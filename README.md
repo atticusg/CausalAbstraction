@@ -3,8 +3,8 @@
 This repository supports mechanistic interpretability experiments that reverse engineer what algorithm a neural network implements with causal abstraction.
 
  It supports the baseline experiments for the causal variable localization track of the Mechanistic Interpretability Benchmark (MIB).
-[![Paper](https://img.shields.io/badge/MIB_Paper-arXiv-b31b1b)](https://arxiv.org/abs/mib-paper) 
-[![GitHub](https://img.shields.io/badge/GitHub-MIB-blue)](https://github.com/mechanistic-interpretability-benchmark/mib)
+[![Paper](https://img.shields.io/badge/MIB_Paper-arXiv-b31b1b)](https://arxiv.org/abs/2504.13151) 
+[![GitHub](https://img.shields.io/badge/GitHub-MIB-blue)](https://github.com/aaronmueller/MIB)
 
 ## Overview
 
