@@ -17,7 +17,7 @@ from model_units.LM_units import TokenPosition, get_last_token_index
 import re
 from datasets import load_dataset, Dataset
 
-def load_hf_dataset(dataset_path, split, hf_token, size=None, name=None, parse_fn=None):
+def load_hf_dataset(dataset_path, split, hf_token=None, size=None, name=None, parse_fn=None):
     """
     Load a HuggingFace dataset and reformat it to be compatible with the Task object.
     
