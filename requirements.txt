@@ -12,3 +12,5 @@ jupyterlab
 ipycytoscape
 seaborn
 transformers
+dash
+dash-cytoscape

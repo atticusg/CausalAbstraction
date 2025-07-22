@@ -11,8 +11,20 @@ import matplotlib.pyplot as plt
 import networkx as nx
 from datasets import Dataset, load_dataset
 
+# visualization libraries
+from dash import Dash, html
+from dash.dependencies import Input, Output, State
+import dash_cytoscape as cyto
+
 from causal.counterfactual_dataset import CounterfactualDataset
 
+class DEFAULT_COLORS:
+    """default colors for displaying causal model with dash"""
+    BASE_INPUT = "#68AF9C"
+    BASE_OUTPUT = "#A0CCC0"
+    SOURCE_INPUT = "#EC3B82"
+    SOURCE_OUTPUT = "#F276A8"
+    COUNTERFACTUAL_OUTPUT = "#A59FD9"
 
 class CausalModel:
     """
@@ -337,41 +349,6 @@ class CausalModel:
             
         return dataset
 
-    def can_distinguish_with_dataset(self, dataset, target_variables1, target_variables2):
-        """
-        Check if the model can distinguish between two sets of target variables 
-        using interchange interventions on a counterfactual dataset.
-        """
-
-        count = 0
-        for example in dataset:
-            input = example["input"]
-            counterfactual_inputs = example["counterfactual_inputs"]
-            assert len(counterfactual_inputs) == 1 
-            
-            setting1 = self.run_interchange(
-                input, 
-                {var: counterfactual_inputs[0] for var in target_variables1}
-            )
-            if target_variables2 is not None:
-                setting2 = self.run_interchange(
-                    input, 
-                    {var: counterfactual_inputs[0] for var in target_variables2}
-                )
-                if setting1["raw_output"] != setting2["raw_output"]:
-                    count += 1
-            else:
-                if setting1["raw_output"] != self.run_forward(input)["raw_output"]:
-                    count += 1
-        
-        proportion = count / len(dataset)
-        print(f"Can distinguish between {target_variables1} and {target_variables2}: {count} out of {len(dataset)} examples")
-        print(f"Proportion of distinguishable examples: {proportion:.2f}")
-        return {"proportion": proportion, "count": count}
-
-        
-
-
     def label_data_with_variables(self, dataset, target_variables):
         """
         Labels a dataset based on variable settings from running the forward model.
@@ -420,6 +397,466 @@ class CausalModel:
         return Dataset.from_dict({"input": inputs, "label": labels}), label_to_setting
 
     # FUNCTIONS FOR PRINTING OUT THE MODEL AND SETTINGS
+
+    def display_structure(self, colors=DEFAULT_COLORS):
+        """Visualize the structure of the causal model without any inputs."""
+        variables = [
+            {
+                'data': {
+                    'id': var, 
+                    'label': var
+                },
+                'position': {'x': 0, 'y': 0}, # updated by automatic layout
+                'classes': 'variable' # as opposed to their inner values
+            }
+            for var in self.variables
+        ]
+        edges = [
+            {'data': {'id': f'{parent}->{child}', 'source': parent, 'target': child}}
+            for child in self.variables
+            for parent in self.parents[child]
+        ]
+
+        app = Dash()
+
+        app.layout = html.Div([
+            cyto.Cytoscape(
+                id='causal-graph-visualization',
+                elements=variables + edges,
+                layout={
+                    'name': 'breadthfirst',
+                    'roots': '#raw_input'
+                },
+                stylesheet=[
+                    {
+                        'selector': 'node',
+                        'style': {
+                            'content': 'data(label)',
+                            'width': 50,
+                            'height': 50
+                        }
+                    },
+                    {
+                        'selector': 'edge',
+                        'style': {
+                            'curve-style': 'straight',
+                            'target-arrow-shape': 'triangle',
+                        }
+                    },
+                    {
+                        'selector': '.variable',
+                        'style': {
+                            'text-valign': 'top'
+                        }
+                    },
+                    {
+                        'selector': '.base_input',
+                        'style': {
+                            'background-color': colors.BASE_INPUT,
+                            'color': 'white',
+                            'text-valign': 'center'
+                        }
+                    },
+                    {
+                        'selector': '.base_value',
+                        'style': {
+                            'background-color': colors.BASE_OUTPUT,
+                            'text-valign': 'center'
+                        }
+                    },
+                    {
+                        'selector': '.source_input',
+                        'style': {
+                            'background-color': colors.SOURCE_INPUT,
+                            'color': 'white',
+                            'text-valign': 'center',
+                        }
+                    },
+                    {
+                        'selector': '.source_value',
+                        'style': {
+                            'background-color': colors.SOURCE_OUTPUT,
+                            'text-valign': 'center',
+                        }
+                    },
+                    {
+                        'selector': '.counterfactual_value',
+                        'style': {
+                            'background-color': colors.COUNTERFACTUAL_OUTPUT,
+                            'text-valign': 'center',
+                        }
+                    }
+                ]
+            )
+        ])
+
+        app.run()
+
+    def display_forward_pass(self, inputs, intervention=None, colors=DEFAULT_COLORS):
+        """Visualize a forward pass of the model."""
+        if intervention is None:
+            intervention = {}
+        outputs = self.run_forward({**inputs, **intervention})
+
+        intervention_only = self._get_descendants(intervention)
+        counterfactual = self._get_descendants(intervention, strict=False)
+
+        variables = [
+            {
+                'data': {
+                    'id': var, 
+                    'label': var
+                },
+                'position': {'x': 0, 'y': 0}, # updated by automatic layout
+                'classes': 'variable' # as opposed to their inner values
+            }
+            for var in self.variables
+        ]
+        edges = [
+            {'data': {'id': f'{parent}->{child}', 'source': parent, 'target': child}}
+            for child in self.variables
+            for parent in self.parents[child]
+        ]
+
+        app = Dash()
+
+        app.layout = html.Div([
+            cyto.Cytoscape(
+                id='causal-graph-visualization',
+                elements=variables + edges,
+                layout={
+                    'name': 'breadthfirst',
+                    'roots': '#raw_input'
+                },
+                stylesheet=[
+                    {
+                        'selector': 'node',
+                        'style': {
+                            'content': 'data(label)',
+                            'width': 50,
+                            'height': 50
+                        }
+                    },
+                    {
+                        'selector': 'edge',
+                        'style': {
+                            'curve-style': 'straight',
+                            'target-arrow-shape': 'triangle',
+                        }
+                    },
+                    {
+                        'selector': '.variable',
+                        'style': {
+                            'text-valign': 'top',
+                            # don't show variable when moving value!
+                            'background-color': 'white'
+                        }
+                    },
+                    {
+                        'selector': '.base_input',
+                        'style': {
+                            'background-color': colors.BASE_INPUT,
+                            'color': 'white',
+                            'text-valign': 'center'
+                        }
+                    },
+                    {
+                        'selector': '.base_value',
+                        'style': {
+                            'background-color': colors.BASE_OUTPUT,
+                            'text-valign': 'center'
+                        }
+                    },
+                    {
+                        'selector': '.source_input',
+                        'style': {
+                            'background-color': colors.SOURCE_INPUT,
+                            'color': 'white',
+                            'text-valign': 'center',
+                        }
+                    },
+                    {
+                        'selector': '.source_value',
+                        'style': {
+                            'background-color': colors.SOURCE_OUTPUT,
+                            'text-valign': 'center',
+                        }
+                    },
+                    {
+                        'selector': '.counterfactual_value',
+                        'style': {
+                            'background-color': colors.COUNTERFACTUAL_OUTPUT,
+                            'text-valign': 'center',
+                        }
+                    }
+                ]
+            ),
+            # hidden trigger for onload so we can add nodes with values
+            html.Div(id='hidden-onload-trigger', style={'display': 'none'})
+        ])
+
+        @app.callback(
+            [
+                Output('causal-graph-visualization', 'layout'), 
+                Output('causal-graph-visualization', 'elements')
+            ],
+            [Input('hidden-onload-trigger', 'children')],
+            [
+                State('causal-graph-visualization', 'elements')
+            ]
+        )
+        def onload(_, elements):
+            """
+            Add values as inner text of variables nodes.
+            Needs to be done after positions have been rendered.
+            """
+            # update layout to preset to fix node positions
+            layout = {'name': 'preset'}
+            for variable, value in outputs.items():
+                if variable in intervention: # intervention first bc it overrides base
+                    classes = 'source_input'
+                elif variable in inputs:
+                    classes = 'base_input'
+                elif variable in intervention_only:
+                    classes = 'source_value'
+                elif variable in counterfactual:
+                    classes = 'counterfactual_value'
+                else: # variable wasn't affected by intervention, so it's a base value
+                    classes = 'base_value'
+
+                # get original variable node
+                variable_node = [e for e in elements if e['data']['id'] == variable][0]
+                elements.append({
+                    'data': {'id': f'{variable}-value', 'label': value},
+                    'position': variable_node['position'],
+                    'classes': classes
+                })
+            return layout, elements
+
+        @app.callback(
+            Output('causal-graph-visualization', 'elements', allow_duplicate=True),
+            Input('causal-graph-visualization', 'elements'),
+            prevent_initial_call=True
+        )
+        def on_moving_nodes(elements):
+            for var in self.variables:
+                variable_node = [e for e in elements if e['data']['id'] == var][0]
+                value_node = [e for e in elements if e['data']['id'] == f'{var}-value'][0]
+                variable_node['position'] = value_node['position']
+            return elements
+
+        app.run()
+
+    def display_interchange(self, inputs, counterfactual_inputs, colors=DEFAULT_COLORS):
+        """Visualize an interchange intervention between a base input and counterfactual input(s)"""
+        outputs = self.run_interchange(inputs, counterfactual_inputs)
+
+        intervention_only = self._get_descendants(counterfactual_inputs)
+        counterfactual = self._get_descendants(counterfactual_inputs, strict=False)
+
+        # CODE
+        # set up base causal graph
+        variables = [
+            {
+                'data': {
+                    'id': var, 
+                    'label': var
+                },
+                'position': {'x': 0, 'y': 0}, # updated by automatic layout
+                'classes': 'variable' # as opposed to their inner values
+            }
+            for var in self.variables
+        ]
+        edges = [
+            {'data': {'id': f'{parent}->{child}', 'source': parent, 'target': child}}
+            for child in self.variables
+            for parent in self.parents[child]
+        ]
+
+        # set up source causal graphs
+        for i, source in enumerate(counterfactual_inputs.keys()):
+            source_variables = [
+                {
+                    'data': {
+                        'id': f'{var}-source-{i}', 
+                        'label': var
+                    },
+                    'position': {'x': 0, 'y': 0}, # updated by automatic layout
+                    'classes': 'variable' # as opposed to their inner values
+                }
+                for var in self.variables
+            ]
+            source_edges = [
+                {'data': {'id': f'{parent}->{child}-source-{i}', 'source': f'{parent}-source-{i}', 'target': f'{child}-source-{i}'}}
+                for child in self.variables
+                for parent in self.parents[child]
+            ]
+            intervention_edge = [{
+                'data': {'id': f'interchange-{i}', 'source': f'{source}-source-{i}', 'target': source},
+                'classes': 'interchange_edge'
+            }]
+            variables += source_variables
+            edges += source_edges + intervention_edge
+            
+        # set raw input as source for each graph
+        roots = ['#raw_input'] + [f'#raw_input-source-{i}' for i in range(len(counterfactual_inputs))]
+
+        app = Dash()
+
+        app.layout = html.Div([
+            cyto.Cytoscape(
+                id='causal-graph-visualization',
+                elements=variables + edges,
+                layout={
+                    'name': 'breadthfirst',
+                    'roots': ','.join(roots)
+                },
+                stylesheet=[
+                    {
+                        'selector': 'node',
+                        'style': {
+                            'content': 'data(label)',
+                            'width': 50,
+                            'height': 50
+                        }
+                    },
+                    {
+                        'selector': 'edge',
+                        'style': {
+                            'curve-style': 'straight',
+                            'target-arrow-shape': 'triangle',
+                        }
+                    },
+                    {
+                        'selector': '.variable',
+                        'style': {
+                            'text-valign': 'top',
+                            'background-color': 'white'
+                        }
+                    },
+                    # color variables by value
+                    {
+                        'selector': '.base_input',
+                        'style': {
+                            'background-color': colors.BASE_INPUT,
+                            'color': 'white',
+                            'text-valign': 'center'
+                        }
+                    },
+                    {
+                        'selector': '.base_value',
+                        'style': {
+                            'background-color': colors.BASE_OUTPUT,
+                            'text-valign': 'center'
+                        }
+                    },
+                    {
+                        'selector': '.source_input',
+                        'style': {
+                            'background-color': colors.SOURCE_INPUT,
+                            'color': 'white',
+                            'text-valign': 'center',
+                        }
+                    },
+                    {
+                        'selector': '.source_value',
+                        'style': {
+                            'background-color': colors.SOURCE_OUTPUT,
+                            'text-valign': 'center',
+                        }
+                    },
+                    {
+                        'selector': '.counterfactual_value',
+                        'style': {
+                            'background-color': colors.COUNTERFACTUAL_OUTPUT,
+                            'text-valign': 'center',
+                        }
+                    },
+                    # color interchange arrows
+                    {
+                        'selector': '.interchange_edge',
+                        'style': {
+                            'curve-style': 'unbundled-bezier',
+                            'line-color': colors.SOURCE_INPUT,
+                            'target-arrow-color': colors.SOURCE_INPUT,
+                            'control-point-distances': '80 -80 80'
+                        }
+                    },
+                ]
+            ),
+            # hidden trigger for onload so we can add nodes with values
+            html.Div(id='hidden-onload-trigger', style={'display': 'none'})
+        ])
+
+        @app.callback(
+            [
+                Output('causal-graph-visualization', 'layout'), 
+                Output('causal-graph-visualization', 'elements')
+            ],
+            [Input('hidden-onload-trigger', 'children')],
+            [State('causal-graph-visualization', 'elements')]
+        )
+        def onload(_, elements):
+            """
+            Add values as inner text of variables nodes.
+            Needs to be done after positions have been rendered.
+            """
+            # update layout to preset to fix node positions
+            layout = {'name': 'preset'}
+
+            # set up source graphs
+            for i, source_inputs in enumerate(counterfactual_inputs.values()):
+                source_outputs = self.run_forward(source_inputs)
+                for variable, value in source_outputs.items():
+                    if variable in source_inputs:
+                        classes = 'source_input'
+                    else:
+                        classes = 'source_value'
+                    
+                    variable_node = [e for e in elements if e['data']['id'] == f'{variable}-source-{i}'][0]
+                    elements.append({
+                        'data': {'id': f'{variable}-source-{i}-value', 'label': value},
+                        'position': variable_node['position'],
+                        'classes': classes
+                    })
+                    
+            # set up base graphs
+            for variable, value in outputs.items():
+                if variable in counterfactual_inputs: # intervention first bc it overrides base
+                    classes = 'source_input'
+                elif variable in inputs:
+                    classes = 'base_input'
+                elif variable in intervention_only:
+                    classes = 'source_value'
+                elif variable in counterfactual:
+                    classes = 'counterfactual_value'
+                else: # variable wasn't affected by intervention, so it's a base value
+                    classes = 'base_value'
+
+                # get original variable node
+                variable_node = [e for e in elements if e['data']['id'] == variable][0]
+                elements.append({
+                    'data': {'id': f'{variable}-value', 'label': value},
+                    'position': variable_node['position'],
+                    'classes': classes
+                })
+            return layout, elements
+
+        @app.callback(
+            Output('causal-graph-visualization', 'elements', allow_duplicate=True),
+            Input('causal-graph-visualization', 'elements'),
+            prevent_initial_call=True
+        )
+        def on_moving_nodes(elements):
+            """make sure variable nodes follow their respective value nodes"""
+            for variable_node in elements:
+                var_id = variable_node['data']['id']
+                if not var_id.endswith('value') and 'label' in variable_node['data']:
+                    value_node = [e for e in elements if e['data']['id'] == f'{var_id}-value'][0]
+                    variable_node['position'] = value_node['position']
+            return elements
+
+        app.run()
 
     def print_structure(self, font=12, node_size=1000):
         """
@@ -721,6 +1158,21 @@ class CausalModel:
 
         return check_path
 
+    def _get_descendants(self, intervention, strict=True):
+        """breadth-first search, include only variables directly affected by intervention"""
+        descendants = [v for v in intervention]
+        current_paths = [v for v in intervention]
+        covered = [v for v in intervention]
+        while current_paths:
+            variable = current_paths.pop(0)
+            for c in self.children[variable]:
+                if c in covered: # don't loop
+                    continue
+                covered.append(c)
+                if all(p in descendants for p in self.parents[c]) or not strict:
+                    descendants.append(c)
+                    current_paths.append(c)
+        return descendants
 
 def simple_example():
     """
