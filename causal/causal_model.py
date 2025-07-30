@@ -395,6 +395,38 @@ class CausalModel:
             labels.append(id_value)
             
         return Dataset.from_dict({"input": inputs, "label": labels}), label_to_setting
+    
+    def can_distinguish_with_dataset(self, dataset, target_variables1, target_variables2):
+        """
+        Check if the model can distinguish between two sets of target variables 
+        using interchange interventions on a counterfactual dataset.
+        """
+
+        count = 0
+        for example in dataset:
+            input = example["input"]
+            counterfactual_inputs = example["counterfactual_inputs"]
+            assert len(counterfactual_inputs) == 1 
+            
+            setting1 = self.run_interchange(
+                input, 
+                {var: counterfactual_inputs[0] for var in target_variables1}
+            )
+            if target_variables2 is not None:
+                setting2 = self.run_interchange(
+                    input, 
+                    {var: counterfactual_inputs[0] for var in target_variables2}
+                )
+                if setting1["raw_output"] != setting2["raw_output"]:
+                    count += 1
+            else:
+                if setting1["raw_output"] != self.run_forward(input)["raw_output"]:
+                    count += 1
+        
+        proportion = count / len(dataset)
+        print(f"Can distinguish between {target_variables1} and {target_variables2}: {count} out of {len(dataset)} examples")
+        print(f"Proportion of distinguishable examples: {proportion:.2f}")
+        return {"proportion": proportion, "count": count}
 
     # FUNCTIONS FOR PRINTING OUT THE MODEL AND SETTINGS
 
