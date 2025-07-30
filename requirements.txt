@@ -1,6 +1,5 @@
 torch
 networkx
-sae_lens
 matplotlib
 pandas
 numpy
