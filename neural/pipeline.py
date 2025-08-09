@@ -109,7 +109,7 @@ class LMPipeline(Pipeline):
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_or_name, token=hf_token)
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_or_name, config=self._init_extra_kwargs.get("config"), token=hf_token
-            ).to(device).to(dtype)
+            ).to(device=device, dtype=dtype)
             if hasattr(self.model.config, "_attn_implementation") and "qwen" not in self.model.config.name_or_path.lower():
                 self.model.config._attn_implementation = "eager"
             if hasattr(self.model.config, "use_cache"):
