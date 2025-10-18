@@ -1,7 +1,3 @@
-import sys
-from pathlib import Path
-
-sys.path.append(str(Path(__file__).resolve().parent.parent))
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -13,161 +9,13 @@ import torch
 import logging
 from collections import Counter
 
+from .LM_utils import LM_loss_and_metric_fn
 from experiments.intervention_experiment import *
 from causal.causal_model import CausalModel
 from neural.LM_units import *
 from neural.model_units import *
 from neural.featurizers import *
 from neural.pipeline import LMPipeline
-
-from experiments.pyvene_core import _prepare_intervenable_inputs
-
-# Set up logging
-logger = logging.getLogger(__name__)
-
-def LM_loss_and_metric_fn(pipeline, intervenable_model, batch, model_units_list):
-    """
-    Calculate loss and evaluation metrics for language model interventions.
-    
-    This function evaluates intervention effects by:
-    
-    1. Preparing intervenable inputs from the batch
-    2. Concatenating ground truth label tokens to the base inputs
-       (e.g., if input has length 10 and labels length 3, creates sequence of length 13)
-    3. Running the intervenable model's forward pass with these concatenated inputs
-       and applying interventions at specified locations
-    4. Extracting logits corresponding only to the positions where labels were appended
-       (e.g., positions 9-11 in the example above)
-    5. Computing accuracy and loss by comparing predicted continuations against ground truth
-    
-    This approach allows measuring how interventions affect the model's ability
-    to predict the correct continuation, even for multi-token responses.
-    
-    Args:
-        pipeline: The language model pipeline handling tokenization and generation
-        intervenable_model: The model with intervention capabilities
-        batch: Batch of data containing inputs and counterfactual inputs
-        model_units_list: List of model units to intervene on
-        
-    Returns:
-        tuple: (loss, eval_metrics, logging_info)
-    """
-    try:
-        # Prepare intervenable inputs
-        batched_base, batched_counterfactuals, inv_locations, feature_indices = _prepare_intervenable_inputs(
-            pipeline, batch, model_units_list)
-
-        # Get ground truth labels
-        batched_inv_label = batch['label']
-        batched_inv_label = pipeline.load(
-            batched_inv_label, max_length=pipeline.max_new_tokens, padding_side='right', add_special_tokens=False)
-        
-        # Concatenate labels to base inputs for evaluation
-        for k in batched_base:
-            if isinstance(batched_base[k], torch.Tensor):
-                batched_base[k] = torch.cat([batched_base[k], batched_inv_label[k]], dim=-1)
-        
-        # Run the intervenable model with interventions
-        _, counterfactual_logits = intervenable_model(
-            batched_base, batched_counterfactuals, unit_locations=inv_locations, subspaces=feature_indices)
-        
-        # Extract relevant portions of logits and labels for evaluation
-        labels = batched_inv_label['input_ids']
-        logits = counterfactual_logits.logits[:, -labels.shape[-1] - 1 : -1]
-        pred_ids = torch.argmax(logits, dim=-1)
-        
-        # Compute metrics and loss
-        eval_metrics = compute_metrics(pred_ids, labels, pipeline.tokenizer.pad_token_id)
-        loss = compute_cross_entropy_loss(logits, labels, pipeline.tokenizer.pad_token_id)
-        
-        # Collect detailed information for logging
-        logging_info = {
-            "preds": pipeline.dump(pred_ids), 
-            "labels": pipeline.dump(labels),
-            "base_ids": batched_base["input_ids"][0],
-            "base_masks": batched_base["attention_mask"][0],
-            "counterfactual_masks": [c["attention_mask"][0] for c in batched_counterfactuals],
-            "counterfactual_ids": [c["input_ids"][0] for c in batched_counterfactuals],
-            "base_inputs": pipeline.dump(batched_base["input_ids"][0]),
-            "counterfactual_inputs": [pipeline.dump(c["input_ids"][0]) for c in batched_counterfactuals],
-            "inv_locations": inv_locations,
-            "feature_indices": feature_indices
-        }
-        
-        return loss, eval_metrics, logging_info
-    except Exception as e:
-        logger.error(f"Error in LM_loss_and_metric_fn: {str(e)}")
-        raise
-
-def compute_metrics(predicted_token_ids, eval_labels, pad_token_id):
-    """
-    Compute sequence-level and token-level accuracy metrics.
-    
-    Args:
-        predicted_token_ids (torch.Tensor): Predicted token IDs from the model
-        eval_labels (torch.Tensor): Ground truth token IDs 
-        pad_token_id (int): ID of the padding token to be ignored in evaluation
-    
-    Returns:
-        dict: Dictionary containing accuracy metrics:
-            - accuracy: Proportion of sequences where all tokens match
-            - token_accuracy: Proportion of individual tokens that match
-    """
-    try:
-        # Create mask to ignore pad tokens in labels
-        mask = (eval_labels != pad_token_id)
-
-        # Calculate token-level accuracy (only for non-pad tokens)
-        correct_tokens = (predicted_token_ids == eval_labels) & mask
-        token_accuracy = correct_tokens.sum().float() / mask.sum() if mask.sum() > 0 else torch.tensor(1.0)
-
-        # Calculate sequence-level accuracy (sequence correct if all non-pad tokens correct)
-        sequence_correct = torch.stack([torch.all(correct_tokens[i, mask[i]]) for i in range(eval_labels.shape[0])])
-        sequence_accuracy = sequence_correct.float().mean() if len(sequence_correct) > 0 else torch.tensor(1.0)
-
-        return {
-            "accuracy": float(sequence_accuracy.item()),
-            "token_accuracy": float(token_accuracy.item())
-        }
-    except Exception as e:
-        logger.error(f"Error computing metrics: {str(e)}")
-        return {"accuracy": 0.0, "token_accuracy": 0.0}
-
-def compute_cross_entropy_loss(eval_preds, eval_labels, pad_token_id):
-    """
-    Compute cross-entropy loss over non-padding tokens.
-    
-    Args:
-        eval_preds (torch.Tensor): Model predictions of shape (batch_size, seq_length, vocab_size)
-        eval_labels (torch.Tensor): Ground truth labels of shape (batch_size, seq_length)
-        pad_token_id (int): ID of the padding token to be ignored in loss calculation
-    
-    Returns:
-        torch.Tensor: The computed cross-entropy loss
-    """
-    try:
-        # Reshape predictions to (batch_size * sequence_length, vocab_size)
-        batch_size, seq_length, vocab_size = eval_preds.shape
-        preds_flat = eval_preds.reshape(-1, vocab_size)
-
-        # Reshape labels to (batch_size * sequence_length)
-        labels_flat = eval_labels.reshape(-1)
-
-        # Create mask for non-pad tokens
-        mask = labels_flat != pad_token_id
-
-        # Only compute loss on non-pad tokens by filtering predictions and labels
-        active_preds = preds_flat[mask]
-        active_labels = labels_flat[mask]
-
-        # Compute cross entropy loss
-        loss = torch.nn.functional.cross_entropy(active_preds, active_labels)
-
-        return loss
-    except Exception as e:
-        logger.error(f"Error computing loss: {str(e)}")
-        return torch.tensor(0.0, requires_grad=True)
-
 
 class PatchResidualStream(InterventionExperiment):
     """
@@ -218,22 +66,31 @@ class PatchResidualStream(InterventionExperiment):
             **kwargs: Additional configuration options
         """
         self.featurizers = featurizers if featurizers is not None else {}
-        self.loss_and_metric_fn = loss_and_metric_fn 
+        self.loss_and_metric_fn = loss_and_metric_fn
+
+        # Extract featurizer_kwargs from config if present
+        config = kwargs.get('config', {})
+        featurizer_kwargs = config.get('featurizer_kwargs', {})
 
         # Generate all combinations of model units without feature_indices
         model_units_lists = []
         for layer in layers:
             for pos in token_positions:
-                featurizer = self.featurizers.get((layer, pos.id), 
-                                                 Featurizer(n_features=pipeline.model.config.hidden_size))
+                featurizer = self.featurizers.get((layer, pos.id),
+                                                 Featurizer(n_features=pipeline.model.config.hidden_size,
+                                                           **featurizer_kwargs))
+                target_output = True
+                if layer == -1:
+                    layer = 0
+                    target_output = False
                 model_units_lists.append([[
                     ResidualStream(
                         layer=layer,
                         token_indices=pos,
                         featurizer=featurizer,
                         shape=(pipeline.model.config.hidden_size,),
-                        feature_indices=None, 
-                        target_output=True
+                        feature_indices=None,
+                        target_output=target_output
                     )
                 ]])
 
@@ -285,25 +142,21 @@ class PatchResidualStream(InterventionExperiment):
                         
                         try:
                             # Load SAE for the specific layer
-                            logger.info(f"Loading SAE for layer {layer}")
                             sae = sae_loader(layer)
                             
                             # Set the SAE featurizer for this unit
-                            unit.set_featurizer(SAEFeaturizer(sae))
+                            unit.set_featurizer(SAEFeaturizer(sae, **self.config.get('featurizer_kwargs', {})))
                             
                             # Clear GPU memory after loading each SAE
                             del sae
                             self._clean_memory()
                             
                         except Exception as e:
-                            logger.error(f"Failed to load SAE for layer {layer}: {str(e)}")
                             # Continue with next unit rather than failing the entire experiment
                             continue
                             
-            logger.info("Successfully applied SAE features to all model units")
             
         except Exception as e:
-            logger.error(f"Error in build_SAE_feature_intervention: {str(e)}")
             raise RuntimeError(f"Failed to apply SAE features: {str(e)}")
 
     def _clean_memory(self):
@@ -339,64 +192,35 @@ class PatchResidualStream(InterventionExperiment):
         else:
             self._plot_individual_heatmaps(results, layers, token_ids, target_variables_str, save_path)
     
-    def _plot_average_heatmap(self, results: Dict, layers: List, positions: List, 
-                             target_variables_str: str, save_path: Optional[str] = None):
-        """Create and save/display an averaged heatmap across all datasets."""
-        # Initialize score matrix and counter
-        score_matrix = np.zeros((len(layers), len(positions)))
-        dataset_count = 0.0
-        
-        # Sum scores across all datasets
-        for dataset_name in results["dataset"]:
-            temp_matrix = np.zeros((len(layers), len(positions)))
-            valid_entries = False
-            
-            # Fill temporary matrix for this dataset
-            for i, layer in enumerate(layers):
-                for j, pos in enumerate(positions):
-                    for unit_str, unit_data in results["dataset"][dataset_name]["model_unit"].items():
-                        if "metadata" in unit_data and target_variables_str in unit_data:
-                            if "average_score" in unit_data[target_variables_str]:
-                                metadata = unit_data["metadata"]
-                                if metadata.get("layer") == layer and metadata.get("position") == pos:
-                                    temp_matrix[i, j] = unit_data[target_variables_str]["average_score"]
-                                    valid_entries = True
-            
-            # Only include datasets with valid entries
-            if valid_entries:
-                score_matrix += temp_matrix
-                dataset_count += 1
-        
-        # Calculate average across datasets
-        if dataset_count > 0:
-            score_matrix /= dataset_count
-            
-            # Create the heatmap
-            self._create_heatmap(
-                score_matrix=score_matrix,
-                layers=layers,
-                positions=positions,
-                title=f'Intervention Accuracy - Average across {dataset_count} datasets\nTask: {results["task_name"]}',
-                save_path=os.path.join(save_path, f'heatmap_average_{results["task_name"]}.png') if save_path else None
-            )
-        else:
-            logger.warning("No valid data found for creating average heatmap")
-    
-    def _plot_individual_heatmaps(self, results: Dict, layers: List, positions: List, 
-                                 target_variables_str: str, save_path: Optional[str] = None):
-        """Create and save/display individual heatmaps for each dataset."""
-        # Get dataset names
-        dataset_names = list(results["dataset"].keys())
-        
-        # Track if we have valid data for any dataset
-        any_valid_entries = False
-        
-        # Create individual heatmaps for each dataset
+    def _build_score_matrix(self,
+                            results: Dict,
+                            layers: List,
+                            positions: List,
+                            target_variables_str: str,
+                            dataset_names: Optional[List[str]] = None) -> Dict[str, np.ndarray]:
+        """
+        Extract score matrices from results for specified datasets.
+
+        Args:
+            results: Dictionary containing experiment results
+            layers: List of layer indices
+            positions: List of position IDs
+            target_variables_str: String identifier for target variables
+            dataset_names: List of dataset names to process. If None, processes all datasets.
+
+        Returns:
+            Dictionary mapping dataset names to their score matrices
+        """
+        if dataset_names is None:
+            dataset_names = list(results["dataset"].keys())
+
+        matrices = {}
+
         for dataset_name in dataset_names:
             score_matrix = np.zeros((len(layers), len(positions)))
             valid_entries = False
-            
-            # Fill score matrix
+
+            # Fill score matrix for this dataset
             for i, layer in enumerate(layers):
                 for j, pos in enumerate(positions):
                     for unit_str, unit_data in results["dataset"][dataset_name]["model_unit"].items():
@@ -406,24 +230,89 @@ class PatchResidualStream(InterventionExperiment):
                                 if metadata.get("layer") == layer and metadata.get("position") == pos:
                                     score_matrix[i, j] = unit_data[target_variables_str]["average_score"]
                                     valid_entries = True
-            
+
+            # Only include datasets with valid entries
             if valid_entries:
-                any_valid_entries = True
-                
-                # Convert dataset name to a safe filename
-                safe_dataset_name = dataset_name.replace(' ', '_').replace('/', '_').replace('\\', '_')
-                
-                # Create the heatmap
-                self._create_heatmap(
-                    score_matrix=score_matrix,
-                    layers=layers,
-                    positions=positions,
-                    title=f'Intervention Accuracy - Dataset: {dataset_name}\nTask: {results["task_name"]}',
-                    save_path=os.path.join(save_path, f'heatmap_{safe_dataset_name}_{results["task_name"]}.png') if save_path else None
-                )
-        
-        if not any_valid_entries and save_path is None:
-            logger.warning("No valid data found for visualization.")
+                matrices[dataset_name] = score_matrix
+
+        return matrices
+
+    def _aggregate_matrices(self,
+                           matrices: Dict[str, np.ndarray],
+                           aggregation: str = "average") -> np.ndarray:
+        """
+        Aggregate multiple score matrices using specified method.
+
+        Args:
+            matrices: Dictionary mapping dataset names to score matrices
+            aggregation: Aggregation method - "average", "sum", "max", or "min"
+
+        Returns:
+            Aggregated score matrix
+
+        Raises:
+            ValueError: If aggregation method is not supported or no matrices provided
+        """
+        if not matrices:
+            raise ValueError("No valid matrices to aggregate")
+
+        matrix_array = np.stack(list(matrices.values()))
+
+        if aggregation == "average":
+            return np.mean(matrix_array, axis=0)
+        elif aggregation == "sum":
+            return np.sum(matrix_array, axis=0)
+        elif aggregation == "max":
+            return np.max(matrix_array, axis=0)
+        elif aggregation == "min":
+            return np.min(matrix_array, axis=0)
+        else:
+            raise ValueError(f"Unsupported aggregation method: {aggregation}")
+
+    def _plot_average_heatmap(self, results: Dict, layers: List, positions: List,
+                             target_variables_str: str, save_path: Optional[str] = None):
+        """Create and save/display an averaged heatmap across all datasets."""
+        # Build score matrices for all datasets
+        matrices = self._build_score_matrix(results, layers, positions, target_variables_str)
+
+        if not matrices:
+            return
+
+        # Aggregate matrices
+        score_matrix = self._aggregate_matrices(matrices, aggregation="average")
+
+        # Use the last dataset name for filename (kept for backwards compatibility)
+        dataset_name = list(matrices.keys())[-1]
+        safe_dataset_name = dataset_name.replace(' ', '_').replace('/', '_').replace('\\', '_')
+
+        # Create the heatmap
+        self._create_heatmap(
+            score_matrix=score_matrix,
+            layers=layers,
+            positions=positions,
+            title=f'Intervention Accuracy - Dataset: {dataset_name}\nTask: {results["task_name"]}\nIntervened Variables: {target_variables_str}',
+            save_path=os.path.join(save_path, f'heatmap_dataset_{safe_dataset_name}_task_{results["task_name"]}_variables_{target_variables_str}.png') if save_path else None
+        )
+    
+    def _plot_individual_heatmaps(self, results: Dict, layers: List, positions: List,
+                                 target_variables_str: str, save_path: Optional[str] = None):
+        """Create and save/display individual heatmaps for each dataset."""
+        # Build score matrices for all datasets
+        matrices = self._build_score_matrix(results, layers, positions, target_variables_str)
+
+        # Create individual heatmaps for each dataset
+        for dataset_name, score_matrix in matrices.items():
+            # Convert dataset name to a safe filename
+            safe_dataset_name = dataset_name.replace(' ', '_').replace('/', '_').replace('\\', '_')
+
+            # Create the heatmap
+            self._create_heatmap(
+                score_matrix=score_matrix,
+                layers=layers,
+                positions=positions,
+                title=f'Intervention Accuracy - Dataset: {dataset_name}\nTask: {results["task_name"]}\nIntervened Variables: {target_variables_str}',
+                save_path=os.path.join(save_path, f'heatmap_dataset_{safe_dataset_name}_task_{results["task_name"]}_variables_{target_variables_str}.png') if save_path else None
+            )
     
     def _create_heatmap(self, score_matrix: np.ndarray, layers: List, positions: List, 
                        title: str, save_path: Optional[str] = None):
@@ -459,13 +348,12 @@ class PatchResidualStream(InterventionExperiment):
         plt.title(title)
         plt.tight_layout()
         
+        print(save_path)
         if save_path:
             # Create directory if it doesn't exist
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             plt.savefig(save_path, bbox_inches='tight', dpi=300)
-            plt.close()
-        else:
-            plt.show()
+        plt.show()
 
 
 class SameLengthResidualStreamTracing:
@@ -562,11 +450,13 @@ class SameLengthResidualStreamTracing:
             'counterfactual_inputs': [[counterfactual_input]],
         }
         dataset = CounterfactualDataset.from_dict(data_dict, id="tracing_example")
-        
+
         # Create all token position indexers for all positions
         seen_labels = dict()  # To track unique labels
         token_positions = []
         for position in range(self.token_length):
+            if self.base_tokens[position] == self.pipeline.tokenizer.pad_token:
+                continue  # Skip padding tokens
             # Create a proper closure to capture the position value
             def make_position_indexer(pos):
                 return lambda _: [pos]
@@ -583,6 +473,9 @@ class SameLengthResidualStreamTracing:
 
             token_position = TokenPosition(position_indexer, self.pipeline, id=label)
             token_positions.append(token_position)
+
+        # Store token positions for plotting
+        self.token_positions = token_positions
         
         # Create all layers list
         layers = list(range(self.num_layers))
@@ -596,7 +489,7 @@ class SameLengthResidualStreamTracing:
             checker=self.checker,
             featurizers=None,  # Use default featurizer
             loss_and_metric_fn=self.loss_and_metric_fn,
-            config={"batch_size": 1, "raw_outputs":True},  # Single example
+            config={"batch_size": 1, "output_scores": True},  # Single example
         )
         
         # Run the experiment once with all locations
@@ -605,22 +498,13 @@ class SameLengthResidualStreamTracing:
             target_variables_list=[["raw_output"]],  # Use raw_output for binary accuracy
         )
 
-        experiment.plot_heatmaps(
-            results=results, 
-            target_variables=["raw_output"], 
-            save_path=save_path,  # Display interactively
-            average_counterfactuals=False,  # No averaging since we only have one example
-        )
-        
-        # Also plot the raw outputs
-        self.plot_raw_outputs(results, token_positions, save_path=save_path)
         
         # Clean up memory after the experiment
         experiment._clean_memory()
         del experiment
         return results
     
-    def plot_raw_outputs(self, results: Dict, token_positions: List[TokenPosition], save_path: Optional[str] = None) -> None:
+    def plot_raw_outputs(self, results: Dict, save_path: Optional[str] = None) -> None:
         """
         Display the raw generated outputs in a grid format with color coding.
         
@@ -638,6 +522,7 @@ class SameLengthResidualStreamTracing:
             ValueError: If raw_outputs are not found in the results
         """
         
+        token_positions = self.token_positions
         # Get dimensions for the grid
         layers = list(range(self.num_layers))
         positions = [tp.id for tp in token_positions]
@@ -665,16 +550,19 @@ class SameLengthResidualStreamTracing:
         if dataset_name in results["dataset"]:
             for unit_str, unit_data in results["dataset"][dataset_name]["model_unit"].items():
                 if "raw_outputs" not in unit_data:
-                    raise ValueError("raw_outputs not found in results. Ensure config['raw_outputs']=True when running the experiment.")
+                    raise ValueError("raw_outputs not found in results. Ensure config['output_scores']=True when running the experiment.")
                 
                 if "metadata" in unit_data and unit_data["raw_outputs"]:
-                    # Get the raw output and decode it
-                    raw_output = unit_data["raw_outputs"][0][0] if unit_data["raw_outputs"][0] else None
-                    if raw_output is not None:
-                        decoded_text = self.pipeline.dump(raw_output, is_logits=False)
-                        if isinstance(decoded_text, list):
-                            decoded_text = decoded_text[0]
-                        output_counter[decoded_text] += 1
+                    # Get the decoded string directly
+                    raw_outputs = unit_data["raw_outputs"]
+                    if isinstance(raw_outputs, list) and len(raw_outputs) > 0:
+                        # raw_outputs is a list of batch dicts
+                        first_batch = raw_outputs[0]
+                        if isinstance(first_batch, dict) and "string" in first_batch:
+                            decoded_text = first_batch["string"]
+                            if isinstance(decoded_text, list):
+                                decoded_text = decoded_text[0]
+                            output_counter[decoded_text] += 1
         
         # Define light colors for the top 5 most frequent outputs
         light_colors = [
@@ -709,18 +597,17 @@ class SameLengthResidualStreamTracing:
                         else:
                             continue
                     
-                    # Get the raw output and decode it
+                    # Get the decoded string directly
                     if unit_data["raw_outputs"]:
-                        # raw_outputs is a list of lists, get the first output
-                        raw_output = unit_data["raw_outputs"][0][0] if unit_data["raw_outputs"][0] else None
-                        
-                        if raw_output is not None:
-                            # Use pipeline.dump to decode the output
-                            decoded_text = self.pipeline.dump(raw_output, is_logits=False)
-                            if isinstance(decoded_text, list):
-                                decoded_text = decoded_text[0]
-                            
-                            text_outputs[layer][pos_idx] = decoded_text
+                        raw_outputs = unit_data["raw_outputs"]
+                        if isinstance(raw_outputs, list) and len(raw_outputs) > 0:
+                            # raw_outputs is a list of batch dicts
+                            first_batch = raw_outputs[0]
+                            if isinstance(first_batch, dict) and "string" in first_batch:
+                                decoded_text = first_batch["string"]
+                                if isinstance(decoded_text, list):
+                                    decoded_text = decoded_text[0]
+                                text_outputs[layer][pos_idx] = decoded_text
         
         # Create the table/grid
         cell_height = 0.8 / len(layers)
@@ -833,13 +720,12 @@ class SameLengthResidualStreamTracing:
                        ha='left', va='center', transform=ax.transAxes, fontsize=40)
         
         plt.tight_layout()
-        
+
         if save_path:
             # Create directory if it doesn't exist
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             plt.savefig(save_path, bbox_inches='tight', dpi=150)
-            plt.close()
-        else:
-            plt.show()
+
+        plt.show()
 
         
