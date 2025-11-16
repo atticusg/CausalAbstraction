@@ -604,45 +604,6 @@ class PatchResidualStream(InterventionExperiment):
                 f.write(full_output)
             print(f"\nText analysis saved to: {save_path}")
 
-    def plot_das_mask_grid(self, results: Dict, target_variables: List[str], dataset_name: str = None,
-                           save_path: str = None, show_text: bool = True):
-        """
-        Visualize DAS+DBM mask counts and layer scores in a grid format.
-
-        This method creates visualizations showing:
-        - Number of selected DAS features (mask=1) for each (layer, position)
-        - Accuracy score for each layer
-        - Both text and graphical outputs
-
-        Designed for results from DAS+DBM training with tie_masks=False.
-
-        Args:
-            results: Results dictionary from perform_interventions with computed scores
-            target_variables: List of target variable names to analyze (e.g., ["answer"], ["answer", "answer_position"])
-            dataset_name: Optional dataset name. If None, uses the first dataset found.
-            save_path: Optional base path for saving visualizations.
-                      Text will be saved to {save_path}_text.txt
-                      Plot will be saved to {save_path}_plot.png
-            show_text: If True, prints text visualization to console (default: True)
-
-        Example:
-            >>> experiment = PatchResidualStream(pipeline, layers, positions, config=config)
-            >>> experiment.train_interventions(labeled_data, method="DAS+DBM")
-            >>> raw_results = experiment.perform_interventions(dataset)
-            >>> results = compute_interchange_scores(raw_results, causal_model, dataset,
-            ...                                      target_variables_list=[["answer"]], checker=checker)
-            >>> experiment.plot_das_mask_grid(results, ["answer"], save_path="das_dbm_results")
-        """
-        # Text visualization
-        if show_text:
-            text_save_path = f"{save_path}_text.txt" if save_path else None
-            print_das_mask_grid(results, target_variables, dataset_name, text_save_path)
-
-        # Graphical visualization
-        plot_save_path = f"{save_path}_plot.png" if save_path else None
-        create_das_mask_grid_plot(results, target_variables, dataset_name, plot_save_path)
-
-
 class SameLengthResidualStreamTracing:
     """
     Experiment for tracing through all token positions at all layers with a single counterfactual.
