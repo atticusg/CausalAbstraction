@@ -87,15 +87,15 @@ Comprehensive test suite covering all core components with specialized tests for
 ### Installation
 
 ```bash
-git clone https://github.com/your-org/causal-abstraction.git
-cd causal-abstraction
+git clone https://github.com/goodfire-ai/causalab.git
+cd causalab
 uv sync
 ```
 
-To install with development dependencies:
+To install for development, also run:
 
 ```bash
-uv sync --extra dev
+uv run pre-commit install  # Set up git hooks
 ```
 
 ### Key Dependencies
@@ -118,10 +118,18 @@ The best way to understand the codebase is through the onboarding tutorial noteb
 
 ### Running Tests
 
+This is the baseline test set that the pre-merge check uses.
+
 ```bash
-pytest tests/  # Run all tests
-pytest tests/test_pyvene_core/  # Run pyvene integration tests
+uv run pytest -m "not slow and not gpu"
 ```
+
+For full coverage, you may simply run:
+
+```bash
+uv run pytest
+```
+
 ## Example Tasks
 
 The repository includes several example tasks demonstrating different aspects of causal abstraction:

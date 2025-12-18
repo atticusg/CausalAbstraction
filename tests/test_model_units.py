@@ -4,27 +4,30 @@ pytest unit-tests for the core abstractions in model_units.py
 """
 
 import pytest
-import torch
 
-import neural.model_units as MU
-import neural.featurizers as F  # the module we just rewrote
+import causalab.neural.model_units as MU
+import causalab.neural.featurizers as F  # the module we just rewrote
+
 
 # --------------------------------------------------------------------------- #
 #  Helpers                                                                     #
 # --------------------------------------------------------------------------- #
-def make_static_component():
-    """Return a trivial StaticComponent for tests."""
-    return MU.StaticComponent(layer=0, component_type="block_input", component_indices=[0])
+def make_test_unit():
+    """Return a trivial AtomicModelUnit for tests."""
+    return MU.AtomicModelUnit(
+        layer=0,
+        component_type="block_input",
+        indices_func=[0],
+        unit="pos",
+    )
 
 
 # --------------------------------------------------------------------------- #
 #  1. Unique default featurizers                                               #
 # --------------------------------------------------------------------------- #
 def test_default_featurizers_are_unique():
-    comp = make_static_component()
-
-    u1 = MU.AtomicModelUnit(component=comp)
-    u2 = MU.AtomicModelUnit(component=comp)
+    u1 = make_test_unit()
+    u2 = make_test_unit()
 
     # distinct identity featurizers
     assert u1.featurizer is not u2.featurizer
@@ -43,18 +46,19 @@ def test_componentindexer_repr():
 
 
 # --------------------------------------------------------------------------- #
-#  3. Component equality & hashing                                             #
+#  3. AtomicModelUnit equality & hashing (based on layer, type, unit, index)  #
 # --------------------------------------------------------------------------- #
-def test_component_equality_hash():
-    c1 = MU.Component(layer=1, component_type="block_input", indices_func=[0])
-    c2 = MU.Component(layer=1, component_type="block_input", indices_func=[0])
-    c3 = MU.Component(layer=2, component_type="block_input", indices_func=[0])
+def test_unit_properties():
+    u1 = MU.AtomicModelUnit(layer=1, component_type="block_input", indices_func=[0])
+    u2 = MU.AtomicModelUnit(layer=1, component_type="block_input", indices_func=[0])
+    u3 = MU.AtomicModelUnit(layer=2, component_type="block_input", indices_func=[0])
 
-    assert c1 == c2
-    assert hash(c1) == hash(c2)
+    assert u1.layer == 1
+    assert u1.component_type == "block_input"
+    assert u1.unit == "pos"
 
-    assert c1 != c3
-    assert hash(c1) != hash(c3)
+    assert u2.layer == 1
+    assert u3.layer == 2
 
 
 # --------------------------------------------------------------------------- #
@@ -62,44 +66,74 @@ def test_component_equality_hash():
 # --------------------------------------------------------------------------- #
 def test_feature_bounds_ok():
     feat = F.Featurizer(n_features=4)
-    comp = make_static_component()
-    unit = MU.AtomicModelUnit(component=comp, featurizer=feat, feature_indices=[1, 2])
+    unit = MU.AtomicModelUnit(
+        layer=0,
+        component_type="block_input",
+        indices_func=[0],
+        featurizer=feat,
+        feature_indices=[1, 2],
+    )
     assert unit.get_feature_indices() == [1, 2]
 
 
 def test_feature_bounds_violation():
     feat = F.SubspaceFeaturizer(shape=(4, 4), trainable=False)  # n_features = 4
-    comp = make_static_component()
     with pytest.raises(ValueError):
-        MU.AtomicModelUnit(component=comp, featurizer=feat, feature_indices=[0, 5])
+        MU.AtomicModelUnit(
+            layer=0,
+            component_type="block_input",
+            indices_func=[0],
+            featurizer=feat,
+            feature_indices=[0, 5],
+        )
 
 
 def test_feature_bounds_after_featurizer_swap():
-    big_feat   = F.SubspaceFeaturizer(shape=(4, 4), trainable=False)   # n_features = 4
-    small_feat = F.SubspaceFeaturizer(shape=(4, 2), trainable=False)   # n_features = 2
+    big_feat = F.SubspaceFeaturizer(shape=(4, 4), trainable=False)  # n_features = 4
+    small_feat = F.SubspaceFeaturizer(shape=(4, 2), trainable=False)  # n_features = 2
 
-    comp = make_static_component()
     # index 3 is valid for the 4-dim featurizer, but invalid for the 2-dim one
-    unit = MU.AtomicModelUnit(component=comp, featurizer=big_feat, feature_indices=[3])
+    unit = MU.AtomicModelUnit(
+        layer=0,
+        component_type="block_input",
+        indices_func=[0],
+        featurizer=big_feat,
+        feature_indices=[3],
+    )
 
     with pytest.raises(ValueError):
         unit.set_featurizer(small_feat)
 
 
 # --------------------------------------------------------------------------- #
-#  5. Static component indexing                                               #
+#  5. Static indices                                                          #
 # --------------------------------------------------------------------------- #
-def test_static_component_index():
-    comp = MU.StaticComponent(layer=0, component_type="block_input", component_indices=[2, 3])
-    assert comp.index("ignored") == [2, 3]
+def test_static_indices():
+    unit = MU.AtomicModelUnit(
+        layer=0,
+        component_type="block_input",
+        indices_func=[2, 3],
+    )
+    assert unit.index_component("ignored") == [2, 3]
+    assert unit.is_static()
+
+
+def test_dynamic_indices():
+    indexer = MU.ComponentIndexer(lambda x: [x], id="test")
+    unit = MU.AtomicModelUnit(
+        layer=0,
+        component_type="block_input",
+        indices_func=indexer,
+    )
+    assert unit.index_component(5) == [5]
+    assert not unit.is_static()
 
 
 # --------------------------------------------------------------------------- #
 #  6. Intervention config structure                                            #
 # --------------------------------------------------------------------------- #
 def test_create_intervention_config():
-    comp = make_static_component()
-    unit = MU.AtomicModelUnit(component=comp)
+    unit = make_test_unit()
     cfg = unit.create_intervention_config(group_key="grp", intervention_type="collect")
 
     assert cfg["component"] == "block_input"

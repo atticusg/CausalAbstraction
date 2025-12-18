@@ -1,5 +1,5 @@
 import unittest
-from causal.causal_model import CausalModel
+from causalab.causal.causal_model import CausalModel
 
 
 class TestRunInterchangeArrowSyntax(unittest.TestCase):
@@ -25,7 +25,7 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
             "Z": [0, 1, 2, 3, 4],
             "C": [0, 1, 2, 3, 4],
             "raw_input": None,
-            "raw_output": None
+            "raw_output": None,
         }
 
         parents = {
@@ -36,7 +36,7 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
             "Z": ["Y"],
             "C": ["B"],
             "raw_input": ["X", "A"],
-            "raw_output": ["Z", "C"]
+            "raw_output": ["Z", "C"],
         }
 
         def X():
@@ -71,10 +71,12 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
             "Z": Z,
             "C": C,
             "raw_input": raw_input,
-            "raw_output": raw_output
+            "raw_output": raw_output,
         }
 
-        self.model = CausalModel(variables, values, parents, mechanisms, id="test_model")
+        self.model = CausalModel(
+            variables, values, parents, mechanisms, id="test_model"
+        )
 
     def test_original_syntax_still_works(self):
         """Test that the original syntax (without arrow) still works correctly."""
@@ -88,10 +90,7 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
 
         # Interchange on Y (using original syntax)
         # Take Y from counterfactual (Y=1) and use it in original
-        result = self.model.run_interchange(
-            original_input,
-            {"Y": counterfactual_input}
-        )
+        result = self.model.run_interchange(original_input, {"Y": counterfactual_input})
 
         # Y should be 1 (from counterfactual), Z should be 2 (Y+1)
         # C should be 4 (from original path)
@@ -112,8 +111,7 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
         # Use arrow syntax: "Y<-B"
         # This should take B from counterfactual (B=1) and use it for Y in original
         result = self.model.run_interchange(
-            original_input,
-            {"Y<-B": counterfactual_input}
+            original_input, {"Y<-B": counterfactual_input}
         )
 
         # Y should be 1 (from counterfactual B)
@@ -131,8 +129,7 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
 
         # Test with spaces: "Y <- B"
         result = self.model.run_interchange(
-            original_input,
-            {"Y <- B": counterfactual_input}
+            original_input, {"Y <- B": counterfactual_input}
         )
 
         self.assertEqual(result["Y"], 1)
@@ -151,11 +148,7 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
         # Swap: Use B's value from counterfactual for Y in original
         # and Y's value from counterfactual for B in original
         result = self.model.run_interchange(
-            original_input,
-            {
-                "Y<-B": counterfactual_input,
-                "B<-Y": counterfactual_input
-            }
+            original_input, {"Y<-B": counterfactual_input, "B<-Y": counterfactual_input}
         )
 
         # Y should be 1 (from counterfactual B=1)
@@ -177,8 +170,8 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
             original_input,
             {
                 "Y<-B": counterfactual_input,  # Arrow syntax
-                "B": counterfactual_input       # Regular syntax
-            }
+                "B": counterfactual_input,  # Regular syntax
+            },
         )
 
         # Y should be 1 (from counterfactual B=1)
@@ -203,8 +196,8 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
             original_input,
             {
                 "Y<-B": counterfactual_1,  # Y gets B from counterfactual_1 (B=1)
-                "B<-Y": counterfactual_2   # B gets Y from counterfactual_2 (Y=3)
-            }
+                "B<-Y": counterfactual_2,  # B gets Y from counterfactual_2 (Y=3)
+            },
         )
 
         # Y should be 1 (from counterfactual_1 B=1)
@@ -223,8 +216,7 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
 
         # Use arrow syntax to swap input variables
         result = self.model.run_interchange(
-            original_input,
-            {"X<-A": counterfactual_input}
+            original_input, {"X<-A": counterfactual_input}
         )
 
         # X should be 0 (from counterfactual A=0)
@@ -247,8 +239,7 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
 
         # Use "Y<-Y" which should behave like the regular syntax
         result = self.model.run_interchange(
-            original_input,
-            {"Y<-Y": counterfactual_input}
+            original_input, {"Y<-Y": counterfactual_input}
         )
 
         # Should behave the same as regular syntax "Y"

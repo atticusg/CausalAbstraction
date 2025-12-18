@@ -2,19 +2,27 @@ __pycache__
 *.pyc
 *.pyo
 *.egg-info/
-dist/
-build/
+/dist/
+/build/
 
-content/
-results/
-logs/
+# Testing and coverage artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+pytest.xml
+.pytest_cache/
 
-run_baseline.sh
+/content/
+/results/
+/logs/
 
-.venv/
-.python-version
+/.venv/
 
-demos/onboarding_tutorial/*results/
+/demos/onboarding_tutorial/*results/
+/demos/onboarding_tutorial/*logs/
+/demos/onboarding_tutorial/*datasets/
 
-tasks/**/*results
-tasks/**/*datasets
+/tasks/**/*results
+/tasks/**/*datasets
+/tasks/**/*logs

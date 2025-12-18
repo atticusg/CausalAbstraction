@@ -1,7 +1,7 @@
 """
 Integration tests for Notebook 02: Residual Stream Tracing
 
-Tests loading the Qwen model and running SameLengthResidualStreamTracing
+Tests loading the Llama model and running residual stream tracing
 to trace information flow through the residual stream.
 """
 
@@ -9,15 +9,19 @@ import pytest
 import copy
 import random
 import torch
-from tasks.MCQA.mcqa import sample_answerable_question
-from experiments.LM_experiments.residual_stream_experiment import SameLengthResidualStreamTracing
+import tempfile
+from causalab.tasks.MCQA.counterfactuals import sample_answerable_question
+from causalab.experiments.jobs.residual_stream_tracing import (
+    run_residual_stream_tracing,
+)
+from causalab.neural.token_position_builder import get_list_of_each_token
 
 
 pytestmark = [pytest.mark.slow, pytest.mark.gpu]
 
 
 class TestModelLoading:
-    """Test loading the Qwen model via LMPipeline."""
+    """Test loading the Llama model via LMPipeline."""
 
     def test_pipeline_loaded(self, pipeline):
         """Test that pipeline is loaded correctly."""
@@ -50,22 +54,15 @@ class TestModelLoading:
         assert isinstance(decoded, str)
 
 
-class TestSameLengthResidualStreamTracing:
-    """Test residual stream tracing experiments."""
+class TestResidualStreamTracing:
+    """Test residual stream tracing experiments using the functional API."""
 
-    def test_create_tracing_experiment(self, pipeline, causal_model, checker):
-        """Test creating SameLengthResidualStreamTracing experiment."""
-        tracing_exp = SameLengthResidualStreamTracing(
-            pipeline=pipeline
-        )
-
-        assert tracing_exp is not None
-        assert tracing_exp.pipeline == pipeline
     def test_run_tracing_on_valid_pair(self, pipeline, causal_model, checker):
         """Test running tracing experiment on a valid input pair."""
         # Sample original and counterfactual
         original = sample_answerable_question()
         full_setting = causal_model.run_forward(original)
+        original["raw_input"] = full_setting["raw_input"]
 
         # Create a counterfactual by changing the answer symbol
         counterfactual = copy.deepcopy(original)
@@ -74,36 +71,41 @@ class TestSameLengthResidualStreamTracing:
             {"A", "B", "C"}.difference({full_setting[answer_symbol_key]})
         )
         counterfactual[answer_symbol_key] = random.choice(new_symbols)
-        del counterfactual["raw_input"]
+        if "raw_input" in counterfactual:
+            del counterfactual["raw_input"]
         counterfactual_setting = causal_model.run_forward(counterfactual)
         counterfactual["raw_input"] = counterfactual_setting["raw_input"]
 
-        # Create tracing experiment
-        tracing_exp = SameLengthResidualStreamTracing(
-            pipeline=pipeline
-        )
+        # Get token positions for the prompt
+        token_positions = get_list_of_each_token(full_setting["raw_input"], pipeline)
 
-        # Run tracing
-        results = tracing_exp.run(
-            base_input=original,
-            counterfactual_input=counterfactual
-        )
+        # Run tracing with temporary output directory
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = run_residual_stream_tracing(
+                pipeline=pipeline,
+                prompt=full_setting["raw_input"],
+                counterfactual_prompt=counterfactual_setting["raw_input"],
+                token_positions=token_positions,
+                output_dir=tmpdir,
+                layers=list(
+                    range(min(3, pipeline.get_num_layers()))
+                ),  # Use fewer layers for speed
+                generate_visualization=False,
+                save_results=True,
+            )
 
         # Verify results structure
         assert results is not None
-        assert "dataset" in results
-        assert "task_name" in results
-        assert "method_name" in results
-        assert "model_name" in results
-
-        # Verify there are model_unit entries
-        assert len(results["dataset"]) > 0
+        assert "intervention_results" in results
+        assert "metadata" in results
+        assert len(results["intervention_results"]) > 0
 
     def test_tracing_results_structure(self, pipeline, causal_model, checker):
         """Test that tracing results have expected structure."""
         # Sample inputs
         original = sample_answerable_question()
         full_setting = causal_model.run_forward(original)
+        original["raw_input"] = full_setting["raw_input"]
 
         counterfactual = copy.deepcopy(original)
         answer_symbol_key = f"symbol{full_setting['answer_position']}"
@@ -111,66 +113,85 @@ class TestSameLengthResidualStreamTracing:
             {"A", "B", "C"}.difference({full_setting[answer_symbol_key]})
         )
         counterfactual[answer_symbol_key] = random.choice(new_symbols)
-        del counterfactual["raw_input"]
+        if "raw_input" in counterfactual:
+            del counterfactual["raw_input"]
         counterfactual_setting = causal_model.run_forward(counterfactual)
         counterfactual["raw_input"] = counterfactual_setting["raw_input"]
 
+        # Get token positions
+        token_positions = get_list_of_each_token(full_setting["raw_input"], pipeline)
+
+        # Use only first 2 token positions and 2 layers for speed
+        token_positions = token_positions[:2]
+        layers = list(range(min(2, pipeline.get_num_layers())))
+
         # Run tracing
-        tracing_exp = SameLengthResidualStreamTracing(
-            pipeline=pipeline
-        )
-        results = tracing_exp.run(
-            base_input=original,
-            counterfactual_input=counterfactual
-        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = run_residual_stream_tracing(
+                pipeline=pipeline,
+                prompt=full_setting["raw_input"],
+                counterfactual_prompt=counterfactual_setting["raw_input"],
+                token_positions=token_positions,
+                output_dir=tmpdir,
+                layers=layers,
+                generate_visualization=False,
+                save_results=False,
+            )
 
-        # Check that we have results for all layers and positions
-        num_layers = pipeline.get_num_layers()
-        assert num_layers > 0
+        # Check metadata structure
+        metadata = results["metadata"]
+        assert "num_layers" in metadata
+        assert "layers_used" in metadata
+        assert "num_token_positions" in metadata
+        assert "total_interventions" in metadata
 
-        # Verify dataset structure
-        dataset_results = results["dataset"]
-        assert len(dataset_results) > 0
+        # Verify intervention results have correct keys
+        intervention_results = results["intervention_results"]
+        assert len(intervention_results) == len(layers) * len(token_positions)
 
-        # Check that model_units have the expected keys
-        first_dataset_key = next(iter(dataset_results.keys()))
-        model_units = dataset_results[first_dataset_key]["model_unit"]
-        assert len(model_units) > 0
-
-        # Check structure of a model unit result
-        first_unit_key = next(iter(model_units.keys()))
-        unit_result = model_units[first_unit_key]
-        assert "raw_outputs" in unit_result
-        assert "metadata" in unit_result
+        # Check that keys are (layer, token_position_id) tuples
+        for key in intervention_results.keys():
+            assert isinstance(key, tuple)
+            assert len(key) == 2
+            layer, pos_id = key
+            assert isinstance(layer, int)
+            assert isinstance(pos_id, str)
 
     def test_tracing_with_same_length_inputs(self, pipeline, causal_model, checker):
-        """Test that tracing requires same-length inputs."""
+        """Test that tracing works with same-length inputs."""
         # Sample two inputs
         original = sample_answerable_question()
-        counterfactual = sample_answerable_question()
+        full_setting = causal_model.run_forward(original)
+        original["raw_input"] = full_setting["raw_input"]
 
-        # Tokenize using pipeline.load() to match what run() does
-        base_ids = pipeline.load(original)
-        cf_ids = pipeline.load(counterfactual)
-
-        base_tokens = pipeline.tokenizer.convert_ids_to_tokens(base_ids['input_ids'][0])
-        cf_tokens = pipeline.tokenizer.convert_ids_to_tokens(cf_ids['input_ids'][0])
-
-        tracing_exp = SameLengthResidualStreamTracing(
-            pipeline=pipeline
+        # Create counterfactual with same length by only changing the symbol
+        counterfactual = copy.deepcopy(original)
+        answer_symbol_key = f"symbol{full_setting['answer_position']}"
+        new_symbols = list(
+            {"A", "B", "C"}.difference({full_setting[answer_symbol_key]})
         )
+        counterfactual[answer_symbol_key] = random.choice(new_symbols)
+        if "raw_input" in counterfactual:
+            del counterfactual["raw_input"]
+        counterfactual_setting = causal_model.run_forward(counterfactual)
+        counterfactual["raw_input"] = counterfactual_setting["raw_input"]
 
-        if len(base_tokens) != len(cf_tokens):
-            # Expect an error when lengths don't match
-            with pytest.raises(ValueError, match="must have the same length"):
-                tracing_exp.run(
-                    base_input=original,
-                    counterfactual_input=counterfactual
-                )
-        else:
-            # If by chance they're the same length, should succeed
-            results = tracing_exp.run(
-                base_input=original,
-                counterfactual_input=counterfactual
+        # Get token positions
+        token_positions = get_list_of_each_token(full_setting["raw_input"], pipeline)[
+            :2
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = run_residual_stream_tracing(
+                pipeline=pipeline,
+                prompt=full_setting["raw_input"],
+                counterfactual_prompt=counterfactual_setting["raw_input"],
+                token_positions=token_positions,
+                output_dir=tmpdir,
+                layers=[0, 1],
+                generate_visualization=False,
+                save_results=False,
             )
-            assert results is not None
+
+        assert results is not None
+        assert len(results["intervention_results"]) > 0

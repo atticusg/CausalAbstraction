@@ -6,6 +6,7 @@ import pytest
 # Dummy HuggingFace‑like stubs
 # ---------------------------------------------------------------------------
 
+
 class DummyTokenizer:
     """Mimics the minimal HF tokenizer API used in `LMPipeline`."""
 
@@ -25,11 +26,25 @@ class DummyTokenizer:
     def encode(self, text):
         return [self.convert_tokens_to_ids(c) for c in text]
 
-    def __call__(self, texts, *, padding, max_length, truncation, return_tensors, add_special_tokens):
+    def __call__(
+        self,
+        texts,
+        *,
+        padding,
+        max_length,
+        truncation,
+        return_tensors,
+        add_special_tokens,
+        **kwargs,
+    ):
         # Very naive: represent each string as its ord() ids, pad / truncate.
+        # Accept **kwargs to ignore unused parameters like return_offsets_mapping
         batch = [self.encode(t) for t in texts]
         if max_length:
-            batch = [seq[: max_length] + [self.pad_token_id] * (max_length - len(seq)) for seq in batch]
+            batch = [
+                seq[:max_length] + [self.pad_token_id] * (max_length - len(seq))
+                for seq in batch
+            ]
         # Build tensors
         input_ids = torch.tensor(batch, dtype=torch.long)
         attention_mask = (input_ids != self.pad_token_id).long()
@@ -38,7 +53,9 @@ class DummyTokenizer:
     def batch_decode(self, ids, skip_special_tokens=True):
         results = []
         for seq in ids:
-            chars = [chr(int(i)) for i in seq.tolist() if i not in (self.pad_token_id, 0)]
+            chars = [
+                chr(int(i)) for i in seq.tolist() if i not in (self.pad_token_id, 0)
+            ]
             results.append("".join(chars))
         return results
 
@@ -71,7 +88,11 @@ class DummyModel:
         # sequences: pad_token_id + incremental ints
         seqs = torch.arange(1, max_new + 1).repeat(batch_size, 1)
         # fake logits: (batch, steps, vocab) where vocab=26 (a‑z)
-        scores = [torch.rand(batch_size, 26) for _ in range(max_new)] if kwargs.get("output_scores") else None
+        scores = (
+            [torch.rand(batch_size, 26) for _ in range(max_new)]
+            if kwargs.get("output_scores")
+            else None
+        )
         return DummyGenerateOutput(seqs, scores)
 
     # Needed by `prepare_inputs_for_generation` when position_ids=True
@@ -84,14 +105,19 @@ class DummyModel:
 # Pytest fixtures & monkeypatches
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(autouse=True)
 def patch_hf(monkeypatch):
     """Patch HF factory funcs to return dummy stubs."""
 
     from transformers import AutoTokenizer, AutoModelForCausalLM
 
-    monkeypatch.setattr(AutoTokenizer, "from_pretrained", lambda *a, **k: DummyTokenizer())
-    monkeypatch.setattr(AutoModelForCausalLM, "from_pretrained", lambda *a, **k: DummyModel())
+    monkeypatch.setattr(
+        AutoTokenizer, "from_pretrained", lambda *a, **k: DummyTokenizer()
+    )
+    monkeypatch.setattr(
+        AutoModelForCausalLM, "from_pretrained", lambda *a, **k: DummyModel()
+    )
     yield  # test runs
 
 
@@ -99,7 +125,7 @@ def patch_hf(monkeypatch):
 # Unit tests
 # ---------------------------------------------------------------------------
 
-from neural.pipeline import LMPipeline, _infer_device_and_dtype  # noqa: E402 (import after patch)
+from causalab.neural.pipeline import LMPipeline, _infer_device_and_dtype  # noqa: E402 (import after patch)
 
 
 def test_infer_device_and_dtype_cpu():

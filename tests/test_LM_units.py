@@ -12,8 +12,9 @@ from __future__ import annotations
 import pytest
 import torch
 
-import neural.LM_units as LM
-import neural.featurizers as F
+from causalab.neural.LM_units import ResidualStream, AttentionHead, MLP
+from causalab.neural.token_position_builder import get_substring_token_ids
+import causalab.neural.featurizers as F
 
 
 # --------------------------------------------------------------------------- #
@@ -30,39 +31,68 @@ def rng():
 #  1. Mutable-default featurizer fix                                           #
 # --------------------------------------------------------------------------- #
 def test_residualstream_featurizers_unique():
-    rs1 = LM.ResidualStream(layer=0, token_indices=[0])
-    rs2 = LM.ResidualStream(layer=0, token_indices=[0])
+    rs1 = ResidualStream(layer=0, token_indices=[0])
+    rs2 = ResidualStream(layer=0, token_indices=[0])
     assert rs1.featurizer is not rs2.featurizer
 
 
 def test_attentionhead_featurizers_unique():
-    ah1 = LM.AttentionHead(layer=0, head=5, token_indices=[0])
-    ah2 = LM.AttentionHead(layer=0, head=5, token_indices=[0])
+    ah1 = AttentionHead(layer=0, head=5, token_indices=[0])
+    ah2 = AttentionHead(layer=0, head=5, token_indices=[0])
     assert ah1.featurizer is not ah2.featurizer
+
+
+def test_mlp_featurizers_unique():
+    mlp1 = MLP(layer=0, token_indices=[0])
+    mlp2 = MLP(layer=0, token_indices=[0])
+    assert mlp1.featurizer is not mlp2.featurizer
 
 
 # --------------------------------------------------------------------------- #
 #  2. AttentionHead index structure                                            #
 # --------------------------------------------------------------------------- #
 def test_attentionhead_index_structure():
-    ah = LM.AttentionHead(layer=1, head=7, token_indices=[3])
+    ah = AttentionHead(layer=1, head=7, token_indices=[3])
     idx = ah.index_component("dummy")
     assert idx == [[[7]], [[3]]]
+
+
+# --------------------------------------------------------------------------- #
+#  2b. MLP component types                                                     #
+# --------------------------------------------------------------------------- #
+def test_mlp_component_types():
+    mlp_input = MLP(layer=0, token_indices=[0], location="mlp_input")
+    mlp_output = MLP(layer=0, token_indices=[0], location="mlp_output")
+    mlp_activation = MLP(layer=0, token_indices=[0], location="mlp_activation")
+
+    assert mlp_input.component_type == "mlp_input"
+    assert mlp_output.component_type == "mlp_output"
+    assert mlp_activation.component_type == "mlp_activation"
+
+
+def test_mlp_default_location():
+    mlp = MLP(layer=0, token_indices=[0])
+    assert mlp.component_type == "mlp_output"
+
+
+def test_mlp_invalid_location():
+    with pytest.raises(ValueError, match="Invalid location"):
+        MLP(layer=0, token_indices=[0], location="invalid")
 
 
 # --------------------------------------------------------------------------- #
 #  3. Feature-index bounds behaviour                                           #
 # --------------------------------------------------------------------------- #
 def test_attentionhead_feature_bounds_violation():
-    big_feat   = F.SubspaceFeaturizer(shape=(4, 4), trainable=False)   # 4 features
-    small_feat = F.SubspaceFeaturizer(shape=(4, 2), trainable=False)   # 2 features
+    big_feat = F.SubspaceFeaturizer(shape=(4, 4), trainable=False)  # 4 features
+    small_feat = F.SubspaceFeaturizer(shape=(4, 2), trainable=False)  # 2 features
 
-    ah = LM.AttentionHead(
+    ah = AttentionHead(
         layer=0,
         head=0,
         token_indices=[0],
         featurizer=big_feat,
-        feature_indices=[3],   # valid in 4-dim space
+        feature_indices=[3],  # valid in 4-dim space
     )
 
     with pytest.raises(ValueError):
@@ -117,10 +147,29 @@ class MockPipeline:
     def __init__(self, tokenizer):
         self.tokenizer = tokenizer
 
-    def load(self, input_dict, add_special_tokens=False):
-        text = input_dict["raw_input"]
-        # Just return token indices
-        return {"input_ids": torch.tensor([[i for i in range(len(self.tokenizer.tokens))]])}
+    def load(
+        self,
+        input_dict,
+        add_special_tokens=False,
+        return_offsets_mapping=False,
+        no_padding=False,
+    ):
+        result = {
+            "input_ids": torch.tensor([[i for i in range(len(self.tokenizer.tokens))]])
+        }
+
+        if return_offsets_mapping:
+            # Generate character offsets for each token
+            offsets = []
+            pos = 0
+            for token in self.tokenizer.tokens:
+                start = pos
+                end = pos + len(token)
+                offsets.append((start, end))
+                pos = end
+            result["offset_mapping"] = [offsets]
+
+        return result
 
 
 def test_get_substring_token_ids_single_token():
@@ -128,7 +177,7 @@ def test_get_substring_token_ids_single_token():
     tokenizer = MockTokenizer(["The", " ", "quick", " ", "fox"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("The quick fox", "quick", pipeline)
+    result = get_substring_token_ids("The quick fox", "quick", pipeline)
     assert result == [2], f"Expected [2], got {result}"
 
 
@@ -137,7 +186,7 @@ def test_get_substring_token_ids_multiple_tokens():
     tokenizer = MockTokenizer(["The", " ", "quick", " ", "brown", " ", "fox"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("The quick brown fox", "quick brown", pipeline)
+    result = get_substring_token_ids("The quick brown fox", "quick brown", pipeline)
     assert result == [2, 3, 4], f"Expected [2, 3, 4], got {result}"
 
 
@@ -146,7 +195,7 @@ def test_get_substring_token_ids_partial_start():
     tokenizer = MockTokenizer(["hello", "world"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("helloworld", "loworld", pipeline)
+    result = get_substring_token_ids("helloworld", "loworld", pipeline)
     # Should include both tokens since substring overlaps both
     assert result == [0, 1], f"Expected [0, 1], got {result}"
 
@@ -156,7 +205,7 @@ def test_get_substring_token_ids_partial_end():
     tokenizer = MockTokenizer(["hello", "world"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("helloworld", "hellowor", pipeline)
+    result = get_substring_token_ids("helloworld", "hellowor", pipeline)
     # Should include both tokens
     assert result == [0, 1], f"Expected [0, 1], got {result}"
 
@@ -166,7 +215,7 @@ def test_get_substring_token_ids_partial_both():
     tokenizer = MockTokenizer(["abc", "def", "ghi"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("abcdefghi", "cdefg", pipeline)
+    result = get_substring_token_ids("abcdefghi", "cdefg", pipeline)
     # Should include all three tokens
     assert result == [0, 1, 2], f"Expected [0, 1, 2], got {result}"
 
@@ -176,7 +225,7 @@ def test_get_substring_token_ids_single_char():
     tokenizer = MockTokenizer(["The", " ", "cat"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("The cat", "c", pipeline)
+    result = get_substring_token_ids("The cat", "c", pipeline)
     assert result == [2], f"Expected [2], got {result}"
 
 
@@ -185,7 +234,7 @@ def test_get_substring_token_ids_with_spaces():
     tokenizer = MockTokenizer(["The", " ", "quick", " ", "fox"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("The quick fox", " quick ", pipeline)
+    result = get_substring_token_ids("The quick fox", " quick ", pipeline)
     assert result == [1, 2, 3], f"Expected [1, 2, 3], got {result}"
 
 
@@ -195,7 +244,7 @@ def test_get_substring_token_ids_empty_substring():
     pipeline = MockPipeline(tokenizer)
 
     with pytest.raises(ValueError, match="Substring cannot be empty"):
-        LM.get_substring_token_ids("hello", "", pipeline)
+        get_substring_token_ids("hello", "", pipeline)
 
 
 def test_get_substring_token_ids_empty_text():
@@ -204,7 +253,7 @@ def test_get_substring_token_ids_empty_text():
     pipeline = MockPipeline(tokenizer)
 
     with pytest.raises(ValueError, match="Text cannot be empty"):
-        LM.get_substring_token_ids("", "test", pipeline)
+        get_substring_token_ids("", "test", pipeline)
 
 
 def test_get_substring_token_ids_substring_not_found():
@@ -213,7 +262,7 @@ def test_get_substring_token_ids_substring_not_found():
     pipeline = MockPipeline(tokenizer)
 
     with pytest.raises(ValueError, match="not found in text"):
-        LM.get_substring_token_ids("helloworld", "xyz", pipeline)
+        get_substring_token_ids("helloworld", "xyz", pipeline)
 
 
 def test_get_substring_token_ids_full_text():
@@ -221,7 +270,7 @@ def test_get_substring_token_ids_full_text():
     tokenizer = MockTokenizer(["hello", "world"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("helloworld", "helloworld", pipeline)
+    result = get_substring_token_ids("helloworld", "helloworld", pipeline)
     assert result == [0, 1], f"Expected [0, 1], got {result}"
 
 
@@ -230,7 +279,7 @@ def test_get_substring_token_ids_first_token_only():
     tokenizer = MockTokenizer(["The", " ", "end"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("The end", "The", pipeline)
+    result = get_substring_token_ids("The end", "The", pipeline)
     assert result == [0], f"Expected [0], got {result}"
 
 
@@ -239,7 +288,7 @@ def test_get_substring_token_ids_last_token_only():
     tokenizer = MockTokenizer(["The", " ", "end"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("The end", "end", pipeline)
+    result = get_substring_token_ids("The end", "end", pipeline)
     assert result == [2], f"Expected [2], got {result}"
 
 
@@ -248,7 +297,7 @@ def test_get_substring_token_ids_multiple_occurrences():
     tokenizer = MockTokenizer(["cat", " ", "and", " ", "cat"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("cat and cat", "cat", pipeline)
+    result = get_substring_token_ids("cat and cat", "cat", pipeline)
     # Should match the first occurrence at token 0
     assert result == [0], f"Expected [0], got {result}"
 
@@ -258,7 +307,7 @@ def test_get_substring_token_ids_multiple_spaces():
     tokenizer = MockTokenizer(["The", "  ", "cat"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("The  cat", "  cat", pipeline)
+    result = get_substring_token_ids("The  cat", "  cat", pipeline)
     assert result == [1, 2], f"Expected [1, 2], got {result}"
 
 
@@ -267,7 +316,7 @@ def test_get_substring_token_ids_punctuation():
     tokenizer = MockTokenizer(["Hello", ",", " ", "world", "!"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("Hello, world!", ", world!", pipeline)
+    result = get_substring_token_ids("Hello, world!", ", world!", pipeline)
     assert result == [1, 2, 3, 4], f"Expected [1, 2, 3, 4], got {result}"
 
 
@@ -276,7 +325,7 @@ def test_get_substring_token_ids_single_char_from_multichar_token():
     tokenizer = MockTokenizer(["hello"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("hello", "l", pipeline)
+    result = get_substring_token_ids("hello", "l", pipeline)
     # Should include the whole token even though it's just one char
     assert result == [0], f"Expected [0], got {result}"
 
@@ -286,7 +335,7 @@ def test_get_substring_token_ids_all_but_one_char():
     tokenizer = MockTokenizer(["hello", "world"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("helloworld", "elloworld", pipeline)
+    result = get_substring_token_ids("helloworld", "elloworld", pipeline)
     # Should include both tokens since substring overlaps both
     assert result == [0, 1], f"Expected [0, 1], got {result}"
 
@@ -299,7 +348,7 @@ def test_get_substring_token_ids_whitespace_mismatch():
 
     # Original text has different spacing than reconstructed
     # This should still work with whitespace normalization fallback
-    result = LM.get_substring_token_ids("The cat", "cat", pipeline)
+    result = get_substring_token_ids("The cat", "cat", pipeline)
     assert result == [2], f"Expected [2], got {result}"
 
 
@@ -308,7 +357,7 @@ def test_get_substring_token_ids_adjacent_identical_tokens():
     tokenizer = MockTokenizer(["la", "la", "la"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("lalala", "lala", pipeline)
+    result = get_substring_token_ids("lalala", "lala", pipeline)
     # Should match first two tokens
     assert result == [0, 1], f"Expected [0, 1], got {result}"
 
@@ -319,7 +368,7 @@ def test_get_substring_token_ids_substring_longer_than_original():
     pipeline = MockPipeline(tokenizer)
 
     with pytest.raises(ValueError, match="not found in text"):
-        LM.get_substring_token_ids("hi", "hi there", pipeline)
+        get_substring_token_ids("hi", "hi there", pipeline)
 
 
 def test_get_substring_token_ids_very_short_tokens():
@@ -327,7 +376,7 @@ def test_get_substring_token_ids_very_short_tokens():
     tokenizer = MockTokenizer(["a", "b", "c", "d", "e"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("abcde", "bcd", pipeline)
+    result = get_substring_token_ids("abcde", "bcd", pipeline)
     assert result == [1, 2, 3], f"Expected [1, 2, 3], got {result}"
 
 
@@ -337,16 +386,16 @@ def test_get_substring_token_ids_token_split_mid_word():
     tokenizer = MockTokenizer(["read", "ing"], reconstructed_text="reading")
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("reading", "reading", pipeline)
+    result = get_substring_token_ids("reading", "reading", pipeline)
     # Should include both tokens
     assert result == [0, 1], f"Expected [0, 1], got {result}"
 
     # Test substring that matches exactly one token
-    result2 = LM.get_substring_token_ids("reading", "read", pipeline)
+    result2 = get_substring_token_ids("reading", "read", pipeline)
     assert result2 == [0], f"Expected [0], got {result2}"
 
     # Test substring that matches the other token
-    result3 = LM.get_substring_token_ids("reading", "ing", pipeline)
+    result3 = get_substring_token_ids("reading", "ing", pipeline)
     assert result3 == [1], f"Expected [1], got {result3}"
 
 
@@ -355,7 +404,7 @@ def test_get_substring_token_ids_overlapping_boundary():
     tokenizer = MockTokenizer(["abc", "def"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("abcdef", "cd", pipeline)
+    result = get_substring_token_ids("abcdef", "cd", pipeline)
     # Should include both tokens since 'c' is in first, 'd' is in second
     assert result == [0, 1], f"Expected [0, 1], got {result}"
 
@@ -365,7 +414,7 @@ def test_get_substring_token_ids_newline_handling():
     tokenizer = MockTokenizer(["Hello", "\n", "World"])
     pipeline = MockPipeline(tokenizer)
 
-    result = LM.get_substring_token_ids("Hello\nWorld", "\nWorld", pipeline)
+    result = get_substring_token_ids("Hello\nWorld", "\nWorld", pipeline)
     assert result == [1, 2], f"Expected [1, 2], got {result}"
 
 
@@ -379,7 +428,8 @@ class TestGetSubstringTokenIdsRealTokenizers:
     @pytest.fixture(scope="class")
     def gpt2_pipeline(self):
         """Load a real GPT-2 pipeline for testing."""
-        from neural.pipeline import LMPipeline
+        from causalab.neural.pipeline import LMPipeline
+
         try:
             pipeline = LMPipeline("gpt2", max_new_tokens=1)
             return pipeline
@@ -389,7 +439,8 @@ class TestGetSubstringTokenIdsRealTokenizers:
     @pytest.fixture(scope="class")
     def olmo_pipeline(self):
         """Load a real OLMo pipeline for testing."""
-        from neural.pipeline import LMPipeline
+        from causalab.neural.pipeline import LMPipeline
+
         try:
             pipeline = LMPipeline("allenai/OLMo-1B-hf", max_new_tokens=1)
             return pipeline
@@ -401,7 +452,7 @@ class TestGetSubstringTokenIdsRealTokenizers:
         text = "The quick brown fox"
         substring = "quick"
 
-        result = LM.get_substring_token_ids(text, substring, gpt2_pipeline)
+        result = get_substring_token_ids(text, substring, gpt2_pipeline)
 
         # Verify result is a list of integers
         assert isinstance(result, list)
@@ -421,7 +472,7 @@ class TestGetSubstringTokenIdsRealTokenizers:
         text = "Hello world from GPT"
         substring = " world"
 
-        result = LM.get_substring_token_ids(text, substring, gpt2_pipeline)
+        result = get_substring_token_ids(text, substring, gpt2_pipeline)
 
         assert isinstance(result, list)
         assert len(result) > 0
@@ -440,7 +491,7 @@ class TestGetSubstringTokenIdsRealTokenizers:
         # Pick a substring that's likely to span multiple BPE tokens
         substring = "liev"
 
-        result = LM.get_substring_token_ids(text, substring, gpt2_pipeline)
+        result = get_substring_token_ids(text, substring, gpt2_pipeline)
 
         assert isinstance(result, list)
         assert len(result) > 0
@@ -457,7 +508,7 @@ class TestGetSubstringTokenIdsRealTokenizers:
         text = "The quick brown fox jumps over the lazy dog"
         substring = "fox jumps over"
 
-        result = LM.get_substring_token_ids(text, substring, gpt2_pipeline)
+        result = get_substring_token_ids(text, substring, gpt2_pipeline)
 
         assert isinstance(result, list)
         assert len(result) >= 3  # At least 3 tokens for these words
@@ -476,7 +527,7 @@ class TestGetSubstringTokenIdsRealTokenizers:
         text = "Hello, world! How are you?"
         substring = ", world!"
 
-        result = LM.get_substring_token_ids(text, substring, gpt2_pipeline)
+        result = get_substring_token_ids(text, substring, gpt2_pipeline)
 
         assert isinstance(result, list)
         assert len(result) > 0
@@ -492,7 +543,7 @@ class TestGetSubstringTokenIdsRealTokenizers:
         text = "The cat sat"
         substring = "c"
 
-        result = LM.get_substring_token_ids(text, substring, gpt2_pipeline)
+        result = get_substring_token_ids(text, substring, gpt2_pipeline)
 
         assert isinstance(result, list)
         assert len(result) > 0
@@ -502,7 +553,7 @@ class TestGetSubstringTokenIdsRealTokenizers:
         text = "The quick brown fox"
         substring = "quick"
 
-        result = LM.get_substring_token_ids(text, substring, olmo_pipeline)
+        result = get_substring_token_ids(text, substring, olmo_pipeline)
 
         # Verify result is a list of integers
         assert isinstance(result, list)
@@ -522,7 +573,7 @@ class TestGetSubstringTokenIdsRealTokenizers:
         text = "Hello world from OLMo"
         substring = " world"
 
-        result = LM.get_substring_token_ids(text, substring, olmo_pipeline)
+        result = get_substring_token_ids(text, substring, olmo_pipeline)
 
         assert isinstance(result, list)
         assert len(result) > 0
@@ -541,8 +592,8 @@ class TestGetSubstringTokenIdsRealTokenizers:
         substring = "brown"
 
         # Both should return valid results
-        gpt2_result = LM.get_substring_token_ids(text, substring, gpt2_pipeline)
-        olmo_result = LM.get_substring_token_ids(text, substring, olmo_pipeline)
+        gpt2_result = get_substring_token_ids(text, substring, gpt2_pipeline)
+        olmo_result = get_substring_token_ids(text, substring, olmo_pipeline)
 
         # Both should be non-empty lists
         assert len(gpt2_result) > 0
@@ -565,7 +616,7 @@ class TestGetSubstringTokenIdsRealTokenizers:
         text = "The quick brown fox"
         substring = "The"
 
-        result = LM.get_substring_token_ids(text, substring, gpt2_pipeline)
+        result = get_substring_token_ids(text, substring, gpt2_pipeline)
 
         assert isinstance(result, list)
         assert len(result) > 0
@@ -576,7 +627,7 @@ class TestGetSubstringTokenIdsRealTokenizers:
         text = "The quick brown fox"
         substring = "fox"
 
-        result = LM.get_substring_token_ids(text, substring, gpt2_pipeline)
+        result = get_substring_token_ids(text, substring, gpt2_pipeline)
 
         assert isinstance(result, list)
         assert len(result) > 0

@@ -7,15 +7,13 @@ Run with:
 
 from __future__ import annotations
 
-import math
-import os
 from pathlib import Path
 from typing import Tuple
 
 import torch
 import pytest
 
-import neural.featurizers as F  # the module we just rewrote
+import causalab.neural.featurizers as F  # the module we just rewrote
 
 
 # --------------------------------------------------------------------------- #
@@ -93,13 +91,13 @@ def test_mask_forward_training_and_eval(rng):
     mask = MaskCls()
 
     # Temperature must be set first
-    mask.set_temperature(1.0)
+    mask.set_temperature(1.0)  # pyright: ignore[reportCallIssue]
 
     # --------------------------------------------------------------------- #
     # 1. Training mode – push mask to 1 ⇒ output ≈ src                      #
     # --------------------------------------------------------------------- #
     mask.train()
-    mask.mask.data.fill_(20.0)          # sigmoid(20) ≈ 1 − 2e-9
+    mask.mask.data.fill_(20.0)  # pyright: ignore[reportCallIssue] # sigmoid(20) ≈ 1 − 2e-9
     out_train = mask(x_base, x_src)
     assert torch.allclose(out_train, x_src, atol=1e-6)
 
@@ -114,9 +112,13 @@ def test_mask_forward_training_and_eval(rng):
 # --------------------------------------------------------------------------- #
 #  Serialization round-trips                                                  #
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("factory", [lambda: F.Featurizer(n_features=4),
-                                     lambda: F.SubspaceFeaturizer(shape=(4, 4),
-                                                                  trainable=False)])
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: F.Featurizer(n_features=4),
+        lambda: F.SubspaceFeaturizer(shape=(4, 4), trainable=False),
+    ],
+)
 def test_save_load_roundtrip(factory, tmp_path: Path, rng):
     feat = factory()
     x = randn((2, 4), rng)

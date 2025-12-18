@@ -1,15 +1,20 @@
 """
 Integration tests for Notebook 03: Localization with Patching
 
-Tests filtering datasets, running PatchResidualStream experiments,
+Tests filtering datasets, running residual stream patching experiments,
 and localizing answer and answer_position variables.
 """
 
 import pytest
-import torch
-from tasks.MCQA.mcqa import MCQA_task
-from experiments.filter_experiment import FilterExperiment
-from experiments.LM_experiments.residual_stream_experiment import PatchResidualStream
+import tempfile
+import os
+from causalab.tasks.MCQA import token_positions
+from causalab.tasks.MCQA.counterfactuals import sample_answerable_question
+from causalab.causal.counterfactual_dataset import CounterfactualDataset
+from causalab.experiments.filter import filter_dataset
+from causalab.experiments.metric import causal_score_intervention_outputs
+from causalab.experiments.interchange_targets import build_residual_stream_targets
+from causalab.neural.pyvene_core.interchange import run_interchange_interventions
 
 
 pytestmark = [pytest.mark.slow, pytest.mark.gpu]
@@ -18,34 +23,51 @@ pytestmark = [pytest.mark.slow, pytest.mark.gpu]
 class TestDatasetFiltering:
     """Test filtering counterfactual datasets based on model performance."""
 
-    def test_filter_experiment_creation(self, pipeline, causal_model, checker):
-        """Test creating FilterExperiment."""
-        filter_exp = FilterExperiment(pipeline, causal_model, checker)
+    def test_filter_dataset(self, pipeline, causal_model, checker):
+        """Test filtering a single counterfactual dataset."""
+        from causalab.tasks.MCQA.counterfactuals import different_symbol
 
-        assert filter_exp is not None
-        assert filter_exp.pipeline == pipeline
-    def test_filter_datasets(
+        # Generate a small dataset
+        dataset = CounterfactualDataset.from_sampler(8, different_symbol)
+
+        # Filter the dataset
+        filtered = filter_dataset(
+            dataset=dataset,
+            pipeline=pipeline,
+            causal_model=causal_model,
+            metric=checker,
+            batch_size=8,
+        )
+
+        # Verify that we get a filtered dataset back
+        assert isinstance(filtered, CounterfactualDataset)
+        assert len(filtered) <= len(dataset)
+
+    def test_filter_multiple_datasets(
         self,
         pipeline,
         causal_model,
         checker,
         small_different_symbol_dataset,
         small_same_symbol_diff_position_dataset,
-        small_random_dataset
+        small_random_dataset,
     ):
         """Test filtering multiple counterfactual datasets."""
         datasets = {
             "different_symbol": small_different_symbol_dataset,
             "same_symbol_different_position": small_same_symbol_diff_position_dataset,
-            "random_counterfactual": small_random_dataset
+            "random_counterfactual": small_random_dataset,
         }
 
-        filter_exp = FilterExperiment(pipeline, causal_model, checker)
-        filtered_datasets = filter_exp.filter(
-            datasets,
-            verbose=False,
-            batch_size=8
-        )
+        filtered_datasets = {}
+        for name, dataset in datasets.items():
+            filtered_datasets[name] = filter_dataset(
+                dataset=dataset,
+                pipeline=pipeline,
+                causal_model=causal_model,
+                metric=checker,
+                batch_size=8,
+            )
 
         # Verify that we get filtered datasets back
         assert isinstance(filtered_datasets, dict)
@@ -57,21 +79,20 @@ class TestDatasetFiltering:
             assert len(filtered_datasets[key]) <= len(datasets[key])
 
     def test_filtered_dataset_structure(
-        self,
-        pipeline,
-        causal_model,
-        checker,
-        small_different_symbol_dataset
+        self, pipeline, causal_model, checker, small_different_symbol_dataset
     ):
         """Test that filtered datasets maintain proper structure."""
-        datasets = {"test": small_different_symbol_dataset}
-
-        filter_exp = FilterExperiment(pipeline, causal_model, checker)
-        filtered = filter_exp.filter(datasets, verbose=False, batch_size=8)
+        filtered = filter_dataset(
+            dataset=small_different_symbol_dataset,
+            pipeline=pipeline,
+            causal_model=causal_model,
+            metric=checker,
+            batch_size=8,
+        )
 
         # Check structure is preserved
-        if len(filtered["test"]) > 0:
-            example = filtered["test"][0]
+        if len(filtered) > 0:
+            example = filtered[0]
             assert "input" in example
             assert "counterfactual_inputs" in example
 
@@ -81,178 +102,148 @@ class TestTokenPositions:
 
     def test_create_token_positions(self, pipeline):
         """Test creating token positions for MCQA task."""
-        token_positions = MCQA_task.create_token_positions(pipeline)
+        token_positions_dict = token_positions.create_token_positions(pipeline)
 
-        assert isinstance(token_positions, dict)
-        assert len(token_positions) > 0
+        assert isinstance(token_positions_dict, dict)
+        assert len(token_positions_dict) > 0
 
         # Check expected positions exist
-        expected_positions = [
-            "symbol0",
-            "symbol1",
-            "correct_symbol",
-            "last_token"
-        ]
+        expected_positions = ["symbol0", "symbol1", "correct_symbol", "last_token"]
         for pos_name in expected_positions:
-            assert pos_name in token_positions
+            assert pos_name in token_positions_dict
 
     def test_token_position_selection(self, pipeline, causal_model):
         """Test that token positions correctly select tokens."""
-        from tasks.MCQA.mcqa import sample_answerable_question
 
-        token_positions = MCQA_task.create_token_positions(pipeline)
+        token_positions_dict = token_positions.create_token_positions(pipeline)
         example = sample_answerable_question()
 
         # Test that each position can highlight a token
-        for pos_name, token_pos in token_positions.items():
+        for _, token_pos in token_positions_dict.items():
             highlighted = token_pos.highlight_selected_token(example)
             assert isinstance(highlighted, str)
             assert "**" in highlighted  # Check that highlighting occurred
 
 
-class TestPatchResidualStreamExperiment:
+class TestResidualStreamPatching:
     """Test activation patching experiments on residual stream."""
 
-    def test_create_patch_experiment(self, pipeline, causal_model, checker):
-        """Test creating PatchResidualStream experiment."""
-        token_positions = list(MCQA_task.create_token_positions(pipeline).values())
-        layers = list(range(0, min(5, pipeline.get_num_layers())))
-
-        experiment = PatchResidualStream(
-            pipeline=pipeline,
-            layers=layers,
-            token_positions=token_positions[:2],  # Use first 2 positions for speed
-            checker=checker,
-            config={"batch_size": 8}
-        )
-
-        assert experiment is not None
-        assert experiment.pipeline == pipeline        assert experiment.layers == layers
-
-    def test_perform_interventions_structure(
-        self,
-        pipeline,
-        causal_model,
-        checker,
-        small_different_symbol_dataset
+    def test_run_patching_experiment(
+        self, pipeline, causal_model, checker, small_different_symbol_dataset
     ):
-        """Test performing interventions and verify results structure."""
-        token_positions = list(MCQA_task.create_token_positions(pipeline).values())
-        layers = list(range(0, min(3, pipeline.get_num_layers())))  # Use fewer layers for speed
-
-        experiment = PatchResidualStream(
+        """Test running patching experiment and verify results structure."""
+        # Filter dataset first
+        filtered_dataset = filter_dataset(
+            dataset=small_different_symbol_dataset,
             pipeline=pipeline,
-            layers=layers,
-            token_positions=token_positions[:2],  # Use fewer positions for speed
-            checker=checker,
-            config={"batch_size": 8}
+            causal_model=causal_model,
+            metric=checker,
+            batch_size=8,
         )
 
-        datasets = {"test_dataset": small_different_symbol_dataset}
-        target_variables_list = [["answer"], ["answer_position"]]
+        if len(filtered_dataset) == 0:
+            pytest.skip("No examples passed filtering")
 
-        results = experiment.perform_interventions(
-            datasets,
-            verbose=False,
-            target_variables_list=target_variables_list
-        )
+        # Create token positions
+        token_positions_dict = token_positions.create_token_positions(pipeline)
+        # Use only first 2 positions for speed
+        limited_positions = dict(list(token_positions_dict.items())[:2])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Save dataset to disk
+            dataset_path = os.path.join(tmpdir, "test_dataset")
+            filtered_dataset.dataset.save_to_disk(dataset_path)
+
+            # Build residual stream targets
+            layers = list(range(min(3, pipeline.get_num_layers())))
+            targets = build_residual_stream_targets(
+                pipeline=pipeline,
+                layers=layers,
+                token_positions=list(limited_positions.values()),
+                mode="one_target_per_unit",
+            )
+
+            # Run interventions directly
+            raw_results = {}
+            for key, target in targets.items():
+                raw_results[key] = run_interchange_interventions(
+                    pipeline=pipeline,
+                    counterfactual_dataset=filtered_dataset,
+                    interchange_target=target,
+                    batch_size=8,
+                    output_scores=False,
+                )
+
+            # Score the results
+            results = causal_score_intervention_outputs(
+                raw_results=raw_results,
+                dataset=filtered_dataset,
+                causal_model=causal_model,
+                target_variable_groups=[("answer",)],
+                metric=checker,
+            )
 
         # Verify results structure
         assert results is not None
-        assert "dataset" in results
-        assert "task_name" in results
-        assert "method_name" in results
-        assert "model_name" in results
+        assert "results_by_key" in results
+        assert "scores_by_variable" in results
 
-        # Verify dataset results
-        assert "test_dataset" in results["dataset"]
-        dataset_results = results["dataset"]["test_dataset"]
-        assert "model_unit" in dataset_results
+        # Verify scores structure
+        assert ("answer",) in results["scores_by_variable"]
+        assert results["scores_by_variable"][("answer",)] >= 0
 
-        # Verify model unit results have expected structure
-        model_units = dataset_results["model_unit"]
-        assert len(model_units) > 0
-
-        first_unit_key = next(iter(model_units.keys()))
-        unit_result = model_units[first_unit_key]
-        assert "metadata" in unit_result
-
-        # Check that we have results for target variables
-        for target_vars in target_variables_list:
-            target_key = "-".join(target_vars)
-            assert target_key in unit_result
-
-    def test_perform_interventions_with_multiple_datasets(
-        self,
-        pipeline,
-        causal_model,
-        checker,
-        small_different_symbol_dataset,
-        small_random_dataset
+    def test_patching_with_multiple_target_variables(
+        self, pipeline, causal_model, checker, small_different_symbol_dataset
     ):
-        """Test performing interventions on multiple datasets."""
-        token_positions = list(MCQA_task.create_token_positions(pipeline).values())
-        layers = list(range(0, min(3, pipeline.get_num_layers())))
+        """Test performing patching with multiple target variables."""
+        # Filter dataset first
+        filtered_dataset = filter_dataset(
+            dataset=small_different_symbol_dataset,
+            pipeline=pipeline,
+            causal_model=causal_model,
+            metric=checker,
+            batch_size=8,
+        )
 
-        experiment = PatchResidualStream(
+        if len(filtered_dataset) == 0:
+            pytest.skip("No examples passed filtering")
+
+        # Create token positions (use just 1 for speed)
+        token_positions_dict = token_positions.create_token_positions(pipeline)
+        limited_positions = {"last_token": token_positions_dict["last_token"]}
+
+        # Build residual stream targets
+        layers = list(range(min(2, pipeline.get_num_layers())))
+        targets = build_residual_stream_targets(
             pipeline=pipeline,
             layers=layers,
-            token_positions=token_positions[:2],
-            config={"batch_size": 8}
+            token_positions=list(limited_positions.values()),
+            mode="one_target_per_unit",
         )
 
-        datasets = {
-            "different_symbol": small_different_symbol_dataset,
-            "random": small_random_dataset
-        }
-        target_variables_list = [["answer"]]
+        # Run interventions directly
+        raw_results = {}
+        for key, target in targets.items():
+            raw_results[key] = run_interchange_interventions(
+                pipeline=pipeline,
+                counterfactual_dataset=filtered_dataset,
+                interchange_target=target,
+                batch_size=8,
+                output_scores=False,
+            )
 
-        results = experiment.perform_interventions(
-            datasets,
-            verbose=False,
-            target_variables_list=target_variables_list
+        # Score with multiple target variables
+        results = causal_score_intervention_outputs(
+            raw_results=raw_results,
+            dataset=filtered_dataset,
+            causal_model=causal_model,
+            target_variable_groups=[("answer",), ("answer_position",)],
+            metric=checker,
         )
 
-        # Verify both datasets have results
-        assert "different_symbol" in results["dataset"]
-        assert "random" in results["dataset"]
-
-    def test_intervention_results_have_scores(
-        self,
-        pipeline,
-        causal_model,
-        checker,
-        small_different_symbol_dataset
-    ):
-        """Test that intervention results contain accuracy scores."""
-        token_positions = list(MCQA_task.create_token_positions(pipeline).values())
-        layers = list(range(0, min(3, pipeline.get_num_layers())))
-
-        experiment = PatchResidualStream(
-            pipeline=pipeline,
-            layers=layers,
-            token_positions=token_positions[:2],
-            config={"batch_size": 8}
-        )
-
-        datasets = {"test": small_different_symbol_dataset}
-        target_variables_list = [["answer"]]
-
-        results = experiment.perform_interventions(
-            datasets,
-            verbose=False,
-            target_variables_list=target_variables_list
-        )
-
-        # Check that results have scores
-        first_unit_key = next(iter(results["dataset"]["test"]["model_unit"].keys()))
-        unit_result = results["dataset"]["test"]["model_unit"][first_unit_key]
-
-        assert "answer" in unit_result
-        answer_result = unit_result["answer"]
-        assert "average_score" in answer_result
-        assert isinstance(answer_result["average_score"], float)
-        assert 0 <= answer_result["average_score"] <= 1
+        # Verify both target variable groups have results
+        assert ("answer",) in results["scores_by_variable"]
+        assert ("answer_position",) in results["scores_by_variable"]
 
 
 class TestIntegrationWorkflow:
@@ -264,40 +255,68 @@ class TestIntegrationWorkflow:
         causal_model,
         checker,
         small_different_symbol_dataset,
-        small_same_symbol_diff_position_dataset
+        small_same_symbol_diff_position_dataset,
     ):
         """Test the complete workflow: filter -> create experiment -> run interventions."""
         # Step 1: Filter datasets
         datasets = {
             "different_symbol": small_different_symbol_dataset,
-            "same_symbol_different_position": small_same_symbol_diff_position_dataset
+            "same_symbol_different_position": small_same_symbol_diff_position_dataset,
         }
 
-        filter_exp = FilterExperiment(pipeline, causal_model, checker)
-        filtered_datasets = filter_exp.filter(datasets, verbose=False, batch_size=8)
+        filtered_datasets = {}
+        for name, dataset in datasets.items():
+            filtered_datasets[name] = filter_dataset(
+                dataset=dataset,
+                pipeline=pipeline,
+                causal_model=causal_model,
+                metric=checker,
+                batch_size=8,
+            )
 
-        # Step 2: Create token positions
-        token_positions = list(MCQA_task.create_token_positions(pipeline).values())
+        # Check if we have any data to work with
+        total_examples = sum(len(d) for d in filtered_datasets.values())
+        if total_examples == 0:
+            pytest.skip("No examples passed filtering")
 
-        # Step 3: Create patching experiment with minimal layers/positions for speed
-        layers = list(range(0, min(2, pipeline.get_num_layers())))
-        experiment = PatchResidualStream(
-            pipeline=pipeline,
-            layers=layers,
-            token_positions=token_positions[:1],  # Just one position
-            checker=checker,
-            config={"batch_size": 8}
-        )
+        # Step 2: Create token positions (minimal for speed)
+        token_positions_dict = token_positions.create_token_positions(pipeline)
+        limited_positions = {"last_token": token_positions_dict["last_token"]}
 
-        # Step 4: Run interventions
-        target_variables_list = [["answer"]]
-        results = experiment.perform_interventions(
-            filtered_datasets,
-            verbose=False,
-            target_variables_list=target_variables_list
-        )
+        # Step 3: Run patching on first non-empty dataset
+        for name, dataset in filtered_datasets.items():
+            if len(dataset) > 0:
+                # Build residual stream targets
+                layers = list(range(min(2, pipeline.get_num_layers())))
+                targets = build_residual_stream_targets(
+                    pipeline=pipeline,
+                    layers=layers,
+                    token_positions=list(limited_positions.values()),
+                    mode="one_target_per_unit",
+                )
 
-        # Verify end-to-end results
-        assert results is not None
-        assert "dataset" in results
-        assert len(results["dataset"]) > 0
+                # Step 4: Run interventions directly
+                raw_results = {}
+                for key, target in targets.items():
+                    raw_results[key] = run_interchange_interventions(
+                        pipeline=pipeline,
+                        counterfactual_dataset=dataset,
+                        interchange_target=target,
+                        batch_size=8,
+                        output_scores=False,
+                    )
+
+                # Score the results
+                results = causal_score_intervention_outputs(
+                    raw_results=raw_results,
+                    dataset=dataset,
+                    causal_model=causal_model,
+                    target_variable_groups=[("answer",)],
+                    metric=checker,
+                )
+
+                # Verify end-to-end results
+                assert results is not None
+                assert "scores_by_variable" in results
+                assert len(results["scores_by_variable"]) > 0
+                break  # Only test one dataset for speed

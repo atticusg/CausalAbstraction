@@ -9,10 +9,10 @@ This test suite verifies that:
 """
 
 import unittest
-from unittest.mock import Mock, patch
-from neural.model_units import ComponentIndexer, Component, AtomicModelUnit
-from neural.LM_units import TokenPosition
-from neural.featurizers import Featurizer
+from unittest.mock import Mock
+from causalab.neural.model_units import ComponentIndexer, AtomicModelUnit
+from causalab.neural.token_position_builder import TokenPosition
+from causalab.neural.featurizers import Featurizer
 
 
 class TestComponentIndexerIsOriginal(unittest.TestCase):
@@ -20,6 +20,7 @@ class TestComponentIndexerIsOriginal(unittest.TestCase):
 
     def test_indexer_with_is_original_parameter(self):
         """Test that indexer functions can receive is_original parameter."""
+
         # Create an indexer that uses the is_original flag
         def position_indexer(input, is_original=True):
             if is_original:
@@ -39,6 +40,7 @@ class TestComponentIndexerIsOriginal(unittest.TestCase):
 
     def test_indexer_without_is_original_parameter(self):
         """Test backward compatibility with indexers that don't accept is_original."""
+
         # Create an old-style indexer that doesn't accept is_original
         def old_indexer(input):
             return [0, 1, 2]
@@ -55,6 +57,7 @@ class TestComponentIndexerIsOriginal(unittest.TestCase):
 
     def test_batch_indexing_with_is_original(self):
         """Test batch indexing with is_original flag."""
+
         def position_indexer(input, is_original=True):
             base_pos = input.get("pos", 0)
             if is_original:
@@ -75,6 +78,7 @@ class TestComponentIndexerIsOriginal(unittest.TestCase):
 
     def test_default_is_original_value(self):
         """Test that is_original defaults to True."""
+
         def position_indexer(input, is_original=True):
             return [0] if is_original else [1]
 
@@ -97,35 +101,25 @@ class TestTokenPositionIsOriginal(unittest.TestCase):
         """Test that TokenPosition stores the is_original flag."""
         # Create TokenPosition with is_original=True
         tp_original = TokenPosition(
-            lambda x: [0],
-            self.mock_pipeline,
-            is_original=True,
-            id="original"
+            lambda x: [0], self.mock_pipeline, is_original=True, id="original"
         )
         self.assertTrue(tp_original.is_original)
 
         # Create TokenPosition with is_original=False
         tp_counterfactual = TokenPosition(
-            lambda x: [0],
-            self.mock_pipeline,
-            is_original=False,
-            id="counterfactual"
+            lambda x: [0], self.mock_pipeline, is_original=False, id="counterfactual"
         )
         self.assertFalse(tp_counterfactual.is_original)
 
     def test_token_position_default_is_original(self):
         """Test that TokenPosition defaults is_original to True."""
-        tp = TokenPosition(
-            lambda x: [0],
-            self.mock_pipeline,
-            id="default"
-        )
+        tp = TokenPosition(lambda x: [0], self.mock_pipeline, id="default")
         self.assertTrue(tp.is_original)
 
     def test_token_position_with_flag_aware_indexer(self):
         """Test TokenPosition with an indexer that uses is_original flag."""
+
         def smart_indexer(input, is_original=True):
-            text = input.get("text", "")
             if is_original:
                 return [0, 1]  # First two tokens
             else:
@@ -142,51 +136,24 @@ class TestTokenPositionIsOriginal(unittest.TestCase):
         self.assertEqual(result_counterfactual, [2, 3])
 
 
-class TestComponentWithIsOriginal(unittest.TestCase):
-    """Test Component class with is_original flag."""
-
-    def test_component_passes_is_original_to_indexer(self):
-        """Test that Component.index passes is_original to the indexer."""
-        def position_indexer(input, is_original=True):
-            return [0] if is_original else [1]
-
-        indexer = ComponentIndexer(position_indexer, id="test")
-        component = Component(
-            layer=5,
-            component_type="block_input",
-            indices_func=indexer,
-            unit="pos"
-        )
-
-        # Test with is_original=True
-        result_original = component.index({"text": "test"}, is_original=True)
-        self.assertEqual(result_original, [0])
-
-        # Test with is_original=False
-        result_counterfactual = component.index({"text": "test"}, is_original=False)
-        self.assertEqual(result_counterfactual, [1])
-
-
 class TestAtomicModelUnitWithIsOriginal(unittest.TestCase):
     """Test AtomicModelUnit with is_original flag."""
 
     def test_atomic_model_unit_passes_is_original(self):
         """Test that AtomicModelUnit.index_component passes is_original."""
+
         def position_indexer(input, is_original=True):
             return [0] if is_original else [1]
 
         indexer = ComponentIndexer(position_indexer, id="test")
-        component = Component(
+
+        unit = AtomicModelUnit(
             layer=5,
             component_type="block_input",
             indices_func=indexer,
-            unit="pos"
-        )
-
-        unit = AtomicModelUnit(
-            component=component,
+            unit="pos",
             featurizer=Featurizer(),
-            id="test_unit"
+            id="test_unit",
         )
 
         # Test with is_original=True
@@ -194,7 +161,9 @@ class TestAtomicModelUnitWithIsOriginal(unittest.TestCase):
         self.assertEqual(result_original, [0])
 
         # Test with is_original=False
-        result_counterfactual = unit.index_component({"text": "test"}, is_original=False)
+        result_counterfactual = unit.index_component(
+            {"text": "test"}, is_original=False
+        )
         self.assertEqual(result_counterfactual, [1])
 
 
@@ -203,6 +172,7 @@ class TestBackwardCompatibility(unittest.TestCase):
 
     def test_old_style_indexer_still_works(self):
         """Test that old indexers without is_original still work."""
+
         # Old-style indexer
         def old_indexer(input):
             return [0, 1, 2]
@@ -261,18 +231,16 @@ class TestIntegrationWithArrowSyntax(unittest.TestCase):
                 # In counterfactual input, "var2" is at position 8
                 return [8]
 
-        tp = TokenPosition(
-            variable_position_indexer,
-            mock_pipeline,
-            id="variable_pos"
-        )
+        tp = TokenPosition(variable_position_indexer, mock_pipeline, id="variable_pos")
 
         # When processing original input
         original_positions = tp.index({"text": "original"}, is_original=True)
         self.assertEqual(original_positions, [5])
 
         # When processing counterfactual input
-        counterfactual_positions = tp.index({"text": "counterfactual"}, is_original=False)
+        counterfactual_positions = tp.index(
+            {"text": "counterfactual"}, is_original=False
+        )
         self.assertEqual(counterfactual_positions, [8])
 
 

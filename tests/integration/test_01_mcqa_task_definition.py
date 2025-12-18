@@ -8,8 +8,11 @@ and counterfactual dataset generation without using neural networks.
 import pytest
 import copy
 import random
-from tasks.MCQA.mcqa import MCQA_task, sample_answerable_question
-from causal.counterfactual_dataset import CounterfactualDataset
+from causalab.tasks.MCQA.counterfactuals import (
+    sample_answerable_question,
+    different_symbol,
+)
+from causalab.causal.counterfactual_dataset import CounterfactualDataset
 
 
 pytestmark = pytest.mark.slow
@@ -29,7 +32,8 @@ class TestMCQACausalModel:
 
         # Check that required keys are present
         assert "template" in example
-        assert "object_color" in example
+        assert "object" in example
+        assert "color" in example
         assert "symbol0" in example
         assert "symbol1" in example
         assert "choice0" in example
@@ -77,7 +81,10 @@ class TestMCQACausalModel:
         # Keep sampling until we get different positions
         max_attempts = 50
         attempts = 0
-        while setting1["answer_position"] == setting2["answer_position"] and attempts < max_attempts:
+        while (
+            setting1["answer_position"] == setting2["answer_position"]
+            and attempts < max_attempts
+        ):
             example2 = sample_answerable_question()
             setting2 = causal_model.run_forward(example2)
             attempts += 1
@@ -85,8 +92,7 @@ class TestMCQACausalModel:
         if attempts < max_attempts:
             # Perform interchange intervention
             intervened_setting = causal_model.run_interchange(
-                example1,
-                {"answer_position": example2}
+                example1, {"answer_position": example2}
             )
 
             # Verify the intervention took the value from example2
@@ -110,7 +116,7 @@ class TestCounterfactualDatasets:
         orig_symbols = {example["input"]["symbol0"], example["input"]["symbol1"]}
         cf_symbols = {
             example["counterfactual_inputs"][0]["symbol0"],
-            example["counterfactual_inputs"][0]["symbol1"]
+            example["counterfactual_inputs"][0]["symbol1"],
         }
         assert orig_symbols != cf_symbols
 
@@ -137,17 +143,10 @@ class TestCounterfactualDatasets:
     def test_can_distinguish_with_dataset(self, causal_model):
         """Test the can_distinguish_with_dataset function."""
         # Create a small dataset
-        dataset = CounterfactualDataset.from_sampler(
-            8,
-            MCQA_task.dataset_generators["different_symbol"]
-        )
+        dataset = CounterfactualDataset.from_sampler(8, different_symbol)
 
         # Test distinguishing answer from no intervention
-        result = causal_model.can_distinguish_with_dataset(
-            dataset,
-            ["answer"],
-            None
-        )
+        result = causal_model.can_distinguish_with_dataset(dataset, ["answer"], None)
 
         # Verify result structure
         assert "proportion" in result
@@ -160,23 +159,25 @@ class TestCounterfactualDatasets:
         example = sample_answerable_question()
         full_setting = causal_model.run_forward(example)
 
-        # Create confounded counterfactual (same symbols)
+        # Create confounded counterfactual (change object and color)
         confounded_cf = copy.deepcopy(example)
-        confounded_cf["object_color"] = (
-            "toy",
-            example[f"choice{int(not full_setting['answer_position'])}"]
-        )
+        confounded_cf["object"] = "toy"
+        confounded_cf["color"] = example[
+            f"choice{int(not full_setting['answer_position'])}"
+        ]
         confounded_cf_setting = causal_model.run_forward(confounded_cf)
 
         # Verify the counterfactual has different answer position
-        assert confounded_cf_setting["answer_position"] != full_setting["answer_position"]
+        assert (
+            confounded_cf_setting["answer_position"] != full_setting["answer_position"]
+        )
 
         # Create deconfounded counterfactual (different symbols)
         deconfounded_cf = copy.deepcopy(example)
-        deconfounded_cf["object_color"] = (
-            "toy",
-            example[f"choice{int(not full_setting['answer_position'])}"]
-        )
+        deconfounded_cf["object"] = "toy"
+        deconfounded_cf["color"] = example[
+            f"choice{int(not full_setting['answer_position'])}"
+        ]
         # Change symbols
         available_symbols = list(
             {"A", "B", "C", "D"}.difference(

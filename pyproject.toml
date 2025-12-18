@@ -1,9 +1,10 @@
 [project]
-name = "causal-abstraction"
-version = "0.0.0"
+name = "causalab"
+version = "0.0.1"
 description = "A toolkit for causal analysis of artificial neural networks."
 authors = [
-    { name = "Atticus Geiger" }
+    { name = "Atticus Geiger" },
+    { name = "Max Loeffler"}
 ]
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,7 +14,7 @@ dependencies = [
     "matplotlib",
     "pandas",
     "numpy",
-    "pyvene @ git+https://github.com/stanfordnlp/pyvene.git@main",
+    "pyvene",
     "scikit-learn",
     "ipywidgets",
     "jupyterlab",
@@ -29,20 +30,73 @@ dependencies = [
     "nnsight>=0.5.9",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pytest",
-]
-
-[tool.setuptools.packages.find]
-include = ["causal*", "neural*", "experiments*", "tasks*"]
+[tool.uv.sources]
+pyvene = { git = "https://github.com/stanfordnlp/pyvene.git", branch = "main" }
 
 [tool.pytest.ini_options]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "gpu: marks tests as requiring GPU",
 ]
+testpaths = ["tests"]
+norecursedirs = [".venv", "__pycache__"]
+
+[tool.coverage.run]
+omit = [
+    "tests/*",
+    "demos/*",
+    "causalab/tasks/*",
+    ".venv/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+[tool.uv.build-backend]
+module-name = ["causalab"]
+module-root = ""
 
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.9.5,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "pytest-cov>=6.0.0",
+    "ruff",
+    "pre-commit>=4.4.0",
+    "basedpyright",
+]
+
+[tool.ruff]
+# target-version inferred from project.requires-python
+exclude = [
+    "**/__pycache__",
+    "**/.venv",
+    ".venv",
+    "causalab/tasks",
+]
+
+[tool.basedpyright]
+pythonVersion = "3.10"
+typeCheckingMode = "strict"
+exclude = [
+    "**/__pycache__",
+    "**/.venv",
+    ".venv",
+    "causalab/tasks",
+    "demos/**"
+]
+# Disable cascading inference rules to avoid untyped code propagating errors
+reportUnknownVariableType = "none"
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownParameterType = "none"
+reportUnknownLambdaType = "none"

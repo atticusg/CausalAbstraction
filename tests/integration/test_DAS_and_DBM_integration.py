@@ -10,807 +10,509 @@ This test is modeled after the 04_train_DAS_and_DBM.ipynb notebook and verifies:
 """
 
 import pytest
-import torch
-from unittest.mock import MagicMock, patch, PropertyMock
-import numpy as np
+import tempfile
+import os
 
-from tasks.MCQA.mcqa import MCQA_task, sample_answerable_question
-from neural.pipeline import LMPipeline
-from causal.counterfactual_dataset import CounterfactualDataset
-from experiments.filter_experiment import FilterExperiment
-from experiments.LM_experiments.residual_stream_experiment import PatchResidualStream
-from experiments.LM_experiments.attention_head_experiment import PatchAttentionHeads
-from neural.LM_units import TokenPosition, get_all_tokens
-
-
-# ---------------------- Fixtures ---------------------- #
-
-@pytest.fixture
-def mock_pipeline():
-    """Create a comprehensive mock pipeline for DAS/DBM experiments."""
-    pipeline = MagicMock(spec=LMPipeline)
-
-    # Model configuration
-    pipeline.model = MagicMock()
-    pipeline.model.config = MagicMock()
-    pipeline.model.config.hidden_size = 128
-    pipeline.model.config.num_hidden_layers = 4
-    pipeline.model.config.num_attention_heads = 4
-    pipeline.model.device = "cpu"
-
-    # Tokenizer configuration
-    pipeline.tokenizer = MagicMock()
-    pipeline.tokenizer.pad_token_id = 0
-    pipeline.tokenizer.padding_side = "left"
-    pipeline.tokenizer.convert_ids_to_tokens.return_value = ["<pad>", "The", "answer", "is", "A"]
-
-    # Pipeline methods
-    pipeline.max_new_tokens = 1
-    pipeline.load.return_value = {
-        "input_ids": torch.tensor([[1, 2, 3, 4, 5]]),
-        "attention_mask": torch.tensor([[1, 1, 1, 1, 1]])
-    }
-    pipeline.dump.return_value = ["A"]
-    pipeline.generate.return_value = {
-        "sequences": torch.tensor([[1]]),
-        "scores": [torch.randn(1, 100)]
-    }
-
-    # Model-specific methods
-    pipeline.get_num_layers.return_value = 4
-    pipeline.get_num_attention_heads.return_value = 4
-
-    return pipeline
+from causalab.tasks.MCQA.token_positions import create_token_positions
+from causalab.tasks.MCQA.counterfactuals import (
+    different_symbol,
+    same_symbol_different_position,
+)
+from causalab.causal.counterfactual_dataset import CounterfactualDataset
+from causalab.experiments.filter import filter_dataset
+from causalab.experiments.jobs.DAS_grid import train_DAS
+from causalab.experiments.jobs.DBM_binary_grid import train_DBM_binary_heatmaps
+from causalab.experiments.interchange_targets import (
+    build_residual_stream_targets,
+    build_attention_head_targets,
+)
+from causalab.neural.token_position_builder import get_all_tokens
 
 
-@pytest.fixture
-def mock_causal_model():
-    """Create a mock causal model for MCQA task."""
-    causal_model = MagicMock()
-    causal_model.run_forward.return_value = {
-        "raw_input": "The banana is yellow. What color is the banana?\nA. yellow\nB. green\nAnswer:",
-        "raw_output": " A",
-        "answer": "A",
-        "answer_position": 0
-    }
-    causal_model.sample_input.return_value = {
-        "template": MCQA_task.causal_models["positional"].values["template"][0],
-        "object_color": ("banana", "yellow"),
-        "symbol0": "A",
-        "symbol1": "B",
-        "choice0": "yellow",
-        "choice1": "green"
-    }
-    return causal_model
+pytestmark = [pytest.mark.slow, pytest.mark.gpu]
 
-
-@pytest.fixture
-def checker():
-    """Create a checker function that validates model outputs."""
-    def _checker(neural_output, causal_output):
-        if isinstance(neural_output, dict) and "string" in neural_output:
-            return causal_output in neural_output["string"] or neural_output["string"] in causal_output
-        return causal_output in str(neural_output)
-    return _checker
-
-
-@pytest.fixture
-def mock_counterfactual_dataset():
-    """Create a mock counterfactual dataset."""
-    # Create sample data
-    inputs = [
-        {
-            "raw_input": "The banana is yellow. What color is the banana?\nA. yellow\nB. green\nAnswer:",
-            "object_color": ("banana", "yellow"),
-            "symbol0": "A",
-            "symbol1": "B",
-            "choice0": "yellow",
-            "choice1": "green"
-        }
-    ]
-
-    counterfactual_inputs = [
-        [{
-            "raw_input": "The banana is yellow. What color is the banana?\nA. green\nB. yellow\nAnswer:",
-            "object_color": ("banana", "yellow"),
-            "symbol0": "A",
-            "symbol1": "B",
-            "choice0": "green",
-            "choice1": "yellow"
-        }]
-    ]
-
-    # Create the dataset mock (without spec to allow __iter__ assignment)
-    dataset = MagicMock()
-
-    # Create inner dataset object
-    inner_dataset = MagicMock()
-    inner_dataset.__len__.return_value = 1
-    inner_dataset.__getitem__.side_effect = lambda key: {
-        "input": inputs,
-        "counterfactual_inputs": counterfactual_inputs
-    }.get(key, [])
-    inner_dataset.features = {"input": None, "counterfactual_inputs": None}
-
-    # Make inner dataset iterable
-    def create_iter():
-        return iter([{
-            "input": inputs[0],
-            "counterfactual_inputs": counterfactual_inputs[0]
-        }])
-    inner_dataset.__iter__ = create_iter
-
-    # Assign inner dataset and make outer dataset iterable too
-    dataset.dataset = inner_dataset
-    dataset.__len__.return_value = 1
-    dataset.__iter__ = create_iter
-
-    return dataset
-
-
-@pytest.fixture
-def mock_token_positions(mock_pipeline):
-    """Create mock token positions for the experiment."""
-    # Create mock token positions
-    pos1 = MagicMock(spec=TokenPosition)
-    pos1.id = "symbol0"
-    pos1.return_value = [2]  # Token index
-
-    pos2 = MagicMock(spec=TokenPosition)
-    pos2.id = "symbol0_period"
-    pos2.return_value = [3]
-
-    return [pos1, pos2]
-
-
-# ---------------------- Test Classes ---------------------- #
 
 class TestDASIntegration:
     """Integration tests for Distributed Alignment Search (DAS)."""
 
-    def test_das_experiment_initialization(self, mock_pipeline, mock_causal_model,
-                                          mock_token_positions, checker):
-        """Test that DAS experiment initializes correctly."""
-        with patch('neural.featurizers.Featurizer'):
-            experiment = PatchResidualStream(
-                pipeline=mock_pipeline,
-                causal_model=mock_causal_model,
-                layers=[0, 1],
-                token_positions=mock_token_positions,
-                config={
-                    "batch_size": 32,
-                    "evaluation_batch_size": 64,
-                    "training_epoch": 2,
-                    "n_features": 16
-                }
+    def test_das_training(self, pipeline, causal_model, checker):
+        """Test DAS training flow with real model."""
+        # Generate and filter datasets
+        train_dataset = CounterfactualDataset.from_sampler(
+            16, same_symbol_different_position
+        )
+        test_dataset = CounterfactualDataset.from_sampler(
+            8, same_symbol_different_position
+        )
+
+        filtered_train = filter_dataset(
+            dataset=train_dataset,
+            pipeline=pipeline,
+            causal_model=causal_model,
+            metric=checker,
+            batch_size=8,
+        )
+
+        filtered_test = filter_dataset(
+            dataset=test_dataset,
+            pipeline=pipeline,
+            causal_model=causal_model,
+            metric=checker,
+            batch_size=8,
+        )
+
+        if len(filtered_train) < 2 or len(filtered_test) < 2:
+            pytest.skip("Not enough examples passed filtering")
+
+        # Create token positions (use minimal set for speed)
+        token_positions_dict = create_token_positions(pipeline)
+        limited_positions = [token_positions_dict["last_token"]]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Save datasets to disk
+            train_path = os.path.join(tmpdir, "train_dataset")
+            test_path = os.path.join(tmpdir, "test_dataset")
+            filtered_train.dataset.save_to_disk(train_path)
+            filtered_test.dataset.save_to_disk(test_path)
+
+            # Build residual stream targets for DAS
+            layers = [0, 1]  # Use only 2 layers for speed
+            targets = build_residual_stream_targets(
+                pipeline=pipeline,
+                layers=layers,
+                token_positions=limited_positions,
+                mode="one_target_per_unit",
             )
 
-        assert experiment.layers == [0, 1]
-        assert experiment.token_positions == mock_token_positions
-        assert experiment.checker is checker
-        assert experiment.config["n_features"] == 16
-
-    def test_das_training_flow(self, mock_pipeline, mock_causal_model,
-                              mock_token_positions, mock_counterfactual_dataset, checker):
-        """Test the DAS training flow with mocked interventions."""
-        with patch('neural.featurizers.Featurizer'):
-            experiment = PatchResidualStream(
-                pipeline=mock_pipeline,
-                causal_model=mock_causal_model,
-                layers=[0, 1],
-                token_positions=mock_token_positions,
-                config={
-                    "batch_size": 32,
-                    "evaluation_batch_size": 64,
-                    "training_epoch": 2,
-                    "n_features": 16
-                }
+            # Train DAS
+            result = train_DAS(
+                causal_model=causal_model,
+                interchange_targets=targets,
+                train_dataset_path=train_path,
+                test_dataset_path=test_path,
+                pipeline=pipeline,
+                target_variable_group=("answer_position",),
+                output_dir=os.path.join(tmpdir, "das_results"),
+                metric=checker,
+                save_results=False,
+                verbose=False,
             )
 
-        # Mock the train_interventions method
-        with patch.object(experiment, 'train_interventions') as mock_train:
-            # Call training
-            experiment.train_interventions(
-                {"same_symbol_different_position": mock_counterfactual_dataset},
-                ["answer_position"],
-                method="DAS",
-                verbose=False
-            )
+        # Verify results structure
+        assert result is not None
+        assert "train_scores" in result
+        assert "test_scores" in result
+        assert "metadata" in result
 
-            # Verify training was called correctly
-            mock_train.assert_called_once()
-            call_args = mock_train.call_args
-            assert "same_symbol_different_position" in call_args[0][0]
-            assert "answer_position" in call_args[0][1]
-            assert call_args[1]["method"] == "DAS"
+        # Verify scores exist (train_DAS returns scores by key, not by variable)
+        assert len(result["train_scores"]) > 0
+        assert len(result["test_scores"]) > 0
 
-    def test_das_perform_interventions(self, mock_pipeline, mock_causal_model,
-                                      mock_token_positions, mock_counterfactual_dataset, checker):
-        """Test performing interventions after DAS training."""
-        with patch('neural.featurizers.Featurizer'):
-            experiment = PatchResidualStream(
-                pipeline=mock_pipeline,
-                causal_model=mock_causal_model,
-                layers=[0, 1],
-                token_positions=mock_token_positions,
-                config={
-                    "batch_size": 32,
-                    "evaluation_batch_size": 64
-                }
-            )
-
-        # Mock perform_interventions
-        mock_results = {
-            "task_name": "MCQA",
-            "dataset": {
-                "same_symbol_different_position": {
-                    "model_unit": {
-                        "unit1": {
-                            "metadata": {"layer": 0, "position": "symbol0"},
-                            "answer_position": {"average_score": 0.85}
-                        }
-                    }
-                }
-            }
-        }
-
-        with patch.object(experiment, 'perform_interventions', return_value=mock_results) as mock_perform:
-            results = experiment.perform_interventions(
-                {"same_symbol_different_position": mock_counterfactual_dataset},
-                target_variables_list=[["answer"], ["answer_position"]],
-                verbose=False
-            )
-
-            # Verify results structure
-            assert "dataset" in results
-            assert "same_symbol_different_position" in results["dataset"]
-            assert "model_unit" in results["dataset"]["same_symbol_different_position"]
-
-    def test_das_generalization_to_test_set(self, mock_pipeline, mock_causal_model,
-                                           mock_token_positions, mock_counterfactual_dataset, checker):
+    def test_das_generalization(self, pipeline, causal_model, checker):
         """Test that DAS results can be evaluated on held-out test data."""
-        with patch('neural.featurizers.Featurizer'):
-            experiment = PatchResidualStream(
-                pipeline=mock_pipeline,
-                causal_model=mock_causal_model,
-                layers=[0, 1, 2],
-                token_positions=mock_token_positions,
-                config={
-                    "batch_size": 32,
-                    "evaluation_batch_size": 64,
-                    "training_epoch": 2,
-                    "n_features": 16
-                }
+        # Generate and filter datasets
+        train_dataset = CounterfactualDataset.from_sampler(
+            16, same_symbol_different_position
+        )
+        test_dataset = CounterfactualDataset.from_sampler(
+            8, same_symbol_different_position
+        )
+
+        filtered_train = filter_dataset(
+            dataset=train_dataset,
+            pipeline=pipeline,
+            causal_model=causal_model,
+            metric=checker,
+            batch_size=8,
+        )
+
+        filtered_test = filter_dataset(
+            dataset=test_dataset,
+            pipeline=pipeline,
+            causal_model=causal_model,
+            metric=checker,
+            batch_size=8,
+        )
+
+        if len(filtered_train) < 2 or len(filtered_test) < 2:
+            pytest.skip("Not enough examples passed filtering")
+
+        token_positions_dict = create_token_positions(pipeline)
+        limited_positions = [token_positions_dict["last_token"]]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            train_path = os.path.join(tmpdir, "train_dataset")
+            test_path = os.path.join(tmpdir, "test_dataset")
+            filtered_train.dataset.save_to_disk(train_path)
+            filtered_test.dataset.save_to_disk(test_path)
+
+            # Build residual stream targets for DAS
+            layers = [0]  # Single layer for speed
+            targets = build_residual_stream_targets(
+                pipeline=pipeline,
+                layers=layers,
+                token_positions=limited_positions,
+                mode="one_target_per_unit",
             )
 
-        # Mock train and test results
-        train_results = {
-            "task_name": "MCQA",
-            "dataset": {
-                "same_symbol_different_position": {
-                    "model_unit": {
-                        "unit1": {
-                            "metadata": {"layer": 0, "position": "symbol0"},
-                            "answer_position": {"average_score": 0.90}
-                        }
-                    }
-                }
-            }
-        }
-
-        test_results = {
-            "task_name": "MCQA",
-            "dataset": {
-                "same_symbol_different_position": {
-                    "model_unit": {
-                        "unit1": {
-                            "metadata": {"layer": 0, "position": "symbol0"},
-                            "answer_position": {"average_score": 0.75}  # Lower score indicates overfitting
-                        }
-                    }
-                }
-            }
-        }
-
-        with patch.object(experiment, 'perform_interventions') as mock_perform:
-            mock_perform.side_effect = [train_results, test_results]
-
-            # Get train results
-            train_res = experiment.perform_interventions(
-                {"same_symbol_different_position": mock_counterfactual_dataset},
-                target_variables_list=[["answer_position"]],
-                verbose=False
+            result = train_DAS(
+                causal_model=causal_model,
+                interchange_targets=targets,
+                train_dataset_path=train_path,
+                test_dataset_path=test_path,
+                pipeline=pipeline,
+                target_variable_group=("answer_position",),
+                output_dir=os.path.join(tmpdir, "das_results"),
+                metric=checker,
+                save_results=False,
+                verbose=False,
             )
 
-            # Get test results
-            test_res = experiment.perform_interventions(
-                {"same_symbol_different_position": mock_counterfactual_dataset},
-                target_variables_list=[["answer_position"]],
-                verbose=False
-            )
+        # Test scores should exist (generalization gap is expected)
+        train_scores = result["train_scores"]
+        test_scores = result["test_scores"]
 
-            # Verify that test performance is typically lower (generalization gap)
-            train_score = train_res["dataset"]["same_symbol_different_position"]["model_unit"]["unit1"]["answer_position"]["average_score"]
-            test_score = test_res["dataset"]["same_symbol_different_position"]["model_unit"]["unit1"]["answer_position"]["average_score"]
+        # Both should have scores
+        assert len(train_scores) > 0
+        assert len(test_scores) > 0
 
-            assert train_score >= test_score  # Train score should be >= test score
+        # Metadata should have summary statistics
+        assert "train_max_score" in result["metadata"]
+        assert "test_max_score" in result["metadata"]
 
 
 class TestDBMIntegration:
     """Integration tests for Desiderata-Based Masking (DBM)."""
 
-    def test_dbm_experiment_initialization(self, mock_pipeline, mock_causal_model, checker):
-        """Test that DBM experiment initializes correctly."""
+    def test_dbm_training(self, pipeline, causal_model, checker):
+        """Test DBM training flow with real model."""
+        # Generate and filter datasets
+        train_dataset = CounterfactualDataset.from_sampler(16, different_symbol)
+        test_dataset = CounterfactualDataset.from_sampler(8, different_symbol)
+
+        filtered_train = filter_dataset(
+            dataset=train_dataset,
+            pipeline=pipeline,
+            causal_model=causal_model,
+            metric=checker,
+            batch_size=8,
+        )
+
+        filtered_test = filter_dataset(
+            dataset=test_dataset,
+            pipeline=pipeline,
+            causal_model=causal_model,
+            metric=checker,
+            batch_size=8,
+        )
+
+        if len(filtered_train) < 2 or len(filtered_test) < 2:
+            pytest.skip("Not enough examples passed filtering")
+
         # Create token position for all tokens
-        all_tokens_pos = MagicMock(spec=TokenPosition)
-        all_tokens_pos.id = "all_tokens"
+        sample_input = filtered_train[0]["input"]
+        all_tokens = get_all_tokens(sample_input, pipeline, padding=True)
 
-        # Create layer-head list
-        layer_head_list = [(0, 0), (0, 1), (1, 0), (1, 1)]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Save datasets to disk
+            train_path = os.path.join(tmpdir, "train_dataset")
+            test_path = os.path.join(tmpdir, "test_dataset")
+            filtered_train.dataset.save_to_disk(train_path)
+            filtered_test.dataset.save_to_disk(test_path)
 
-        with patch('neural.featurizers.Featurizer'):
-            experiment = PatchAttentionHeads(
-                pipeline=mock_pipeline,
-                causal_model=mock_causal_model,
-                layer_head_lists=[layer_head_list],
-                token_position=all_tokens_pos,
-                config={
-                    "learning_rate": 0.001,
-                    "batch_size": 32,
-                    "evaluation_batch_size": 64,
-                    "training_epoch": 10,
-                    "masking": {
-                        "regularization_coefficient": 0.1
-                    },
-                    "featurizer_kwargs": {
-                        "tie_masks": True
-                    }
-                }
+            # Build attention head targets for DBM
+            layers = [0, 1]  # Use only 2 layers for speed
+            num_heads = pipeline.model.config.num_attention_heads
+            heads = list(range(num_heads))
+            targets = build_attention_head_targets(
+                pipeline=pipeline,
+                layers=layers,
+                heads=heads,
+                token_position=all_tokens,
+                mode="one_target_all_units",
             )
 
-        assert experiment.layer_head_lists == [layer_head_list]
-        assert experiment.token_position == all_tokens_pos
-        assert experiment.checker is checker
-
-    def test_dbm_training_flow(self, mock_pipeline, mock_causal_model,
-                              mock_counterfactual_dataset, checker):
-        """Test the DBM training flow with mocked interventions."""
-        # Create token position
-        all_tokens_pos = MagicMock(spec=TokenPosition)
-        all_tokens_pos.id = "all_tokens"
-
-        # Create layer-head list covering multiple layers
-        num_heads = 4
-        end = 3
-        layer_head_list = [(layer, head) for layer in range(0, end) for head in range(num_heads)]
-
-        with patch('neural.featurizers.Featurizer'):
-            experiment = PatchAttentionHeads(
-                pipeline=mock_pipeline,
-                causal_model=mock_causal_model,
-                layer_head_lists=[layer_head_list],
-                token_position=all_tokens_pos,
-                config={
-                    "learning_rate": 0.001,
-                    "batch_size": 32,
-                    "evaluation_batch_size": 64,
-                    "training_epoch": 5,
-                    "masking": {
-                        "regularization_coefficient": 0.1
-                    },
-                    "featurizer_kwargs": {
-                        "tie_masks": True
-                    }
-                }
+            # Train DBM
+            result = train_DBM_binary_heatmaps(
+                causal_model=causal_model,
+                interchange_target=targets[("all",)],
+                train_dataset_path=train_path,
+                test_dataset_path=test_path,
+                pipeline=pipeline,
+                target_variable_group=("answer",),
+                output_dir=os.path.join(tmpdir, "dbm_results"),
+                metric=checker,
+                tie_masks=True,
+                save_results=False,
+                verbose=False,
             )
 
-        # Mock the train_interventions method
-        with patch.object(experiment, 'train_interventions') as mock_train:
-            # Call training
-            experiment.train_interventions(
-                {"different_symbol": mock_counterfactual_dataset},
-                ["answer"],
-                method="DBM",
-                verbose=False
-            )
+        # Verify results structure
+        assert result is not None
+        assert "train_score" in result
+        assert "test_score" in result
+        assert "selected_units" in result
+        assert "metadata" in result
 
-            # Verify training was called correctly
-            mock_train.assert_called_once()
-            call_args = mock_train.call_args
-            assert "different_symbol" in call_args[0][0]
-            assert "answer" in call_args[0][1]
-            assert call_args[1]["method"] == "DBM"
+        # Verify selected_units is a list of tuples
+        assert isinstance(result["selected_units"], list)
 
-    def test_dbm_mask_extraction(self, mock_pipeline, mock_causal_model,
-                                mock_counterfactual_dataset, checker):
+    def test_dbm_mask_extraction(self, pipeline, causal_model, checker):
         """Test extracting binary masks from DBM results."""
-        # Create token position
-        all_tokens_pos = MagicMock(spec=TokenPosition)
-        all_tokens_pos.id = "all_tokens"
+        train_dataset = CounterfactualDataset.from_sampler(16, different_symbol)
+        test_dataset = CounterfactualDataset.from_sampler(8, different_symbol)
 
-        layer_head_list = [(0, 0), (0, 1), (1, 0), (1, 1)]
+        filtered_train = filter_dataset(
+            dataset=train_dataset,
+            pipeline=pipeline,
+            causal_model=causal_model,
+            metric=checker,
+            batch_size=8,
+        )
 
-        with patch('neural.featurizers.Featurizer'):
-            experiment = PatchAttentionHeads(
-                pipeline=mock_pipeline,
-                causal_model=mock_causal_model,
-                layer_head_lists=[layer_head_list],
-                token_position=all_tokens_pos,
-                config={
-                    "learning_rate": 0.001,
-                    "batch_size": 32,
-                    "training_epoch": 5,
-                    "masking": {
-                        "regularization_coefficient": 0.1
-                    },
-                    "featurizer_kwargs": {
-                        "tie_masks": True
-                    }
-                }
+        filtered_test = filter_dataset(
+            dataset=test_dataset,
+            pipeline=pipeline,
+            causal_model=causal_model,
+            metric=checker,
+            batch_size=8,
+        )
+
+        if len(filtered_train) < 2 or len(filtered_test) < 2:
+            pytest.skip("Not enough examples passed filtering")
+
+        sample_input = filtered_train[0]["input"]
+        all_tokens = get_all_tokens(sample_input, pipeline, padding=True)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            train_path = os.path.join(tmpdir, "train_dataset")
+            test_path = os.path.join(tmpdir, "test_dataset")
+            filtered_train.dataset.save_to_disk(train_path)
+            filtered_test.dataset.save_to_disk(test_path)
+
+            # Build attention head targets for DBM
+            layers = [0]  # Single layer for speed
+            num_heads = pipeline.model.config.num_attention_heads
+            heads = list(range(num_heads))
+            targets = build_attention_head_targets(
+                pipeline=pipeline,
+                layers=layers,
+                heads=heads,
+                token_position=all_tokens,
+                mode="one_target_all_units",
             )
 
-        # Mock results with feature_indices (binary masks)
-        mock_results = {
-            "task_name": "MCQA",
-            "dataset": {
-                "different_symbol": {
-                    "model_unit": {
-                        "all_heads": {
-                            "feature_indices": {
-                                "AttentionHead(Layer-0,Head-0,Token-all_tokens)": [0],  # Selected
-                                "AttentionHead(Layer-0,Head-1,Token-all_tokens)": [],   # Not selected
-                                "AttentionHead(Layer-1,Head-0,Token-all_tokens)": [0],  # Selected
-                                "AttentionHead(Layer-1,Head-1,Token-all_tokens)": []    # Not selected
-                            },
-                            "answer": {"average_score": 0.95}
-                        }
-                    }
-                }
-            }
-        }
-
-        with patch.object(experiment, 'perform_interventions', return_value=mock_results):
-            results = experiment.perform_interventions(
-                {"different_symbol": mock_counterfactual_dataset},
-                target_variables_list=[["answer"]],
-                verbose=False
+            result = train_DBM_binary_heatmaps(
+                causal_model=causal_model,
+                interchange_target=targets[("all",)],
+                train_dataset_path=train_path,
+                test_dataset_path=test_path,
+                pipeline=pipeline,
+                target_variable_group=("answer",),
+                output_dir=os.path.join(tmpdir, "dbm_results"),
+                metric=checker,
+                tie_masks=True,
+                save_results=False,
+                verbose=False,
             )
 
-            # Verify feature_indices structure
-            assert "feature_indices" in results["dataset"]["different_symbol"]["model_unit"]["all_heads"]
-            feature_indices = results["dataset"]["different_symbol"]["model_unit"]["all_heads"]["feature_indices"]
+        # Verify feature_indices structure
+        assert "feature_indices" in result
+        feature_indices = result["feature_indices"]
+        assert isinstance(feature_indices, dict)
 
-            # Check that some heads are selected and some are not
-            selected_heads = [k for k, v in feature_indices.items() if v == [0]]
-            unselected_heads = [k for k, v in feature_indices.items() if v == []]
-
-            assert len(selected_heads) > 0
-            assert len(unselected_heads) > 0
-
-    def test_dbm_perfect_generalization(self, mock_pipeline, mock_causal_model,
-                                       mock_counterfactual_dataset, checker):
-        """Test that DBM masks generalize to test data."""
-        # Create token position
-        all_tokens_pos = MagicMock(spec=TokenPosition)
-        all_tokens_pos.id = "all_tokens"
-
-        layer_head_list = [(0, 0), (0, 1), (1, 0), (1, 1)]
-
-        with patch('neural.featurizers.Featurizer'):
-            experiment = PatchAttentionHeads(
-                pipeline=mock_pipeline,
-                causal_model=mock_causal_model,
-                layer_head_lists=[layer_head_list],
-                token_position=all_tokens_pos,
-                config={
-                    "learning_rate": 0.001,
-                    "batch_size": 32,
-                    "training_epoch": 10
-                }
-            )
-
-        # Mock train results
-        train_results = {
-            "task_name": "MCQA",
-            "dataset": {
-                "different_symbol": {
-                    "model_unit": {
-                        "all_heads": {
-                            "answer": {"average_score": 1.0}  # Perfect on train
-                        }
-                    }
-                }
-            }
-        }
-
-        # Mock test results (should also be perfect if heads are correctly identified)
-        test_results = {
-            "task_name": "MCQA",
-            "dataset": {
-                "different_symbol": {
-                    "model_unit": {
-                        "all_heads": {
-                            "answer": {"average_score": 1.0}  # Perfect on test
-                        }
-                    }
-                }
-            }
-        }
-
-        with patch.object(experiment, 'perform_interventions') as mock_perform:
-            mock_perform.side_effect = [train_results, test_results]
-
-            # Get train results
-            train_res = experiment.perform_interventions(
-                {"different_symbol": mock_counterfactual_dataset},
-                target_variables_list=[["answer"]],
-                verbose=False
-            )
-
-            # Get test results
-            test_res = experiment.perform_interventions(
-                {"different_symbol": mock_counterfactual_dataset},
-                target_variables_list=[["answer"]],
-                verbose=False
-            )
-
-            # DBM should generalize perfectly when attention heads are correctly identified
-            train_score = train_res["dataset"]["different_symbol"]["model_unit"]["all_heads"]["answer"]["average_score"]
-            test_score = test_res["dataset"]["different_symbol"]["model_unit"]["all_heads"]["answer"]["average_score"]
-
-            assert train_score == 1.0
-            assert test_score == 1.0
+        # Verify metadata has head information
+        assert "num_selected_units" in result["metadata"]
+        assert "num_units" in result["metadata"]
 
 
 class TestFilterExperimentIntegration:
-    """Integration tests for FilterExperiment used before DAS/DBM."""
+    """Integration tests for filter_dataset used before DAS/DBM."""
 
-    def test_filter_experiment_with_mcqa_task(self, mock_pipeline, mock_causal_model,
-                                             mock_counterfactual_dataset, checker):
+    def test_filter_dataset_with_mcqa_task(self, pipeline, causal_model, checker):
         """Test filtering datasets based on model performance."""
-        experiment = FilterExperiment(
-            pipeline=mock_pipeline,
-            causal_model=mock_causal_model
+        # Generate datasets
+        dataset = CounterfactualDataset.from_sampler(16, different_symbol)
+
+        # Filter dataset
+        filtered = filter_dataset(
+            dataset=dataset,
+            pipeline=pipeline,
+            causal_model=causal_model,
+            metric=checker,
+            batch_size=8,
         )
 
-        # Mock validation methods to simulate filtering
-        with patch.object(experiment, '_validate_original_inputs', return_value=[True]), \
-             patch.object(experiment, '_validate_counterfactual_inputs', return_value=[True]), \
-             patch('causal.counterfactual_dataset.CounterfactualDataset.from_dict') as mock_from_dict:
+        # Verify filtering worked
+        assert isinstance(filtered, CounterfactualDataset)
+        assert len(filtered) <= len(dataset)
 
-            # Set up filtered dataset
-            filtered_dataset = MagicMock(spec=CounterfactualDataset)
-            filtered_dataset.__len__.return_value = 1
-            mock_from_dict.return_value = filtered_dataset
+    def test_filter_multiple_datasets(self, pipeline, causal_model, checker):
+        """Test filtering multiple datasets."""
+        datasets = {
+            "different_symbol": CounterfactualDataset.from_sampler(8, different_symbol),
+            "same_symbol_different_position": CounterfactualDataset.from_sampler(
+                8, same_symbol_different_position
+            ),
+        }
 
-            # Run filter
-            datasets = {
-                "different_symbol": mock_counterfactual_dataset,
-                "same_symbol_different_position": mock_counterfactual_dataset,
-                "random_counterfactual": mock_counterfactual_dataset
-            }
-
-            filtered_datasets = experiment.filter(datasets, verbose=False, batch_size=64)
-
-            # Verify all datasets were filtered
-            assert len(filtered_datasets) == 3
-            assert "different_symbol" in filtered_datasets
-            assert "same_symbol_different_position" in filtered_datasets
-            assert "random_counterfactual" in filtered_datasets
-
-    def test_filter_high_keep_rate(self, mock_pipeline, mock_causal_model,
-                                  mock_counterfactual_dataset, checker):
-        """Test that filter keeps most examples when model performs well."""
-        experiment = FilterExperiment(
-            pipeline=mock_pipeline,
-            causal_model=mock_causal_model
-        )
-
-        # Create a dataset with multiple examples (without spec to allow __iter__ assignment)
-        extended_dataset = MagicMock()
-        extended_dataset.__len__.return_value = 64
-
-        # Create inner dataset
-        inner_dataset = MagicMock()
-        inner_dataset.__len__.return_value = 64
-        inner_dataset.__getitem__.side_effect = lambda key: [f"item_{i}" for i in range(64)]
-        inner_dataset.features = {"input": None, "counterfactual_inputs": None}
-        inner_dataset.__iter__ = lambda: iter([{"input": f"item_{i}", "counterfactual_inputs": []} for i in range(64)])
-
-        extended_dataset.dataset = inner_dataset
-        extended_dataset.__iter__ = lambda: iter([{"input": f"item_{i}", "counterfactual_inputs": []} for i in range(64)])
-
-        # Mock validation to pass most examples
-        passing_mask = [True] * 63 + [False]  # 63 out of 64 pass
-
-        with patch.object(experiment, '_validate_original_inputs', return_value=passing_mask), \
-             patch.object(experiment, '_validate_counterfactual_inputs', return_value=passing_mask), \
-             patch('causal.counterfactual_dataset.CounterfactualDataset.from_dict') as mock_from_dict:
-
-            # Set up filtered dataset
-            filtered_dataset = MagicMock(spec=CounterfactualDataset)
-            filtered_dataset.__len__.return_value = 63
-            mock_from_dict.return_value = filtered_dataset
-
-            # Run filter
-            filtered_datasets = experiment.filter(
-                {"test_dataset": extended_dataset},
-                verbose=False,
-                batch_size=64
+        filtered_datasets = {}
+        for name, dataset in datasets.items():
+            filtered_datasets[name] = filter_dataset(
+                dataset=dataset,
+                pipeline=pipeline,
+                causal_model=causal_model,
+                metric=checker,
+                batch_size=8,
             )
 
-            # Check keep rate
-            assert len(filtered_datasets["test_dataset"]) == 63
-            keep_rate = len(filtered_datasets["test_dataset"]) / 64
-            assert keep_rate > 0.95  # High keep rate (>95%)
+        # Verify all datasets were filtered
+        assert len(filtered_datasets) == 2
+        for name in datasets.keys():
+            assert name in filtered_datasets
+            assert len(filtered_datasets[name]) <= len(datasets[name])
 
 
 class TestEndToEndWorkflow:
     """End-to-end integration tests simulating the notebook workflow."""
 
-    def test_complete_das_workflow(self, mock_pipeline, mock_causal_model,
-                                   mock_token_positions, mock_counterfactual_dataset, checker):
-        """Test complete DAS workflow: filter -> train -> evaluate -> test."""
-        # Step 1: Filter datasets
-        filter_exp = FilterExperiment(
-            pipeline=mock_pipeline,
-            causal_model=mock_causal_model
+    def test_complete_das_workflow(self, pipeline, causal_model, checker):
+        """Test complete DAS workflow: filter -> train -> evaluate."""
+        # Step 1: Generate and filter datasets
+        train_dataset = CounterfactualDataset.from_sampler(
+            16, same_symbol_different_position
+        )
+        test_dataset = CounterfactualDataset.from_sampler(
+            8, same_symbol_different_position
         )
 
-        with patch.object(filter_exp, '_validate_original_inputs', return_value=[True]), \
-             patch.object(filter_exp, '_validate_counterfactual_inputs', return_value=[True]), \
-             patch('causal.counterfactual_dataset.CounterfactualDataset.from_dict') as mock_from_dict:
-
-            filtered_dataset = MagicMock(spec=CounterfactualDataset)
-            filtered_dataset.__len__.return_value = 1
-            mock_from_dict.return_value = filtered_dataset
-
-            filtered_datasets = filter_exp.filter(
-                {"same_symbol_different_position": mock_counterfactual_dataset},
-                verbose=False,
-                batch_size=64
-            )
-
-        # Step 2: Create DAS experiment
-        with patch('neural.featurizers.Featurizer'):
-            das_exp = PatchResidualStream(
-                pipeline=mock_pipeline,
-                causal_model=mock_causal_model,
-                layers=[0, 1, 2],
-                token_positions=mock_token_positions,
-                config={
-                    "batch_size": 32,
-                    "evaluation_batch_size": 64,
-                    "training_epoch": 4,
-                    "n_features": 16
-                }
-            )
-
-        # Step 3: Train DAS
-        with patch.object(das_exp, 'train_interventions') as mock_train:
-            das_exp.train_interventions(
-                filtered_datasets,
-                ["answer_position"],
-                method="DAS",
-                verbose=False
-            )
-            mock_train.assert_called_once()
-
-        # Step 4: Evaluate on train data
-        train_results = {
-            "task_name": "MCQA",
-            "dataset": {
-                "same_symbol_different_position": {
-                    "model_unit": {
-                        "unit1": {
-                            "metadata": {"layer": 1, "position": "symbol0"},
-                            "answer_position": {"average_score": 0.88}
-                        }
-                    }
-                }
-            }
-        }
-
-        with patch.object(das_exp, 'perform_interventions', return_value=train_results):
-            results = das_exp.perform_interventions(
-                filtered_datasets,
-                target_variables_list=[["answer_position"]],
-                verbose=False
-            )
-
-            assert "dataset" in results
-            assert results["dataset"]["same_symbol_different_position"]["model_unit"]["unit1"]["answer_position"]["average_score"] > 0.5
-
-    def test_complete_dbm_workflow(self, mock_pipeline, mock_causal_model,
-                                   mock_counterfactual_dataset, checker):
-        """Test complete DBM workflow: filter -> train -> evaluate -> test."""
-        # Step 1: Filter datasets
-        filter_exp = FilterExperiment(
-            pipeline=mock_pipeline,
-            causal_model=mock_causal_model
+        filtered_train = filter_dataset(
+            dataset=train_dataset,
+            pipeline=pipeline,
+            causal_model=causal_model,
+            metric=checker,
+            batch_size=8,
         )
 
-        with patch.object(filter_exp, '_validate_original_inputs', return_value=[True]), \
-             patch.object(filter_exp, '_validate_counterfactual_inputs', return_value=[True]), \
-             patch('causal.counterfactual_dataset.CounterfactualDataset.from_dict') as mock_from_dict:
+        filtered_test = filter_dataset(
+            dataset=test_dataset,
+            pipeline=pipeline,
+            causal_model=causal_model,
+            metric=checker,
+            batch_size=8,
+        )
 
-            filtered_dataset = MagicMock(spec=CounterfactualDataset)
-            filtered_dataset.__len__.return_value = 1
-            mock_from_dict.return_value = filtered_dataset
+        if len(filtered_train) < 2 or len(filtered_test) < 2:
+            pytest.skip("Not enough examples passed filtering")
 
-            filtered_datasets = filter_exp.filter(
-                {"different_symbol": mock_counterfactual_dataset},
+        # Step 2: Create token positions
+        token_positions_dict = create_token_positions(pipeline)
+        limited_positions = [token_positions_dict["last_token"]]
+
+        # Step 3: Train and evaluate DAS
+        with tempfile.TemporaryDirectory() as tmpdir:
+            train_path = os.path.join(tmpdir, "train_dataset")
+            test_path = os.path.join(tmpdir, "test_dataset")
+            filtered_train.dataset.save_to_disk(train_path)
+            filtered_test.dataset.save_to_disk(test_path)
+
+            # Build residual stream targets for DAS
+            layers = [0]  # Minimal for speed
+            targets = build_residual_stream_targets(
+                pipeline=pipeline,
+                layers=layers,
+                token_positions=limited_positions,
+                mode="one_target_per_unit",
+            )
+
+            result = train_DAS(
+                causal_model=causal_model,
+                interchange_targets=targets,
+                train_dataset_path=train_path,
+                test_dataset_path=test_path,
+                pipeline=pipeline,
+                target_variable_group=("answer_position",),
+                output_dir=os.path.join(tmpdir, "das_results"),
+                metric=checker,
+                save_results=False,
                 verbose=False,
-                batch_size=64
             )
 
-        # Step 2: Create DBM experiment
-        all_tokens_pos = MagicMock(spec=TokenPosition)
-        all_tokens_pos.id = "all_tokens"
+        # Verify complete workflow results
+        assert result is not None
+        assert "train_scores" in result
+        assert "test_scores" in result
+        assert result["metadata"]["train_max_score"] is not None
+        assert result["metadata"]["test_max_score"] is not None
 
-        num_heads = 4
-        end = 3
-        heads_masking = [[(layer, head) for layer in range(0, end) for head in range(num_heads)]]
+    def test_complete_dbm_workflow(self, pipeline, causal_model, checker):
+        """Test complete DBM workflow: filter -> train -> evaluate."""
+        # Step 1: Generate and filter datasets
+        train_dataset = CounterfactualDataset.from_sampler(16, different_symbol)
+        test_dataset = CounterfactualDataset.from_sampler(8, different_symbol)
 
-        with patch('neural.featurizers.Featurizer'):
-            dbm_exp = PatchAttentionHeads(
-                pipeline=mock_pipeline,
-                causal_model=mock_causal_model,
-                layer_head_lists=heads_masking,
-                token_position=all_tokens_pos,
-                config={
-                    "learning_rate": 0.001,
-                    "batch_size": 32,
-                    "evaluation_batch_size": 64,
-                    "training_epoch": 10,
-                    "masking": {
-                        "regularization_coefficient": 0.1
-                    },
-                    "featurizer_kwargs": {
-                        "tie_masks": True
-                    }
-                }
+        filtered_train = filter_dataset(
+            dataset=train_dataset,
+            pipeline=pipeline,
+            causal_model=causal_model,
+            metric=checker,
+            batch_size=8,
+        )
+
+        filtered_test = filter_dataset(
+            dataset=test_dataset,
+            pipeline=pipeline,
+            causal_model=causal_model,
+            metric=checker,
+            batch_size=8,
+        )
+
+        if len(filtered_train) < 2 or len(filtered_test) < 2:
+            pytest.skip("Not enough examples passed filtering")
+
+        # Step 2: Create token position for all tokens
+        sample_input = filtered_train[0]["input"]
+        all_tokens = get_all_tokens(sample_input, pipeline, padding=True)
+
+        # Step 3: Train and evaluate DBM
+        with tempfile.TemporaryDirectory() as tmpdir:
+            train_path = os.path.join(tmpdir, "train_dataset")
+            test_path = os.path.join(tmpdir, "test_dataset")
+            filtered_train.dataset.save_to_disk(train_path)
+            filtered_test.dataset.save_to_disk(test_path)
+
+            # Build attention head targets for DBM
+            layers = [0]  # Minimal for speed
+            num_heads = pipeline.model.config.num_attention_heads
+            heads = list(range(num_heads))
+            targets = build_attention_head_targets(
+                pipeline=pipeline,
+                layers=layers,
+                heads=heads,
+                token_position=all_tokens,
+                mode="one_target_all_units",
             )
 
-        # Step 3: Train DBM
-        with patch.object(dbm_exp, 'train_interventions') as mock_train:
-            dbm_exp.train_interventions(
-                filtered_datasets,
-                ["answer"],
-                method="DBM",
-                verbose=False
-            )
-            mock_train.assert_called_once()
-
-        # Step 4: Evaluate and extract masks
-        results_with_masks = {
-            "task_name": "MCQA",
-            "dataset": {
-                "different_symbol": {
-                    "model_unit": {
-                        "all_heads": {
-                            "feature_indices": {
-                                "AttentionHead(Layer-0,Head-0,Token-all_tokens)": [0],
-                                "AttentionHead(Layer-1,Head-2,Token-all_tokens)": [0],
-                                "AttentionHead(Layer-2,Head-1,Token-all_tokens)": [0]
-                            },
-                            "answer": {"average_score": 1.0}
-                        }
-                    }
-                }
-            }
-        }
-
-        with patch.object(dbm_exp, 'perform_interventions', return_value=results_with_masks):
-            results = dbm_exp.perform_interventions(
-                filtered_datasets,
-                target_variables_list=[["answer"]],
-                verbose=False
+            result = train_DBM_binary_heatmaps(
+                causal_model=causal_model,
+                interchange_target=targets[("all",)],
+                train_dataset_path=train_path,
+                test_dataset_path=test_path,
+                pipeline=pipeline,
+                target_variable_group=("answer",),
+                output_dir=os.path.join(tmpdir, "dbm_results"),
+                metric=checker,
+                tie_masks=True,
+                save_results=False,
+                verbose=False,
             )
 
-            # Verify we got masks
-            assert "feature_indices" in results["dataset"]["different_symbol"]["model_unit"]["all_heads"]
-            assert results["dataset"]["different_symbol"]["model_unit"]["all_heads"]["answer"]["average_score"] == 1.0
+        # Verify complete workflow results
+        assert result is not None
+        assert "train_score" in result
+        assert "test_score" in result
+        assert "selected_units" in result
+        assert result["metadata"]["num_selected_units"] is not None
 
 
 # Run tests when file is executed directly
