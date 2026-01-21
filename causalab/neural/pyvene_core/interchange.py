@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import collections
 import logging
+import random
 from typing import Any, Callable
 
 import torch
@@ -20,16 +21,19 @@ from torch import Tensor
 import transformers
 import numpy as np
 from tqdm import tqdm
-from pyvene import IntervenableModel
+from pyvene import IntervenableModel  # type: ignore[import-untyped]
 
-from causalab.causal.counterfactual_dataset import CounterfactualDataset
+from causalab.causal.counterfactual_dataset import (
+    CounterfactualExample,
+    LabeledCounterfactualExample,
+)
 from causalab.neural.pipeline import Pipeline
 from causalab.neural.model_units import InterchangeTarget
 from causalab.neural.pyvene_core.intervenable_model import (
     prepare_intervenable_model,
     delete_intervenable_model,
 )
-from torch.utils.data import DataLoader
+from causalab.neural.pyvene_core.collect import collect_source_representations
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -37,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 def prepare_intervenable_inputs(
     pipeline: Pipeline,
-    batch: dict[str, Any],
+    examples: list[CounterfactualExample] | list[LabeledCounterfactualExample],
     interchange_target: InterchangeTarget,
 ) -> tuple[
     dict[str, Any],
@@ -53,20 +57,22 @@ def prepare_intervenable_inputs(
 
     Args:
         pipeline: The pipeline containing the model
-        batch: The batch of data containing the base and counterfactual inputs.
-            The batch should contain "input" and "counterfactual_inputs" keys.
-            The "counterfactual_inputs" key should contain a list of lists with shape,
-            (batch_size, num_counterfactuals).
+        examples: List of counterfactual examples, each with "input" and
+            "counterfactual_inputs" keys.
         interchange_target: InterchangeTarget containing the model units to be intervened on.
             Groups in the target correspond to counterfactual inputs.
 
     Returns:
         Tuple of (batched_base, batched_counterfactuals, inv_locations, feature_indices)
     """
-    batched_base = batch["input"]
-    # Change the shape of the counterfactual inputs from (batch_size, num_counterfactuals)
-    # to (num_counterfactuals, batch_size)
-    batched_counterfactuals = list(zip(*batch["counterfactual_inputs"]))
+    # Extract and batch inputs from examples
+    batched_base = [ex["input"] for ex in examples]
+    # Shape: (batch_size, num_counterfactuals) -> (num_counterfactuals, batch_size)
+    # Convert zip tuples to lists for pipeline.load() compatibility
+    batched_counterfactuals = [
+        list(cf_tuple)
+        for cf_tuple in zip(*[ex["counterfactual_inputs"] for ex in examples])
+    ]
 
     # shape: (num_model_units, batch_size, num_component_indices)
     base_indices = [
@@ -106,9 +112,11 @@ def prepare_intervenable_inputs(
 def batched_interchange_intervention(
     pipeline: Pipeline,
     intervenable_model: IntervenableModel,
-    batch: dict[str, Any],
+    examples: list[CounterfactualExample],
     interchange_target: InterchangeTarget,
     output_scores: bool | int = True,
+    source_pipeline: Pipeline | None = None,
+    source_intervenable_model: IntervenableModel | None = None,
 ) -> dict[str, Any]:
     """
     Perform interchange interventions on batched inputs using an intervenable model.
@@ -119,19 +127,34 @@ def batched_interchange_intervention(
     3. Moving tensors back to CPU to free GPU memory
 
     Args:
-        pipeline: Neural model pipeline that handles tokenization and generation
+        pipeline: Target pipeline where interventions are applied
         intervenable_model: PyVENE model with preset intervention locations
-        batch: Batch of data containing "input" and "counterfactual_inputs"
+        examples: List of counterfactual examples
         interchange_target: InterchangeTarget containing model components to intervene on
         output_scores: Whether to include scores in output dictionary (default: True)
+        source_pipeline: If provided, collect activations from this pipeline instead
+            of the target pipeline. Enables cross-model patching.
+        source_intervenable_model: Optional pre-created intervenable model for the source
+            pipeline. If provided with source_pipeline, this model will be reused for
+            collecting activations instead of creating a new one per batch.
 
     Returns:
         dict: Dictionary with 'sequences' and optionally 'scores' keys
     """
-    # Prepare inputs for intervention
+    # Prepare inputs for intervention (using target pipeline for base)
     batched_base, batched_counterfactuals, inv_locations, feature_indices = (
-        prepare_intervenable_inputs(pipeline, batch, interchange_target)
+        prepare_intervenable_inputs(pipeline, examples, interchange_target)
     )
+
+    # Collect source representations if using cross-model patching
+    source_representations = None
+    if source_pipeline is not None:
+        source_representations = collect_source_representations(
+            source_pipeline, examples, interchange_target, source_intervenable_model
+        )
+        # When using cross-model patching, we don't pass counterfactuals to pyvene
+        # because we're using pre-collected source_representations instead
+        batched_counterfactuals = None
 
     # Execute the intervention via the pipeline
     gen_kwargs = {"output_scores": output_scores}
@@ -141,14 +164,18 @@ def batched_interchange_intervention(
         batched_counterfactuals,
         inv_locations,
         feature_indices,
+        source_representations=source_representations,
         **gen_kwargs,
     )
 
     # Move tensors to CPU to free GPU memory
-    for batched in [batched_base] + batched_counterfactuals:
-        for k, v in batched.items():
-            if isinstance(v, Tensor):
+    if batched_counterfactuals is not None:
+        for batched in [batched_base] + batched_counterfactuals:
+            for k, v in batched.items():
                 batched[k] = v.cpu()
+    else:
+        for k, v in batched_base.items():
+            batched_base[k] = v.cpu()
 
     return output
 
@@ -253,10 +280,11 @@ def _move_outputs_to_cpu(outputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def run_interchange_interventions(
     pipeline: Pipeline,
-    counterfactual_dataset: CounterfactualDataset,
+    counterfactual_dataset: list[CounterfactualExample],
     interchange_target: InterchangeTarget,
     batch_size: int = 32,
     output_scores: bool | int = True,
+    source_pipeline: Pipeline | None = None,
 ) -> dict[str, list[Any]]:
     """
     Run interchange interventions on a full counterfactual dataset in batches.
@@ -269,8 +297,8 @@ def run_interchange_interventions(
     5. Collects and returns results from all batches
 
     Args:
-        pipeline: Neural model pipeline that handles tokenization and generation
-        counterfactual_dataset: Dataset containing inputs and their counterfactuals
+        pipeline: Target pipeline where interventions are applied
+        counterfactual_dataset: List of counterfactual examples
         interchange_target: InterchangeTarget containing model components to intervene on,
                            where groups share counterfactual inputs
         batch_size: Number of examples to process in each batch
@@ -278,6 +306,9 @@ def run_interchange_interventions(
             - False: No scores
             - True: Full vocabulary scores (on CPU)
             - int (e.g., 10): Top-k scores (on CPU, memory efficient)
+        source_pipeline: If provided, collect activations from this pipeline instead
+            of the target pipeline. Enables cross-model patching where activations
+            from source_pipeline are patched into pipeline (the target).
 
     Returns:
         List[dict]: List of dictionaries, each with 'sequences' (on CPU) and optionally
@@ -288,40 +319,42 @@ def run_interchange_interventions(
         pipeline, interchange_target, intervention_type="interchange"
     )
 
-    # Create data loader for batch processing
-    def shallow_collate_fn(batch: list[dict[str, Any]]) -> dict[str, list[Any]]:
-        return {key: [item[key] for item in batch] for key in batch[0].keys()}
+    # Create source intervenable model if doing cross-model patching
+    source_intervenable_model = None
+    if source_pipeline is not None:
+        source_intervenable_model = prepare_intervenable_model(
+            source_pipeline, interchange_target, intervention_type="collect"
+        )
 
-    dataloader = DataLoader(
-        counterfactual_dataset,  # type: ignore[arg-type]
-        batch_size=batch_size,
-        shuffle=False,  # Maintain dataset order
-        collate_fn=shallow_collate_fn,
-    )
     all_outputs = []
 
     # Process each batch with progress tracking
-    for batch in tqdm(
-        dataloader,
+    for start in tqdm(
+        range(0, len(counterfactual_dataset), batch_size),
         desc="Processing batches",
         disable=not logger.isEnabledFor(logging.DEBUG),
         leave=False,
     ):
+        examples = counterfactual_dataset[start : start + batch_size]
         with torch.no_grad():  # Disable gradient tracking for inference
             # Perform interchange interventions on the batch - returns dict
             output_dict = batched_interchange_intervention(
                 pipeline,
                 intervenable_model,
-                batch,
+                examples,
                 interchange_target,
                 output_scores=output_scores,
+                source_pipeline=source_pipeline,
+                source_intervenable_model=source_intervenable_model,
             )
 
             # Collect outputs from this batch
             all_outputs.append(output_dict)
 
-    # Clean up the intervenable model to free GPU memory
+    # Clean up the intervenable models to free GPU memory
     delete_intervenable_model(intervenable_model)
+    if source_intervenable_model is not None:
+        delete_intervenable_model(source_intervenable_model)
 
     # Convert to top-k format if requested (while still on GPU for efficiency)
     if not isinstance(output_scores, bool) and output_scores > 0:
@@ -341,10 +374,11 @@ def run_interchange_interventions(
 def train_interventions(
     pipeline: Pipeline,
     interchange_target: InterchangeTarget,
-    counterfactual_dataset: CounterfactualDataset,
+    counterfactual_dataset: list[CounterfactualExample],
     intervention_type: str,
     config: dict[str, Any],
     loss_and_metric_fn: Callable[..., tuple[Tensor, dict[str, Any], dict[str, Any]]],
+    source_pipeline: Pipeline | None = None,
 ) -> str:
     """
     Train intervention models on a counterfactual dataset.
@@ -354,10 +388,10 @@ def train_interventions(
     intervention parameters while keeping the base model frozen.
 
     Args:
-        pipeline: Neural model pipeline for tokenization and model execution
+        pipeline: Target pipeline where interventions are applied
         interchange_target: InterchangeTarget containing model components to intervene on,
                            where groups share counterfactual inputs
-        counterfactual_dataset: Dataset containing original inputs and their counterfactuals
+        counterfactual_dataset: List of counterfactual examples
         intervention_type: Type of intervention ("interchange" or "mask")
         config: Configuration parameters including:
             - batch_size: Number of examples per batch
@@ -372,8 +406,10 @@ def train_interventions(
             - memory_cleanup_freq: Batch frequency for memory cleanup
             - shuffle: Whether to shuffle data
         loss_and_metric_fn: Function computing loss and metrics for a batch
-                           with signature (pipeline, model, batch, units) ->
+                           with signature (pipeline, model, examples, units, source_pipeline) ->
                            (loss, metrics_dict, logging_info)
+        source_pipeline: If provided, collect activations from this pipeline instead
+            of the target pipeline during training. Enables cross-model patching.
 
     Returns:
         str: Summary string with final metrics
@@ -385,21 +421,22 @@ def train_interventions(
     intervenable_model.disable_model_gradients()
     intervenable_model.eval()
 
-    # ----- Data Preparation ----- #
-    def shallow_collate_fn_train(batch: list[dict[str, Any]]) -> dict[str, list[Any]]:
-        return {key: [item[key] for item in batch] for key in batch[0].keys()}
+    # Create source intervenable model if doing cross-model patching
+    source_intervenable_model = None
+    if source_pipeline is not None:
+        source_intervenable_model = prepare_intervenable_model(
+            source_pipeline, interchange_target, intervention_type="collect"
+        )
 
-    dataloader = DataLoader(
-        counterfactual_dataset,  # type: ignore[arg-type]
-        batch_size=config["train_batch_size"],
-        shuffle=config.get("shuffle", True),
-        collate_fn=shallow_collate_fn_train,
-    )
+    # ----- Data Preparation ----- #
+    train_batch_size = config["train_batch_size"]
+    shuffle = config.get("shuffle", True)
+    num_batches = -(-len(counterfactual_dataset) // train_batch_size)
 
     # ----- Configuration ----- #
     num_epoch = config["training_epoch"]
     regularization_coefficient = config.get("masking", {}).get(
-        "regularization_coefficient", 1e-4
+        "regularization_coefficient", 0.1
     )
     memory_cleanup_freq = config.get("memory_cleanup_freq", 50)
     patience = config.get("patience", None)  # Default to no early stopping
@@ -422,7 +459,7 @@ def train_interventions(
     scheduler = transformers.get_scheduler(
         scheduler_type,
         optimizer=optimizer,
-        num_training_steps=num_epoch * len(dataloader),
+        num_training_steps=num_epoch * num_batches,
     )
 
     # Track step count manually instead of accessing scheduler._step_count
@@ -440,7 +477,7 @@ def train_interventions(
         )
 
         # Calculate number of steps for annealing
-        total_steps = num_epoch * len(dataloader)
+        total_steps = num_epoch * num_batches
         annealing_steps = int(total_steps * temperature_annealing_fraction)
 
         # Create schedule: anneal for first fraction of steps, then stay constant
@@ -471,48 +508,59 @@ def train_interventions(
         leave=False,
     )
     for epoch in train_iterator:
-        epoch_iterator = tqdm(
-            dataloader, desc=f"Epoch: {epoch}", position=1, leave=False
-        )
+        # Shuffle indices for this epoch if requested
+        indices = list(range(len(counterfactual_dataset)))
+        if shuffle:
+            random.shuffle(indices)
 
         aggregated_stats = collections.defaultdict(list)
 
-        for step, batch in enumerate(epoch_iterator):
-            # Move batch data to device
-            for k, v in batch.items():
-                if v is not None and isinstance(v, torch.Tensor):
-                    batch[k] = v.to(pipeline.model.device)
+        epoch_iterator = tqdm(
+            range(0, len(indices), train_batch_size),
+            desc=f"Epoch: {epoch}",
+            position=1,
+            leave=False,
+        )
+        for step, start in enumerate(epoch_iterator):
+            examples = [
+                counterfactual_dataset[i]
+                for i in indices[start : start + train_batch_size]
+            ]
 
             # Run training step
             loss, eval_metrics, _logging_info = loss_and_metric_fn(
-                pipeline, intervenable_model, batch, interchange_target
+                pipeline,
+                intervenable_model,
+                examples,
+                interchange_target,
+                source_pipeline,
+                source_intervenable_model,
             )
 
             # Add sparsity loss for mask interventions
             if intervention_type == "mask":
-                masks_list: list[Tensor] = []
                 assert temperature_schedule is not None
                 assert interventions is not None
                 temp = temperature_schedule[current_step]
+
+                # Collect sparsity losses and mask sizes for normalization
+                total_sparsity: Tensor = torch.tensor(0.0, device=loss.device)
+                total_mask_elements = 0
                 for k, v in interventions.items():
                     # pyvene's intervention dict values are dynamically typed
                     mask_intervention = v[0] if isinstance(v, tuple) else v
-                    loss = (
-                        loss
-                        + regularization_coefficient
-                        * mask_intervention.get_sparsity_loss()  # pyright: ignore[reportCallIssue]
+                    total_sparsity = (
+                        total_sparsity + mask_intervention.get_sparsity_loss()  # pyright: ignore[reportCallIssue]
                     )
-                    masks_list.append(mask_intervention.mask)  # pyright: ignore[reportArgumentType]
+                    total_mask_elements += mask_intervention.mask.numel()  # pyright: ignore[reportAttributeAccessIssue, reportCallIssue]
                     mask_intervention.set_temperature(temp)  # pyright: ignore[reportCallIssue]
-                if config["featurizer_kwargs"]["tie_masks"]:
-                    masks = torch.cat(masks_list)
-                    sparse_loss = torch.norm(
-                        torch.sigmoid(
-                            masks / temp,
-                        ),
-                        p=1,
+
+                # Normalize by total mask elements so regularization_coefficient
+                # has consistent meaning regardless of number of features/units
+                if total_mask_elements > 0:
+                    loss = loss + regularization_coefficient * (
+                        total_sparsity / total_mask_elements
                     )
-                    loss = loss + regularization_coefficient * sparse_loss
 
             # Update statistics
             aggregated_stats["loss"].append(loss.item())
@@ -596,6 +644,8 @@ def train_interventions(
 
     # ----- Cleanup ----- #
     delete_intervenable_model(intervenable_model)
+    if source_intervenable_model is not None:
+        delete_intervenable_model(source_intervenable_model)
 
     summary = f"Trained intervention for {str(interchange_target)[:200]}"
     summary += "\nFinal metrics: " + " ".join(

@@ -12,7 +12,7 @@ from __future__ import annotations
 import gc
 
 import torch
-import pyvene as pv
+import pyvene as pv  # type: ignore[import-untyped]
 
 from causalab.neural.pipeline import Pipeline
 from causalab.neural.model_units import AtomicModelUnit, InterchangeTarget

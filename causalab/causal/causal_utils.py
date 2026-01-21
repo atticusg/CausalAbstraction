@@ -1,17 +1,25 @@
 """Utility functions for working with causal models."""
 
-import copy
-import logging
+from __future__ import annotations
 
+from causalab.causal.counterfactual_dataset import CounterfactualExample
+from typing import TYPE_CHECKING, Any, List, Dict, Callable, Mapping, Sequence
+import copy
+import itertools
+import logging
+import random
 import numpy as np
 import torch
-from typing import List, Dict, Callable, Union
+import json
 
-from causalab.causal.counterfactual_dataset import CounterfactualDataset
+
+if TYPE_CHECKING:
+    from causalab.causal.causal_model import CausalModel
 
 logger = logging.getLogger(__name__)
 
 
+# currently unused but not dead code - usage to come
 def can_distinguish_with_dataset(
     dataset,
     causal_model1,
@@ -55,24 +63,22 @@ def can_distinguish_with_dataset(
         counterfactual_inputs = example["counterfactual_inputs"]
         assert len(counterfactual_inputs) == 1
 
-        # Run interchange intervention on first model
-        setting1 = causal_model1.run_interchange(
-            input_data, {var: counterfactual_inputs[0] for var in target_variables1}
-        )
+        # Perform interchange intervention: copy base trace and intervene with counterfactual values
+        cf_trace = counterfactual_inputs[0]
+        setting1 = input_data.copy()
+        for var in target_variables1:
+            setting1.intervene(var, cf_trace[var])
 
         if causal_model2 is not None and target_variables2 is not None:
-            # Run interchange intervention on second model
-            setting2 = causal_model2.run_interchange(
-                input_data, {var: counterfactual_inputs[0] for var in target_variables2}
-            )
+            # Perform interchange intervention on second set of variables
+            setting2 = input_data.copy()
+            for var in target_variables2:
+                setting2.intervene(var, cf_trace[var])
             if setting1["raw_output"] != setting2["raw_output"]:
                 count += 1
         else:
-            # Compare against forward pass of first model
-            if (
-                setting1["raw_output"]
-                != causal_model1.run_forward(input_data)["raw_output"]
-            ):
+            # Compare against baseline (input_data is already a trace)
+            if setting1["raw_output"] != input_data["raw_output"]:
                 count += 1
 
     proportion = count / len(dataset)
@@ -83,48 +89,10 @@ def can_distinguish_with_dataset(
     return {"proportion": proportion, "count": count}
 
 
-def statement_conjunction_function(filled_statements: List, delimiters: list) -> str:
-    """
-    Combine multiple filled statements into a single conjunction.
-
-    Args:
-        filled_statements: List of filled statement strings
-        delimiters: List of delimiters to use between statements
-
-    Returns:
-        A single string combining all statements with proper punctuation, seen below:
-        "Statement one delimiter one statement two delimiter two ... statement N delimiter N+1."
-
-    """
-    # Capitalize first letter and ensure it ends with a period.
-    fill_index = delimiters.index("FILL")
-    filler = delimiters[fill_index - 1]
-    new_delimiters = delimiters[: fill_index - 1] + delimiters[fill_index + 1 :]
-    for _ in range(len(filled_statements) - len(new_delimiters)):
-        new_delimiters.insert(fill_index - 1, filler)
-
-    if len(new_delimiters) > len(filled_statements):
-        new_delimiters = new_delimiters[-len(filled_statements) :]
-
-    statements = []
-    for i in range(len(filled_statements)):
-        statement = filled_statements[i]
-        # Decompose into words
-        words = statement.split()
-        # Capitalize first letter and ensure it ends with a period.
-        words[0] = words[0].capitalize()
-        statements.append(" ".join(words).rstrip(new_delimiters[-1]))
-    conjunction = statements[0]
-    for i in range(1, len(statements)):
-        conjunction += new_delimiters[i - 1] + statements[i]
-    conjunction += new_delimiters[-1]
-    return conjunction
-
-
 def compute_interchange_scores(
     raw_results: Dict,
     causal_model,
-    datasets: Union[Dict, "CounterfactualDataset"],
+    datasets: Mapping[str, list[CounterfactualExample]],
     target_variables_list: List[List[str]],
     checker: Callable,
 ) -> Dict:
@@ -149,8 +117,7 @@ def compute_interchange_scores(
             - metadata: Model unit metadata (layer, position, etc.)
             - feature_indices: Selected features for each model unit
         causal_model: CausalModel used to generate expected outputs via label_counterfactual_data
-        datasets: Dictionary mapping dataset names to CounterfactualDataset objects,
-                 or single CounterfactualDataset (will be converted to dict)
+        datasets: Dictionary mapping dataset names to list[CounterfactualExample]
         target_variables_list: List of target variable groups to evaluate.
                               Each group is a list of variable names to intervene on.
         checker: Function with signature (output_dict, expected_label) -> score
@@ -182,10 +149,6 @@ def compute_interchange_scores(
         >>> experiment.plot_heatmaps(results_A, target_variables=["A"])
         >>> experiment.plot_heatmaps(results_AB, target_variables=["A", "B"])
     """
-    # Convert single dataset to dictionary
-    if isinstance(datasets, CounterfactualDataset):
-        datasets = {datasets.id: datasets}
-
     # Create a deep copy to avoid modifying the input
     results = copy.deepcopy(raw_results)
 
@@ -272,3 +235,481 @@ def compute_interchange_scores(
                 ] = {"scores": scores, "average_score": np.mean(scores)}
 
     return results
+
+
+# ============================================================================
+# Helper functions for working with counterfactual examples
+# ============================================================================
+
+
+def generate_counterfactual_samples(
+    size: int,
+    sampler: Callable[[], CounterfactualExample],
+    filter: Callable[[CounterfactualExample], bool] | None = None,
+) -> list[CounterfactualExample]:
+    """
+    Generate a list of counterfactual examples.
+
+    Args:
+        size (int): Number of examples to generate.
+        sampler (callable): Function that returns a CounterfactualExample.
+        filter (callable, optional): Function that takes a CounterfactualExample and returns
+                                    a boolean indicating whether to include it.
+
+    Returns:
+        list[CounterfactualExample]: List of counterfactual examples.
+    """
+    examples = []
+    while len(examples) < size:
+        sample = sampler()
+        if filter is None or filter(sample):
+            examples.append(sample)
+
+    return examples
+
+
+def display_counterfactual_examples(
+    examples: Sequence[Mapping[str, Any]],
+    num_examples: int = 1,
+    verbose: bool = True,
+    name: str = "dataset",
+) -> Dict[int, Mapping[str, Any]]:
+    """
+    Display examples from a list of counterfactual examples.
+
+    Args:
+        examples (list): List of counterfactual example dicts.
+        num_examples (int, optional): Number of examples to display. Defaults to 1.
+        verbose (bool, optional): Whether to print information. Defaults to True.
+        name (str, optional): Name to display for the dataset. Defaults to "dataset".
+
+    Returns:
+        dict: A dictionary mapping indices to displayed examples.
+    """
+    if verbose:
+        print(f"Dataset '{name}':")
+
+    displayed_examples: Dict[int, Mapping[str, Any]] = {}
+
+    for i in range(min(num_examples, len(examples))):
+        example = examples[i]
+
+        if verbose:
+            print(f"\nExample {i + 1}:")
+            print(f"Input: {example['input']}")
+            print(
+                f"Counterfactual Inputs ({len(example['counterfactual_inputs'])} alternatives):"
+            )
+
+            for j, counterfactual_input in enumerate(example["counterfactual_inputs"]):
+                print(f"  [{j + 1}] {counterfactual_input}")
+
+        displayed_examples[i] = example
+
+    if verbose and len(examples) > num_examples:
+        print(f"\n... {len(examples) - num_examples} more examples not shown")
+
+    return displayed_examples
+
+
+def save_counterfactual_examples(
+    examples: list[CounterfactualExample],
+    path: str,
+) -> None:
+    """
+    Save a list of counterfactual examples to disk as JSON.
+
+    Args:
+        examples: List of CounterfactualExample dicts to save.
+        path: File path to save the JSON to (should end in .json).
+    """
+
+    def serialize_example(ex: CounterfactualExample) -> dict[str, Any]:
+        return {
+            "input": ex["input"].to_dict(),
+            "counterfactual_inputs": [t.to_dict() for t in ex["counterfactual_inputs"]],
+        }
+
+    serialized = [serialize_example(ex) for ex in examples]
+    with open(path, "w") as f:
+        json.dump(serialized, f, indent=2)
+
+
+def load_counterfactual_examples(
+    path: str, causal_model: "CausalModel"
+) -> list[CounterfactualExample]:
+    """
+    Load a list of counterfactual examples from disk.
+
+    Args:
+        path: File path to load the JSON from.
+        causal_model: CausalModel to use for deserializing CausalTrace objects
+
+    Returns:
+        List of CounterfactualExamples
+    """
+    with open(path) as f:
+        data = json.load(f)
+    return deserialize_counterfactual_examples(data, causal_model)
+
+
+def deserialize_counterfactual_examples(
+    dataset: Sequence[CounterfactualExample], causal_model: "CausalModel"
+) -> list[CounterfactualExample]:
+    """
+    Convert dicts loaded from disk back to CausalTraces.
+
+    When a dataset is saved to disk, CausalTrace objects are serialized to dicts.
+    This function converts them back to CausalTraces using the causal model's mechanisms.
+
+    Args:
+        dataset: List of CounterfactualExample dicts (from load_counterfactual_examples).
+        causal_model: CausalModel to use for reconstructing traces.
+
+    Returns:
+        List of CounterfactualExample with CausalTrace objects instead of dicts.
+    """
+    result = []
+    for example in dataset:
+        input_data = example["input"]
+        cf_inputs_data = example["counterfactual_inputs"]
+
+        # Convert to CausalTrace if it's a dict
+        if isinstance(input_data, dict):
+            input_trace = causal_model.new_trace(input_data)
+        else:
+            input_trace = input_data
+
+        # Convert counterfactual inputs
+        cf_traces = []
+        for cf_data in cf_inputs_data:
+            if isinstance(cf_data, dict):
+                cf_traces.append(causal_model.new_trace(cf_data))
+            else:
+                cf_traces.append(cf_data)
+
+        result.append({"input": input_trace, "counterfactual_inputs": cf_traces})
+
+    return result
+
+
+# ============================================================================
+# Functions extracted from CausalModel class
+# ============================================================================
+
+
+def sample_intervention(
+    model: "CausalModel", filter_func: Callable[[dict[str, Any]], bool] | None = None
+) -> dict[str, Any]:
+    """
+    Sample a random intervention that satisfies an optional filter.
+
+    Parameters:
+    -----------
+    model : CausalModel
+        The causal model to sample from.
+    filter_func : function, optional
+        A function that takes an intervention and returns a boolean indicating
+        whether it satisfies the filter (default is None).
+
+    Returns:
+    --------
+    dict
+        A dictionary mapping variables to their sampled intervention values.
+    """
+    filter_func = (
+        filter_func if filter_func is not None else lambda x: len(x.keys()) > 0
+    )
+    intervention: dict[str, Any] = {}
+    while not filter_func(intervention):
+        intervention = {}
+        while len(intervention.keys()) == 0:
+            for var in model.variables:
+                if var in model.inputs or var in model.outputs:
+                    continue
+                if random.choice([0, 1]) == 0:
+                    intervention[var] = random.choice(model.values[var])
+    return intervention
+
+
+def label_data_with_variables(
+    model: "CausalModel",
+    data: Sequence[Mapping[str, Any]],
+    target_variables: list[str],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """
+    Labels a dataset based on variable settings from running the forward model.
+
+    Takes a dataset of inputs, runs the forward model on each input, and assigns
+    a unique label ID based on the values of the specified target variables.
+
+    Parameters:
+    -----------
+    model : CausalModel
+        The causal model to use for labeling.
+    data : list
+        List containing examples with "input" field.
+    target_variables : list
+        List of variable names to use for labeling.
+
+    Returns:
+    --------
+    tuple
+        A tuple containing:
+            - list[dict]: A list of dicts with "input" and "label" fields.
+            - dict: A mapping from concatenated target variable values to label IDs.
+    """
+    traces = []
+    labels = []
+    label_to_setting: dict[str, int] = {}
+
+    new_id = 0
+    for example in data:
+        trace = example["input"]
+        # Store input
+        traces.append(trace)
+
+        target_labels = [str(trace[var]) for var in target_variables]
+
+        # Assign or create a label ID
+        label_key = "".join(target_labels)
+        if label_key in label_to_setting:
+            id_value = label_to_setting[label_key]
+        else:
+            id_value = new_id
+            label_to_setting[label_key] = new_id
+            new_id += 1
+
+        labels.append(id_value)
+
+    # Return list of dicts with input and label
+    labeled_data = [
+        {"input": t.to_dict() if hasattr(t, "to_dict") else t, "label": label}
+        for t, label in zip(traces, labels)
+    ]
+    return labeled_data, label_to_setting
+
+
+def generate_equiv_classes(model: "CausalModel") -> dict[str, dict[Any, list[Any]]]:
+    """
+    Generate equivalence classes for each variable.
+
+    This function computes, for each non-input variable, the sets of parent values
+    that produce each possible value of the variable.
+
+    Parameters:
+    -----------
+    model : CausalModel
+        The causal model to compute equivalence classes for.
+
+    Returns:
+    --------
+    dict
+        A dictionary mapping variables to their equivalence classes.
+    """
+    equiv_classes: dict[str, dict[Any, list[Any]]] = {}
+    for var in model.variables:
+        if var in model.inputs:
+            continue
+        equiv_classes[var] = {val: [] for val in model.values[var]}
+        for parent_values in itertools.product(
+            *[model.values[par] for par in model.parents[var]]
+        ):
+            value = model.mechanisms[var](*parent_values)
+            equiv_classes[var][value].append(
+                {par: parent_values[i] for i, par in enumerate(model.parents[var])}
+            )
+    return equiv_classes
+
+
+def find_live_paths(
+    model: "CausalModel", intervention: dict[str, Any]
+) -> dict[int, list[list[str]]]:
+    """
+    Find all live causal paths in the model given an intervention.
+
+    A live path is a sequence of variables where changing the value of one
+    variable can affect the value of the next variable in the sequence.
+
+    Parameters:
+    -----------
+    model : CausalModel
+        The causal model to analyze.
+    intervention : dict or CausalTrace
+        Intervention values (dict will be converted to trace).
+
+    Returns:
+    --------
+    dict
+        A dictionary mapping path lengths to lists of paths.
+    """
+    # Create actual setting trace
+    actual_setting = model.new_trace(intervention)
+
+    paths: dict[int, list[list[str]]] = {
+        1: [[variable] for variable in model.variables]
+    }
+    step = 2
+    while True:
+        paths[step] = []
+        for path in paths[step - 1]:
+            for child in model.children[path[-1]]:
+                actual_cause = False
+                for value in model.values[path[-1]]:
+                    # Create counterfactual trace with intervention values
+                    counterfactual_setting = model.new_trace(intervention)
+                    # Intervene with new value for path variable
+                    counterfactual_setting.intervene(path[-1], value)
+
+                    if counterfactual_setting[child] != actual_setting[child]:
+                        actual_cause = True
+                if actual_cause:
+                    paths[step].append(copy.deepcopy(path) + [child])
+        if len(paths[step]) == 0:
+            break
+        step += 1
+    del paths[1]
+    return paths
+
+
+def sample_input_tree_balanced(
+    model: "CausalModel",
+    equiv_classes: dict[str, dict[Any, list[Any]]],
+    output_var: str | None = None,
+    output_var_value: Any | None = None,
+) -> dict[str, Any]:
+    """
+    Sample an input that leads to a specific output value using a balanced tree approach.
+
+    Parameters:
+    -----------
+    model : CausalModel
+        The causal model to sample from.
+    equiv_classes : dict
+        Pre-computed equivalence classes (from generate_equiv_classes).
+    output_var : str, optional
+        The output variable to target (default is the first output variable).
+    output_var_value : any, optional
+        The desired value for the output variable (default is a random choice).
+
+    Returns:
+    --------
+    dict
+        A dictionary mapping input variables to their sampled values.
+    """
+    assert output_var is not None or len(model.outputs) == 1
+
+    if output_var is None:
+        output_var = model.outputs[0]
+    if output_var_value is None:
+        output_var_value = random.choice(model.values[output_var])
+
+    def create_input(
+        var: str, value: Any, input_dict: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        if input_dict is None:
+            input_dict = {}
+        parent_values = random.choice(equiv_classes[var][value])
+        for parent in parent_values:
+            if parent in model.inputs:
+                input_dict[parent] = parent_values[parent]
+            else:
+                create_input(parent, parent_values[parent], input_dict)
+        return input_dict
+
+    input_setting = create_input(output_var, output_var_value)
+    for input_var in model.inputs:
+        if input_var not in input_setting:
+            input_setting[input_var] = random.choice(model.values[input_var])
+    return input_setting
+
+
+def get_path_maxlen_filter(
+    model: "CausalModel", lengths: list[int] | set[int]
+) -> Callable[[dict[str, Any]], bool]:
+    """
+    Get a filter function that checks if the maximum length of any live path
+    is in a given set of lengths.
+
+    Parameters:
+    -----------
+    model : CausalModel
+        The causal model to use for path finding.
+    lengths : list or set
+        A list or set of path lengths to check against.
+
+    Returns:
+    --------
+    function
+        A filter function that takes a setting and returns a boolean.
+    """
+
+    def check_path(total_setting: dict[str, Any]) -> bool:
+        input_setting = {var: total_setting[var] for var in model.inputs}
+        paths = find_live_paths(model, input_setting)
+        max_len = max([length for length in paths.keys() if len(paths[length]) != 0])
+        if max_len in lengths:
+            return True
+        return False
+
+    return check_path
+
+
+def get_partial_filter(
+    partial_setting: dict[str, Any],
+) -> Callable[[dict[str, Any]], bool]:
+    """
+    Get a filter function that checks if a setting matches a partial setting.
+
+    Parameters:
+    -----------
+    partial_setting : dict
+        A dictionary mapping variables to their desired values.
+
+    Returns:
+    --------
+    function
+        A filter function that takes a setting and returns a boolean.
+    """
+
+    def compare(total_setting: dict[str, Any]) -> bool:
+        for var in partial_setting:
+            if total_setting[var] != partial_setting[var]:
+                return False
+        return True
+
+    return compare
+
+
+def get_specific_path_filter(
+    model: "CausalModel", start: str, end: str
+) -> Callable[[dict[str, Any]], bool]:
+    """
+    Get a filter function that checks if there is a live path from a start
+    variable to an end variable.
+
+    Parameters:
+    -----------
+    model : CausalModel
+        The causal model to use for path finding.
+    start : str
+        The start variable of the path.
+    end : str
+        The end variable of the path.
+
+    Returns:
+    --------
+    function
+        A filter function that takes a setting and returns a boolean.
+    """
+
+    def check_path(total_setting: dict[str, Any]) -> bool:
+        input_setting = {var: total_setting[var] for var in model.inputs}
+        paths = find_live_paths(model, input_setting)
+        for k in paths:
+            for path in paths[k]:
+                if path[0] == start and path[-1] == end:
+                    return True
+        return False
+
+    return check_path

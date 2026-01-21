@@ -61,7 +61,7 @@ from tqdm import tqdm
 
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_position_builder import TokenPosition
-from causalab.causal.counterfactual_dataset import CounterfactualDataset
+from causalab.causal.counterfactual_dataset import CounterfactualExample
 from causalab.neural.pyvene_core.interchange import run_interchange_interventions
 from causalab.experiments.visualizations.string_heatmap import (
     plot_residual_stream_intervention_heatmap,
@@ -86,12 +86,13 @@ def run_residual_stream_tracing(
     generate_visualization: bool = True,
     save_results: bool = True,
     verbose: bool = True,
+    source_pipeline: LMPipeline | None = None,
 ) -> Dict[str, Any]:
     """
     Trace information flow through residual stream interventions.
 
     Args:
-        pipeline: LMPipeline object with loaded model
+        pipeline: Target LMPipeline where interventions are applied
         prompt: Original prompt text
         counterfactual_prompt: Counterfactual prompt text
         token_positions: List of TokenPosition objects to analyze
@@ -100,6 +101,8 @@ def run_residual_stream_tracing(
         generate_visualization: Whether to generate visualization (default: True)
         save_results: Whether to save metadata and results to disk (default: True)
         verbose: Whether to print progress information
+        source_pipeline: If provided, collect activations from this pipeline instead
+            of the target pipeline. Enables cross-model patching.
 
     Returns:
         Dictionary containing:
@@ -113,12 +116,12 @@ def run_residual_stream_tracing(
 
     # Create Dataset
     # Create a single-example counterfactual dataset
-    dataset_dict = {
-        "input": [{"raw_input": prompt}],
-        "counterfactual_inputs": [[{"raw_input": counterfactual_prompt}]],
-    }
-
-    counterfactual_dataset = CounterfactualDataset.from_dict(dataset_dict)
+    counterfactual_dataset: list[CounterfactualExample] = [  # type: ignore[assignment]
+        {
+            "input": {"raw_input": prompt},
+            "counterfactual_inputs": [{"raw_input": counterfactual_prompt}],
+        }
+    ]
 
     # Determine Layers
     num_layers = pipeline.model.config.num_hidden_layers
@@ -144,6 +147,7 @@ def run_residual_stream_tracing(
             interchange_target=target,
             batch_size=1,
             output_scores=False,
+            source_pipeline=source_pipeline,
         )
         intervention_results[(layer, pos_id)] = outputs
 

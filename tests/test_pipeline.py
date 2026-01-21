@@ -2,6 +2,19 @@ import types
 import torch
 import pytest
 
+from causalab.causal.trace import CausalTrace, Mechanism
+
+
+def _make_trace(text: str) -> CausalTrace:
+    """Helper to create a simple CausalTrace from a string."""
+    return CausalTrace(
+        mechanisms={
+            "raw_input": Mechanism(parents=[], compute=lambda t: t["raw_input"])
+        },
+        inputs={"raw_input": text},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dummy HuggingFace‑like stubs
 # ---------------------------------------------------------------------------
@@ -35,10 +48,9 @@ class DummyTokenizer:
         truncation,
         return_tensors,
         add_special_tokens,
-        **kwargs,
+        return_offsets_mapping: bool = False,
     ):
         # Very naive: represent each string as its ord() ids, pad / truncate.
-        # Accept **kwargs to ignore unused parameters like return_offsets_mapping
         batch = [self.encode(t) for t in texts]
         if max_length:
             batch = [
@@ -48,7 +60,23 @@ class DummyTokenizer:
         # Build tensors
         input_ids = torch.tensor(batch, dtype=torch.long)
         attention_mask = (input_ids != self.pad_token_id).long()
-        return {"input_ids": input_ids, "attention_mask": attention_mask}
+        result = {"input_ids": input_ids, "attention_mask": attention_mask}
+        if return_offsets_mapping:
+            # Generate dummy offset mappings
+            offsets = []
+            for text in texts:
+                text_offsets = []
+                pos = 0
+                for _ in text:
+                    text_offsets.append((pos, pos + 1))
+                    pos += 1
+                # Pad to max_length if needed
+                if max_length:
+                    while len(text_offsets) < max_length:
+                        text_offsets.append((0, 0))
+                offsets.append(text_offsets)
+            result["offset_mapping"] = torch.tensor(offsets)
+        return result
 
     def batch_decode(self, ids, skip_special_tokens=True):
         results = []
@@ -131,7 +159,7 @@ from causalab.neural.pipeline import LMPipeline, _infer_device_and_dtype  # noqa
 def test_infer_device_and_dtype_cpu():
     device, dtype = _infer_device_and_dtype("cpu", None)
     assert device == "cpu"
-    assert dtype == torch.float32
+    assert dtype == "auto"
 
 
 def test_pipeline_setup():
@@ -144,14 +172,14 @@ def test_pipeline_setup():
 
 def test_load_returns_device_tensors():
     pipe = LMPipeline("dummy")
-    batch = pipe.load("ab")
+    batch = pipe.load([_make_trace("ab")])
     assert batch["input_ids"].device.type == "cpu"
     assert batch["attention_mask"].sum() == 2  # two non‑pad tokens
 
 
 def test_generate_and_dump():
     pipe = LMPipeline("dummy", max_new_tokens=3)
-    output = pipe.generate(["hello", "world"])
+    output = pipe.generate([_make_trace("hello"), _make_trace("world")])
     assert set(output.keys()) == {"scores", "sequences", "string"}
     assert output["sequences"].shape == (2, 3)
     text = pipe.dump(output["sequences"])

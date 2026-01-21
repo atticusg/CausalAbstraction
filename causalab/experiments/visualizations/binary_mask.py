@@ -13,148 +13,15 @@ This module consolidates all binary mask plotting for different component types:
 
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 import numpy as np
-import re
 
+from .unit_id import (
+    extract_layer_from_unit_id,
+    extract_token_position_from_unit_id,
+    extract_layer_head_from_unit_id,
+    detect_component_type,
+    extract_grid_dimensions,
+)
 from .utils import create_binary_mask_heatmap
-
-
-# =============================================================================
-# Unit ID Parsing Helpers
-# =============================================================================
-
-
-def _extract_layer_from_unit_id(unit_id: str) -> int:
-    """
-    Extract layer number from a unit ID string.
-
-    Handles formats like:
-    - "ResidualStream(Layer-5,...)"
-    - "MLP(Layer-3,...)"
-    - "AttentionHead(Layer-2,Head-5,...)"
-    """
-    match = re.search(r"Layer-(\d+)", unit_id)
-    if not match:
-        raise ValueError(
-            f"Could not parse layer from unit_id: {unit_id}. "
-            f"Expected format containing 'Layer-X'"
-        )
-    return int(match.group(1))
-
-
-def _extract_token_position_from_unit_id(unit_id: str) -> str:
-    """
-    Extract token position ID from a unit ID string.
-
-    Handles formats like:
-    - "ResidualStream(Layer-5,block_output,Token-last_token)"
-    - "MLP(Layer-3,mlp_output,Token-last_token)"
-    """
-    match = re.search(r"Token-([^)]+)", unit_id)
-    if not match:
-        raise ValueError(
-            f"Could not parse token position from unit_id: {unit_id}. "
-            f"Expected format containing 'Token-<token_position_id>'"
-        )
-    return match.group(1)
-
-
-def extract_layer_head_from_unit_id(unit_id: str) -> Tuple[int, int]:
-    """
-    Extract (layer, head) from an AttentionHead unit ID string.
-
-    Args:
-        unit_id: Unit ID string like "AttentionHead(Layer-2,Head-5,...)"
-
-    Returns:
-        Tuple of (layer, head) as integers.
-    """
-    match = re.search(r"Layer-(\d+),Head-(\d+)", unit_id)
-    if not match:
-        raise ValueError(
-            f"Could not parse layer and head from unit_id: {unit_id}. "
-            f"Expected format: 'AttentionHead(Layer-X,Head-Y,...)'"
-        )
-    return int(match.group(1)), int(match.group(2))
-
-
-# =============================================================================
-# Component Type Detection and Grid Extraction
-# =============================================================================
-
-
-def _detect_component_type(feature_indices: Dict[str, Optional[List[int]]]) -> str:
-    """
-    Infer component type from unit IDs in feature_indices.
-
-    Args:
-        feature_indices: Dict from InterchangeTarget.get_feature_indices()
-
-    Returns:
-        One of: "attention_head", "residual_stream", "mlp"
-
-    Raises:
-        ValueError: If component type cannot be determined
-    """
-    if not feature_indices:
-        raise ValueError("feature_indices is empty, cannot detect component type")
-
-    # Get first unit ID
-    unit_id = next(iter(feature_indices.keys()))
-
-    if "AttentionHead" in unit_id:
-        return "attention_head"
-    elif "ResidualStream" in unit_id:
-        return "residual_stream"
-    elif "MLP" in unit_id:
-        return "mlp"
-    else:
-        raise ValueError(f"Unknown component type in unit_id: {unit_id}")
-
-
-def extract_grid_dimensions(
-    component_type: str, feature_indices: Dict[str, Optional[List[int]]]
-) -> Dict[str, Any]:
-    """
-    Extract grid dimensions (layers, heads, or token_positions) from unit IDs.
-
-    Args:
-        component_type: One of "attention_head", "residual_stream", "mlp"
-        feature_indices: Dict from InterchangeTarget.get_feature_indices()
-
-    Returns:
-        Dict with grid dimensions:
-        - attention_head: {"layers": [...], "heads": [...]}
-        - residual_stream/mlp: {"layers": [...], "token_position_ids": [...]}
-    """
-    if component_type == "attention_head":
-        layers, heads = set(), set()
-        for unit_id in feature_indices.keys():
-            if "AttentionHead" not in unit_id:
-                continue
-            try:
-                layer, head = extract_layer_head_from_unit_id(unit_id)
-                layers.add(layer)
-                heads.add(head)
-            except ValueError:
-                continue
-        return {"layers": sorted(layers), "heads": sorted(heads)}
-    else:
-        # residual_stream or mlp
-        layers, positions = set(), set()
-        component_marker = (
-            "ResidualStream" if component_type == "residual_stream" else "MLP"
-        )
-        for unit_id in feature_indices.keys():
-            if component_marker not in unit_id:
-                continue
-            try:
-                layer = _extract_layer_from_unit_id(unit_id)
-                position = _extract_token_position_from_unit_id(unit_id)
-                layers.add(layer)
-                positions.add(position)
-            except ValueError:
-                continue
-        return {"layers": sorted(layers), "token_position_ids": sorted(positions)}
 
 
 # =============================================================================
@@ -215,8 +82,8 @@ def get_selected_residual_positions(
             continue
 
         try:
-            layer = _extract_layer_from_unit_id(unit_id)
-            position = _extract_token_position_from_unit_id(unit_id)
+            layer = extract_layer_from_unit_id(unit_id)
+            position = extract_token_position_from_unit_id(unit_id)
 
             # None means all features selected (mask=1)
             if indices is None:
@@ -250,8 +117,8 @@ def get_selected_mlps(
             continue
 
         try:
-            layer = _extract_layer_from_unit_id(unit_id)
-            position = _extract_token_position_from_unit_id(unit_id)
+            layer = extract_layer_from_unit_id(unit_id)
+            position = extract_token_position_from_unit_id(unit_id)
 
             # None means all features selected (mask=1)
             if indices is None:
@@ -280,7 +147,7 @@ def get_selected_units(
         - residual_stream: List[Tuple[int, str]] - (layer, token_position_id)
         - mlp: List[Tuple[int, str]] - (layer, token_position_id)
     """
-    component_type = _detect_component_type(feature_indices)
+    component_type = detect_component_type(feature_indices)
 
     if component_type == "attention_head":
         return get_selected_heads(feature_indices)
@@ -390,8 +257,8 @@ def plot_residual_stream_mask(
             continue
 
         try:
-            layer = _extract_layer_from_unit_id(unit_id)
-            position = _extract_token_position_from_unit_id(unit_id)
+            layer = extract_layer_from_unit_id(unit_id)
+            position = extract_token_position_from_unit_id(unit_id)
 
             if layer in layers and position in token_position_ids:
                 layer_idx = layers.index(layer)
@@ -458,8 +325,8 @@ def plot_mlp_mask(
             continue
 
         try:
-            layer = _extract_layer_from_unit_id(unit_id)
-            position = _extract_token_position_from_unit_id(unit_id)
+            layer = extract_layer_from_unit_id(unit_id)
+            position = extract_token_position_from_unit_id(unit_id)
 
             if layer in layers and position in token_position_ids:
                 layer_idx = layers.index(layer)
@@ -518,7 +385,7 @@ def plot_binary_mask(
         save_path: Optional path to save figure.
     """
     # Detect component type
-    component_type = _detect_component_type(feature_indices)
+    component_type = detect_component_type(feature_indices)
 
     # Extract grid dimensions
     dims = extract_grid_dimensions(component_type, feature_indices)

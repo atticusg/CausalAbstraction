@@ -14,6 +14,7 @@ The bug was fixed by ensuring pyvene properly handles empty subspaces.
 
 import pytest
 import torch
+from causalab.causal.trace import CausalTrace, Mechanism
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.LM_units import AttentionHead
 from causalab.neural.token_position_builder import TokenPosition
@@ -21,6 +22,16 @@ from causalab.neural.model_units import Featurizer
 from causalab.neural.pyvene_core.interchange import batched_interchange_intervention
 from causalab.neural.pyvene_core.intervenable_model import prepare_intervenable_model
 from causalab.neural.model_units import InterchangeTarget
+
+
+def _make_trace(text: str) -> CausalTrace:
+    """Helper to create a simple CausalTrace from a string."""
+    return CausalTrace(
+        mechanisms={
+            "raw_input": Mechanism(parents=[], compute=lambda t: t["raw_input"])
+        },
+        inputs={"raw_input": text},
+    )
 
 
 @pytest.mark.slow
@@ -37,24 +48,25 @@ class TestEmptyFeatureIndicesRegression:
         """Create a pipeline for testing."""
         device = "cuda" if torch.cuda.is_available() else "cpu"
         pipeline = LMPipeline(model_name, max_new_tokens=1, device=device)
-        pipeline.tokenizer.padding_side = "left"
         return pipeline
 
     @pytest.fixture
     def test_batch(self):
         """Create test batch with base and counterfactual inputs."""
-        return {
-            "input": [{"raw_input": "The banana is yellow. What color is the banana?"}],
-            "counterfactual_inputs": [
-                [{"raw_input": "The banana is green. What color is the banana?"}]
-            ],
-        }
+        return [
+            {
+                "input": _make_trace("The banana is yellow. What color is the banana?"),
+                "counterfactual_inputs": [
+                    _make_trace("The banana is green. What color is the banana?")
+                ],
+            }
+        ]
 
     @pytest.fixture
     def token_position(self, pipeline, test_batch):
         """Create token position indexer for last token."""
         return TokenPosition(
-            lambda x: [len(pipeline.load(x)["input_ids"][0]) - 1],
+            lambda x: [len(pipeline.load([x])["input_ids"][0]) - 1],
             pipeline,
             id="last_token",
         )
@@ -239,7 +251,7 @@ class TestEmptyFeatureIndicesRegression:
 
         # Run without any intervention
         with torch.no_grad():
-            base_inputs = test_batch["input"]
+            base_inputs = [ex["input"] for ex in test_batch]
             no_intervention_output = pipeline.generate(base_inputs, output_scores=True)
 
         # Compare outputs

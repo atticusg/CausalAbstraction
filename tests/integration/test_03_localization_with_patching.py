@@ -9,8 +9,9 @@ import pytest
 import tempfile
 import os
 from causalab.tasks.MCQA import token_positions
+from causalab.causal.causal_utils import save_counterfactual_examples
 from causalab.tasks.MCQA.counterfactuals import sample_answerable_question
-from causalab.causal.counterfactual_dataset import CounterfactualDataset
+from causalab.causal.causal_utils import generate_counterfactual_samples
 from causalab.experiments.filter import filter_dataset
 from causalab.experiments.metric import causal_score_intervention_outputs
 from causalab.experiments.interchange_targets import build_residual_stream_targets
@@ -28,7 +29,7 @@ class TestDatasetFiltering:
         from causalab.tasks.MCQA.counterfactuals import different_symbol
 
         # Generate a small dataset
-        dataset = CounterfactualDataset.from_sampler(8, different_symbol)
+        dataset = generate_counterfactual_samples(8, different_symbol)
 
         # Filter the dataset
         filtered = filter_dataset(
@@ -40,7 +41,7 @@ class TestDatasetFiltering:
         )
 
         # Verify that we get a filtered dataset back
-        assert isinstance(filtered, CounterfactualDataset)
+        assert isinstance(filtered, list)
         assert len(filtered) <= len(dataset)
 
     def test_filter_multiple_datasets(
@@ -151,8 +152,8 @@ class TestResidualStreamPatching:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # Save dataset to disk
-            dataset_path = os.path.join(tmpdir, "test_dataset")
-            filtered_dataset.dataset.save_to_disk(dataset_path)
+            dataset_path = os.path.join(tmpdir, "test_dataset.json")
+            save_counterfactual_examples(filtered_dataset, dataset_path)
 
             # Build residual stream targets
             layers = list(range(min(3, pipeline.get_num_layers())))

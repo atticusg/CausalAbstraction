@@ -10,42 +10,80 @@ including dimensionality reduction techniques like SVD/PCA.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 import torch
 from torch import Tensor
-from torch.utils.data import DataLoader
-from sklearn.decomposition import TruncatedSVD
+from sklearn.decomposition import TruncatedSVD  # type: ignore[import-untyped]
 from tqdm import tqdm
+
+from causalab.causal.counterfactual_dataset import (
+    CounterfactualExample,
+    LabeledCounterfactualExample,
+)
+from pyvene import IntervenableModel  # type: ignore[reportMissingTypeStubs]
 
 from causalab.neural.pyvene_core.intervenable_model import (
     prepare_intervenable_model,
     delete_intervenable_model,
 )
 from causalab.neural.pipeline import Pipeline
-from causalab.neural.model_units import AtomicModelUnit
+from causalab.neural.model_units import AtomicModelUnit, InterchangeTarget
 
 logger = logging.getLogger(__name__)
 
 
+def _collect_activations_single_batch(
+    intervenable_model: IntervenableModel,
+    loaded_inputs: dict[str, Tensor],
+    indices: list[Any],
+) -> list[Tensor]:
+    """
+    Collect activations from a single batch using an intervenable model.
+
+    This is the core primitive for activation collection, used by both
+    collect_features() for dataset-wide collection and collect_batch_representations()
+    for cross-model patching.
+
+    Args:
+        intervenable_model: Model configured with "collect" intervention type
+        loaded_inputs: Tokenized inputs (output of pipeline.load())
+        indices: Position indices for each model unit, shape (num_units, batch_size, num_positions)
+
+    Returns:
+        List of activation tensors, one per intervention location, in order matching
+        intervenable_model.sorted_keys. Each tensor has shape determined by the
+        intervention location (e.g., (batch_size, hidden_dim) for residual stream).
+    """
+    # Create location map - for collection, source and base indices are the same
+    location_map = {"sources->base": (indices, indices)}
+
+    # Run collection pass - pyvene returns ((base_outputs, collected_activations), cf_outputs)
+    # For collect mode, we want collected_activations which is [0][1]
+    activations = intervenable_model(loaded_inputs, unit_locations=location_map)[0][1]
+
+    return activations
+
+
 def collect_features(
-    dataloader: DataLoader[dict[str, Any]],
+    dataset: list[CounterfactualExample],
     pipeline: Pipeline,
     model_units: list[AtomicModelUnit],
+    batch_size: int = 32,
 ) -> dict[str, Tensor]:
     """
     Collect internal neural network activations (features) at specified model locations.
 
     This function:
     1. Creates an intervenable model configured for feature collection
-    2. Processes batches from the dataloader to extract activations at target locations
+    2. Processes batches from the dataset to extract activations at target locations
     3. Returns a dictionary mapping each model unit ID to its collected features
 
     Args:
-        dataloader: PyTorch DataLoader providing batches of input data. Each batch should
-                   have an "input" key containing the data to process.
+        dataset: List of CounterfactualExample objects
         pipeline: Neural model pipeline for processing inputs
-        model_units (List[AtomicModelUnit]): Flat list of model units to collect features from
+        model_units: Flat list of model units to collect features from
+        batch_size: Number of examples to process per batch (default: 32)
 
     Returns:
         Dict[str, torch.Tensor]: Dictionary mapping model unit IDs to feature tensors.
@@ -53,11 +91,9 @@ def collect_features(
                                 the activations for all inputs in the dataset.
 
     Example:
-        >>> from causalab.neural.dataloader import create_dataloader
         >>> from causalab.neural.collect import collect_features
         >>>
-        >>> dataloader = create_dataloader(dataset, batch_size=32)
-        >>> features_dict = collect_features(dataloader, pipeline, model_units)
+        >>> features_dict = collect_features(dataset, pipeline, model_units, batch_size=32)
     """
     # Initialize model with "collect" intervention type (extracts activations without modifying them)
     # prepare_intervenable_model auto-wraps flat lists into InterchangeTarget
@@ -67,12 +103,17 @@ def collect_features(
 
     # Initialize container for collected features: one list per model unit
     # Use model unit IDs as keys to handle duplicates gracefully
-    data = {model_unit.id: [] for model_unit in model_units}
+    data: dict[str, list[Tensor]] = {model_unit.id: [] for model_unit in model_units}
 
     # Process dataset in batches with progress tracking
-    for batch in tqdm(dataloader, desc="Processing batches", leave=False):
+    for start in tqdm(
+        range(0, len(dataset), batch_size),
+        desc="Processing batches",
+        leave=False,
+    ):
+        batch = dataset[start : start + batch_size]
         # Get inputs from batch
-        batched_inputs = batch["input"]
+        batched_inputs = [example["input"] for example in batch]
 
         # Compute indices for each model unit
         indices = [
@@ -83,15 +124,10 @@ def collect_features(
         # Load inputs through pipeline
         loaded_inputs = pipeline.load(batched_inputs)
 
-        # Create mapping for base input activations (identical source and target)
-        location_map = {"sources->base": (indices, indices)}
-
-        # Collect activations from base inputs
-        # Returns a list of activation tensors, one per model unit
-        # In pyvene 0.1.8+, each tensor contains all batch samples for that unit
-        activations = intervenable_model(loaded_inputs, unit_locations=location_map)[0][
-            1
-        ]
+        # Use shared helper to collect activations
+        activations = _collect_activations_single_batch(
+            intervenable_model, loaded_inputs, indices
+        )
 
         # Process activations: pyvene 0.1.8+ returns one tensor per unit
         if len(activations) != len(model_units):
@@ -113,21 +149,147 @@ def collect_features(
     delete_intervenable_model(intervenable_model)
 
     # Stack collected activations into 2D tensors with shape (n_samples, n_features)
-    data = {unit_id: torch.stack(activations) for unit_id, activations in data.items()}
+    result = {
+        unit_id: torch.stack(activations) for unit_id, activations in data.items()
+    }
 
-    logger.debug(f"Collected features for {len(data)} model units")
-    sample_tensor = next(iter(data.values()))
+    logger.debug(f"Collected features for {len(result)} model units")
+    sample_tensor = next(iter(result.values()))
     logger.debug(f"Feature tensor shape: {sample_tensor.shape} (samples, features)")
 
     # Return dictionary: {unit_id -> tensor of shape (n_samples, n_features)}
-    return data
+    return result
+
+
+def collect_source_representations(
+    source_pipeline: Pipeline,
+    examples: list[CounterfactualExample] | list[LabeledCounterfactualExample],
+    interchange_target: InterchangeTarget,
+    source_intervenable_model: IntervenableModel | None = None,
+) -> list[Tensor]:
+    """
+    Collect activations from source pipeline for cross-model patching.
+
+    This is a convenience wrapper around collect_batch_representations that handles
+    tokenization and index computation for the source pipeline.
+
+    Args:
+        source_pipeline: Pipeline to collect activations from
+        examples: List of CounterfactualExample objects
+        interchange_target: InterchangeTarget specifying which locations to collect
+        source_intervenable_model: Optional pre-created intervenable model for efficiency
+
+    Returns:
+        List of activation tensors for use as pyvene's source_representations
+    """
+    cf_inputs_raw = list(zip(*[ex["counterfactual_inputs"] for ex in examples]))
+    batched_cf_for_source = [
+        source_pipeline.load(list(cf_group)) for cf_group in cf_inputs_raw
+    ]
+    source_cf_indices = [
+        model_unit.index_component(list(cf_group), batch=True, is_original=False)
+        for group, cf_group in zip(interchange_target, cf_inputs_raw)
+        for model_unit in group
+    ]
+    return collect_batch_representations(
+        source_pipeline,
+        batched_cf_for_source,
+        interchange_target,
+        source_cf_indices,
+        intervenable_model=source_intervenable_model,
+    )
+
+
+def collect_batch_representations(
+    pipeline: Pipeline,
+    batched_counterfactuals: list[dict[str, Tensor]],
+    interchange_target: InterchangeTarget,
+    counterfactual_indices: list[Any],
+    intervenable_model: IntervenableModel | None = None,
+) -> list[Tensor]:
+    """
+    Collect activations from a single batch for use as source_representations.
+
+    This is the primitive for cross-model patching: collect activations from
+    source_pipeline, then pass them to target_pipeline via source_representations.
+
+    Args:
+        pipeline: Source pipeline to collect activations from
+        batched_counterfactuals: List of tokenized counterfactual inputs (one per group).
+            Each element is the output of pipeline.load() for one counterfactual group.
+        interchange_target: InterchangeTarget specifying which locations to collect from.
+            Groups in the target correspond to counterfactual inputs.
+        counterfactual_indices: Indices for each model unit, shape (num_units, batch_size, num_positions).
+            These should be computed using the SOURCE pipeline's tokenization.
+        intervenable_model: Optional pre-created intervenable model configured for collection.
+            If provided, this model will be used instead of creating a new one.
+            This allows hoisting model creation outside batch loops for efficiency.
+            If None, a model will be created and cleaned up within this function.
+
+    Returns:
+        List of activation tensors in the format expected by pyvene's source_representations
+        parameter. Each tensor corresponds to one intervention location, in order matching
+        intervenable_model.sorted_keys.
+
+    Example:
+        >>> # Collect from source model
+        >>> source_reps = collect_batch_representations(
+        ...     source_pipeline,
+        ...     batched_cf_tokenized,
+        ...     interchange_target,
+        ...     source_cf_indices,
+        ... )
+        >>> # Use in target model
+        >>> target_pipeline.intervenable_generate(
+        ...     intervenable_model,
+        ...     base_inputs,
+        ...     sources=None,  # Not needed when using source_representations
+        ...     source_representations=source_reps,
+        ...     ...
+        ... )
+    """
+    # Create intervenable model in collect mode if not provided
+    owns_model = intervenable_model is None
+    if owns_model:
+        model_units = interchange_target.flatten()
+        intervenable_model = prepare_intervenable_model(
+            pipeline, model_units, intervention_type="collect"
+        )
+
+    # Collect activations for each counterfactual group
+    # We need to run each group separately since they have different inputs
+    all_activations: list[Tensor] = []
+
+    unit_idx = 0
+    for group_idx, group in enumerate(interchange_target):
+        # Get the tokenized counterfactual input for this group
+        cf_input = batched_counterfactuals[group_idx]
+
+        # Get indices for units in this group
+        num_units_in_group = len(group)
+        group_indices = counterfactual_indices[unit_idx : unit_idx + num_units_in_group]
+        unit_idx += num_units_in_group
+
+        # Collect activations using shared helper
+        activations = _collect_activations_single_batch(
+            intervenable_model, cf_input, group_indices
+        )
+
+        # Extend our list with activations for this group's units
+        all_activations.extend(activations)
+
+    # Cleanup only if we created the model
+    if owns_model:
+        delete_intervenable_model(intervenable_model)
+
+    return all_activations
 
 
 def compute_svd(
     features_dict: dict[str, Tensor],
     n_components: int | None = None,
     normalize: bool = False,
-    algorithm: str = "randomized",
+    algorithm: Literal["arpack", "randomized"] = "randomized",
 ) -> dict[str, dict[str, Any]]:
     """
     Perform SVD/PCA analysis on collected features.

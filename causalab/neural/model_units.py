@@ -179,39 +179,120 @@ class InterchangeTarget:
         return nested_list
 
     # -------------------- Delegated AtomicModelUnit methods ---------- #
-    def save(self, parent_dir: str) -> list[str]:
-        """Save all units to subdirectories.
+    def save(self, parent_dir: str) -> str:
+        """Save all units to a directory.
+
+        Saves to consolidated format with 1-2 files:
+        - units_metadata.json (all unit metadata)
+        - featurizers.pt (only if there are non-trivial featurizers)
 
         Args:
-            parent_dir: Parent directory for saving all units
+            parent_dir: Directory for saving
 
         Returns:
-            List of paths to created unit directories
+            Path to the parent directory
         """
-        paths = []
+        import torch
+
+        os.makedirs(parent_dir, exist_ok=True)
+
+        # Consolidated format: 1-2 files total
+        # Collect all metadata
+        all_metadata: dict[str, dict[str, Any]] = {}
         for unit in self.flatten():
-            unit_dir = unit.save(parent_dir)
-            paths.append(unit_dir)
-        return paths
+            all_metadata[unit.id] = {
+                "id": unit.id,
+                "feature_indices": (
+                    [int(i) for i in unit.feature_indices]
+                    if unit.feature_indices is not None
+                    else None
+                ),
+                "layer": unit.layer,
+                "component_type": unit.component_type,
+                "unit": unit.unit,
+                "index_id": unit.get_index_id(),
+                "featurizer_info": {
+                    "id": unit.featurizer.id,
+                    "n_features": unit.featurizer.n_features,
+                    "is_trivial": unit.featurizer.is_trivial(),
+                },
+                "shape": unit.shape if unit.shape is None else list(unit.shape),
+                "version": MODEL_UNIT_VERSION,
+            }
+
+        # Save metadata to single JSON file
+        metadata_path = os.path.join(parent_dir, "units_metadata.json")
+        with open(metadata_path, "w") as f:
+            json.dump(all_metadata, f, indent=2)
+
+        # Save non-trivial featurizers to single file (if any)
+        featurizers: dict[str, dict[str, Any]] = {}
+        for unit in self.flatten():
+            featurizer_data = unit.featurizer.to_dict()
+            if featurizer_data is not None:
+                featurizers[unit.id] = featurizer_data
+
+        if featurizers:
+            filepath = os.path.join(parent_dir, "featurizers.pt")
+            torch.save(featurizers, filepath)
+
+        return parent_dir
 
     def load(self, parent_dir: str, ignore_version_mismatch: bool = False) -> None:
-        """Load all units from their subdirectories.
+        """Load all units from a directory.
 
-        Assumes each unit's subdirectory is named after its ID:
-        {parent_dir}/{unit.id}/
+        Loads from consolidated format (units_metadata.json + featurizers.pt).
 
         Args:
-            parent_dir: Parent directory containing unit subdirectories
-            ignore_version_mismatch: If True, skip version validation for all units.
-                If False (default), raise an exception when loading from an
-                incompatible version.
+            parent_dir: Directory containing saved units
+            ignore_version_mismatch: If True, skip version validation.
 
         Returns:
             None (modifies all units in place)
         """
+        import torch
+
+        metadata_path = os.path.join(parent_dir, "units_metadata.json")
+        if not os.path.exists(metadata_path):
+            raise FileNotFoundError(
+                f"units_metadata.json not found in {parent_dir}. "
+                "Expected consolidated format."
+            )
+
+        with open(metadata_path, "r") as f:
+            all_metadata = json.load(f)
+
+        # Load featurizers if present
+        featurizers_path = os.path.join(parent_dir, "featurizers.pt")
+        featurizers = {}
+        if os.path.exists(featurizers_path):
+            featurizers = torch.load(featurizers_path, weights_only=False)
+
+        # Apply to units
         for unit in self.flatten():
-            unit_dir = os.path.join(parent_dir, unit.id)
-            unit.load(unit_dir, ignore_version_mismatch=ignore_version_mismatch)
+            if unit.id not in all_metadata:
+                raise ValueError(f"Unit {unit.id} not found in saved metadata")
+
+            metadata = all_metadata[unit.id]
+
+            # Validate version
+            version = metadata.get("version")
+            if version != MODEL_UNIT_VERSION and not ignore_version_mismatch:
+                raise ValueError(
+                    f"Loading unit from version {version}, "
+                    f"current version is {MODEL_UNIT_VERSION}."
+                )
+
+            # Load featurizer if non-trivial
+            if unit.id in featurizers:
+                unit.set_featurizer(Featurizer.from_dict(featurizers[unit.id]))
+
+            # Load feature indices
+            unit.set_feature_indices(metadata.get("feature_indices"))
+
+            # Update shape
+            if metadata.get("shape") is not None:
+                unit.shape = tuple(metadata["shape"])
 
     def set_featurizer(self, featurizer: Featurizer) -> None:
         """Set the same featurizer on all units.
@@ -389,115 +470,3 @@ class AtomicModelUnit:
     def get_layer(self) -> int:
         """Get the layer number."""
         return self.layer
-
-    # ---------------- Serialization ------------------------------------ #
-    def save(self, parent_dir: str) -> str:
-        """Save this model unit to a new subdirectory.
-
-        Creates a directory structure:
-            {parent_dir}/{self.id}/
-                ├── metadata.json          # Unit configuration and indices
-                ├── featurizer             # Featurizer module state
-                └── inverse_featurizer     # Inverse featurizer module state
-
-        Args:
-            parent_dir: Parent directory for saving
-
-        Returns:
-            Path to the created unit directory
-        """
-        # Create unit-specific directory
-        unit_dir = os.path.join(parent_dir, self.id)
-        os.makedirs(unit_dir, exist_ok=True)
-
-        # Prepare metadata
-        metadata = {
-            "id": self.id,
-            "feature_indices": (
-                [int(i) for i in self.feature_indices]
-                if self.feature_indices is not None
-                else None
-            ),
-            "layer": self.layer,
-            "component_type": self.component_type,
-            "unit": self.unit,
-            "index_id": self.get_index_id(),
-            "featurizer_info": {
-                "id": self.featurizer.id,
-                "n_features": self.featurizer.n_features,
-            },
-            "shape": self.shape if self.shape is None else list(self.shape),
-            "version": MODEL_UNIT_VERSION,
-        }
-
-        # Save metadata
-        metadata_path = os.path.join(unit_dir, "metadata.json")
-        with open(metadata_path, "w") as f:
-            json.dump(metadata, f, indent=2)
-
-        # Save featurizer modules using standard names
-        filename = os.path.join(unit_dir, "model")
-        self.featurizer.save_modules(filename)
-
-        return unit_dir
-
-    def load(self, unit_dir: str, ignore_version_mismatch: bool = False) -> None:
-        """Load model unit from a directory.
-
-        Expects directory structure:
-            {unit_dir}/
-                ├── metadata.json
-                ├── model_featurizer
-                └── model_inverse_featurizer
-
-        Args:
-            unit_dir: Directory containing saved unit
-            ignore_version_mismatch: If True, skip version validation. If False
-                (default), raise an exception when loading from an incompatible version.
-
-        Returns:
-            None (modifies the object in place)
-
-        Raises:
-            ValueError: If the saved unit version doesn't match "2.0" and
-                ignore_version_mismatch is False.
-        """
-        # Load metadata
-        metadata_path = os.path.join(unit_dir, "metadata.json")
-        if not os.path.exists(metadata_path):
-            raise FileNotFoundError(f"Metadata file not found: {metadata_path}")
-
-        with open(metadata_path, "r") as f:
-            metadata = json.load(f)
-
-        # Validate version compatibility
-        version = metadata.get("version")
-        if version != MODEL_UNIT_VERSION and not ignore_version_mismatch:
-            raise ValueError(
-                f"Loading unit from version {version}, current version is {MODEL_UNIT_VERSION}. "
-                "Some features may not work correctly. "
-                "Set ignore_version_mismatch=True to load anyway."
-            )
-
-        # Load featurizer modules
-        model_path = os.path.join(unit_dir, "model")
-        featurizer_path = model_path + "_featurizer"
-        inverse_featurizer_path = model_path + "_inverse_featurizer"
-
-        if not os.path.exists(featurizer_path) or not os.path.exists(
-            inverse_featurizer_path
-        ):
-            raise FileNotFoundError(
-                f"Featurizer files not found in {unit_dir}. "
-                f"Expected {featurizer_path} and {inverse_featurizer_path}"
-            )
-
-        self.set_featurizer(Featurizer.load_modules(model_path))
-
-        # Load feature indices from metadata
-        indices = metadata.get("feature_indices")
-        self.set_feature_indices(indices)
-
-        # Update shape if present
-        if "shape" in metadata and metadata["shape"] is not None:
-            self.shape = tuple(metadata["shape"])

@@ -3,7 +3,8 @@
 import pytest
 import torch
 from causalab.neural.pipeline import LMPipeline
-from causalab.causal.counterfactual_dataset import CounterfactualDataset
+from causalab.causal.counterfactual_dataset import CounterfactualExample
+from causalab.causal.causal_utils import generate_counterfactual_samples
 from causalab.tasks.MCQA.causal_models import positional_causal_model
 from causalab.tasks.MCQA.counterfactuals import (
     different_symbol,
@@ -31,7 +32,6 @@ def pipeline(device):
         dtype=torch.bfloat16 if device == "cuda" else torch.float32,
         max_length=32,
     )
-    pipeline.tokenizer.padding_side = "left"
     return pipeline
 
 
@@ -55,21 +55,21 @@ def checker():
 
 
 @pytest.fixture
-def small_different_symbol_dataset():
+def small_different_symbol_dataset() -> list[CounterfactualExample]:
     """Generate small different_symbol counterfactual dataset."""
-    return CounterfactualDataset.from_sampler(8, different_symbol)
+    return generate_counterfactual_samples(8, different_symbol)
 
 
 @pytest.fixture
-def small_same_symbol_diff_position_dataset():
+def small_same_symbol_diff_position_dataset() -> list[CounterfactualExample]:
     """Generate small same_symbol_different_position counterfactual dataset."""
-    return CounterfactualDataset.from_sampler(8, same_symbol_different_position)
+    return generate_counterfactual_samples(8, same_symbol_different_position)
 
 
 @pytest.fixture
-def small_random_dataset():
+def small_random_dataset() -> list[CounterfactualExample]:
     """Generate small random counterfactual dataset."""
-    return CounterfactualDataset.from_sampler(8, random_counterfactual)
+    return generate_counterfactual_samples(8, random_counterfactual)
 
 
 @pytest.fixture

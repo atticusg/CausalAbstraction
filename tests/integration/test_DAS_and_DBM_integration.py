@@ -14,11 +14,12 @@ import tempfile
 import os
 
 from causalab.tasks.MCQA.token_positions import create_token_positions
+from causalab.causal.causal_utils import save_counterfactual_examples
 from causalab.tasks.MCQA.counterfactuals import (
     different_symbol,
     same_symbol_different_position,
 )
-from causalab.causal.counterfactual_dataset import CounterfactualDataset
+from causalab.causal.causal_utils import generate_counterfactual_samples
 from causalab.experiments.filter import filter_dataset
 from causalab.experiments.jobs.DAS_grid import train_DAS
 from causalab.experiments.jobs.DBM_binary_grid import train_DBM_binary_heatmaps
@@ -27,7 +28,6 @@ from causalab.experiments.interchange_targets import (
     build_attention_head_targets,
 )
 from causalab.neural.token_position_builder import get_all_tokens
-
 
 pytestmark = [pytest.mark.slow, pytest.mark.gpu]
 
@@ -38,10 +38,10 @@ class TestDASIntegration:
     def test_das_training(self, pipeline, causal_model, checker):
         """Test DAS training flow with real model."""
         # Generate and filter datasets
-        train_dataset = CounterfactualDataset.from_sampler(
+        train_dataset = generate_counterfactual_samples(
             16, same_symbol_different_position
         )
-        test_dataset = CounterfactualDataset.from_sampler(
+        test_dataset = generate_counterfactual_samples(
             8, same_symbol_different_position
         )
 
@@ -70,10 +70,10 @@ class TestDASIntegration:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # Save datasets to disk
-            train_path = os.path.join(tmpdir, "train_dataset")
-            test_path = os.path.join(tmpdir, "test_dataset")
-            filtered_train.dataset.save_to_disk(train_path)
-            filtered_test.dataset.save_to_disk(test_path)
+            train_path = os.path.join(tmpdir, "train_dataset.json")
+            test_path = os.path.join(tmpdir, "test_dataset.json")
+            save_counterfactual_examples(filtered_train, train_path)
+            save_counterfactual_examples(filtered_test, test_path)
 
             # Build residual stream targets for DAS
             layers = [0, 1]  # Use only 2 layers for speed
@@ -111,10 +111,10 @@ class TestDASIntegration:
     def test_das_generalization(self, pipeline, causal_model, checker):
         """Test that DAS results can be evaluated on held-out test data."""
         # Generate and filter datasets
-        train_dataset = CounterfactualDataset.from_sampler(
+        train_dataset = generate_counterfactual_samples(
             16, same_symbol_different_position
         )
-        test_dataset = CounterfactualDataset.from_sampler(
+        test_dataset = generate_counterfactual_samples(
             8, same_symbol_different_position
         )
 
@@ -141,10 +141,10 @@ class TestDASIntegration:
         limited_positions = [token_positions_dict["last_token"]]
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            train_path = os.path.join(tmpdir, "train_dataset")
-            test_path = os.path.join(tmpdir, "test_dataset")
-            filtered_train.dataset.save_to_disk(train_path)
-            filtered_test.dataset.save_to_disk(test_path)
+            train_path = os.path.join(tmpdir, "train_dataset.json")
+            test_path = os.path.join(tmpdir, "test_dataset.json")
+            save_counterfactual_examples(filtered_train, train_path)
+            save_counterfactual_examples(filtered_test, test_path)
 
             # Build residual stream targets for DAS
             layers = [0]  # Single layer for speed
@@ -187,8 +187,8 @@ class TestDBMIntegration:
     def test_dbm_training(self, pipeline, causal_model, checker):
         """Test DBM training flow with real model."""
         # Generate and filter datasets
-        train_dataset = CounterfactualDataset.from_sampler(16, different_symbol)
-        test_dataset = CounterfactualDataset.from_sampler(8, different_symbol)
+        train_dataset = generate_counterfactual_samples(16, different_symbol)
+        test_dataset = generate_counterfactual_samples(8, different_symbol)
 
         filtered_train = filter_dataset(
             dataset=train_dataset,
@@ -215,10 +215,10 @@ class TestDBMIntegration:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # Save datasets to disk
-            train_path = os.path.join(tmpdir, "train_dataset")
-            test_path = os.path.join(tmpdir, "test_dataset")
-            filtered_train.dataset.save_to_disk(train_path)
-            filtered_test.dataset.save_to_disk(test_path)
+            train_path = os.path.join(tmpdir, "train_dataset.json")
+            test_path = os.path.join(tmpdir, "test_dataset.json")
+            save_counterfactual_examples(filtered_train, train_path)
+            save_counterfactual_examples(filtered_test, test_path)
 
             # Build attention head targets for DBM
             layers = [0, 1]  # Use only 2 layers for speed
@@ -259,8 +259,8 @@ class TestDBMIntegration:
 
     def test_dbm_mask_extraction(self, pipeline, causal_model, checker):
         """Test extracting binary masks from DBM results."""
-        train_dataset = CounterfactualDataset.from_sampler(16, different_symbol)
-        test_dataset = CounterfactualDataset.from_sampler(8, different_symbol)
+        train_dataset = generate_counterfactual_samples(16, different_symbol)
+        test_dataset = generate_counterfactual_samples(8, different_symbol)
 
         filtered_train = filter_dataset(
             dataset=train_dataset,
@@ -285,10 +285,10 @@ class TestDBMIntegration:
         all_tokens = get_all_tokens(sample_input, pipeline, padding=True)
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            train_path = os.path.join(tmpdir, "train_dataset")
-            test_path = os.path.join(tmpdir, "test_dataset")
-            filtered_train.dataset.save_to_disk(train_path)
-            filtered_test.dataset.save_to_disk(test_path)
+            train_path = os.path.join(tmpdir, "train_dataset.json")
+            test_path = os.path.join(tmpdir, "test_dataset.json")
+            save_counterfactual_examples(filtered_train, train_path)
+            save_counterfactual_examples(filtered_test, test_path)
 
             # Build attention head targets for DBM
             layers = [0]  # Single layer for speed
@@ -332,7 +332,7 @@ class TestFilterExperimentIntegration:
     def test_filter_dataset_with_mcqa_task(self, pipeline, causal_model, checker):
         """Test filtering datasets based on model performance."""
         # Generate datasets
-        dataset = CounterfactualDataset.from_sampler(16, different_symbol)
+        dataset = generate_counterfactual_samples(16, different_symbol)
 
         # Filter dataset
         filtered = filter_dataset(
@@ -344,14 +344,14 @@ class TestFilterExperimentIntegration:
         )
 
         # Verify filtering worked
-        assert isinstance(filtered, CounterfactualDataset)
+        assert isinstance(filtered, list)
         assert len(filtered) <= len(dataset)
 
     def test_filter_multiple_datasets(self, pipeline, causal_model, checker):
         """Test filtering multiple datasets."""
         datasets = {
-            "different_symbol": CounterfactualDataset.from_sampler(8, different_symbol),
-            "same_symbol_different_position": CounterfactualDataset.from_sampler(
+            "different_symbol": generate_counterfactual_samples(8, different_symbol),
+            "same_symbol_different_position": generate_counterfactual_samples(
                 8, same_symbol_different_position
             ),
         }
@@ -379,10 +379,10 @@ class TestEndToEndWorkflow:
     def test_complete_das_workflow(self, pipeline, causal_model, checker):
         """Test complete DAS workflow: filter -> train -> evaluate."""
         # Step 1: Generate and filter datasets
-        train_dataset = CounterfactualDataset.from_sampler(
+        train_dataset = generate_counterfactual_samples(
             16, same_symbol_different_position
         )
-        test_dataset = CounterfactualDataset.from_sampler(
+        test_dataset = generate_counterfactual_samples(
             8, same_symbol_different_position
         )
 
@@ -411,10 +411,10 @@ class TestEndToEndWorkflow:
 
         # Step 3: Train and evaluate DAS
         with tempfile.TemporaryDirectory() as tmpdir:
-            train_path = os.path.join(tmpdir, "train_dataset")
-            test_path = os.path.join(tmpdir, "test_dataset")
-            filtered_train.dataset.save_to_disk(train_path)
-            filtered_test.dataset.save_to_disk(test_path)
+            train_path = os.path.join(tmpdir, "train_dataset.json")
+            test_path = os.path.join(tmpdir, "test_dataset.json")
+            save_counterfactual_examples(filtered_train, train_path)
+            save_counterfactual_examples(filtered_test, test_path)
 
             # Build residual stream targets for DAS
             layers = [0]  # Minimal for speed
@@ -448,8 +448,8 @@ class TestEndToEndWorkflow:
     def test_complete_dbm_workflow(self, pipeline, causal_model, checker):
         """Test complete DBM workflow: filter -> train -> evaluate."""
         # Step 1: Generate and filter datasets
-        train_dataset = CounterfactualDataset.from_sampler(16, different_symbol)
-        test_dataset = CounterfactualDataset.from_sampler(8, different_symbol)
+        train_dataset = generate_counterfactual_samples(16, different_symbol)
+        test_dataset = generate_counterfactual_samples(8, different_symbol)
 
         filtered_train = filter_dataset(
             dataset=train_dataset,
@@ -476,10 +476,10 @@ class TestEndToEndWorkflow:
 
         # Step 3: Train and evaluate DBM
         with tempfile.TemporaryDirectory() as tmpdir:
-            train_path = os.path.join(tmpdir, "train_dataset")
-            test_path = os.path.join(tmpdir, "test_dataset")
-            filtered_train.dataset.save_to_disk(train_path)
-            filtered_test.dataset.save_to_disk(test_path)
+            train_path = os.path.join(tmpdir, "train_dataset.json")
+            test_path = os.path.join(tmpdir, "test_dataset.json")
+            save_counterfactual_examples(filtered_train, train_path)
+            save_counterfactual_examples(filtered_test, test_path)
 
             # Build attention head targets for DBM
             layers = [0]  # Minimal for speed

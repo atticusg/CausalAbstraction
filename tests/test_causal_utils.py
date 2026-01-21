@@ -10,7 +10,7 @@ from causalab.causal.causal_utils import compute_interchange_scores
 
 
 class MockDataset:
-    """Mock CounterfactualDataset for testing."""
+    """Mock dataset for testing (simulates list-like dataset interface)."""
 
     def __init__(self, data, dataset_id="test_dataset"):
         self.data = data
@@ -102,7 +102,7 @@ def mock_raw_results():
 
 @pytest.fixture
 def mock_dataset():
-    """Create a mock CounterfactualDataset."""
+    """Create a mock dataset (list-like interface)."""
     data = [
         {"id": 0, "raw_input": "input_0", "counterfactual_inputs": [{"id": 0}]},
         {"id": 1, "raw_input": "input_1", "counterfactual_inputs": [{"id": 1}]},

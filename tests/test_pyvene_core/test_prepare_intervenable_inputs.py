@@ -1,6 +1,7 @@
 # tests/test_pyvene_core/test_prepare_intervenable_inputs.py
 
 import pytest
+from typing import Any
 from unittest.mock import MagicMock
 import torch
 
@@ -14,10 +15,10 @@ class TestPrepareIntervenableInputs:
     @pytest.fixture
     def mock_batch(self):
         """Create a mock batch with base and counterfactual inputs."""
-        return {
-            "input": ["input1", "input2"],
-            "counterfactual_inputs": [["cf1_1", "cf1_2"], ["cf2_1", "cf2_2"]],
-        }
+        return [
+            {"input": "input1", "counterfactual_inputs": ["cf1_1", "cf2_1"]},
+            {"input": "input2", "counterfactual_inputs": ["cf1_2", "cf2_2"]},
+        ]
 
     @pytest.fixture
     def mock_loaded_inputs(self):
@@ -97,7 +98,7 @@ class TestPrepareIntervenableInputs:
         # Check feature_indices
         assert len(feature_indices) == len(all_units)
         for indices in feature_indices:
-            assert len(indices) == len(mock_batch["input"])  # One per batch item
+            assert len(indices) == len(mock_batch)  # One per batch item
 
     def test_left_padding_adjustment(
         self, mock_tiny_lm, model_units_list, mock_batch, mock_loaded_inputs
@@ -201,7 +202,9 @@ class TestPrepareIntervenableInputs:
 
         # Check that we have the correct number of counterfactuals (matches batch)
         # The original test was wrong; from the error it seems we get all counterfactuals
-        assert len(batched_counterfactuals) == len(mock_batch["counterfactual_inputs"])
+        assert len(batched_counterfactuals) == len(
+            mock_batch[0]["counterfactual_inputs"]
+        )
 
         # Check that we have indices for both units
         counterfactual_indices, base_indices = inv_locations["sources->base"]
@@ -253,7 +256,7 @@ class TestPrepareIntervenableInputs:
 
         # Check that feature_indices contains None values
         for indices in feature_indices:
-            assert len(indices) == len(mock_batch["input"])  # One per batch item
+            assert len(indices) == len(mock_batch)  # One per batch item
             for index in indices:
                 assert index is None
 
@@ -329,17 +332,15 @@ class TestPrepareIntervenableInputs:
                 unit.get_feature_indices = MagicMock(return_value=[0, 1, 2])
                 all_units.append(unit)
 
-        # Test with the first batch variant only for simplicity
-        batch = {"input": ["input1"], "counterfactual_inputs": [["cf1_1"]]}
+        # Test with a single example for simplicity
+        batch: Any = [{"input": "input1", "counterfactual_inputs": ["cf1_1"]}]
 
         # Adjust mock returns for the batch size
-        custom_base = {
-            k: v.clone()[: len(batch["input"])] for k, v in base_loaded.items()
-        }
+        custom_base = {k: v.clone()[: len(batch)] for k, v in base_loaded.items()}
         custom_cfs = []
-        for i in range(len(batch["counterfactual_inputs"])):
+        for i in range(len(batch[0]["counterfactual_inputs"])):
             custom_cf = {
-                k: v.clone()[: len(batch["input"])]
+                k: v.clone()[: len(batch)]
                 for k, v in cf_loaded[min(i, len(cf_loaded) - 1)].items()
             }
             custom_cfs.append(custom_cf)
@@ -359,6 +360,6 @@ class TestPrepareIntervenableInputs:
         )
 
         # Check batch dimensions
-        assert len(batched_counterfactuals) == len(batch["counterfactual_inputs"])
+        assert len(batched_counterfactuals) == len(batch[0]["counterfactual_inputs"])
         counterfactual_indices, base_indices = inv_locations["sources->base"]
         assert len(base_indices) == len(all_units)

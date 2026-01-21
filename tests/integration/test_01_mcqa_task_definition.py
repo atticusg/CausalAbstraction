@@ -6,13 +6,12 @@ and counterfactual dataset generation without using neural networks.
 """
 
 import pytest
-import copy
 import random
 from causalab.tasks.MCQA.counterfactuals import (
     sample_answerable_question,
     different_symbol,
 )
-from causalab.causal.counterfactual_dataset import CounterfactualDataset
+from causalab.causal.causal_utils import generate_counterfactual_samples
 
 
 pytestmark = pytest.mark.slow
@@ -42,8 +41,8 @@ class TestMCQACausalModel:
 
     def test_causal_model_forward(self, causal_model):
         """Test running the causal model forward."""
-        example = sample_answerable_question()
-        full_setting = causal_model.run_forward(example)
+        # sample_answerable_question() already returns a fully computed CausalTrace
+        full_setting = sample_answerable_question()
 
         # Check that output variables are computed
         assert "answer_position" in full_setting
@@ -54,29 +53,32 @@ class TestMCQACausalModel:
         assert full_setting["answer_position"] in [0, 1]
 
         # Verify answer is one of the symbols
-        assert full_setting["answer"] in [example["symbol0"], example["symbol1"]]
+        assert full_setting["answer"] in [
+            full_setting["symbol0"],
+            full_setting["symbol1"],
+        ]
 
     def test_causal_model_intervention(self, causal_model):
         """Test fixing a variable in the causal model."""
-        example = sample_answerable_question()
-        full_setting = causal_model.run_forward(example)
+        example_trace = sample_answerable_question()
+        original_position = example_trace["answer_position"]
 
-        # Intervene on answer_position
-        example["answer_position"] = int(not full_setting["answer_position"])
-        intervened_setting = causal_model.run_forward(example)
+        # Intervene on answer_position using copy().intervene()
+        new_position = int(not original_position)
+        intervened_trace = example_trace.copy().intervene(
+            "answer_position", new_position
+        )
 
         # Check that the intervention took effect
-        assert intervened_setting["answer_position"] == example["answer_position"]
-        assert intervened_setting["answer_position"] != full_setting["answer_position"]
+        assert intervened_trace["answer_position"] == new_position
+        assert intervened_trace["answer_position"] != original_position
 
     def test_interchange_intervention(self, causal_model):
         """Test interchange interventions on the causal model."""
         # Generate two examples with different answer positions
-        example1 = sample_answerable_question()
-        setting1 = causal_model.run_forward(example1)
-
-        example2 = sample_answerable_question()
-        setting2 = causal_model.run_forward(example2)
+        # sample_answerable_question() returns a fully computed CausalTrace
+        setting1 = sample_answerable_question()
+        setting2 = sample_answerable_question()
 
         # Keep sampling until we get different positions
         max_attempts = 50
@@ -85,14 +87,13 @@ class TestMCQACausalModel:
             setting1["answer_position"] == setting2["answer_position"]
             and attempts < max_attempts
         ):
-            example2 = sample_answerable_question()
-            setting2 = causal_model.run_forward(example2)
+            setting2 = sample_answerable_question()
             attempts += 1
 
         if attempts < max_attempts:
             # Perform interchange intervention
             intervened_setting = causal_model.run_interchange(
-                example1, {"answer_position": example2}
+                setting1, {"answer_position": setting2}
             )
 
             # Verify the intervention took the value from example2
@@ -142,11 +143,13 @@ class TestCounterfactualDatasets:
 
     def test_can_distinguish_with_dataset(self, causal_model):
         """Test the can_distinguish_with_dataset function."""
+        from causalab.causal.causal_utils import can_distinguish_with_dataset
+
         # Create a small dataset
-        dataset = CounterfactualDataset.from_sampler(8, different_symbol)
+        dataset = generate_counterfactual_samples(8, different_symbol)
 
         # Test distinguishing answer from no intervention
-        result = causal_model.can_distinguish_with_dataset(dataset, ["answer"], None)
+        result = can_distinguish_with_dataset(dataset, causal_model, ["answer"], None)
 
         # Verify result structure
         assert "proportion" in result
@@ -156,16 +159,19 @@ class TestCounterfactualDatasets:
 
     def test_confounding_example(self, causal_model):
         """Test creating confounded and deconfounded counterfactuals."""
-        example = sample_answerable_question()
-        full_setting = causal_model.run_forward(example)
+        # sample_answerable_question() returns a fully computed CausalTrace
+        full_setting = sample_answerable_question()
+
+        # Extract input variables only for creating modified traces
+        input_vars = {var: full_setting[var] for var in causal_model.inputs}
 
         # Create confounded counterfactual (change object and color)
-        confounded_cf = copy.deepcopy(example)
+        confounded_cf = input_vars.copy()
         confounded_cf["object"] = "toy"
-        confounded_cf["color"] = example[
+        confounded_cf["color"] = full_setting[
             f"choice{int(not full_setting['answer_position'])}"
         ]
-        confounded_cf_setting = causal_model.run_forward(confounded_cf)
+        confounded_cf_setting = causal_model.new_trace(confounded_cf)
 
         # Verify the counterfactual has different answer position
         assert (
@@ -173,9 +179,9 @@ class TestCounterfactualDatasets:
         )
 
         # Create deconfounded counterfactual (different symbols)
-        deconfounded_cf = copy.deepcopy(example)
+        deconfounded_cf = input_vars.copy()
         deconfounded_cf["object"] = "toy"
-        deconfounded_cf["color"] = example[
+        deconfounded_cf["color"] = full_setting[
             f"choice{int(not full_setting['answer_position'])}"
         ]
         # Change symbols
@@ -186,7 +192,7 @@ class TestCounterfactualDatasets:
         )
         if available_symbols:
             deconfounded_cf["symbol0"] = random.choice(available_symbols)
-            deconfounded_cf_setting = causal_model.run_forward(deconfounded_cf)
+            deconfounded_cf_setting = causal_model.new_trace(deconfounded_cf)
 
             # Verify structure is valid
             assert "answer" in deconfounded_cf_setting

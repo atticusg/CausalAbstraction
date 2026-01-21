@@ -73,12 +73,16 @@ result = train_DBM_binary_heatmaps(
 
 import logging
 import os
-from typing import Dict, Any, Callable, Optional, Tuple
+from typing import Dict, Any, Callable, Tuple
 
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.model_units import InterchangeTarget
 from causalab.causal.causal_model import CausalModel
 from causalab.experiments.train import train_interventions
+from causalab.experiments.configs.train_config import (
+    ExperimentConfigInput,
+    merge_with_defaults,
+)
 from causalab.experiments.visualizations.binary_mask import (
     plot_binary_mask,
     get_selected_units,
@@ -99,9 +103,10 @@ def train_DBM_binary_heatmaps(
     output_dir: str,
     metric: Callable[[Any, Any], bool],
     tie_masks: bool = True,
-    config: Optional[Dict[str, Any]] = None,
+    config: ExperimentConfigInput = None,
     save_results: bool = True,
     verbose: bool = True,
+    source_pipeline: LMPipeline | None = None,
 ) -> Dict[str, Any]:
     """
     Train DBM (Desiderata-Based Masking) with binary masks on any component type.
@@ -118,7 +123,7 @@ def train_DBM_binary_heatmaps(
                            Should use mode="one_target_all_units" for DBM.
         train_dataset_path: Path to filtered training dataset directory
         test_dataset_path: Path to filtered test dataset directory
-        pipeline: LMPipeline object with loaded model
+        pipeline: Target LMPipeline where interventions are applied
         target_variable_group: Tuple of target variable names (e.g., ("answer",) or ("answer", "position"))
         output_dir: Output directory for results and models
         metric: Function to compare neural output with expected output
@@ -128,6 +133,8 @@ def train_DBM_binary_heatmaps(
                 (default: DEFAULT_CONFIG with masking settings)
         save_results: Whether to save metadata and results to disk (default: True)
         verbose: Whether to print progress information
+        source_pipeline: If provided, collect activations from this pipeline instead
+            of the target pipeline. Enables cross-model patching.
 
     Returns:
         Dictionary containing:
@@ -168,17 +175,21 @@ def train_DBM_binary_heatmaps(
 
     # Setup config with DBM defaults
     if config is None:
-        config = {
-            "train_batch_size": 32,
-            "evaluation_batch_size": 64,
-            "training_epoch": 20,
-            "init_lr": 0.001,
-            "masking": {
-                "regularization_coefficient": 0.1,
-            },
-        }
+        config = merge_with_defaults(
+            {
+                "train_batch_size": 32,
+                "evaluation_batch_size": 64,
+                "training_epoch": 20,
+                "init_lr": 0.001,
+                "masking": {
+                    "regularization_coefficient": 100,
+                },
+            }
+        )
+    else:
+        config = merge_with_defaults(config)
 
-    # Ensure featurizer_kwargs is set for tie_masks
+    # Override featurizer_kwargs with tie_masks setting
     config["featurizer_kwargs"] = {"tie_masks": tie_masks}
 
     # Train DBM using the train_interventions function
@@ -193,6 +204,7 @@ def train_DBM_binary_heatmaps(
         metric=metric,
         config=config,
         save_results=save_results,
+        source_pipeline=source_pipeline,
     )
 
     # Extract results for single target

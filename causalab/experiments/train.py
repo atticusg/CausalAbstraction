@@ -27,8 +27,7 @@ output_dir/
 import copy
 import logging
 import os
-from pathlib import Path
-from typing import Dict, Any, Callable, Optional, Union, Tuple
+from typing import Dict, Any, Callable, Union, Tuple
 
 from tqdm import tqdm
 
@@ -40,8 +39,11 @@ from causalab.neural.pyvene_core.interchange import (
     train_interventions as train_interventions_pyvene,
     run_interchange_interventions,
 )
-from causalab.experiments.configs.train_config import DEFAULT_CONFIG
-from causalab.causal.counterfactual_dataset import CounterfactualDataset
+from causalab.experiments.configs.train_config import (
+    ExperimentConfig,
+    ExperimentConfigInput,
+    merge_with_defaults,
+)
 from causalab.causal.causal_model import CausalModel
 from causalab.experiments.metric import (
     LM_loss_and_metric_fn,
@@ -52,7 +54,7 @@ from causalab.experiments.io import (
     save_training_artifacts,
     save_aggregate_metadata,
 )
-from datasets import load_from_disk, Dataset
+from causalab.causal.causal_utils import load_counterfactual_examples
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +70,9 @@ def train_interventions(
     target_variable_group: Tuple[str, ...],
     output_dir: str,
     metric: Callable[[Any, Any], bool],
-    config: Optional[Dict[str, Any]] = None,
+    config: ExperimentConfigInput = None,
     save_results: bool = True,
+    source_pipeline: LMPipeline | None = None,
 ) -> Dict[str, Any]:
     """
     Train interventions (DBM or DAS) on one or more InterchangeTargets.
@@ -86,7 +89,7 @@ def train_interventions(
         interchange_targets: Either a dict mapping keys to targets, or a single target
         train_dataset_path: Path to filtered training dataset directory
         test_dataset_path: Path to filtered test dataset directory
-        pipeline: LMPipeline object with loaded model
+        pipeline: Target LMPipeline where interventions are applied
         target_variable_group: Tuple of target variable names to evaluate jointly
                               (e.g., ("answer",) or ("answer", "position"))
         output_dir: Output directory for results and models
@@ -98,6 +101,14 @@ def train_interventions(
                 - train_batch_size: batch size for training
                 (default: DEFAULT_CONFIG with appropriate settings)
         save_results: Whether to save metadata and models to disk (default: True)
+        source_pipeline: If provided, collect activations from this pipeline instead
+            of the target pipeline. Enables cross-model patching where you train
+            to find features in pipeline that align with activations from
+            source_pipeline.
+
+    Note:
+        Units with pre-initialized featurizers (id != "null") are preserved.
+        This allows using PCA/SVD-initialized featurizers without overwriting them.
 
     Returns:
         Dictionary containing:
@@ -117,9 +128,8 @@ def train_interventions(
         FileNotFoundError: If dataset paths do not exist
     """
 
-    # Setup configuration
-    if config is None:
-        config = copy.deepcopy(DEFAULT_CONFIG)
+    # Setup configuration - merge with defaults
+    config = merge_with_defaults(config)
 
     intervention_type = config.get("intervention_type", "mask")
 
@@ -141,28 +151,18 @@ def train_interventions(
     if isinstance(interchange_targets, InterchangeTarget):
         interchange_targets = {("single",): interchange_targets}
 
-    # Load training dataset
-    train_dataset_name = Path(train_dataset_path).parent.name
-    train_hf_dataset = load_from_disk(train_dataset_path)
-    if not isinstance(train_hf_dataset, Dataset):
-        raise TypeError(f"Expected Dataset, got {type(train_hf_dataset).__name__}")
-    train_dataset = CounterfactualDataset(
-        dataset=train_hf_dataset, id=train_dataset_name
-    )
+    # Load training dataset and deserialize CausalTraces
+    train_dataset = load_counterfactual_examples(train_dataset_path, causal_model)
 
     # Ensure log_dir is set
     config["log_dir"] = os.path.join(output_dir, "logs")
     os.makedirs(config["log_dir"], exist_ok=True)
 
-    # Initialize featurizers based on config
+    # Initialize featurizers based on config (skips pre-initialized featurizers)
     _initialize_featurizers(interchange_targets, config)
 
-    # Load test dataset
-    test_dataset_name = f"{train_dataset_name}_test"
-    test_hf_dataset = load_from_disk(test_dataset_path)
-    if not isinstance(test_hf_dataset, Dataset):
-        raise TypeError(f"Expected Dataset, got {type(test_hf_dataset).__name__}")
-    test_dataset = CounterfactualDataset(dataset=test_hf_dataset, id=test_dataset_name)
+    # Load test dataset and deserialize CausalTraces
+    test_dataset = load_counterfactual_examples(test_dataset_path, causal_model)
 
     # Label training dataset
     labeled_train_dataset = causal_model.label_counterfactual_data(
@@ -185,12 +185,13 @@ def train_interventions(
         train_interventions_pyvene(
             pipeline=pipeline,
             interchange_target=target,
-            counterfactual_dataset=labeled_train_dataset,
+            counterfactual_dataset=labeled_train_dataset,  # type: ignore[arg-type]
             intervention_type=intervention_type,
-            config=config,
-            loss_and_metric_fn=lambda p, m, b, t: LM_loss_and_metric_fn(
-                p, m, b, t, metric
+            config=config,  # type: ignore[arg-type]
+            loss_and_metric_fn=lambda p, m, b, t, sp, sim: LM_loss_and_metric_fn(
+                p, m, b, t, metric, source_pipeline=sp, source_intervenable_model=sim
             ),
+            source_pipeline=source_pipeline,
         )
 
         # Get feature indices
@@ -204,6 +205,7 @@ def train_interventions(
                 interchange_target=target,
                 batch_size=eval_batch_size,
                 output_scores=False,
+                source_pipeline=source_pipeline,
             )
         }
 
@@ -224,6 +226,7 @@ def train_interventions(
                 interchange_target=target,
                 batch_size=eval_batch_size,
                 output_scores=False,
+                source_pipeline=source_pipeline,
             )
         }
 
@@ -347,10 +350,13 @@ def train_interventions(
 
 def _initialize_featurizers(
     interchange_targets: Dict[Tuple[Any, ...], InterchangeTarget],
-    config: Dict[str, Any],
+    config: ExperimentConfig,
 ) -> None:
     """
     Initialize featurizers on all units based on config.
+
+    Skips units that already have a non-placeholder featurizer (id != "null"),
+    allowing pre-initialized featurizers (e.g., from PCA/SVD) to be preserved.
 
     For intervention_type="mask": Uses Featurizer with tie_masks
     For intervention_type="interchange": Uses SubspaceFeaturizer with n_features
@@ -359,6 +365,10 @@ def _initialize_featurizers(
 
     for _key, target in interchange_targets.items():
         for unit in target.flatten():
+            # Skip units with pre-initialized featurizers
+            if unit.featurizer.id != "null":
+                continue
+
             unit_shape = unit.shape
             if unit_shape is None:
                 raise ValueError(f"Unit {unit.id} has no shape defined")
@@ -368,6 +378,7 @@ def _initialize_featurizers(
                     Featurizer(
                         n_features=unit_shape[0],
                         tie_masks=tie_masks,
+                        id=f"mask_{unit.id}",
                     )
                 )
             else:  # "interchange" (DAS or subspace tracing)

@@ -8,11 +8,10 @@ from typing import Any, Dict, List
 
 import torch
 from torch import Tensor
-from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel
-from datasets import Dataset
-from pyvene import IntervenableModel
-from causalab.causal.counterfactual_dataset import CounterfactualDataset
+from pyvene import IntervenableModel  # type: ignore[import-untyped]
+from causalab.causal.counterfactual_dataset import CounterfactualExample
+from causalab.causal.trace import CausalTrace
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
@@ -26,13 +25,17 @@ __all__ = ["Pipeline", "LMPipeline"]
 
 def _infer_device_and_dtype(
     requested_device: str | torch.device | None = None,
-    requested_dtype: torch.dtype | None = None,
-) -> tuple[str | torch.device, torch.dtype]:
-    """Return a sensible `(device, dtype)` pair when not fully specified."""
+    requested_dtype: torch.dtype | str | None = None,
+) -> tuple[str | torch.device, torch.dtype | str]:
+    """Return a sensible `(device, dtype)` pair when not fully specified.
+
+    If dtype is None, defaults to "auto" which tells transformers to use the
+    dtype from the model's config (e.g., bfloat16 if the model was saved that way).
+    """
     if requested_device is None:
         requested_device = "cuda" if torch.cuda.is_available() else "cpu"
     if requested_dtype is None:
-        requested_dtype = torch.float32
+        requested_dtype = "auto"
     return requested_device, requested_dtype
 
 
@@ -85,6 +88,7 @@ class Pipeline(ABC):
         sources: Any,
         map: Any,  # noqa: A002 – intentional name
         feature_indices: Any,
+        source_representations: Any = None,
     ) -> Dict[str, Any]:
         pass
 
@@ -136,17 +140,22 @@ class LMPipeline(Pipeline):
             self.tokenizer = AutoTokenizer.from_pretrained(
                 self.model_or_name, token=hf_token
             )
-            self.model = AutoModelForCausalLM.from_pretrained(
+            self.model = AutoModelForCausalLM.from_pretrained(  # type: ignore[call-arg]
                 self.model_or_name,
                 config=self._init_extra_kwargs.get("config"),
                 token=hf_token,
-            ).to(device=device, dtype=dtype)
+                torch_dtype=dtype,  # Pass dtype to from_pretrained ("auto" uses config)
+            ).to(device=device)
             if hasattr(self.model.config, "_attn_implementation"):
                 self.model.config._attn_implementation = "eager"
             if hasattr(self.model.config, "use_cache"):
                 self.model.config.use_cache = False
         else:
-            self.model = self.model_or_name.to(device).to(dtype)
+            # Pre-loaded model: move to device, and only convert dtype if explicit
+            self.model = self.model_or_name.to(device)
+            if isinstance(dtype, torch.dtype):
+                self.model = self.model.to(dtype)
+            # If dtype is "auto", keep the model's existing dtype
             self.tokenizer = AutoTokenizer.from_pretrained(
                 self.model.config.name_or_path
             )
@@ -164,7 +173,7 @@ class LMPipeline(Pipeline):
 
     def load(
         self,
-        input: dict[str, Any] | list[dict[str, Any]] | str | list[str],
+        input: list[CausalTrace],
         *,
         max_length: int | None = None,
         padding_side: str | None = None,
@@ -172,28 +181,11 @@ class LMPipeline(Pipeline):
         use_chat_template: bool | None = None,
         no_padding: bool = False,
         return_offsets_mapping: bool = False,
-    ) -> dict[str, Tensor]:
+    ) -> dict[str, Any]:
         if use_chat_template is None:
             use_chat_template = self.use_chat_template
 
-        if isinstance(input, str):
-            input = [{"raw_input": input}]
-        elif isinstance(input, list) and len(input) > 0 and isinstance(input[0], str):
-            input = [{"raw_input": p} for p in input]
-
-        if isinstance(input, dict):
-            assert "raw_input" in input, (
-                "Input dictionary must contain 'raw_input' key."
-            )
-            raw_input = [input["raw_input"]]
-        else:
-            assert isinstance(input, list) or isinstance(input, tuple), (
-                "Input must be a dictionary or a list/tuple of dictionaries."
-            )
-            assert all("raw_input" in item for item in input), (
-                "Each input dictionary must contain 'raw_input' key."
-            )
-            raw_input = [item["raw_input"] for item in input]
+        raw_input = [item["raw_input"] for item in input]
 
         # Apply chat template if requested
         if use_chat_template:
@@ -227,9 +219,15 @@ class LMPipeline(Pipeline):
             enc["position_ids"] = self.model.prepare_inputs_for_generation(
                 input_ids=enc["input_ids"], attention_mask=enc["attention_mask"]
             )["position_ids"]
+        # Pop offset_mapping if present - it's a list of tuples, not a tensor
+        offset_mapping = enc.pop("offset_mapping", None)
+
         for k, v in enc.items():
-            if isinstance(v, torch.Tensor):
-                enc[k] = v.to(self.model.device)
+            enc[k] = v.to(self.model.device)
+
+        # Add back offset_mapping if it was present
+        if offset_mapping is not None:
+            enc["offset_mapping"] = offset_mapping
 
         if padding_side is not None:
             self.tokenizer.padding_side = prev_padding_side
@@ -278,10 +276,9 @@ class LMPipeline(Pipeline):
 
     def generate(
         self,
-        input: dict[str, Any] | list[dict[str, Any]] | str | list[str],
+        input: list[CausalTrace],
         **gen_kwargs: Any,
     ) -> dict[str, Any]:
-        # Handle backward compatibility for raw strings
         inputs = self.load(input)
         defaults: dict[str, Any] = dict(
             max_new_tokens=self.max_new_tokens,
@@ -313,11 +310,28 @@ class LMPipeline(Pipeline):
         self,
         intervenable_model: IntervenableModel,
         base: dict[str, Tensor],
-        sources: list[dict[str, Tensor]],
+        sources: list[dict[str, Tensor]] | None,
         map: dict[str, Any],
         feature_indices: list[list[int]] | None,
+        source_representations: list[Tensor] | None = None,
         **gen_kwargs: Any,
     ) -> dict[str, Any]:
+        """
+        Generate with interventions applied.
+
+        Args:
+            intervenable_model: PyVENE model with preset intervention locations
+            base: Tokenized base inputs
+            sources: Tokenized counterfactual inputs. Can be None if source_representations
+                is provided (cross-model patching case).
+            map: Unit locations mapping {"sources->base": (source_indices, base_indices)}
+            feature_indices: Feature subspace indices for each unit
+            source_representations: Pre-collected activations to use instead of computing
+                from sources. When provided, sources should be None. This enables cross-model
+                patching where activations are collected from a different model.
+                Format: List of tensors, one per intervention location.
+            **gen_kwargs: Additional generation kwargs
+        """
         defaults = dict(
             unit_locations=map,
             subspaces=feature_indices,
@@ -331,8 +345,13 @@ class LMPipeline(Pipeline):
         )
         defaults.update(gen_kwargs)
         with torch.no_grad():
-            # pyvene type stubs are incomplete
-            out = intervenable_model.generate(base, sources=sources, **defaults)  # type: ignore[reportOptionalMemberAccess]
+            # pyvene type stubs are incomplete - source_representations accepts list or dict
+            out = intervenable_model.generate(
+                base,
+                sources=sources,
+                source_representations=source_representations,  # type: ignore[reportArgumentType]
+                **defaults,  # type: ignore[reportArgumentType]
+            )  # type: ignore[reportOptionalMemberAccess]
 
         # Return dictionary like HuggingFace models
         sequences = out[-1].sequences[:, -self.max_new_tokens :].detach().cpu()
@@ -352,7 +371,7 @@ class LMPipeline(Pipeline):
 
     def compute_outputs(
         self,
-        dataset: CounterfactualDataset,
+        dataset: list[CounterfactualExample],
         batch_size: int = 32,
     ) -> dict[str, list[dict[str, Any]]]:
         """
@@ -362,7 +381,7 @@ class LMPipeline(Pipeline):
         without interventions, returning the raw generation outputs.
 
         Args:
-            dataset: CounterfactualDataset with base inputs and counterfactual inputs
+            dataset: List of CounterfactualExample with base inputs and counterfactual inputs
             batch_size: Batch size for processing
 
         Returns:
@@ -375,44 +394,24 @@ class LMPipeline(Pipeline):
                 - "scores": List of score tensors (if available)
                 - "string": String output
         """
-
-        # Extract base inputs
         base_inputs = [example["input"] for example in dataset]
-        base_dataset = Dataset.from_list(base_inputs)
-
-        # Create dataloader for base inputs
-        def shallow_collate_fn(batch: list[dict[str, Any]]) -> dict[str, list[Any]]:
-            return {key: [item[key] for item in batch] for key in batch[0].keys()}
-
-        base_dataloader = DataLoader(
-            base_dataset,  # type: ignore[arg-type]
-            batch_size=batch_size,
-            shuffle=False,
-            collate_fn=shallow_collate_fn,
-        )
 
         base_outputs = []
 
-        # Process base inputs
-        for batch in tqdm(
-            base_dataloader,
+        # Process base inputs in batches
+        for start in tqdm(
+            range(0, len(base_inputs), batch_size),
             desc="Computing base outputs",
             disable=not logger.isEnabledFor(logging.DEBUG),
             leave=False,
         ):
+            batch_inputs = base_inputs[start : start + batch_size]
             with torch.no_grad():
-                # Reconstruct batch as list of dicts for pipeline.generate
-                batch_inputs = []
-                batch_size_actual = len(batch["raw_input"])
-                for i in range(batch_size_actual):
-                    example_dict = {key: batch[key][i] for key in batch.keys()}
-                    batch_inputs.append(example_dict)
-
                 # Generate outputs
                 output_dict = self.generate(batch_inputs)
 
                 # Flatten batch outputs into individual examples
-                for i in range(batch_size_actual):
+                for i in range(len(batch_inputs)):
                     example_output = {
                         "sequences": output_dict["sequences"][i : i + 1],
                     }
@@ -436,33 +435,19 @@ class LMPipeline(Pipeline):
         # Process counterfactuals if they exist
         counterfactual_outputs = []
         if counterfactual_inputs:
-            cf_dataset = Dataset.from_list(counterfactual_inputs)
-            cf_dataloader = DataLoader(
-                cf_dataset,  # type: ignore[arg-type]
-                batch_size=batch_size,
-                shuffle=False,
-                collate_fn=shallow_collate_fn,
-            )
-
-            for batch in tqdm(
-                cf_dataloader,
+            for start in tqdm(
+                range(0, len(counterfactual_inputs), batch_size),
                 desc="Computing counterfactual outputs",
                 disable=not logger.isEnabledFor(logging.DEBUG),
                 leave=False,
             ):
+                batch_inputs = counterfactual_inputs[start : start + batch_size]
                 with torch.no_grad():
-                    # Reconstruct batch as list of dicts
-                    batch_inputs = []
-                    batch_size_actual = len(batch["raw_input"])
-                    for i in range(batch_size_actual):
-                        example_dict = {key: batch[key][i] for key in batch.keys()}
-                        batch_inputs.append(example_dict)
-
                     # Generate outputs
                     output_dict = self.generate(batch_inputs)
 
                     # Flatten batch outputs into individual examples
-                    for i in range(batch_size_actual):
+                    for i in range(len(batch_inputs)):
                         example_output = {
                             "sequences": output_dict["sequences"][i : i + 1],
                         }

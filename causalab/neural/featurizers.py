@@ -30,7 +30,7 @@ from typing import Any
 
 import torch
 from torch import Tensor
-import pyvene as pv
+import pyvene as pv  # type: ignore[import-untyped]
 
 
 # --------------------------------------------------------------------------- #
@@ -126,6 +126,17 @@ class Featurizer:
         return self._mask_intervention
 
     # ------------------------- Convenience I/O --------------------------- #
+    def is_trivial(self) -> bool:
+        """Return True if this is an identity featurizer with no learned weights.
+
+        Trivial featurizers don't need to be serialized - they can be
+        reconstructed from just knowing they're identity.
+
+        Uses the id="null" convention: identity featurizers have id="null",
+        while learned featurizers have descriptive ids like "subspace", "sae".
+        """
+        return self.id == "null"
+
     def featurize(self, x: Tensor) -> tuple[Tensor, Tensor | None]:
         return self.featurizer(x)
 
@@ -135,6 +146,83 @@ class Featurizer:
     # --------------------------------------------------------------------- #
     #  (De)serialisation helpers                                            #
     # --------------------------------------------------------------------- #
+    def to_dict(self) -> dict[str, Any] | None:
+        """Return serializable dict representation, or None if trivial/SAE.
+
+        Returns None for:
+        - Identity featurizers (trivial, can be reconstructed)
+        - SAE featurizers (loaded from sae_lens, not serializable)
+
+        For DAS/Subspace featurizers, returns the learned rotation matrix.
+        """
+        featurizer_class = self.featurizer.__class__.__name__
+
+        if featurizer_class == "SAEFeaturizerModule":
+            return None
+
+        if self.is_trivial():
+            return None
+
+        inverse_featurizer_class = self.inverse_featurizer.__class__.__name__
+
+        # Extra config needed for Subspace featurizers
+        additional_config: dict[str, Any] = {}
+        if featurizer_class == "SubspaceFeaturizerModule":
+            additional_config["rotation_matrix"] = (
+                self.featurizer.rotate.weight.detach().clone()  # type: ignore[union-attr]
+            )
+            additional_config["requires_grad"] = (
+                self.featurizer.rotate.weight.requires_grad  # type: ignore[union-attr]
+            )
+
+        return {
+            "model_info": {
+                "featurizer_class": featurizer_class,
+                "inverse_featurizer_class": inverse_featurizer_class,
+                "n_features": self.n_features,
+                "featurizer_id": self.id,
+                "additional_config": additional_config,
+            },
+            "featurizer_state_dict": self.featurizer.state_dict(),
+            "inverse_state_dict": self.inverse_featurizer.state_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Featurizer":
+        """Reconstruct Featurizer from dict (inverse of to_dict)."""
+        model_info = data["model_info"]
+        featurizer_class = model_info["featurizer_class"]
+
+        if featurizer_class == "SubspaceFeaturizerModule":
+            rot = model_info["additional_config"]["rotation_matrix"]
+            requires_grad = model_info["additional_config"]["requires_grad"]
+
+            in_dim, out_dim = rot.shape
+            rotate_layer = pv.models.layers.LowRankRotateLayer(  # type: ignore[attr-defined]
+                in_dim, out_dim, init_orth=False
+            )
+            rotate_layer.weight.data.copy_(rot)
+            rotate_layer = torch.nn.utils.parametrizations.orthogonal(rotate_layer)
+            rotate_layer.requires_grad_(requires_grad)
+
+            featurizer = SubspaceFeaturizerModule(rotate_layer)
+            inverse = SubspaceInverseFeaturizerModule(rotate_layer)
+        elif featurizer_class == "IdentityFeaturizerModule":
+            featurizer = IdentityFeaturizerModule()
+            inverse = IdentityInverseFeaturizerModule()
+        else:
+            raise ValueError(f"Unknown featurizer class '{featurizer_class}'.")
+
+        featurizer.load_state_dict(data["featurizer_state_dict"])
+        inverse.load_state_dict(data["inverse_state_dict"])
+
+        return cls(
+            featurizer,
+            inverse,
+            n_features=model_info["n_features"],
+            id=model_info.get("featurizer_id", "loaded"),
+        )
+
     def save_modules(self, path: str) -> tuple[str | None, str | None]:
         """Serialise featurizer & inverse to `<path>_{featurizer, inverse}`.
 
@@ -153,7 +241,7 @@ class Featurizer:
         inverse_featurizer_class = self.inverse_featurizer.__class__.__name__
 
         # Extra config needed for Subspace featurizers
-        additional_config = {}
+        additional_config: dict[str, Any] = {}
         if featurizer_class == "SubspaceFeaturizerModule":
             additional_config["rotation_matrix"] = (
                 self.featurizer.rotate.weight.detach().clone()
@@ -166,6 +254,7 @@ class Featurizer:
             "featurizer_class": featurizer_class,
             "inverse_featurizer_class": inverse_featurizer_class,
             "n_features": self.n_features,
+            "featurizer_id": self.id,
             "additional_config": additional_config,
         }
 
@@ -498,6 +587,7 @@ class SAEInverseFeaturizerModule(torch.nn.Module):
         ) + error.to(features.dtype)
 
 
+# currently unused but not dead code - usage to come
 class SAEFeaturizer(Featurizer):
     """Featurizer backed by a pre-trained sparse auto-encoder.
 
@@ -533,6 +623,7 @@ def _subspace_is_all_none(subspaces: list[Any] | None) -> bool:
     )
 
 
+# currently unused but not dead code - usage to come
 def build_SVD_featurizers(
     model_units: list[Any],
     svd_results: dict[str, dict[str, Any]],

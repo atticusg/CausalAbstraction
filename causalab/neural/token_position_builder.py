@@ -35,11 +35,14 @@ Usage:
 """
 
 import re
-from typing import Any, Callable, Dict, List, Union
+from typing import Any, Callable, Dict, List, Union, cast
+from typing_extensions import LiteralString
 
+import torch
+
+from causalab.causal.trace import CausalTrace, Mechanism
 from causalab.neural.model_units import ComponentIndexer
 from causalab.neural.pipeline import LMPipeline
-
 
 # --------------------------------------------------------------------------- #
 #  Token Position Utilities                                                   #
@@ -65,7 +68,7 @@ class TokenPosition(ComponentIndexer):
         self.pipeline = pipeline
         self.is_original = is_original
 
-    def highlight_selected_token(self, input: dict) -> str:
+    def highlight_selected_token(self, input: CausalTrace) -> str:
         """Return *prompt* with selected token(s) wrapped in ``**bold**``.
 
         The method tokenizes *prompt*, calls self.index to obtain the
@@ -76,7 +79,7 @@ class TokenPosition(ComponentIndexer):
         Note that whitespace handling may be approximate for tokenizers
         that encode leading spaces as special glyphs (e.g. ``Ġ``).
         """
-        ids = self.pipeline.load(input)["input_ids"][0]
+        ids = self.pipeline.load([input])["input_ids"][0]
         highlight = self.index(input)
 
         pad_token_id = self.pipeline.tokenizer.pad_token_id
@@ -91,21 +94,21 @@ class TokenPosition(ComponentIndexer):
 
 
 # Convenience indexers
-def get_last_token_index(input: dict, pipeline: LMPipeline) -> List[int]:
+def get_last_token_index(input: CausalTrace, pipeline: LMPipeline) -> List[int]:
     """Return a one-element list containing the *last* token index."""
-    ids = list(pipeline.load(input)["input_ids"][0])
+    ids = list(pipeline.load([input])["input_ids"][0])
     return [len(ids) - 1]
 
 
 def get_all_tokens(
-    input: dict[str, Any], pipeline: LMPipeline, padding: bool = False
+    input: CausalTrace, pipeline: LMPipeline, padding: bool = False
 ) -> TokenPosition:
     """Return a single TokenPosition object containing all (non-pad) token indices."""
     pad_token_id = pipeline.tokenizer.pad_token_id
 
     # Create indexer function that returns all non-pad token indices
-    def all_tokens_indexer(inp):
-        token_ids = pipeline.load(inp)["input_ids"][0]
+    def all_tokens_indexer(inp: CausalTrace) -> List[int]:
+        token_ids = pipeline.load([inp])["input_ids"][0]
         if padding:
             return [i for i in range(len(token_ids))]
         return [i for i in range(len(token_ids)) if token_ids[i] != pad_token_id]
@@ -114,10 +117,20 @@ def get_all_tokens(
 
 
 def get_list_of_each_token(
-    input: dict[str, Any], pipeline: LMPipeline
+    input: CausalTrace | str, pipeline: LMPipeline
 ) -> List[TokenPosition]:
     """Return a list of TokenPosition objects, each containing a single token index."""
-    ids = list(pipeline.load(input)["input_ids"][0])
+    # Convert string to CausalTrace if needed
+    if isinstance(input, str):
+        trace = CausalTrace(
+            mechanisms={
+                "raw_input": Mechanism(parents=[], compute=lambda t: t["raw_input"])
+            },
+            inputs={"raw_input": input},
+        )
+    else:
+        trace = input
+    ids = list(pipeline.load([trace])["input_ids"][0])
     pad_token_id = pipeline.tokenizer.pad_token_id
 
     token_positions = []
@@ -145,7 +158,11 @@ def get_list_of_each_token(
     return token_positions
 
 
-def get_tokens_in_char_range(offsets, start_char: int, end_char: int) -> List[int]:
+def get_tokens_in_char_range(
+    offsets: torch.Tensor,  # shape [seq_len, 2]
+    start_char: int,
+    end_char: int,
+) -> List[int]:
     """
     Find which tokens overlap with a character range.
 
@@ -172,17 +189,16 @@ def get_tokens_in_char_range(offsets, start_char: int, end_char: int) -> List[in
     - Padding tokens (offset (0, 0)) are automatically skipped
     - A token overlaps if its character span has any intersection with [start_char, end_char)
     """
-    tokens = []
-    for token_idx, (token_start, token_end) in enumerate(offsets):
-        # Skip padding tokens (they have offset (0, 0))
-        if token_start == 0 and token_end == 0:
-            continue
+    if end_char <= start_char:
+        return []
 
-        # Check if this token overlaps with the character range
-        if token_start < end_char and token_end > start_char:
-            tokens.append(token_idx)
+    starts = offsets[:, 0]
+    ends = offsets[:, 1]
 
-    return tokens
+    nonpad = ~((starts == 0) & (ends == 0))
+    overlap = (starts < end_char) & (ends > start_char)
+    idx = torch.nonzero(nonpad & overlap, as_tuple=False).flatten()
+    return idx.tolist()
 
 
 def get_substring_token_ids(
@@ -288,11 +304,18 @@ def get_substring_token_ids(
             f"Valid indices: 0 to {num_occurrences - 1} or -1 to -{num_occurrences}"
         )
 
+    # Convert text to CausalTrace
+    trace = CausalTrace(
+        mechanisms={
+            "raw_input": Mechanism(parents=[], compute=lambda t: t["raw_input"])
+        },
+        inputs={"raw_input": text},
+    )
+
     # Use pipeline.load() with offset_mapping to get character→token mapping
     # This ensures we use the exact same tokenization as interventions
-    input_dict = {"raw_input": text}
     tokenized = pipeline.load(
-        input_dict, add_special_tokens=add_special_tokens, return_offsets_mapping=True
+        [trace], add_special_tokens=add_special_tokens, return_offsets_mapping=True
     )
     offsets = tokenized["offset_mapping"][0]  # Get first sequence from batch
 
@@ -373,6 +396,10 @@ class Template:
                 result.append(str(values[content]))
         return "".join(result)
 
+    # Class-level cache for tokenization results
+    # Key: (template_str, full_text_str), Value: (offsets, variable_tokens)
+    _position_cache: Dict[tuple[int, LiteralString], Dict[str, List[int]]] = {}
+
     def get_variable_positions(
         self, values: Dict[str, Any], pipeline
     ) -> Dict[str, List[int]]:
@@ -381,6 +408,8 @@ class Template:
 
         This is the key method: we tokenize the template piece by piece,
         tracking exactly where each variable's tokens appear.
+
+        Results are cached by the filled text to avoid re-tokenization.
 
         Args:
             values: Dictionary mapping variable names to their values
@@ -417,10 +446,22 @@ class Template:
 
         full_text_str = "".join(full_text)
 
+        # Check cache first
+        cache_key: tuple[int, LiteralString] = (id(pipeline.tokenizer), full_text_str)
+        if cache_key in Template._position_cache:
+            return Template._position_cache[cache_key]
+
+        # Convert text to CausalTrace
+        trace = CausalTrace(
+            mechanisms={
+                "raw_input": Mechanism(parents=[], compute=lambda t: t["raw_input"])
+            },
+            inputs={"raw_input": full_text_str},
+        )
+
         # Use pipeline.load() with offset_mapping to get character→token mapping
         # This ensures we use the exact same tokenization as interventions
-        input_dict = {"raw_input": full_text_str}
-        tokenized = pipeline.load(input_dict, return_offsets_mapping=True)
+        tokenized = pipeline.load([trace], return_offsets_mapping=True)
         offsets = tokenized["offset_mapping"][0]  # Get first sequence from batch
 
         # Map character positions to token indices using offsets
@@ -432,6 +473,9 @@ class Template:
                 # Find which tokens overlap with this character range
                 tokens = get_tokens_in_char_range(offsets, start_char, end_char)
                 variable_tokens[var_name].extend(tokens)
+
+        # Cache the result
+        Template._position_cache[cache_key] = variable_tokens
 
         return variable_tokens
 
@@ -518,12 +562,8 @@ def _build_dynamic_factory(name: str, spec_func: Callable, template: str) -> Cal
 
             # Build a factory from the returned spec
             temp_factory = _build_factory(f"{name}_dynamic", actual_spec, template)
-
             # Get the TokenPosition from that factory
-            temp_token_pos = temp_factory(pipeline)
-
-            # Call its indexer to get the actual token indices
-            return temp_token_pos.index(input_sample)
+            return temp_factory(pipeline).index(input_sample)
 
         return TokenPosition(indexer, pipeline, id=name)
 
@@ -559,8 +599,8 @@ def _build_absolute_index_factory(name: str, position: int) -> Callable:
     """Build factory for absolute index positions (e.g., first, last token)."""
 
     def factory(pipeline):
-        def indexer(input_sample):
-            ids = pipeline.load(input_sample)["input_ids"][0]
+        def indexer(input_sample: CausalTrace):
+            ids = pipeline.load([input_sample])["input_ids"][0]
             total_tokens = len(ids)
 
             # Handle negative indices
@@ -711,7 +751,7 @@ def _build_relative_index_factory(
                 target_pos = reference_pos + offset
 
             # Validate it's in bounds
-            ids = pipeline.load(input_sample)["input_ids"][0]
+            ids = pipeline.load([input_sample])["input_ids"][0]
             total_tokens = len(ids)
 
             if target_pos < 0 or target_pos >= total_tokens:
@@ -725,3 +765,82 @@ def _build_relative_index_factory(
         return TokenPosition(indexer, pipeline, id=name)
 
     return factory
+
+
+# --------------------------------------------------------------------------- #
+#  Token Position Combinators                                                  #
+# --------------------------------------------------------------------------- #
+
+
+def paired_token_position(
+    original_position: TokenPosition,
+    counterfactual_position: TokenPosition,
+    id: str = "paired",
+) -> TokenPosition:
+    """
+    Create a TokenPosition that uses different positions for original vs counterfactual.
+
+    This is useful for interchange interventions where you want to patch activations
+    from one token position in the counterfactual to a different token position in
+    the original input.
+
+    Args:
+        original_position: TokenPosition to use for original inputs (is_original=True)
+        counterfactual_position: TokenPosition to use for counterfactual inputs (is_original=False)
+        id: Identifier for the new TokenPosition
+
+    Returns:
+        A new TokenPosition that delegates based on is_original flag
+
+    Example:
+        >>> # Intervene at last_token in original, using activation from answer_var in counterfactual
+        >>> last_token = TokenPosition(lambda x: [-1], pipeline, id="last")
+        >>> answer_var = TokenPosition(lambda x: [5], pipeline, id="answer")
+        >>> paired = paired_token_position(last_token, answer_var, id="last<-answer")
+    """
+
+    def indexer(
+        input_sample: CausalTrace, is_original: bool = True
+    ) -> List[int] | List[List[int]]:
+        if is_original:
+            return original_position.index(input_sample)
+        else:
+            return counterfactual_position.index(input_sample)
+
+    # Use pipeline from original (they should be the same)
+    return TokenPosition(indexer, original_position.pipeline, id=id)
+
+
+def combined_token_position(
+    token_positions: List[TokenPosition],
+    id: str = "combined",
+) -> TokenPosition:
+    """
+    Combine multiple TokenPositions into a single TokenPosition.
+
+    Returns the concatenation of all token indices from each position.
+
+    Args:
+        token_positions: List of TokenPosition objects to combine
+        id: Identifier for the new TokenPosition
+
+    Returns:
+        A new TokenPosition that returns all indices from all input positions
+
+    Example:
+        >>> pos1 = TokenPosition(lambda x: [0, 1], pipeline, id="first_two")
+        >>> pos2 = TokenPosition(lambda x: [5], pipeline, id="middle")
+        >>> combined = combined_token_position([pos1, pos2], id="first_two_and_middle")
+        >>> # combined.index(...) returns [0, 1, 5]
+    """
+    if not token_positions:
+        raise ValueError("token_positions list cannot be empty")
+
+    def indexer(input_sample: CausalTrace, is_original: bool = True) -> List[int]:
+        all_indices: List[int] = []
+        for tp in token_positions:
+            indices = cast(List[int], tp.index(input_sample, is_original=is_original))
+            all_indices.extend(indices)
+        return all_indices
+
+    return TokenPosition(indexer, token_positions[0].pipeline, id=id)

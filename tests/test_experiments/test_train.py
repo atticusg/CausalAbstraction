@@ -4,29 +4,24 @@ Tests for experiments/train.py - DBM and DAS training functions.
 """
 
 import pytest
-from unittest.mock import MagicMock, patch, create_autospec
-from datasets import Dataset
+from unittest.mock import MagicMock, patch
 
 from causalab.experiments.train import train_interventions as train_intervention
-from causalab.experiments.configs.train_config import DEFAULT_CONFIG
+from causalab.experiments.configs.train_config import (
+    DEFAULT_CONFIG,
+    PartialExperimentConfig,
+)
 
 
-def create_mock_hf_dataset(size=5):
-    """Create a mock that passes isinstance(x, Dataset) check."""
-    mock = create_autospec(Dataset, instance=True)
-    mock.__len__ = MagicMock(return_value=size)
-    mock.__iter__ = MagicMock(
-        return_value=iter(
-            [
-                {
-                    "input": {"text": "test"},
-                    "counterfactual_inputs": [{"text": "cf"}],
-                }
-                for _ in range(size)
-            ]
-        )
-    )
-    return mock
+def create_mock_dataset(size: int = 5) -> list[dict[str, object]]:
+    """Create a mock counterfactual dataset as a list of dicts."""
+    return [
+        {
+            "input": {"text": "test", "raw_input": "test"},
+            "counterfactual_inputs": [{"text": "cf", "raw_input": "cf"}],
+        }
+        for _ in range(size)
+    ]
 
 
 class TestTrainInterventionValidation:
@@ -34,6 +29,9 @@ class TestTrainInterventionValidation:
 
     def test_rejects_invalid_intervention_type(self, tmp_path):
         """Test that invalid intervention_type raises ValueError."""
+        # Cast to PartialExperimentConfig to satisfy type checker
+        # (intentionally invalid value for testing)
+        config: PartialExperimentConfig = {"intervention_type": "invalid_type"}  # type: ignore[typeddict-item]
         with pytest.raises(ValueError, match="Invalid intervention_type"):
             train_intervention(
                 causal_model=MagicMock(),
@@ -44,13 +42,14 @@ class TestTrainInterventionValidation:
                 target_variable_group=("answer",),
                 output_dir=str(tmp_path / "output"),
                 metric=lambda x, y: True,
-                config={"intervention_type": "invalid_type"},
+                config=config,
             )
 
     def test_accepts_mask_intervention_type(self, tmp_path):
         """Test that 'mask' is a valid intervention_type."""
         # Should not raise on intervention_type validation
         # (will fail later on dataset loading, which is expected)
+        config: PartialExperimentConfig = {"intervention_type": "mask"}
         with pytest.raises(Exception) as exc_info:
             train_intervention(
                 causal_model=MagicMock(),
@@ -61,13 +60,14 @@ class TestTrainInterventionValidation:
                 target_variable_group=("answer",),
                 output_dir=str(tmp_path / "output"),
                 metric=lambda x, y: True,
-                config={"intervention_type": "mask"},
+                config=config,
             )
         # Should fail on dataset loading, not intervention_type
         assert "Invalid intervention_type" not in str(exc_info.value)
 
     def test_accepts_interchange_intervention_type(self, tmp_path):
         """Test that 'interchange' is a valid intervention_type."""
+        config: PartialExperimentConfig = {"intervention_type": "interchange"}
         with pytest.raises(Exception) as exc_info:
             train_intervention(
                 causal_model=MagicMock(),
@@ -78,7 +78,7 @@ class TestTrainInterventionValidation:
                 target_variable_group=("answer",),
                 output_dir=str(tmp_path / "output"),
                 metric=lambda x, y: True,
-                config={"intervention_type": "interchange"},
+                config=config,
             )
         assert "Invalid intervention_type" not in str(exc_info.value)
 
@@ -95,47 +95,11 @@ class TestTrainInterventionConfig:
         assert "training_epoch" in DEFAULT_CONFIG
         assert "init_lr" in DEFAULT_CONFIG
 
-    def test_mask_requires_featurizer_kwargs(self, tmp_path):
-        """Test that mask intervention requires featurizer_kwargs in config."""
-        # Create a config without featurizer_kwargs
-        config = {
-            "intervention_type": "mask",
-            "train_batch_size": 4,
-            "training_epoch": 1,
-        }
-
-        # Mock the dataset loading to get past that step
-        mock_hf_dataset = create_mock_hf_dataset(5)
-
-        # Create properly mocked CounterfactualDataset
-        mock_cf_dataset = MagicMock()
-        mock_cf_dataset.__len__ = MagicMock(return_value=5)
-        mock_cf_dataset.id = "test_dataset"
-
-        with (
-            patch(
-                "causalab.experiments.train.load_from_disk",
-                return_value=mock_hf_dataset,
-            ),
-            patch(
-                "causalab.experiments.train.CounterfactualDataset",
-                return_value=mock_cf_dataset,
-            ),
-        ):
-            with pytest.raises(ValueError, match="featurizer_kwargs"):
-                train_intervention(
-                    causal_model=MagicMock(),
-                    interchange_targets={
-                        ("test",): MagicMock(flatten=MagicMock(return_value=[]))
-                    },
-                    train_dataset_path=str(tmp_path),
-                    test_dataset_path=str(tmp_path),
-                    pipeline=MagicMock(),
-                    target_variable_group=("answer",),
-                    output_dir=str(tmp_path / "output"),
-                    metric=lambda x, y: True,
-                    config=config,
-                )
+    def test_default_config_includes_featurizer_kwargs(self):
+        """Test that DEFAULT_CONFIG includes featurizer_kwargs for mask interventions."""
+        # DEFAULT_CONFIG should have featurizer_kwargs with tie_masks
+        assert "featurizer_kwargs" in DEFAULT_CONFIG
+        assert "tie_masks" in DEFAULT_CONFIG["featurizer_kwargs"]
 
 
 class TestTrainInterventionExecution:
@@ -144,13 +108,8 @@ class TestTrainInterventionExecution:
     @pytest.fixture
     def mock_dependencies(self, tmp_path):
         """Set up common mocks for train_intervention tests."""
-        # Mock HuggingFace dataset
-        mock_hf_dataset = create_mock_hf_dataset(5)
-
-        # Mock CounterfactualDataset
-        mock_cf_dataset = MagicMock()
-        mock_cf_dataset.__len__ = MagicMock(return_value=5)
-        mock_cf_dataset.__iter__ = MagicMock(return_value=iter([]))
+        # Mock counterfactual dataset
+        mock_dataset = create_mock_dataset(5)
 
         # Mock InterchangeTarget
         mock_target = MagicMock()
@@ -175,8 +134,7 @@ class TestTrainInterventionExecution:
         )
 
         return {
-            "hf_dataset": mock_hf_dataset,
-            "cf_dataset": mock_cf_dataset,
+            "dataset": mock_dataset,
             "target": mock_target,
             "pipeline": mock_pipeline,
             "causal_model": mock_causal_model,
@@ -187,7 +145,7 @@ class TestTrainInterventionExecution:
         """Test that train_intervention calls the underlying training function."""
         mocks = mock_dependencies
 
-        config = {
+        config: PartialExperimentConfig = {
             "intervention_type": "mask",
             "train_batch_size": 2,
             "training_epoch": 1,
@@ -203,12 +161,8 @@ class TestTrainInterventionExecution:
 
         with (
             patch(
-                "causalab.experiments.train.load_from_disk",
-                return_value=mocks["hf_dataset"],
-            ),
-            patch(
-                "causalab.experiments.train.CounterfactualDataset",
-                return_value=mocks["cf_dataset"],
+                "causalab.experiments.train.load_counterfactual_examples",
+                return_value=mocks["dataset"],
             ),
             patch(
                 "causalab.experiments.train.train_interventions_pyvene"
@@ -246,7 +200,7 @@ class TestTrainInterventionExecution:
         """Test that train_intervention returns correct metadata structure."""
         mocks = mock_dependencies
 
-        config = {
+        config: PartialExperimentConfig = {
             "intervention_type": "mask",
             "train_batch_size": 2,
             "training_epoch": 1,
@@ -262,12 +216,8 @@ class TestTrainInterventionExecution:
 
         with (
             patch(
-                "causalab.experiments.train.load_from_disk",
-                return_value=mocks["hf_dataset"],
-            ),
-            patch(
-                "causalab.experiments.train.CounterfactualDataset",
-                return_value=mocks["cf_dataset"],
+                "causalab.experiments.train.load_counterfactual_examples",
+                return_value=mocks["dataset"],
             ),
             patch("causalab.experiments.train.train_interventions_pyvene"),
             patch(

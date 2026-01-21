@@ -4,18 +4,18 @@ Tests for experiments/metric.py - causal_score_intervention_outputs function.
 """
 
 import pytest
+from typing import Any
 from unittest.mock import MagicMock
 
 from causalab.experiments.metric import causal_score_intervention_outputs
 
 
-def create_mock_cf_dataset(size=3):
-    """Create a properly mocked CounterfactualDataset."""
-    mock = MagicMock()
-    mock.__len__ = MagicMock(return_value=size)
-    mock.__iter__ = MagicMock(return_value=iter([]))
-    mock.id = "test_dataset"
-    return mock
+def create_mock_cf_dataset(size: int = 3) -> Any:
+    """Create a list of mock CounterfactualExample dicts for testing."""
+    return [
+        {"input": {"text": f"input_{i}"}, "counterfactual_inputs": []}
+        for i in range(size)
+    ]
 
 
 class TestCausalScoreInterventionOutputs:

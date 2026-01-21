@@ -19,10 +19,14 @@ pytest.xml
 
 /.venv/
 
-/demos/onboarding_tutorial/*results/
+/demos/onboarding_tutorial/*result*/
 /demos/onboarding_tutorial/*logs/
-/demos/onboarding_tutorial/*datasets/
+/demos/onboarding_tutorial/*dataset*/
+/demos/onboarding_tutorial/*temp*/
 
-/tasks/**/*results
-/tasks/**/*datasets
-/tasks/**/*logs
+/causalab/tasks/**/*results
+/causalab/tasks/**/*datasets
+/causalab/tasks/**/*logs
+
+# NFS temp files
+.nfs*

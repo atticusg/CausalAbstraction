@@ -2,7 +2,8 @@
 
 import pytest
 import torch
-from unittest.mock import MagicMock, patch, ANY  # Added ANY import
+from typing import Any
+from unittest.mock import MagicMock, patch, ANY
 
 from causalab.neural.pyvene_core.interchange import run_interchange_interventions
 from causalab.neural.model_units import InterchangeTarget
@@ -10,19 +11,6 @@ from causalab.neural.model_units import InterchangeTarget
 
 class TestRunInterchangeInterventions:
     """Tests for the _run_interchange_interventions function."""
-
-    @pytest.fixture
-    def mock_counterfactual_dataset(self):
-        """Create a mock counterfactual dataset."""
-        # Create mock dataset with required features
-        mock_dataset = MagicMock()
-        mock_dataset.dataset = MagicMock()
-        mock_dataset.dataset.__getitem__.side_effect = lambda i: {
-            "input": f"input_{i}",
-            "counterfactual_inputs": [f"cf_{i}_1", f"cf_{i}_2"],
-        }
-        mock_dataset.dataset.__len__.return_value = 10
-        return mock_dataset
 
     @pytest.fixture
     def mock_intervenable_model(self):
@@ -33,9 +21,7 @@ class TestRunInterchangeInterventions:
         ]
         return mock_model
 
-    def test_basic_intervention_run(
-        self, mock_tiny_lm, model_units_list, mock_counterfactual_dataset
-    ):
+    def test_basic_intervention_run(self, mock_tiny_lm: Any, model_units_list: Any):
         """Test basic functionality for running interventions."""
         # Extract units from fixture and create InterchangeTarget
         model_units_sublist = model_units_list[0]
@@ -45,13 +31,11 @@ class TestRunInterchangeInterventions:
                 all_units.append(unit)
         interchange_target = InterchangeTarget([all_units])
 
-        # Create mock batches to be returned by dataloader
-        mock_batches = [
-            {
-                "input": ["input1", "input2"],
-                "counterfactual_inputs": [["cf1"], ["cf2"]],
-            },
-            {"input": ["input3"], "counterfactual_inputs": [["cf3"]]},
+        # Test dataset (mock data)
+        test_dataset: Any = [
+            {"input": "input1", "counterfactual_inputs": ["cf1"]},
+            {"input": "input2", "counterfactual_inputs": ["cf2"]},
+            {"input": "input3", "counterfactual_inputs": ["cf3"]},
         ]
 
         # Mock prepare_intervenable_model
@@ -67,24 +51,22 @@ class TestRunInterchangeInterventions:
             patch(
                 "causalab.neural.pyvene_core.interchange.delete_intervenable_model"
             ) as mock_delete,
-            patch(
-                "causalab.neural.pyvene_core.interchange.DataLoader",
-                return_value=mock_batches,
-            ),
         ):
             # Set up mock return values for batched_interchange_intervention
-            # Return different dicts (with sequences) for each batch to ensure results are properly collected
+            # With batch_size=2, we'll have 2 batches (2 examples, then 1 example)
             mock_batched.side_effect = [
-                {"sequences": torch.tensor([[1, 2, 3], [4, 5, 6]])},  # First batch
-                {"sequences": torch.tensor([[7, 8, 9]])},  # Second batch
+                {
+                    "sequences": torch.tensor([[1, 2, 3], [4, 5, 6]])
+                },  # First batch (2 examples)
+                {"sequences": torch.tensor([[7, 8, 9]])},  # Second batch (1 example)
             ]
 
-            # Call the function
+            # Call the function with batch_size=2
             results = run_interchange_interventions(
                 pipeline=mock_tiny_lm,
-                counterfactual_dataset=mock_counterfactual_dataset,
+                counterfactual_dataset=test_dataset,
                 interchange_target=interchange_target,
-                batch_size=6,
+                batch_size=2,
                 output_scores=False,
             )
 
@@ -103,9 +85,7 @@ class TestRunInterchangeInterventions:
             assert "sequences" in results
             assert len(results["sequences"]) == 2  # One per batch
 
-    def test_with_output_scores(
-        self, mock_tiny_lm, model_units_list, mock_counterfactual_dataset
-    ):
+    def test_with_output_scores(self, mock_tiny_lm: Any, model_units_list: Any):
         """Test when output_scores is an int (top-k format), verifying scores are properly returned."""
         # Extract units from fixture and create InterchangeTarget
         model_units_sublist = model_units_list[0]
@@ -115,13 +95,11 @@ class TestRunInterchangeInterventions:
                 all_units.append(unit)
         interchange_target = InterchangeTarget([all_units])
 
-        # Create mock batches to be returned by dataloader
-        mock_batches = [
-            {
-                "input": ["input1", "input2"],
-                "counterfactual_inputs": [["cf1"], ["cf2"]],
-            },
-            {"input": ["input3"], "counterfactual_inputs": [["cf3"]]},
+        # Test dataset (mock data)
+        test_dataset: Any = [
+            {"input": "input1", "counterfactual_inputs": ["cf1"]},
+            {"input": "input2", "counterfactual_inputs": ["cf2"]},
+            {"input": "input3", "counterfactual_inputs": ["cf3"]},
         ]
 
         # Mock prepare_intervenable_model
@@ -135,10 +113,6 @@ class TestRunInterchangeInterventions:
                 "causalab.neural.pyvene_core.interchange.batched_interchange_intervention"
             ) as mock_batched,
             patch("causalab.neural.pyvene_core.interchange.delete_intervenable_model"),
-            patch(
-                "causalab.neural.pyvene_core.interchange.DataLoader",
-                return_value=mock_batches,
-            ),
             # Also mock _convert_to_top_k to avoid actual conversion
             patch(
                 "causalab.neural.pyvene_core.interchange._convert_to_top_k"
@@ -146,7 +120,7 @@ class TestRunInterchangeInterventions:
         ):
             # For scores, we expect dict outputs with sequences and scores
             mock_output_batches = [
-                # First batch
+                # First batch (2 examples)
                 {
                     "sequences": torch.tensor([[1, 2, 3], [4, 5, 6]]),
                     "scores": [
@@ -155,7 +129,7 @@ class TestRunInterchangeInterventions:
                         ),
                     ],
                 },
-                # Second batch
+                # Second batch (1 example)
                 {
                     "sequences": torch.tensor([[7, 8, 9]]),
                     "scores": [
@@ -167,18 +141,24 @@ class TestRunInterchangeInterventions:
             # Mock _convert_to_top_k to return the same outputs (just pass through)
             mock_convert.return_value = mock_output_batches
 
-            # Call the function with output_scores=10 (top-k format)
+            # Call the function with output_scores=10 (top-k format), batch_size=2
             results = run_interchange_interventions(
                 pipeline=mock_tiny_lm,
-                counterfactual_dataset=mock_counterfactual_dataset,
+                counterfactual_dataset=test_dataset,
                 interchange_target=interchange_target,
-                batch_size=6,
+                batch_size=2,
                 output_scores=10,  # Use int for top-k format
             )
 
             # Verify that batched_interchange_intervention was called with output_scores=10
             mock_batched.assert_called_with(
-                mock_tiny_lm, mock_model, ANY, interchange_target, output_scores=10
+                mock_tiny_lm,
+                mock_model,
+                ANY,
+                interchange_target,
+                output_scores=10,
+                source_pipeline=None,
+                source_intervenable_model=None,
             )
 
             # Verify that _convert_to_top_k was called
@@ -188,9 +168,7 @@ class TestRunInterchangeInterventions:
             assert "sequences" in results
             assert "scores" in results
 
-    def test_with_tqdm_progress(
-        self, mock_tiny_lm, model_units_list, mock_counterfactual_dataset
-    ):
+    def test_with_tqdm_progress(self, mock_tiny_lm: Any, model_units_list: Any):
         """Test that tqdm progress is controlled by logging level."""
         # Extract units from fixture and create InterchangeTarget
         model_units_sublist = model_units_list[0]
@@ -200,9 +178,9 @@ class TestRunInterchangeInterventions:
                 all_units.append(unit)
         interchange_target = InterchangeTarget([all_units])
 
-        # Create mock batches to be returned by dataloader
-        mock_batches = [
-            {"input": ["input1"], "counterfactual_inputs": [["cf1"]]},
+        # Test dataset (mock data)
+        test_dataset: Any = [
+            {"input": "input1", "counterfactual_inputs": ["cf1"]},
         ]
 
         # Mock prepare_intervenable_model
@@ -217,30 +195,24 @@ class TestRunInterchangeInterventions:
                 return_value={"sequences": torch.tensor([[1, 2, 3]])},
             ),
             patch("causalab.neural.pyvene_core.interchange.delete_intervenable_model"),
-            patch(
-                "causalab.neural.pyvene_core.interchange.DataLoader",
-                return_value=mock_batches,
-            ),
             patch("causalab.neural.pyvene_core.interchange.tqdm") as mock_tqdm,
         ):
-            # Make tqdm return an iterable (the mock_batches)
-            mock_tqdm.return_value = mock_batches
+            # Make tqdm return an iterable over the range
+            mock_tqdm.return_value = range(0, 1, 1)
 
             # Call the function (tqdm is now controlled by logging level)
             run_interchange_interventions(
                 pipeline=mock_tiny_lm,
-                counterfactual_dataset=mock_counterfactual_dataset,
+                counterfactual_dataset=test_dataset,
                 interchange_target=interchange_target,
                 batch_size=6,
                 output_scores=False,
             )
 
-            # Verify that tqdm was used to wrap the dataloader
+            # Verify that tqdm was used to wrap the range
             mock_tqdm.assert_called_once()
 
-    def test_with_small_batch_size(
-        self, mock_tiny_lm, model_units_list, mock_counterfactual_dataset
-    ):
+    def test_with_small_batch_size(self, mock_tiny_lm: Any, model_units_list: Any):
         """Test behavior with a small batch size, requiring more processing batches."""
         # Extract units from fixture and create InterchangeTarget
         model_units_sublist = model_units_list[0]
@@ -250,13 +222,13 @@ class TestRunInterchangeInterventions:
                 all_units.append(unit)
         interchange_target = InterchangeTarget([all_units])
 
-        # Create mock batches - 5 batches to simulate small batch size processing
-        mock_batches = [
-            {"input": ["input1"], "counterfactual_inputs": [["cf1"]]},
-            {"input": ["input2"], "counterfactual_inputs": [["cf2"]]},
-            {"input": ["input3"], "counterfactual_inputs": [["cf3"]]},
-            {"input": ["input4"], "counterfactual_inputs": [["cf4"]]},
-            {"input": ["input5"], "counterfactual_inputs": [["cf5"]]},
+        # Test dataset (mock data) - 5 examples
+        test_dataset: Any = [
+            {"input": "input1", "counterfactual_inputs": ["cf1"]},
+            {"input": "input2", "counterfactual_inputs": ["cf2"]},
+            {"input": "input3", "counterfactual_inputs": ["cf3"]},
+            {"input": "input4", "counterfactual_inputs": ["cf4"]},
+            {"input": "input5", "counterfactual_inputs": ["cf5"]},
         ]
 
         # Mock prepare_intervenable_model
@@ -270,12 +242,8 @@ class TestRunInterchangeInterventions:
                 "causalab.neural.pyvene_core.interchange.batched_interchange_intervention"
             ) as mock_batched,
             patch("causalab.neural.pyvene_core.interchange.delete_intervenable_model"),
-            patch(
-                "causalab.neural.pyvene_core.interchange.DataLoader",
-                return_value=mock_batches,
-            ),
         ):
-            # Set up return values for each batch
+            # Set up return values for each batch (5 examples with batch_size=1 = 5 batches)
             mock_batched.side_effect = [
                 {"sequences": torch.tensor([[1, 2, 3]])},  # Batch 1
                 {"sequences": torch.tensor([[4, 5, 6]])},  # Batch 2
@@ -287,9 +255,9 @@ class TestRunInterchangeInterventions:
             # Call the function with a small batch size
             results = run_interchange_interventions(
                 pipeline=mock_tiny_lm,
-                counterfactual_dataset=mock_counterfactual_dataset,
+                counterfactual_dataset=test_dataset,
                 interchange_target=interchange_target,
-                batch_size=2,  # Small batch size
+                batch_size=1,  # Very small batch size - one example per batch
                 output_scores=False,
             )
 
@@ -300,9 +268,7 @@ class TestRunInterchangeInterventions:
             assert "sequences" in results
             assert len(results["sequences"]) == 5
 
-    def test_error_handling(
-        self, mock_tiny_lm, model_units_list, mock_counterfactual_dataset
-    ):
+    def test_error_handling(self, mock_tiny_lm: Any, model_units_list: Any):
         """Test handling of errors during intervention."""
         # Extract units from fixture and create InterchangeTarget
         model_units_sublist = model_units_list[0]
@@ -312,9 +278,9 @@ class TestRunInterchangeInterventions:
                 all_units.append(unit)
         interchange_target = InterchangeTarget([all_units])
 
-        # Create mock batches to be returned by dataloader
-        mock_batches = [
-            {"input": ["input1"], "counterfactual_inputs": [["cf1"]]},
+        # Test dataset (mock data)
+        test_dataset: Any = [
+            {"input": "input1", "counterfactual_inputs": ["cf1"]},
         ]
 
         # Mock prepare_intervenable_model
@@ -330,16 +296,12 @@ class TestRunInterchangeInterventions:
                 "causalab.neural.pyvene_core.interchange.batched_interchange_intervention",
                 side_effect=RuntimeError("Test error"),
             ),
-            patch(
-                "causalab.neural.pyvene_core.interchange.DataLoader",
-                return_value=mock_batches,
-            ),
         ):
             # Call the function - should propagate the error
             with pytest.raises(RuntimeError) as exc_info:
                 run_interchange_interventions(
                     pipeline=mock_tiny_lm,
-                    counterfactual_dataset=mock_counterfactual_dataset,
+                    counterfactual_dataset=test_dataset,
                     interchange_target=interchange_target,
                     batch_size=6,
                     output_scores=False,
@@ -348,7 +310,7 @@ class TestRunInterchangeInterventions:
             # Verify that the error message is as expected
             assert "Test error" in str(exc_info.value)
 
-    def test_empty_dataset(self, mock_tiny_lm, model_units_list):
+    def test_empty_dataset(self, mock_tiny_lm: Any, model_units_list: Any):
         """Test behavior with an empty dataset."""
         # Extract units from fixture and create InterchangeTarget
         model_units_sublist = model_units_list[0]
@@ -358,13 +320,8 @@ class TestRunInterchangeInterventions:
                 all_units.append(unit)
         interchange_target = InterchangeTarget([all_units])
 
-        # Create an empty dataset
-        empty_mock = MagicMock()
-        empty_mock.dataset = MagicMock()
-        empty_mock.dataset.__len__.return_value = 0
-
-        # Empty dataloader - no batches
-        mock_batches = []
+        # Empty dataset
+        empty_dataset = []
 
         # Mock prepare_intervenable_model
         mock_model = MagicMock()
@@ -379,17 +336,13 @@ class TestRunInterchangeInterventions:
             patch(
                 "causalab.neural.pyvene_core.interchange.delete_intervenable_model"
             ) as _mock_delete,
-            patch(
-                "causalab.neural.pyvene_core.interchange.DataLoader",
-                return_value=mock_batches,
-            ),
         ):
             # Call the function with an empty dataset - should raise IndexError due to empty all_outputs
             # The function tries to access all_outputs[0].keys() when restructuring
             with pytest.raises(IndexError):
                 run_interchange_interventions(
                     pipeline=mock_tiny_lm,
-                    counterfactual_dataset=empty_mock,
+                    counterfactual_dataset=empty_dataset,
                     interchange_target=interchange_target,
                     batch_size=6,
                     output_scores=False,

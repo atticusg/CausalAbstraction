@@ -5,13 +5,17 @@ This module provides interactive and static visualization methods for CausalMode
 including graph-based visualizations using Dash/Cytoscape and NetworkX/Matplotlib.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import matplotlib.pyplot as plt
 import networkx as nx
 from dash import Dash, html
 from dash.dependencies import Input, Output, State
-import dash_cytoscape as cyto
+import dash_cytoscape as cyto  # type: ignore[import-untyped]
+
+if TYPE_CHECKING:
+    from causalab.causal.causal_model import CausalModel
+    from causalab.causal.trace import CausalTrace
 
 
 class DEFAULT_COLORS:
@@ -24,7 +28,9 @@ class DEFAULT_COLORS:
     COUNTERFACTUAL_OUTPUT = "#A59FD9"
 
 
-def _get_descendants(model, intervention, strict=True):
+def _get_descendants(
+    model: "CausalModel", intervention: dict[str, Any], strict: bool = True
+) -> list[str]:
     """
     Breadth-first search to get variables affected by intervention.
 
@@ -62,7 +68,9 @@ def _get_descendants(model, intervention, strict=True):
     return descendants
 
 
-def display_structure(model, colors=DEFAULT_COLORS):
+def display_structure(
+    model: "CausalModel", colors: type[DEFAULT_COLORS] = DEFAULT_COLORS
+) -> None:
     """
     Visualize the structure of the causal model without any inputs.
 
@@ -163,7 +171,12 @@ def display_structure(model, colors=DEFAULT_COLORS):
     app.run()
 
 
-def display_forward_pass(model, inputs, intervention=None, colors=DEFAULT_COLORS):
+def display_forward_pass(
+    model: "CausalModel",
+    inputs: dict[str, Any],
+    intervention: dict[str, Any] | None = None,
+    colors: type[DEFAULT_COLORS] = DEFAULT_COLORS,
+) -> None:
     """
     Visualize a forward pass of the model.
 
@@ -188,7 +201,11 @@ def display_forward_pass(model, inputs, intervention=None, colors=DEFAULT_COLORS
     """
     if intervention is None:
         intervention = {}
-    outputs = model.run_forward({**inputs, **intervention})
+    # Create trace with inputs and apply any interventions
+    trace = model.new_trace(inputs)
+    for var, val in intervention.items():
+        trace.intervene(var, val)
+    outputs = trace.to_dict()
 
     intervention_only = _get_descendants(model, intervention)
     counterfactual = _get_descendants(model, intervention, strict=False)
@@ -325,10 +342,14 @@ def display_forward_pass(model, inputs, intervention=None, colors=DEFAULT_COLORS
     def on_moving_nodes(
         elements: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        # Build lookup dict for faster access
+        elements_by_id = {e["data"]["id"]: e for e in elements}
         for var in model.variables:
-            variable_node = [e for e in elements if e["data"]["id"] == var][0]
-            value_node = [e for e in elements if e["data"]["id"] == f"{var}-value"][0]
-            variable_node["position"] = value_node["position"]
+            variable_node = elements_by_id.get(var)
+            value_node = elements_by_id.get(f"{var}-value")
+            # Only sync if both nodes exist (value nodes created by onload)
+            if variable_node and value_node:
+                variable_node["position"] = value_node["position"]
         return elements
 
     app.callback(
@@ -340,7 +361,12 @@ def display_forward_pass(model, inputs, intervention=None, colors=DEFAULT_COLORS
     app.run()
 
 
-def display_interchange(model, inputs, counterfactual_inputs, colors=DEFAULT_COLORS):
+def display_interchange(
+    model: "CausalModel",
+    inputs: "dict[str, Any] | CausalTrace",
+    counterfactual_inputs: dict[str, Any],
+    colors: type[DEFAULT_COLORS] = DEFAULT_COLORS,
+) -> None:
     """
     Visualize an interchange intervention between a base input and counterfactual input(s).
 
@@ -363,7 +389,22 @@ def display_interchange(model, inputs, counterfactual_inputs, colors=DEFAULT_COL
     None
         Launches an interactive Dash application in the browser.
     """
-    outputs = model.run_interchange(inputs, counterfactual_inputs)
+    # Convert inputs to CausalTrace if needed
+    input_trace = model.new_trace(inputs) if isinstance(inputs, dict) else inputs
+
+    # Convert counterfactual_inputs values to CausalTrace objects if needed
+    cf_traces = {}
+    for var, cf_input in counterfactual_inputs.items():
+        if isinstance(cf_input, dict):
+            cf_traces[var] = model.new_trace(cf_input)
+        else:
+            cf_traces[var] = cf_input
+
+    # Perform interchange: copy base trace and intervene with counterfactual values
+    result_trace = input_trace.copy()
+    for var, cf_trace in cf_traces.items():
+        result_trace.intervene(var, cf_trace[var])
+    outputs = result_trace.to_dict()
 
     intervention_only = _get_descendants(model, counterfactual_inputs)
     counterfactual = _get_descendants(model, counterfactual_inputs, strict=False)
@@ -514,25 +555,31 @@ def display_interchange(model, inputs, counterfactual_inputs, colors=DEFAULT_COL
         # update layout to preset to fix node positions
         layout: dict[str, Any] = {"name": "preset"}
 
+        # Build lookup dict for faster access
+        elements_by_id = {e["data"]["id"]: e for e in elements}
+
         # set up source graphs
-        for i, source_inputs in enumerate(counterfactual_inputs.values()):
-            source_outputs = model.run_forward(source_inputs)
+        for i, (cf_key, source_trace) in enumerate(cf_traces.items()):
+            source_outputs = source_trace.to_dict()
+            original_inputs = counterfactual_inputs[cf_key]
             for variable, value in source_outputs.items():
-                if variable in source_inputs:
+                if variable in original_inputs:
                     classes = "source_input"
                 else:
                     classes = "source_value"
 
-                variable_node = [
-                    e for e in elements if e["data"]["id"] == f"{variable}-source-{i}"
-                ][0]
-                elements.append(
-                    {
-                        "data": {"id": f"{variable}-source-{i}-value", "label": value},
-                        "position": variable_node["position"],
-                        "classes": classes,
-                    }
-                )
+                variable_node = elements_by_id.get(f"{variable}-source-{i}")
+                if variable_node:
+                    elements.append(
+                        {
+                            "data": {
+                                "id": f"{variable}-source-{i}-value",
+                                "label": value,
+                            },
+                            "position": variable_node["position"],
+                            "classes": classes,
+                        }
+                    )
 
         # set up base graphs
         for variable, value in outputs.items():
@@ -550,14 +597,15 @@ def display_interchange(model, inputs, counterfactual_inputs, colors=DEFAULT_COL
                 classes = "base_value"
 
             # get original variable node
-            variable_node = [e for e in elements if e["data"]["id"] == variable][0]
-            elements.append(
-                {
-                    "data": {"id": f"{variable}-value", "label": value},
-                    "position": variable_node["position"],
-                    "classes": classes,
-                }
-            )
+            variable_node = elements_by_id.get(variable)
+            if variable_node:
+                elements.append(
+                    {
+                        "data": {"id": f"{variable}-value", "label": value},
+                        "position": variable_node["position"],
+                        "classes": classes,
+                    }
+                )
         return layout, elements
 
     app.callback(
@@ -573,13 +621,15 @@ def display_interchange(model, inputs, counterfactual_inputs, colors=DEFAULT_COL
         elements: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """make sure variable nodes follow their respective value nodes"""
+        # Build lookup dict for faster access
+        elements_by_id = {e["data"]["id"]: e for e in elements}
         for variable_node in elements:
             var_id = variable_node["data"]["id"]
             if not var_id.endswith("value") and "label" in variable_node["data"]:
-                value_node = [
-                    e for e in elements if e["data"]["id"] == f"{var_id}-value"
-                ][0]
-                variable_node["position"] = value_node["position"]
+                value_node = elements_by_id.get(f"{var_id}-value")
+                # Only sync if value node exists (created by onload)
+                if value_node:
+                    variable_node["position"] = value_node["position"]
         return elements
 
     app.callback(
@@ -591,7 +641,9 @@ def display_interchange(model, inputs, counterfactual_inputs, colors=DEFAULT_COL
     app.run()
 
 
-def print_structure(model, font=12, node_size=1000):
+def print_structure(
+    model: "CausalModel", font: int = 12, node_size: int = 1000
+) -> None:
     """
     Print the graph structure of the causal model.
 
@@ -631,7 +683,12 @@ def print_structure(model, font=12, node_size=1000):
     plt.show()
 
 
-def print_setting(model, total_setting, font=12, node_size=1000):
+def print_setting(
+    model: "CausalModel",
+    total_setting: dict[str, Any],
+    font: int = 12,
+    node_size: int = 1000,
+) -> None:
     """
     Print the graph with variable values.
 

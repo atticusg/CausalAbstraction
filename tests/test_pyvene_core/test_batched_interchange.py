@@ -105,6 +105,7 @@ class TestBatchedInterchangeIntervention:
                 batched_counterfactuals,
                 inv_locations,
                 feature_indices,
+                source_representations=None,
                 output_scores=True,
             )
 
@@ -170,6 +171,7 @@ class TestBatchedInterchangeIntervention:
                 batched_counterfactuals,
                 inv_locations,
                 feature_indices,
+                source_representations=None,
                 output_scores=True,
             )
 
@@ -233,52 +235,3 @@ class TestBatchedInterchangeIntervention:
                 for k, v in batched.items():
                     if isinstance(v, torch.Tensor):
                         assert v.device.type == "cpu"
-
-    # TODO: fix. i think maybe the typing is wrong
-    def test_non_tensor_handling(
-        self, mock_tiny_lm, model_units_list, mock_batch, mock_prepared_inputs
-    ):
-        """Test handling of non-tensor values in the batches."""
-        batched_base, batched_counterfactuals, inv_locations, feature_indices = (
-            mock_prepared_inputs
-        )
-
-        # Extract units from fixture and create InterchangeTarget
-        model_units_sublist = model_units_list[0]
-        all_units = []
-        for units in model_units_sublist:
-            for unit in units:
-                all_units.append(unit)
-        interchange_target = InterchangeTarget([all_units])
-
-        # Add non-tensor values to batches
-        batched_base["non_tensor"] = "string_value"
-        batched_counterfactuals[0]["non_tensor"] = ["list", "value"]
-        batched_counterfactuals[1]["non_tensor"] = {"dict": "value"}
-
-        # Mock intervenable model
-        mock_intervenable_model = MagicMock()
-
-        # Mock prepare_intervenable_inputs
-        with patch(
-            "causalab.neural.pyvene_core.interchange.prepare_intervenable_inputs",
-            return_value=(
-                batched_base,
-                batched_counterfactuals,
-                inv_locations,
-                feature_indices,
-            ),
-        ):
-            # Mock pipeline.intervenable_generate
-            expected_output = torch.tensor([[100, 101, 102], [103, 104, 105]])
-            mock_tiny_lm.intervenable_generate = MagicMock(return_value=expected_output)
-
-            # Call the function
-            batched_interchange_intervention(
-                mock_tiny_lm, mock_intervenable_model, mock_batch, interchange_target
-            )
-
-            # Verify that non-tensor values are still present and unchanged
-            assert batched_base["non_tensor"] == "string_value"
-            assert batched_counterfactuals[0]["non_tensor"] == ["list", "value"]
-            assert batched_counterfactuals[1]["non_tensor"] == {"dict": "value"}

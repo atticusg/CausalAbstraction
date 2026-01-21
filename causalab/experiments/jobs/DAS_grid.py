@@ -79,8 +79,7 @@ result = train_DAS(
 
 import logging
 import os
-import copy
-from typing import Dict, Any, Callable, Optional, Tuple
+from typing import Dict, Any, Callable, Tuple
 
 import numpy as np
 
@@ -88,7 +87,10 @@ from causalab.neural.pipeline import LMPipeline
 from causalab.neural.model_units import InterchangeTarget
 from causalab.causal.causal_model import CausalModel
 from causalab.experiments.train import train_interventions
-from causalab.experiments.configs.train_config import DEFAULT_CONFIG
+from causalab.experiments.configs.train_config import (
+    ExperimentConfigInput,
+    merge_with_defaults,
+)
 from causalab.experiments.visualizations import (
     detect_component_type_from_targets,
     extract_grid_dimensions_from_targets,
@@ -108,9 +110,10 @@ def train_DAS(
     target_variable_group: Tuple[str, ...],
     output_dir: str,
     metric: Callable[[Any, Any], bool],
-    config: Optional[Dict[str, Any]] = None,
+    config: ExperimentConfigInput = None,
     save_results: bool = True,
     verbose: bool = True,
+    source_pipeline: LMPipeline | None = None,
 ) -> Dict[str, Any]:
     """
     Train DAS models on any component type.
@@ -127,7 +130,7 @@ def train_DAS(
                             Should use mode="one_target_per_unit".
         train_dataset_path: Path to filtered training dataset directory
         test_dataset_path: Path to filtered test dataset directory
-        pipeline: LMPipeline object with loaded model
+        pipeline: Target LMPipeline where interventions are applied
         target_variable_group: Tuple of target variable names (e.g., ("answer",) or ("answer", "position"))
         output_dir: Output directory for results and models
         metric: Function to compare neural output with expected output
@@ -135,6 +138,8 @@ def train_DAS(
                 (default: DEFAULT_CONFIG with DAS settings)
         save_results: Whether to save metadata and results to disk (default: True)
         verbose: Whether to print progress information
+        source_pipeline: If provided, collect activations from this pipeline instead
+            of the target pipeline. Enables cross-model patching.
 
     Returns:
         Dictionary containing:
@@ -160,10 +165,9 @@ def train_DAS(
         component_type, interchange_targets
     )
 
-    # Setup configuration
+    # Setup configuration - merge with defaults
     if config is None:
-        config = copy.deepcopy(DEFAULT_CONFIG)
-        config.update(
+        config = merge_with_defaults(
             {
                 "intervention_type": "interchange",
                 "train_batch_size": 32,
@@ -172,10 +176,11 @@ def train_DAS(
                 "training_epoch": 4,
                 "init_lr": 0.001,
                 "log_dir": os.path.join(output_dir, "logs"),
+                "DAS": {"n_features": 32},
             }
         )
-        config["DAS"] = {"n_features": 32}
     else:
+        config = merge_with_defaults(config)
         # Ensure intervention_type is set for DAS
         config["intervention_type"] = "interchange"
 
@@ -193,6 +198,7 @@ def train_DAS(
         metric=metric,
         config=config,
         save_results=save_results,
+        source_pipeline=source_pipeline,
     )
 
     # Extract scores from result

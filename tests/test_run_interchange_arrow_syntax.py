@@ -1,5 +1,6 @@
 import unittest
 from causalab.causal.causal_model import CausalModel
+from causalab.causal.trace import Mechanism, input_var
 
 
 class TestRunInterchangeArrowSyntax(unittest.TestCase):
@@ -15,7 +16,6 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
         # Create a simple model with two separate chains
         # Chain 1: X -> Y -> Z
         # Chain 2: A -> B -> C
-        variables = ["X", "A", "Y", "B", "Z", "C", "raw_input", "raw_output"]
 
         values = {
             "X": [0, 1, 2],
@@ -28,69 +28,36 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
             "raw_output": None,
         }
 
-        parents = {
-            "X": [],
-            "A": [],
-            "Y": ["X"],
-            "B": ["A"],
-            "Z": ["Y"],
-            "C": ["B"],
-            "raw_input": ["X", "A"],
-            "raw_output": ["Z", "C"],
-        }
-
-        def X():
-            return 1
-
-        def A():
-            return 2
-
-        def Y(x):
-            return x + 1
-
-        def B(a):
-            return a + 1
-
-        def Z(y):
-            return y + 1
-
-        def C(b):
-            return b + 1
-
-        def raw_input(x, a):
-            return f"X={x}, A={a}"
-
-        def raw_output(z, c):
-            return f"Z={z}, C={c}"
-
         mechanisms = {
-            "X": X,
-            "A": A,
-            "Y": Y,
-            "B": B,
-            "Z": Z,
-            "C": C,
-            "raw_input": raw_input,
-            "raw_output": raw_output,
+            "X": input_var([0, 1, 2]),
+            "A": input_var([0, 1, 2]),
+            "Y": Mechanism(parents=["X"], compute=lambda t: t["X"] + 1),
+            "B": Mechanism(parents=["A"], compute=lambda t: t["A"] + 1),
+            "Z": Mechanism(parents=["Y"], compute=lambda t: t["Y"] + 1),
+            "C": Mechanism(parents=["B"], compute=lambda t: t["B"] + 1),
+            "raw_input": Mechanism(
+                parents=["X", "A"], compute=lambda t: f"X={t['X']}, A={t['A']}"
+            ),
+            "raw_output": Mechanism(
+                parents=["Z", "C"], compute=lambda t: f"Z={t['Z']}, C={t['C']}"
+            ),
         }
 
-        self.model = CausalModel(
-            variables, values, parents, mechanisms, id="test_model"
-        )
+        self.model = CausalModel(mechanisms, values, id="test_model")
 
     def test_original_syntax_still_works(self):
         """Test that the original syntax (without arrow) still works correctly."""
         # Original input: X=1, A=2
         # This should produce: Y=2, B=3, Z=3, C=4
-        original_input = {"X": 1, "A": 2}
+        original_trace = self.model.new_trace({"X": 1, "A": 2})
 
         # Counterfactual input: X=0, A=0
         # This should produce: Y=1, B=1, Z=2, C=2
-        counterfactual_input = {"X": 0, "A": 0}
+        counterfactual_trace = self.model.new_trace({"X": 0, "A": 0})
 
         # Interchange on Y (using original syntax)
         # Take Y from counterfactual (Y=1) and use it in original
-        result = self.model.run_interchange(original_input, {"Y": counterfactual_input})
+        result = self.model.run_interchange(original_trace, {"Y": counterfactual_trace})
 
         # Y should be 1 (from counterfactual), Z should be 2 (Y+1)
         # C should be 4 (from original path)
@@ -102,16 +69,16 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
         """Test basic arrow syntax functionality."""
         # Original input: X=1, A=2
         # This produces: Y=2, B=3, Z=3, C=4
-        original_input = {"X": 1, "A": 2}
+        original_trace = self.model.new_trace({"X": 1, "A": 2})
 
         # Counterfactual input: X=0, A=0
         # This produces: Y=1, B=1, Z=2, C=2
-        counterfactual_input = {"X": 0, "A": 0}
+        counterfactual_trace = self.model.new_trace({"X": 0, "A": 0})
 
         # Use arrow syntax: "Y<-B"
         # This should take B from counterfactual (B=1) and use it for Y in original
         result = self.model.run_interchange(
-            original_input, {"Y<-B": counterfactual_input}
+            original_trace, {"Y<-B": counterfactual_trace}
         )
 
         # Y should be 1 (from counterfactual B)
@@ -124,12 +91,12 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
 
     def test_arrow_syntax_with_spaces(self):
         """Test that arrow syntax works with spaces around the arrow."""
-        original_input = {"X": 1, "A": 2}
-        counterfactual_input = {"X": 0, "A": 0}
+        original_trace = self.model.new_trace({"X": 1, "A": 2})
+        counterfactual_trace = self.model.new_trace({"X": 0, "A": 0})
 
         # Test with spaces: "Y <- B"
         result = self.model.run_interchange(
-            original_input, {"Y <- B": counterfactual_input}
+            original_trace, {"Y <- B": counterfactual_trace}
         )
 
         self.assertEqual(result["Y"], 1)
@@ -140,15 +107,16 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
     def test_arrow_syntax_swap_chains(self):
         """Test swapping values between two independent chains."""
         # Original: X=1 -> Y=2 -> Z=3, A=2 -> B=3 -> C=4
-        original_input = {"X": 1, "A": 2}
+        original_trace = self.model.new_trace({"X": 1, "A": 2})
 
         # Counterfactual: X=0 -> Y=1 -> Z=2, A=0 -> B=1 -> C=2
-        counterfactual_input = {"X": 0, "A": 0}
+        counterfactual_trace = self.model.new_trace({"X": 0, "A": 0})
 
         # Swap: Use B's value from counterfactual for Y in original
         # and Y's value from counterfactual for B in original
         result = self.model.run_interchange(
-            original_input, {"Y<-B": counterfactual_input, "B<-Y": counterfactual_input}
+            original_trace,
+            {"Y<-B": counterfactual_trace, "B<-Y": counterfactual_trace},
         )
 
         # Y should be 1 (from counterfactual B=1)
@@ -162,15 +130,15 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
 
     def test_arrow_syntax_mixed_with_regular(self):
         """Test mixing arrow syntax with regular syntax in the same interchange."""
-        original_input = {"X": 1, "A": 2}
-        counterfactual_input = {"X": 0, "A": 0}
+        original_trace = self.model.new_trace({"X": 1, "A": 2})
+        counterfactual_trace = self.model.new_trace({"X": 0, "A": 0})
 
         # Mix arrow syntax and regular syntax
         result = self.model.run_interchange(
-            original_input,
+            original_trace,
             {
-                "Y<-B": counterfactual_input,  # Arrow syntax
-                "B": counterfactual_input,  # Regular syntax
+                "Y<-B": counterfactual_trace,  # Arrow syntax
+                "B": counterfactual_trace,  # Regular syntax
             },
         )
 
@@ -185,15 +153,15 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
 
     def test_arrow_syntax_different_counterfactuals(self):
         """Test arrow syntax with different counterfactual inputs for different variables."""
-        original_input = {"X": 1, "A": 2}
+        original_trace = self.model.new_trace({"X": 1, "A": 2})
 
         # Two different counterfactual inputs
-        counterfactual_1 = {"X": 0, "A": 0}  # Produces Y=1, B=1
-        counterfactual_2 = {"X": 2, "A": 2}  # Produces Y=3, B=3
+        counterfactual_1 = self.model.new_trace({"X": 0, "A": 0})  # Y=1, B=1
+        counterfactual_2 = self.model.new_trace({"X": 2, "A": 2})  # Y=3, B=3
 
         # Use different counterfactuals for different interventions
         result = self.model.run_interchange(
-            original_input,
+            original_trace,
             {
                 "Y<-B": counterfactual_1,  # Y gets B from counterfactual_1 (B=1)
                 "B<-Y": counterfactual_2,  # B gets Y from counterfactual_2 (Y=3)
@@ -211,12 +179,12 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
 
     def test_arrow_syntax_input_variable(self):
         """Test arrow syntax with input variables."""
-        original_input = {"X": 1, "A": 2}
-        counterfactual_input = {"X": 0, "A": 0}
+        original_trace = self.model.new_trace({"X": 1, "A": 2})
+        counterfactual_trace = self.model.new_trace({"X": 0, "A": 0})
 
         # Use arrow syntax to swap input variables
         result = self.model.run_interchange(
-            original_input, {"X<-A": counterfactual_input}
+            original_trace, {"X<-A": counterfactual_trace}
         )
 
         # X should be 0 (from counterfactual A=0)
@@ -234,12 +202,12 @@ class TestRunInterchangeArrowSyntax(unittest.TestCase):
 
     def test_arrow_syntax_same_variable_name(self):
         """Test that arrow syntax works even when using the same variable name on both sides."""
-        original_input = {"X": 1, "A": 2}
-        counterfactual_input = {"X": 0, "A": 0}
+        original_trace = self.model.new_trace({"X": 1, "A": 2})
+        counterfactual_trace = self.model.new_trace({"X": 0, "A": 0})
 
         # Use "Y<-Y" which should behave like the regular syntax
         result = self.model.run_interchange(
-            original_input, {"Y<-Y": counterfactual_input}
+            original_trace, {"Y<-Y": counterfactual_trace}
         )
 
         # Should behave the same as regular syntax "Y"

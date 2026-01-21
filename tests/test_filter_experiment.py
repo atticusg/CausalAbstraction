@@ -1,16 +1,16 @@
 """
 Test suite for experiments/filter.py
 
-Tests the filter_dataset() function which filters CounterfactualDatasets
+Tests the filter_dataset() function which filters list[CounterfactualExample]
 based on agreement between neural pipeline and causal model outputs.
 """
 
 import pytest
+from typing import Any
 from unittest import mock
 import torch
 
 from causalab.experiments.filter import filter_dataset
-from causalab.causal.counterfactual_dataset import CounterfactualDataset
 
 
 # ---------------------- Fixtures ---------------------- #
@@ -25,29 +25,37 @@ def mock_pipeline():
 
 @pytest.fixture
 def mock_causal_model():
-    """Create a mock causal model with run_forward method."""
+    """Create a mock causal model with new_trace method."""
     causal_model = mock.MagicMock()
     return causal_model
 
 
 @pytest.fixture
 def simple_dataset():
-    """Create a simple CounterfactualDataset with 3 examples."""
-    return CounterfactualDataset.from_dict(
+    """Create a simple list of mock CounterfactualExample dicts for testing."""
+    return [
         {
-            "input": [
-                {"text": "input_0"},
-                {"text": "input_1"},
-                {"text": "input_2"},
-            ],
+            "input": {"text": "input_0", "raw_output": "expected_0"},
             "counterfactual_inputs": [
-                [{"text": "cf_0_0"}, {"text": "cf_0_1"}],
-                [{"text": "cf_1_0"}, {"text": "cf_1_1"}],
-                [{"text": "cf_2_0"}, {"text": "cf_2_1"}],
+                {"text": "cf_0_0", "raw_output": "cf_expected_0_0"},
+                {"text": "cf_0_1", "raw_output": "cf_expected_0_1"},
             ],
         },
-        id="test_dataset",
-    )
+        {
+            "input": {"text": "input_1", "raw_output": "expected_1"},
+            "counterfactual_inputs": [
+                {"text": "cf_1_0", "raw_output": "cf_expected_1_0"},
+                {"text": "cf_1_1", "raw_output": "cf_expected_1_1"},
+            ],
+        },
+        {
+            "input": {"text": "input_2", "raw_output": "expected_2"},
+            "counterfactual_inputs": [
+                {"text": "cf_2_0", "raw_output": "cf_expected_2_0"},
+                {"text": "cf_2_1", "raw_output": "cf_expected_2_1"},
+            ],
+        },
+    ]
 
 
 @pytest.fixture
@@ -98,12 +106,6 @@ class TestFilterDataset:
             ],
         }
 
-        # Setup causal model to return expected outputs
-        mock_causal_model.run_forward.return_value = {
-            "raw_output": "expected",
-            "raw_input": "raw",
-        }
-
         result = filter_dataset(
             simple_dataset,
             mock_pipeline,
@@ -112,12 +114,11 @@ class TestFilterDataset:
         )
 
         assert len(result) == 3
-        assert result.id == "test_dataset"
 
     def test_filter_all_fail(
         self, mock_pipeline, mock_causal_model, simple_dataset, metric_all_fail
     ):
-        """No examples pass metric check - raises IndexError due to empty dataset creation."""
+        """No examples pass metric check - empty list returned."""
         mock_pipeline.compute_outputs.return_value = {
             "base_outputs": [
                 {"string": "out_0", "sequences": torch.tensor([[0]])},
@@ -134,19 +135,15 @@ class TestFilterDataset:
             ],
         }
 
-        mock_causal_model.run_forward.return_value = {
-            "raw_output": "expected",
-            "raw_input": "raw",
-        }
+        result = filter_dataset(
+            simple_dataset,
+            mock_pipeline,
+            mock_causal_model,
+            metric_all_fail,
+        )
 
-        # CounterfactualDataset doesn't support empty datasets (tries to access [0])
-        with pytest.raises(IndexError):
-            filter_dataset(
-                simple_dataset,
-                mock_pipeline,
-                mock_causal_model,
-                metric_all_fail,
-            )
+        # Now returns empty list instead of raising IndexError
+        assert len(result) == 0
 
     def test_filter_mixed_results(
         self, mock_pipeline, mock_causal_model, simple_dataset
@@ -169,7 +166,7 @@ class TestFilterDataset:
         }
 
         # Return different expected values for each call
-        mock_causal_model.run_forward.return_value = {
+        mock_causal_model.new_trace.return_value = {
             "raw_output": "expected",
             "raw_input": "raw",
         }
@@ -212,11 +209,6 @@ class TestFilterDataset:
             ],
         }
 
-        mock_causal_model.run_forward.return_value = {
-            "raw_output": "expected",
-            "raw_input": "raw",
-        }
-
         metric_calls = []
 
         def tracking_metric(pred, expected):
@@ -224,15 +216,15 @@ class TestFilterDataset:
             # Fail all base inputs
             return "cf_" in pred.get("string", "")
 
-        # All bases fail -> empty dataset -> IndexError from CounterfactualDataset
-        with pytest.raises(IndexError):
-            filter_dataset(
-                simple_dataset,
-                mock_pipeline,
-                mock_causal_model,
-                tracking_metric,
-            )
+        result = filter_dataset(
+            simple_dataset,
+            mock_pipeline,
+            mock_causal_model,
+            tracking_metric,
+        )
 
+        # All bases fail -> empty list returned
+        assert len(result) == 0
         # Should only have 3 calls (one per base input), no CF calls since bases fail
         assert len(metric_calls) == 3
 
@@ -256,11 +248,6 @@ class TestFilterDataset:
             ],
         }
 
-        mock_causal_model.run_forward.return_value = {
-            "raw_output": "expected",
-            "raw_input": "raw",
-        }
-
         call_count = [0]
 
         def base_pass_cf_fail(pred, expected):
@@ -269,26 +256,35 @@ class TestFilterDataset:
             # Pass base (idx 0), fail first CF (idx 1)
             return idx == 0
 
-        # All examples excluded -> empty dataset -> IndexError
-        with pytest.raises(IndexError):
-            filter_dataset(
-                simple_dataset,
-                mock_pipeline,
-                mock_causal_model,
-                base_pass_cf_fail,
-            )
+        result = filter_dataset(
+            simple_dataset,
+            mock_pipeline,
+            mock_causal_model,
+            base_pass_cf_fail,
+        )
+
+        # All examples excluded -> empty list
+        assert len(result) == 0
 
     def test_filter_empty_dataset(
         self, mock_pipeline, mock_causal_model, metric_all_pass
     ):
-        """Empty input dataset - CounterfactualDataset doesn't support empty datasets."""
-        # CounterfactualDataset.from_dict raises IndexError for empty datasets
-        # because it tries to access dataset[0] in __init__
-        with pytest.raises(IndexError):
-            CounterfactualDataset.from_dict(
-                {"input": [], "counterfactual_inputs": []},
-                id="empty",
-            )
+        """Empty input dataset - returns empty list."""
+        empty_dataset = []
+
+        mock_pipeline.compute_outputs.return_value = {
+            "base_outputs": [],
+            "counterfactual_outputs": [],
+        }
+
+        result = filter_dataset(
+            empty_dataset,
+            mock_pipeline,
+            mock_causal_model,
+            metric_all_pass,
+        )
+
+        assert len(result) == 0
 
     def test_filter_validate_counterfactuals_false(
         self, mock_pipeline, mock_causal_model, simple_dataset
@@ -310,7 +306,7 @@ class TestFilterDataset:
             ],
         }
 
-        mock_causal_model.run_forward.return_value = {
+        mock_causal_model.new_trace.return_value = {
             "raw_output": "expected",
             "raw_input": "raw",
         }
@@ -333,17 +329,19 @@ class TestFilterDataset:
         assert len(metric_calls) == 3
         assert len(result) == 3
 
-    def test_filter_preserves_dataset_id(
+    def test_filter_preserves_example_data(
         self, mock_pipeline, mock_causal_model, metric_all_pass
     ):
-        """Filtered dataset preserves the original dataset id."""
-        dataset = CounterfactualDataset.from_dict(
+        """Filtered dataset preserves the original example data."""
+        # Mock data for testing
+        dataset: Any = [
             {
-                "input": [{"text": "input_0"}],
-                "counterfactual_inputs": [[{"text": "cf_0"}]],
+                "input": {"text": "input_0", "raw_output": "expected_0"},
+                "counterfactual_inputs": [
+                    {"text": "cf_0", "raw_output": "cf_expected_0"}
+                ],
             },
-            id="my_custom_id",
-        )
+        ]
 
         mock_pipeline.compute_outputs.return_value = {
             "base_outputs": [
@@ -354,11 +352,6 @@ class TestFilterDataset:
             ],
         }
 
-        mock_causal_model.run_forward.return_value = {
-            "raw_output": "expected",
-            "raw_input": "raw",
-        }
-
         result = filter_dataset(
             dataset,
             mock_pipeline,
@@ -366,4 +359,5 @@ class TestFilterDataset:
             metric_all_pass,
         )
 
-        assert result.id == "my_custom_id"
+        assert len(result) == 1
+        assert result[0]["input"]["text"] == "input_0"

@@ -9,6 +9,8 @@ These tests assume:
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 import torch
 
@@ -150,26 +152,35 @@ class MockPipeline:
     def load(
         self,
         input_dict,
-        add_special_tokens=False,
-        return_offsets_mapping=False,
-        no_padding=False,
+        add_special_tokens: bool = False,
+        no_padding: bool = False,
+        return_offsets_mapping: bool = False,
     ):
         result = {
             "input_ids": torch.tensor([[i for i in range(len(self.tokenizer.tokens))]])
         }
-
         if return_offsets_mapping:
-            # Generate character offsets for each token
+            # Generate offset mapping from tokenizer tokens
             offsets = []
             pos = 0
             for token in self.tokenizer.tokens:
                 start = pos
                 end = pos + len(token)
-                offsets.append((start, end))
+                offsets.append([start, end])
                 pos = end
-            result["offset_mapping"] = [offsets]
-
+            result["offset_mapping"] = torch.tensor([offsets])
         return result
+
+    def get_token_offsets(self, trace: Any, add_special_tokens: bool = True):
+        """Get character-to-token offset mapping for a single trace."""
+        offsets = []
+        pos = 0
+        for token in self.tokenizer.tokens:
+            start = pos
+            end = pos + len(token)
+            offsets.append((start, end))
+            pos = end
+        return offsets
 
 
 def test_get_substring_token_ids_single_token():
@@ -460,7 +471,7 @@ class TestGetSubstringTokenIdsRealTokenizers:
         assert len(result) > 0
 
         # Verify the tokens actually contain the substring
-        token_ids = gpt2_pipeline.load({"raw_input": text})["input_ids"][0]
+        token_ids = gpt2_pipeline.tokenizer(text, return_tensors="pt")["input_ids"][0]
         selected_tokens = [token_ids[i].item() for i in result]
         decoded = gpt2_pipeline.tokenizer.decode(selected_tokens)
 
@@ -478,7 +489,7 @@ class TestGetSubstringTokenIdsRealTokenizers:
         assert len(result) > 0
 
         # Verify the selection includes the space
-        token_ids = gpt2_pipeline.load({"raw_input": text})["input_ids"][0]
+        token_ids = gpt2_pipeline.tokenizer(text, return_tensors="pt")["input_ids"][0]
         selected_tokens = [token_ids[i].item() for i in result]
         decoded = gpt2_pipeline.tokenizer.decode(selected_tokens)
 
@@ -497,7 +508,7 @@ class TestGetSubstringTokenIdsRealTokenizers:
         assert len(result) > 0
 
         # Verify tokens include the substring
-        token_ids = gpt2_pipeline.load({"raw_input": text})["input_ids"][0]
+        token_ids = gpt2_pipeline.tokenizer(text, return_tensors="pt")["input_ids"][0]
         selected_tokens = [token_ids[i].item() for i in result]
         decoded = gpt2_pipeline.tokenizer.decode(selected_tokens)
 
@@ -514,7 +525,7 @@ class TestGetSubstringTokenIdsRealTokenizers:
         assert len(result) >= 3  # At least 3 tokens for these words
 
         # Verify all words are covered
-        token_ids = gpt2_pipeline.load({"raw_input": text})["input_ids"][0]
+        token_ids = gpt2_pipeline.tokenizer(text, return_tensors="pt")["input_ids"][0]
         selected_tokens = [token_ids[i].item() for i in result]
         decoded = gpt2_pipeline.tokenizer.decode(selected_tokens)
 
@@ -532,7 +543,7 @@ class TestGetSubstringTokenIdsRealTokenizers:
         assert isinstance(result, list)
         assert len(result) > 0
 
-        token_ids = gpt2_pipeline.load({"raw_input": text})["input_ids"][0]
+        token_ids = gpt2_pipeline.tokenizer(text, return_tensors="pt")["input_ids"][0]
         selected_tokens = [token_ids[i].item() for i in result]
         decoded = gpt2_pipeline.tokenizer.decode(selected_tokens)
 
@@ -561,7 +572,7 @@ class TestGetSubstringTokenIdsRealTokenizers:
         assert len(result) > 0
 
         # Verify the tokens actually contain the substring
-        token_ids = olmo_pipeline.load({"raw_input": text})["input_ids"][0]
+        token_ids = olmo_pipeline.tokenizer(text, return_tensors="pt")["input_ids"][0]
         selected_tokens = [token_ids[i].item() for i in result]
         decoded = olmo_pipeline.tokenizer.decode(selected_tokens)
 
@@ -579,7 +590,7 @@ class TestGetSubstringTokenIdsRealTokenizers:
         assert len(result) > 0
 
         # Verify the selection includes the space
-        token_ids = olmo_pipeline.load({"raw_input": text})["input_ids"][0]
+        token_ids = olmo_pipeline.tokenizer(text, return_tensors="pt")["input_ids"][0]
         selected_tokens = [token_ids[i].item() for i in result]
         decoded = olmo_pipeline.tokenizer.decode(selected_tokens)
 
@@ -600,11 +611,11 @@ class TestGetSubstringTokenIdsRealTokenizers:
         assert len(olmo_result) > 0
 
         # Verify both selections decode to contain the substring
-        gpt2_tokens = gpt2_pipeline.load({"raw_input": text})["input_ids"][0]
+        gpt2_tokens = gpt2_pipeline.tokenizer(text, return_tensors="pt")["input_ids"][0]
         gpt2_selected = [gpt2_tokens[i].item() for i in gpt2_result]
         gpt2_decoded = gpt2_pipeline.tokenizer.decode(gpt2_selected)
 
-        olmo_tokens = olmo_pipeline.load({"raw_input": text})["input_ids"][0]
+        olmo_tokens = olmo_pipeline.tokenizer(text, return_tensors="pt")["input_ids"][0]
         olmo_selected = [olmo_tokens[i].item() for i in olmo_result]
         olmo_decoded = olmo_pipeline.tokenizer.decode(olmo_selected)
 
@@ -633,5 +644,5 @@ class TestGetSubstringTokenIdsRealTokenizers:
         assert len(result) > 0
 
         # Should include the last token
-        token_ids = gpt2_pipeline.load({"raw_input": text})["input_ids"][0]
+        token_ids = gpt2_pipeline.tokenizer(text, return_tensors="pt")["input_ids"][0]
         assert (len(token_ids) - 1) in result

@@ -106,7 +106,7 @@ class TestTrainInterventions:
             "patience": None,
             "scheduler_type": "constant",
             "masking": {
-                "regularization_coefficient": 1e-4,
+                "regularization_coefficient": 0.1,
                 "temperature_schedule": (1.0, 0.01),
                 "temperature_annealing_fraction": 0.5,
             },
@@ -123,10 +123,6 @@ class TestTrainInterventions:
         mock_config,
     ):
         """Test training with interchange intervention type."""
-        mock_batches = [
-            {"input": ["input1"], "counterfactual_inputs": [["cf1"]]},
-        ]
-
         mock_scheduler = MagicMock()
         mock_scheduler.get_last_lr.return_value = [0.001]
         mock_scheduler._step_count = 0
@@ -137,10 +133,6 @@ class TestTrainInterventions:
                 return_value=mock_intervenable_model,
             ) as mock_prepare,
             patch("causalab.neural.pyvene_core.interchange.delete_intervenable_model"),
-            patch(
-                "causalab.neural.pyvene_core.interchange.DataLoader",
-                return_value=mock_batches,
-            ),
             patch("causalab.neural.pyvene_core.interchange.tqdm", MockTqdm),
             patch("torch.optim.AdamW", return_value=MagicMock()),
             patch(
@@ -180,10 +172,6 @@ class TestTrainInterventions:
         mock_config,
     ):
         """Test training with mask intervention type."""
-        mock_batches = [
-            {"input": ["input1"], "counterfactual_inputs": [["cf1"]]},
-        ]
-
         mock_scheduler = MagicMock()
         mock_scheduler.get_last_lr.return_value = [0.001]
         mock_scheduler._step_count = 0
@@ -194,10 +182,6 @@ class TestTrainInterventions:
                 return_value=mock_intervenable_model,
             ) as mock_prepare,
             patch("causalab.neural.pyvene_core.interchange.delete_intervenable_model"),
-            patch(
-                "causalab.neural.pyvene_core.interchange.DataLoader",
-                return_value=mock_batches,
-            ),
             patch("causalab.neural.pyvene_core.interchange.tqdm", MockTqdm),
             patch("torch.optim.AdamW", return_value=MagicMock()),
             patch(
@@ -235,10 +219,6 @@ class TestTrainInterventions:
         mock_config["patience"] = 1
         mock_config["training_epoch"] = 10  # More epochs than we'll run
 
-        mock_batches = [
-            {"input": ["input1"], "counterfactual_inputs": [["cf1"]]},
-        ]
-
         # Track loss values - start low then increase to trigger early stopping
         loss_call_count = [0]
 
@@ -262,10 +242,6 @@ class TestTrainInterventions:
                 return_value=mock_intervenable_model,
             ),
             patch("causalab.neural.pyvene_core.interchange.delete_intervenable_model"),
-            patch(
-                "causalab.neural.pyvene_core.interchange.DataLoader",
-                return_value=mock_batches,
-            ),
             patch("causalab.neural.pyvene_core.interchange.tqdm", MockTqdm),
             patch("torch.optim.AdamW", return_value=MagicMock()),
             patch(
@@ -297,14 +273,17 @@ class TestTrainInterventions:
         mock_config,
     ):
         """Test using a custom loss function."""
-        mock_batches = [
-            {"input": ["input1"], "counterfactual_inputs": [["cf1"]]},
-        ]
-
         # Track calls to custom loss function
         custom_loss_called = [0]
 
-        def custom_loss_fn(pipeline, model, batch, target):
+        def custom_loss_fn(
+            pipeline: MagicMock,
+            model: MagicMock,
+            batch: dict[str, list[str]],
+            target: InterchangeTarget,
+            source_pipeline: MagicMock | None = None,
+            source_intervenable_model: MagicMock | None = None,
+        ) -> tuple[torch.Tensor, dict[str, float], dict[str, str]]:
             custom_loss_called[0] += 1
             return (
                 torch.tensor(0.3, requires_grad=True),
@@ -322,10 +301,6 @@ class TestTrainInterventions:
                 return_value=mock_intervenable_model,
             ),
             patch("causalab.neural.pyvene_core.interchange.delete_intervenable_model"),
-            patch(
-                "causalab.neural.pyvene_core.interchange.DataLoader",
-                return_value=mock_batches,
-            ),
             patch("causalab.neural.pyvene_core.interchange.tqdm", MockTqdm),
             patch("torch.optim.AdamW", return_value=MagicMock()),
             patch(
@@ -358,11 +333,6 @@ class TestTrainInterventions:
         # Set memory cleanup frequency
         mock_config["memory_cleanup_freq"] = 1
 
-        mock_batches = [
-            {"input": ["input1"], "counterfactual_inputs": [["cf1"]]},
-            {"input": ["input2"], "counterfactual_inputs": [["cf2"]]},
-        ]
-
         mock_scheduler = MagicMock()
         mock_scheduler.get_last_lr.return_value = [0.001]
         mock_scheduler._step_count = 0
@@ -373,10 +343,6 @@ class TestTrainInterventions:
                 return_value=mock_intervenable_model,
             ),
             patch("causalab.neural.pyvene_core.interchange.delete_intervenable_model"),
-            patch(
-                "causalab.neural.pyvene_core.interchange.DataLoader",
-                return_value=mock_batches,
-            ),
             patch("causalab.neural.pyvene_core.interchange.tqdm", MockTqdm),
             patch("torch.optim.AdamW", return_value=MagicMock()),
             patch(

@@ -6,7 +6,7 @@ import random
 import numpy as np
 
 from causalab.causal.causal_model import CausalModel
-from causalab.causal.counterfactual_dataset import CounterfactualDataset
+from causalab.causal.trace import Mechanism, input_var
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.LM_units import ResidualStream
 from causalab.neural.token_position_builder import TokenPosition
@@ -53,14 +53,7 @@ def mcqa_causal_model():
 
     COLORS = [item[0] for item in COLOR_OBJECTS]
 
-    # Define the causal model variables and values
-    variables = (
-        ["question"]
-        + [f"symbol{x}" for x in range(NUM_CHOICES)]
-        + [f"choice{x}" for x in range(NUM_CHOICES)]
-        + ["answer_pointer", "answer"]
-    )
-
+    # Define values
     values = {f"choice{x}": COLORS for x in range(NUM_CHOICES)}
     values.update({f"symbol{x}": list(ALPHABET) for x in range(NUM_CHOICES)})
     values.update(
@@ -68,88 +61,28 @@ def mcqa_causal_model():
     )
     values.update({"question": COLOR_OBJECTS})
 
-    # Define parent relationships
-    parents = {
-        "answer": ["answer_pointer"] + [f"symbol{x}" for x in range(NUM_CHOICES)],
-        "answer_pointer": ["question"] + [f"choice{x}" for x in range(NUM_CHOICES)],
-        "question": [],
+    # Define mechanisms using new API
+    mechanisms: dict[str, Mechanism] = {
+        "question": input_var(COLOR_OBJECTS),
+        **{f"symbol{i}": input_var(list(ALPHABET)) for i in range(NUM_CHOICES)},
+        **{f"choice{i}": input_var(COLORS) for i in range(NUM_CHOICES)},
+        "answer_pointer": Mechanism(
+            parents=["question"] + [f"choice{x}" for x in range(NUM_CHOICES)],
+            compute=lambda t: next(
+                (i for i in range(NUM_CHOICES) if t[f"choice{i}"] == t["question"][0]),
+                random.randint(0, NUM_CHOICES - 1),
+            ),
+        ),
+        "answer": Mechanism(
+            parents=["answer_pointer"] + [f"symbol{x}" for x in range(NUM_CHOICES)],
+            compute=lambda t: " " + t[f"symbol{t['answer_pointer']}"],
+        ),
     }
-    parents.update({f"choice{x}": [] for x in range(NUM_CHOICES)})
-    parents.update({f"symbol{x}": [] for x in range(NUM_CHOICES)})
-
-    # Define causal mechanisms
-    def get_question():
-        return random.choice(COLOR_OBJECTS)
-
-    def get_symbol():
-        return random.choice(list(ALPHABET))
-
-    def get_choice():
-        return random.choice(COLORS)
-
-    def get_answer_pointer(question, *choices):
-        for i, choice in enumerate(choices):
-            if choice == question[0]:  # question[0] is the color
-                return i
-        # If no match, return random (shouldn't happen in well-formed questions)
-        return random.randint(0, NUM_CHOICES - 1)
-
-    def get_answer(answer_pointer, *symbols):
-        return " " + symbols[answer_pointer]
-
-    mechanisms = {
-        "question": get_question,
-        **{f"symbol{i}": get_symbol for i in range(NUM_CHOICES)},
-        **{f"choice{i}": get_choice for i in range(NUM_CHOICES)},
-        "answer_pointer": get_answer_pointer,
-        "answer": get_answer,
-    }
-
-    # Define input and output format functions
-    def input_dumper(input_data):
-        output = f"Question: The {input_data['question'][1]} is {input_data['question'][0]}. What color is the {input_data['question'][1]}?"
-        for i in range(NUM_CHOICES):
-            output += f"\n{input_data[f'symbol{i}']}. {input_data[f'choice{i}']}"
-        output += "\nAnswer:"
-        return output
-
-    def output_dumper(setting):
-        return setting["answer"]
-
-    # Helper to parse inputs
-    def input_parser(text):
-        # Simple parsing of format: "Question: The object is color. What color is the object?"
-        try:
-            question_part = text.split("Question: ")[1].split(". What color")[0]
-            object_color = question_part.split(" is ")
-            object_name = object_color[0].replace("The ", "").strip()
-            color = object_color[1].strip()
-
-            # Extract choices
-            lines = text.strip().split("\n")
-            choices = {}
-            for i, line in enumerate(lines[1:]):
-                if line.startswith("Answer:"):
-                    break
-                if "." in line:
-                    symbol, choice_text = line.split(". ", 1)
-                    choices[f"symbol{i}"] = symbol
-                    choices[f"choice{i}"] = choice_text
-
-            return {"question": (color, object_name), **choices}
-        except Exception:
-            # Return empty dictionary if parsing fails
-            return {}
 
     # Create and return the model
     return CausalModel(
-        variables,
-        values,
-        parents,
-        mechanisms,
-        input_dumper=input_dumper,
-        output_dumper=output_dumper,
-        input_loader=input_parser,
+        mechanisms=mechanisms,
+        values=values,
         id="4_answer_MCQA_test",
     )
 
@@ -205,7 +138,7 @@ def mcqa_counterfactual_datasets(mcqa_causal_model, seed_everything):
         counterfactual = dict(input_setting)  # Make a copy
 
         # Get current answer position
-        answer_position = model.run_forward(input_setting)["answer_pointer"]
+        answer_position = model.new_trace(input_setting)["answer_pointer"]
 
         # Choose a different position
         available_positions = [i for i in range(NUM_CHOICES) if i != answer_position]
@@ -229,7 +162,7 @@ def mcqa_counterfactual_datasets(mcqa_causal_model, seed_everything):
         counterfactual = letter_cf["counterfactual_inputs"][0]
 
         # Now change position too
-        answer_position = model.run_forward(input_setting)["answer_pointer"]
+        answer_position = model.new_trace(input_setting)["answer_pointer"]
         available_positions = [i for i in range(NUM_CHOICES) if i != answer_position]
         new_position = random.choice(available_positions)
 
@@ -269,13 +202,15 @@ def mcqa_counterfactual_datasets(mcqa_causal_model, seed_everything):
             test_data["input"].append(sample["input"])
             test_data["counterfactual_inputs"].append(sample["counterfactual_inputs"])
 
-        # Create CounterfactualDataset objects
-        datasets[f"{name}_train"] = CounterfactualDataset.from_dict(
-            train_data, id=f"{name}_train"
-        )
-        datasets[f"{name}_test"] = CounterfactualDataset.from_dict(
-            test_data, id=f"{name}_test"
-        )
+        # Create list[CounterfactualExample]
+        datasets[f"{name}_train"] = [
+            {"input": inp, "counterfactual_inputs": cf}
+            for inp, cf in zip(train_data["input"], train_data["counterfactual_inputs"])
+        ]
+        datasets[f"{name}_test"] = [
+            {"input": inp, "counterfactual_inputs": cf}
+            for inp, cf in zip(test_data["input"], test_data["counterfactual_inputs"])
+        ]
 
     return datasets
 
@@ -451,7 +386,7 @@ def token_positions(mock_tiny_lm, mcqa_causal_model):
         causal_input = mcqa_causal_model.input_loader(prompt)
 
         # Get the answer pointer
-        output = mcqa_causal_model.run_forward(causal_input)
+        output = mcqa_causal_model.new_trace(causal_input)
         answer_position = output["answer_pointer"]
 
         # Get the symbol at that position

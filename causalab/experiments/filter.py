@@ -1,25 +1,26 @@
 """
-Filter counterfactual datasets based on agreement between neural and causal models.
+Filter counterfactual examples based on agreement between neural and causal models.
 
-This module provides functionality to filter datasets by removing examples where
+This module provides functionality to filter examples by removing those where
 the neural pipeline and causal model outputs disagree.
 """
 
 from typing import Callable, Any
 
-from causalab.causal.counterfactual_dataset import CounterfactualDataset
+from causalab.causal.counterfactual_dataset import CounterfactualExample
+from causalab.causal.trace import CausalTrace
 from causalab.neural.pipeline import LMPipeline
 from causalab.causal.causal_model import CausalModel
 
 
 def filter_dataset(
-    dataset: CounterfactualDataset,
+    dataset: list[CounterfactualExample],
     pipeline: LMPipeline,
     causal_model: CausalModel,
     metric: Callable[[Any, Any], bool],
     batch_size: int = 32,
     validate_counterfactuals: bool = True,
-) -> CounterfactualDataset:
+) -> list[CounterfactualExample]:
     """
     Filter dataset based on agreement between pipeline and causal model outputs.
 
@@ -30,7 +31,7 @@ def filter_dataset(
     Only examples where both conditions are met are kept in the filtered dataset.
 
     Args:
-        dataset: CounterfactualDataset to filter
+        dataset: List of CounterfactualExample to filter
         pipeline: Neural model pipeline that processes inputs
         causal_model: Causal model that generates expected outputs
         metric: Function that compares neural output with causal output,
@@ -40,7 +41,7 @@ def filter_dataset(
                                  If False, only validates base inputs.
 
     Returns:
-        Filtered CounterfactualDataset with examples that pass validation
+        Filtered list of CounterfactualExample with examples that pass validation
     """
     dataset_original = len(dataset)
 
@@ -53,8 +54,7 @@ def filter_dataset(
     )
 
     # Validate each example
-    filtered_inputs = []
-    filtered_counterfactuals = []
+    filtered_examples: list[CounterfactualExample] = []
 
     # Get number of counterfactuals per example (assumes all examples have same count)
     num_cf_per_example = (
@@ -65,12 +65,12 @@ def filter_dataset(
 
     for example_idx in range(dataset_original):
         example = dataset[example_idx]
+        input_trace: CausalTrace = example["input"]
 
         # Validate base input
         base_output = base_outputs_flat[example_idx]
-        setting = causal_model.run_forward(example["input"])
-        base_expected = setting["raw_output"]
-        example["input"]["raw_input"] = setting["raw_input"]
+        # Get expected output from the trace (already computed by causal model)
+        base_expected = input_trace["raw_output"]
 
         if not metric(base_output, base_expected):
             # Skip counterfactuals if base fails
@@ -81,11 +81,10 @@ def filter_dataset(
         if validate_counterfactuals and num_cf_per_example > 0:
             cf_valid = True
             for i in range(num_cf_per_example):
-                cf_input = example["counterfactual_inputs"][i]
+                cf_trace: CausalTrace = example["counterfactual_inputs"][i]
                 cf_output = counterfactual_outputs_flat[cf_idx + i]
-                setting = causal_model.run_forward(cf_input)
-                cf_expected = setting["raw_output"]
-                example["counterfactual_inputs"][i]["raw_input"] = setting["raw_input"]
+                # Get expected output from the trace
+                cf_expected = cf_trace["raw_output"]
 
                 if not metric(cf_output, cf_expected):
                     cf_valid = False
@@ -97,19 +96,6 @@ def filter_dataset(
                 continue
 
         # Example passed validation
-        filtered_inputs.append(example["input"])
-        filtered_counterfactuals.append(example["counterfactual_inputs"])
+        filtered_examples.append(example)
 
-    # Create filtered dataset
-    if not filtered_inputs:
-        # Return empty dataset with same structure
-        return CounterfactualDataset.from_dict(
-            {"input": [], "counterfactual_inputs": []}, id=dataset.id
-        )
-
-    filtered_dataset = CounterfactualDataset.from_dict(
-        {"input": filtered_inputs, "counterfactual_inputs": filtered_counterfactuals},
-        id=dataset.id,
-    )
-
-    return filtered_dataset
+    return filtered_examples

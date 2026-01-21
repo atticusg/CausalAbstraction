@@ -2,7 +2,10 @@
 Tests for the declarative token position builder system.
 """
 
+from typing import Any
+
 import pytest
+import torch
 from unittest.mock import Mock
 from causalab.neural.token_position_builder import build_token_position_factories
 
@@ -18,28 +21,29 @@ def mock_pipeline():
     # Tokens: ["The", " sum", " of", " ", x_value, " and", " ", y_value, " is", " "]
     # Positions: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     def mock_load(
-        input_dict,
+        input_list,
         add_special_tokens=False,
         return_offsets_mapping=False,
         no_padding=False,
     ):
-        raw_input = input_dict["raw_input"]
+        # Accept list of CausalTraces (access raw_input via [])
+        raw_input = input_list[0]["raw_input"]
         # Simplified tokenization for testing
         # Just split on spaces and assign sequential IDs
         tokens = raw_input.split()
         token_ids = list(range(len(tokens)))
-        result = {"input_ids": [token_ids]}
+        result: dict[str, Any] = {"input_ids": [token_ids]}
 
         if return_offsets_mapping:
-            # Create fake character offsets
+            # Create fake character offsets as tensor (matching runtime behavior)
             offsets = []
             pos = 0
             for token in tokens:
                 start = pos
                 end = pos + len(token)
-                offsets.append((start, end))
+                offsets.append([start, end])
                 pos = end + 1  # +1 for space
-            result["offset_mapping"] = [offsets]
+            result["offset_mapping"] = [torch.tensor(offsets)]
 
         return result
 

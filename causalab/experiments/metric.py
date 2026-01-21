@@ -16,16 +16,21 @@ from typing import Dict, List, Callable, Tuple, Any
 import copy
 import torch
 from causalab.neural.pyvene_core.interchange import prepare_intervenable_inputs
-from causalab.causal.counterfactual_dataset import CounterfactualDataset
+from causalab.causal.counterfactual_dataset import (
+    CounterfactualExample,
+    LabeledCounterfactualExample,
+)
 from causalab.causal.causal_model import CausalModel
+from causalab.causal.trace import CausalTrace, Mechanism
 
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.model_units import InterchangeTarget
+from causalab.neural.pyvene_core.collect import collect_source_representations
 
 
 def causal_score_intervention_outputs(
     raw_results: Dict[Tuple[Any, ...], Dict[str, Any]],
-    dataset: CounterfactualDataset,
+    dataset: list[CounterfactualExample],
     causal_model: CausalModel,
     target_variable_groups: List[Tuple[str, ...]],
     metric: Callable[[Any, Any], bool],
@@ -39,7 +44,7 @@ def causal_score_intervention_outputs(
     Args:
         raw_results: Dict mapping keys to intervention outputs, as returned by
                     run_interchange_interventions(). Each value has {"string": [...], ...}
-        dataset: CounterfactualDataset used for interventions
+        dataset: list[CounterfactualExample] used for interventions
         causal_model: Causal model for generating expected outputs
         target_variable_groups: List of variable groups to evaluate. Each group is a tuple
                                of variable names that are evaluated jointly.
@@ -200,7 +205,7 @@ def make_causal_metric(
 
 def score_intervention_outputs(
     raw_results: Dict[Tuple[Any, ...], Dict[str, Any]],
-    dataset: CounterfactualDataset,
+    dataset: list[CounterfactualExample],
     metric: InterchangeMetric,
     causal_model: CausalModel | None = None,
     original_outputs: List[Dict[str, Any]] | None = None,
@@ -218,7 +223,7 @@ def score_intervention_outputs(
     Args:
         raw_results: Dict mapping keys to intervention outputs, as returned by
                     run_interventions(). Each value has {"string": [...], ...}
-        dataset: CounterfactualDataset used for interventions
+        dataset: list[CounterfactualExample] used for interventions
         metric: InterchangeMetric defining the scoring function and data requirements
         causal_model: Required if metric.needs_causal_expected is True
         original_outputs: Pre-computed original model outputs. Required if
@@ -276,7 +281,7 @@ def score_intervention_outputs(
         assert metric.target_variables is not None  # validated above
         labeled_data = causal_model.label_counterfactual_data(
             copy.deepcopy(dataset),
-            metric.target_variables,
+            list(metric.target_variables),
         )
         expected_outputs = [example["label"] for example in labeled_data]
     else:
@@ -318,9 +323,11 @@ def score_intervention_outputs(
 def LM_loss_and_metric_fn(
     pipeline: LMPipeline,
     intervenable_model: Any,
-    batch: Dict[str, Any],
+    examples: List[LabeledCounterfactualExample],
     interchange_target: InterchangeTarget,
     checker: Callable[[Dict[str, Any], Dict[str, Any]], float],
+    source_pipeline: LMPipeline | None = None,
+    source_intervenable_model: Any = None,
 ) -> Tuple[torch.Tensor, Dict[str, float], Dict[str, Any]]:
     """
     Calculate loss and evaluation metrics for language model interventions.
@@ -329,26 +336,50 @@ def LM_loss_and_metric_fn(
     then extracts logits at label positions to compute accuracy and loss.
 
     Args:
-        pipeline: Language model pipeline for tokenization and generation.
+        pipeline: Target language model pipeline for tokenization and generation.
         intervenable_model: Model with intervention capabilities.
-        batch: Batch containing inputs and counterfactual inputs.
+        examples: List of labeled counterfactual examples with inputs and labels.
         interchange_target: InterchangeTarget containing the model units to intervene on.
         checker: Function(neural_output, causal_output) -> bool/float for evaluation.
+        source_pipeline: If provided, collect activations from this pipeline instead
+            of the target pipeline. Enables cross-model patching during training.
+        source_intervenable_model: Optional pre-created intervenable model for the source
+            pipeline. If provided with source_pipeline, this model will be reused for
+            collecting activations instead of creating a new one per batch.
 
     Returns:
         tuple: (loss, eval_metrics, logging_info)
     """
-    # Prepare intervenable inputs
+    # Prepare intervenable inputs (using target pipeline)
     batched_base, batched_counterfactuals, inv_locations, feature_indices = (
-        prepare_intervenable_inputs(pipeline, batch, interchange_target)
+        prepare_intervenable_inputs(pipeline, examples, interchange_target)
     )
 
+    # Collect source representations if using cross-model patching
+    source_representations = None
+    if source_pipeline is not None:
+        source_representations = collect_source_representations(
+            source_pipeline, examples, interchange_target, source_intervenable_model
+        )
+        batched_counterfactuals = None
+
     # Get ground truth labels
-    batched_inv_label = batch["label"]
-    if isinstance(batched_inv_label[0], dict):
-        batched_inv_label = [item["string"] for item in batched_inv_label]
+    batched_inv_label_strs = [ex["label"] for ex in examples]
+    if isinstance(batched_inv_label_strs[0], dict):
+        batched_inv_label_strs = [item["string"] for item in batched_inv_label_strs]
+
+    # Convert strings to CausalTraces
+    batched_inv_label_traces = [
+        CausalTrace(
+            mechanisms={
+                "raw_input": Mechanism(parents=[], compute=lambda t: t["raw_input"])
+            },
+            inputs={"raw_input": label_str},
+        )
+        for label_str in batched_inv_label_strs
+    ]
     batched_inv_label = pipeline.load(
-        batched_inv_label,
+        batched_inv_label_traces,
         max_length=pipeline.max_new_tokens,
         padding_side="right",
         add_special_tokens=False,
@@ -365,6 +396,7 @@ def LM_loss_and_metric_fn(
         batched_counterfactuals,
         unit_locations=inv_locations,
         subspaces=feature_indices,
+        source_representations=source_representations,
     )
 
     # Extract relevant portions of logits and labels for evaluation
@@ -382,7 +414,7 @@ def LM_loss_and_metric_fn(
         neural_output = {"string": pred_str}
 
         # Apply checker function
-        score = checker(neural_output, batch["label"][i])
+        score = checker(neural_output, examples[i]["label"])
         if isinstance(score, torch.Tensor):
             score = score.item()
         scores.append(float(score))
@@ -394,22 +426,25 @@ def LM_loss_and_metric_fn(
     loss = compute_cross_entropy_loss(logits, labels, pipeline.tokenizer.pad_token_id)
 
     # Collect detailed information for logging
-    logging_info = {
+    logging_info: Dict[str, Any] = {
         "preds": pipeline.dump(pred_ids),
         "labels": pipeline.dump(labels),
         "base_ids": batched_base["input_ids"][0],
         "base_masks": batched_base["attention_mask"][0],
-        "counterfactual_masks": [
-            c["attention_mask"][0] for c in batched_counterfactuals
-        ],
-        "counterfactual_ids": [c["input_ids"][0] for c in batched_counterfactuals],
         "base_inputs": pipeline.dump(batched_base["input_ids"][0]),
-        "counterfactual_inputs": [
-            pipeline.dump(c["input_ids"][0]) for c in batched_counterfactuals
-        ],
         "inv_locations": inv_locations,
         "feature_indices": feature_indices,
     }
+    if batched_counterfactuals is not None:
+        logging_info["counterfactual_masks"] = [
+            c["attention_mask"][0] for c in batched_counterfactuals
+        ]
+        logging_info["counterfactual_ids"] = [
+            c["input_ids"][0] for c in batched_counterfactuals
+        ]
+        logging_info["counterfactual_inputs"] = [
+            pipeline.dump(c["input_ids"][0]) for c in batched_counterfactuals
+        ]
 
     return loss, eval_metrics, logging_info
 

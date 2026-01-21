@@ -1,5 +1,7 @@
 # Causal Abstraction for Mechanistic Interpretability
 
+![Tests](https://github.com/goodfire-ai/causalab-internal/workflows/Tests/badge.svg)
+
 This repository supports mechanistic interpretability experiments that reverse engineer what algorithm a neural network implements with causal abstraction.
 
 ## Overview
@@ -75,6 +77,8 @@ Task implementations organized by directory. Each task contains:
 
 Available tasks:
 - `MCQA/`: Multiple Choice Question Answering task implementation with positional causal model
+
+Outdated tasks:
 - `IOI/`: Indirect Object Identification task (example from literature)
 - `entity_binding/`: Entity binding task
 - `general_addition/`: General addition task
@@ -87,8 +91,8 @@ Comprehensive test suite covering all core components with specialized tests for
 ### Installation
 
 ```bash
-git clone https://github.com/goodfire-ai/causalab.git
-cd causalab
+git clone https://github.com/goodfire-ai/causalab-internal.git
+cd causalab-internal
 uv sync
 ```
 
@@ -129,19 +133,3 @@ For full coverage, you may simply run:
 ```bash
 uv run pytest
 ```
-
-## Example Tasks
-
-The repository includes several example tasks demonstrating different aspects of causal abstraction:
-
-### MCQA (Multiple Choice Question Answering)
-A simple task where the model answers color-based multiple choice questions, demonstrating positional reasoning and token-level interventions.
-
-### IOI (Indirect Object Identification)
-A task involving name resolution in sentences, showing multi-variable causal models and attention head analysis.
-
-### Entity Binding
-A task testing how models retrieve associated information by comparing direct indexing versus content-based positional search mechanisms.
-
-### General Addition
-A task implementing arithmetic addition with both basic input-output models and intermediate models that include explicit carry and sum variables.

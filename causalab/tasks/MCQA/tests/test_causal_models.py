@@ -4,17 +4,17 @@ Test Script: MCQA Causal Models
 This script tests the MCQA causal model structure, mechanisms, and forward execution.
 """
 
+import pytest
+
 from causalab.tasks.MCQA.causal_models import (
     positional_causal_model,
-    fill_template,
-    get_answer_position,
-    get_answer,
     OBJECTS,
     COLORS,
     ALPHABET,
     NUM_CHOICES,
     TEMPLATES,
 )
+from causalab.tasks.MCQA.counterfactuals import sample_answerable_question
 
 
 def test_causal_model_structure():
@@ -59,24 +59,28 @@ def test_causal_model_structure():
     print("✓ Test 1 passed\n")
 
 
-def test_sample_input():
-    """Test sampling valid inputs."""
-    print("=== Test 2: Sample Input ===")
+def test_sample_answerable_question():
+    """Test sampling valid answerable questions."""
+    print("=== Test 2: Sample Answerable Question ===")
 
-    model = positional_causal_model
-
-    # Sample 5 inputs
+    # Sample 5 valid inputs using sample_answerable_question
     for i in range(5):
-        input_sample = model.sample_input()
+        input_sample = sample_answerable_question()
 
         # Check all input variables are present
         assert "template" in input_sample
-        assert 'object' in input_sample
-        assert 'color' in input_sample
+        assert "object" in input_sample
+        assert "color" in input_sample
         assert "symbol0" in input_sample
         assert "symbol1" in input_sample
         assert "choice0" in input_sample
         assert "choice1" in input_sample
+
+        # Verify the color is in one of the choices (answerable question)
+        assert input_sample["color"] in [
+            input_sample["choice0"],
+            input_sample["choice1"],
+        ], "Color should be in choices for answerable question"
 
         print(
             f"Sample {i + 1}: {input_sample['object']} is {input_sample['color']} with choices {input_sample['choice0']}, {input_sample['choice1']}"
@@ -86,20 +90,25 @@ def test_sample_input():
 
 
 def test_fill_template_mechanism():
-    """Test the template filling mechanism."""
+    """Test the template filling mechanism via new_trace."""
     print("=== Test 3: Fill Template Mechanism ===")
 
-    template = TEMPLATES[0]
-    object = "banana"
-    color = "yellow"
-    symbol0 = "A"
-    symbol1 = "B"
-    choice0 = "blue"
-    choice1 = "yellow"
+    model = positional_causal_model
 
-    result = fill_template(template, object, color, symbol0, symbol1, choice0, choice1)
+    input_sample = {
+        "template": TEMPLATES[0],
+        "object": "banana",
+        "color": "yellow",
+        "symbol0": "A",
+        "symbol1": "B",
+        "choice0": "blue",
+        "choice1": "yellow",
+    }
 
-    print(f"Template: {template}")
+    output = model.new_trace(input_sample)
+    result = output["raw_input"]
+
+    print(f"Template: {TEMPLATES[0]}")
     print(f"\nFilled result:\n{result}")
 
     # Check substitutions
@@ -110,81 +119,142 @@ def test_fill_template_mechanism():
     assert "blue" in result, "Choice0 should be in result"
 
     # Check no placeholders remain
-    assert "<object>" not in result, "No placeholder should remain"
-    assert "<color>" not in result, "No placeholder should remain"
-    assert "<symbol0>" not in result, "No placeholder should remain"
-    assert "<symbol1>" not in result, "No placeholder should remain"
-    assert "<choice0>" not in result, "No placeholder should remain"
-    assert "<choice1>" not in result, "No placeholder should remain"
+    assert "{object}" not in result, "No placeholder should remain"
+    assert "{color}" not in result, "No placeholder should remain"
+    assert "{symbol0}" not in result, "No placeholder should remain"
+    assert "{symbol1}" not in result, "No placeholder should remain"
+    assert "{choice0}" not in result, "No placeholder should remain"
+    assert "{choice1}" not in result, "No placeholder should remain"
 
     print("✓ All substitutions correct")
     print("✓ Test 3 passed\n")
 
 
 def test_answer_position_mechanism():
-    """Test the answer position mechanism."""
+    """Test the answer position mechanism via new_trace."""
     print("=== Test 4: Answer Position Mechanism ===")
 
-    # Test case 1: Answer in position 0
-    color = "yellow"
-    choice0 = "yellow"
-    choice1 = "blue"
+    model = positional_causal_model
 
-    pos = get_answer_position(color, choice0, choice1)
-    print(f"Test 1: Color 'yellow' in choices ['yellow', 'blue'] -> position {pos}")
-    assert pos == 0, "Should find yellow at position 0"
+    # Test case 1: Answer in position 0
+    output1 = model.new_trace(
+        {
+            "template": TEMPLATES[0],
+            "object": "ball",
+            "color": "yellow",
+            "symbol0": "A",
+            "symbol1": "B",
+            "choice0": "yellow",
+            "choice1": "blue",
+        }
+    )
+    print(
+        f"Test 1: Color 'yellow' in choices ['yellow', 'blue'] -> position {output1['answer_position']}"
+    )
+    assert output1["answer_position"] == 0, "Should find yellow at position 0"
 
     # Test case 2: Answer in position 1
-    color = "green"
-    choice0 = "blue"
-    choice1 = "green"
+    output2 = model.new_trace(
+        {
+            "template": TEMPLATES[0],
+            "object": "ball",
+            "color": "green",
+            "symbol0": "A",
+            "symbol1": "B",
+            "choice0": "blue",
+            "choice1": "green",
+        }
+    )
+    print(
+        f"Test 2: Color 'green' in choices ['blue', 'green'] -> position {output2['answer_position']}"
+    )
+    assert output2["answer_position"] == 1, "Should find green at position 1"
 
-    pos = get_answer_position(color, choice0, choice1)
-    print(f"Test 2: Color 'green' in choices ['blue', 'green'] -> position {pos}")
-    assert pos == 1, "Should find green at position 1"
-
-    # Test case 3: Answer not in choices (edge case)
-    color = "yellow"
-    choice0 = "blue"
-    choice1 = "red"
-
-    pos = get_answer_position(color, choice0, choice1)
-    print(f"Test 3: Color 'yellow' in choices ['blue', 'red'] -> position {pos}")
-    assert pos is None, "Should return None when color not in choices"
+    # Test case 3: Answer not in choices (should raise ValueError)
+    input3 = {
+        "template": TEMPLATES[0],
+        "object": "ball",
+        "color": "yellow",
+        "symbol0": "A",
+        "symbol1": "B",
+        "choice0": "blue",
+        "choice1": "red",
+    }
+    print(
+        "Test 3: Color 'yellow' in choices ['blue', 'red'] -> should raise ValueError"
+    )
+    with pytest.raises(ValueError, match="No correct answer position found"):
+        model.new_trace(input3)
 
     # Test case 4: Duplicate colors (edge case - returns first match)
-    color = "white"
-    choice0 = "white"
-    choice1 = "white"
-
-    pos = get_answer_position(color, choice0, choice1)
-    print(f"Test 4: Color 'white' in choices ['white', 'white'] -> position {pos}")
-    assert pos == 0, "Should return first match when duplicate"
+    output4 = model.new_trace(
+        {
+            "template": TEMPLATES[0],
+            "object": "ball",
+            "color": "white",
+            "symbol0": "A",
+            "symbol1": "B",
+            "choice0": "white",
+            "choice1": "white",
+        }
+    )
+    print(
+        f"Test 4: Color 'white' in choices ['white', 'white'] -> position {output4['answer_position']}"
+    )
+    assert output4["answer_position"] == 0, "Should return first match when duplicate"
 
     print("✓ Test 4 passed\n")
 
 
 def test_answer_retrieval_mechanism():
-    """Test the answer retrieval mechanism."""
+    """Test the answer retrieval mechanism via new_trace."""
     print("=== Test 5: Answer Retrieval Mechanism ===")
 
-    symbol0 = "A"
-    symbol1 = "B"
+    model = positional_causal_model
 
-    # Test position 0
-    answer = get_answer(0, symbol0, symbol1)
-    print(f"Position 0 with symbols ['A', 'B'] -> answer '{answer}'")
-    assert answer == "A", "Position 0 should return first symbol"
+    # Test position 0 (answer at first choice)
+    output1 = model.new_trace(
+        {
+            "template": TEMPLATES[0],
+            "object": "ball",
+            "color": "yellow",
+            "symbol0": "A",
+            "symbol1": "B",
+            "choice0": "yellow",
+            "choice1": "blue",
+        }
+    )
+    print(f"Position 0 with symbols ['A', 'B'] -> answer '{output1['answer']}'")
+    assert output1["answer"] == "A", "Position 0 should return first symbol"
 
-    # Test position 1
-    answer = get_answer(1, symbol0, symbol1)
-    print(f"Position 1 with symbols ['A', 'B'] -> answer '{answer}'")
-    assert answer == "B", "Position 1 should return second symbol"
+    # Test position 1 (answer at second choice)
+    output2 = model.new_trace(
+        {
+            "template": TEMPLATES[0],
+            "object": "ball",
+            "color": "blue",
+            "symbol0": "A",
+            "symbol1": "B",
+            "choice0": "yellow",
+            "choice1": "blue",
+        }
+    )
+    print(f"Position 1 with symbols ['A', 'B'] -> answer '{output2['answer']}'")
+    assert output2["answer"] == "B", "Position 1 should return second symbol"
 
-    # Test None position (edge case)
-    answer = get_answer(None, symbol0, symbol1)
-    print(f"Position None with symbols ['A', 'B'] -> answer '{answer}'")
-    assert answer is None, "None position should return None"
+    # Test color not in choices (should raise ValueError)
+    input3 = {
+        "template": TEMPLATES[0],
+        "object": "ball",
+        "color": "green",
+        "symbol0": "A",
+        "symbol1": "B",
+        "choice0": "yellow",
+        "choice1": "blue",
+    }
+    print("Color not in choices -> should raise ValueError")
+    with pytest.raises(ValueError, match="No correct answer position found"):
+        model.new_trace(input3)
 
     print("✓ Test 5 passed\n")
 
@@ -197,16 +267,16 @@ def test_forward_execution():
 
     # Create specific input
     input_sample = {
-        'template': TEMPLATES[0],
-        'object': 'banana',
-        'color': 'yellow',
-        'symbol0': 'A',
-        'symbol1': 'B',
-        'choice0': 'blue',
-        'choice1': 'yellow',
+        "template": TEMPLATES[0],
+        "object": "banana",
+        "color": "yellow",
+        "symbol0": "A",
+        "symbol1": "B",
+        "choice0": "blue",
+        "choice1": "yellow",
     }
 
-    output = model.run_forward(input_sample)
+    output = model.new_trace(input_sample)
 
     print(f"Prompt:\n{output['raw_input']}\n")
     print(f"Answer position: {output['answer_position']}")
@@ -228,36 +298,27 @@ def test_multiple_forward_executions():
     """Test multiple forward executions for consistency."""
     print("=== Test 7: Multiple Forward Executions ===")
 
-    model = positional_causal_model
-
     print("Testing 10 random samples:\n")
 
     for i in range(10):
-        input_sample = model.sample_input()
-        output = model.run_forward(input_sample)
+        # sample_answerable_question() returns a fully computed CausalTrace
+        trace = sample_answerable_question()
 
         # Verify consistency
-        assert "raw_input" in output
-        assert "raw_output" in output
-        assert "answer_position" in output
-        assert "answer" in output
+        assert "raw_input" in trace
+        assert "raw_output" in trace
+        assert "answer_position" in trace
+        assert "answer" in trace
 
-        # Verify answer matches answer_position (if position is valid)
-        if output["answer_position"] is not None:
-            expected_symbol = input_sample[f"symbol{output['answer_position']}"]
-            assert output["answer"] == expected_symbol, (
-                "Answer should match symbol at answer_position"
-            )
-        else:
-            assert output["answer"] is None, (
-                "Answer should be None when position is None"
-            )
-
-        print(
-            f"Sample {i+1}: {input_sample['object']} is {input_sample['color']}"
+        # Verify answer matches answer_position
+        expected_symbol = trace[f"symbol{trace['answer_position']}"]
+        assert trace["answer"] == expected_symbol, (
+            "Answer should match symbol at answer_position"
         )
-        print(f"  Choices: {input_sample['choice0']}, {input_sample['choice1']}")
-        print(f"  Answer at position {output['answer_position']}: {output['answer']}")
+
+        print(f"Sample {i + 1}: {trace['object']} is {trace['color']}")
+        print(f"  Choices: {trace['choice0']}, {trace['choice1']}")
+        print(f"  Answer at position {trace['answer_position']}: {trace['answer']}")
 
     print("\n✓ All executions consistent")
     print("✓ Test 7 passed\n")
@@ -270,20 +331,20 @@ def test_edge_case_duplicate_colors():
     model = positional_causal_model
 
     input_sample = {
-        'template': TEMPLATES[0],
-        'object': 'snow',
-        'color': 'white',
-        'symbol0': 'X',
-        'symbol1': 'Y',
-        'choice0': 'white',
-        'choice1': 'white',
+        "template": TEMPLATES[0],
+        "object": "snow",
+        "color": "white",
+        "symbol0": "X",
+        "symbol1": "Y",
+        "choice0": "white",
+        "choice1": "white",
     }
 
-    output = model.run_forward(input_sample)
+    output = model.new_trace(input_sample)
 
-    print(f"Object: snow")
-    print(f"Color: white")
-    print(f"Choices: white, white")
+    print("Object: snow")
+    print("Color: white")
+    print("Choices: white, white")
     print(f"Answer position: {output['answer_position']}")
     print(f"Answer: {output['answer']}")
 
@@ -328,7 +389,7 @@ def main():
 
     try:
         test_causal_model_structure()
-        test_sample_input()
+        test_sample_answerable_question()
         test_fill_template_mechanism()
         test_answer_position_mechanism()
         test_answer_retrieval_mechanism()

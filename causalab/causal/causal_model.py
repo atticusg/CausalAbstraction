@@ -1,58 +1,61 @@
-import copy
-import itertools
 import logging
 import random
-from collections import defaultdict
-from collections.abc import Sequence
+from typing import Any
+import copy
 
-from datasets import Dataset
-
-from causalab.causal.causal_viz import print_structure, print_setting
+from causalab.causal.counterfactual_dataset import CounterfactualExample
+from causalab.causal.trace import CausalTrace, Mechanism
 
 logger = logging.getLogger(__name__)
 
 
 class CausalModel:
     """
-    A class to represent a causal model with variables, values, parents, and mechanisms.
+    A class to represent a causal model with variables, values, and mechanisms.
+
     Attributes:
     -----------
     variables : list
-        A list of variables in the causal model.
+        A list of variables in the causal model (derived from mechanisms).
     values : dict
         A dictionary mapping each variable to its possible values.
-    parents : dict
-        A dictionary mapping each variable to its parent variables.
     mechanisms : dict
-        A dictionary mapping each variable to its causal mechanism.
+        A dictionary mapping each variable to its Mechanism object.
+    parents : dict
+        A dictionary mapping each variable to its parent variables (derived from mechanisms).
+    children : dict
+        A dictionary mapping each variable to its child variables (derived from mechanisms).
     print_pos : dict, optional
         A dictionary specifying positions for plotting (default is None).
     """
 
     def __init__(
-        self, variables, values, parents, mechanisms, print_pos=None, id="null"
-    ):
+        self,
+        mechanisms: dict[str, Mechanism],
+        values: dict[str, Any],
+        print_pos: dict[str, tuple[int, int]] | None = None,
+        id: str = "null",
+    ) -> None:
         """
-        Initialize a CausalModel instance with the given parameters.
+        Initialize a CausalModel instance.
 
         Parameters:
         -----------
-        variables : list
-            A list of variables in the causal model.
+        mechanisms : dict
+            A dictionary mapping variable names to Mechanism objects.
         values : dict
             A dictionary mapping each variable to its possible values.
-        parents : dict
-            A dictionary mapping each variable to its parent variables.
-        mechanisms : dict
-            A dictionary mapping each variable to its causal mechanism.
         print_pos : dict, optional
-            A dictionary specifying positions for plotting (default is None).
+            Positions for plotting (default is None).
+        id : str, optional
+            Identifier for the model.
         """
-        self.variables = variables
-        self.values = values
-        self.parents = parents
         self.mechanisms = mechanisms
+        self.values = values
         self.id = id
+        # Derive variables from mechanisms
+        self.variables = list(self.mechanisms.keys())
+
         assert "raw_input" in self.variables, (
             "Variable 'raw_input' must be present in the model variables."
         )
@@ -60,18 +63,22 @@ class CausalModel:
             "Variable 'raw_output' must be present in the model variables."
         )
 
-        # Create children and verify model integrity
-        self.children = {var: [] for var in variables}
-        for variable in variables:
-            assert variable in self.parents
+        # Derive parents from mechanisms
+        self.parents = {
+            var: mechanism.parents for var, mechanism in self.mechanisms.items()
+        }
+
+        # Compute children from parents
+        self.children: dict[str, list[str]] = {var: [] for var in self.variables}
+        for variable in self.variables:
             for parent in self.parents[variable]:
                 self.children[parent].append(variable)
 
         # Find inputs and outputs
-        self.inputs = [var for var in self.variables if len(parents[var]) == 0]
-        self.outputs = copy.deepcopy(variables)
-        for child in variables:
-            for parent in parents[child]:
+        self.inputs = [var for var in self.variables if len(self.parents[var]) == 0]
+        self.outputs = copy.deepcopy(self.variables)
+        for child in self.variables:
+            for parent in self.parents[child]:
                 if parent in self.outputs:
                     self.outputs.remove(parent)
 
@@ -128,7 +135,7 @@ class CausalModel:
                         )
                 if variable2 in self.children[variable]:
                     try:
-                        assert variable in parents[variable2]
+                        assert variable in self.parents[variable2]
                     except AssertionError:
                         raise ValueError(
                             f"Variable {variable} not in parents of {variable2}"
@@ -157,70 +164,76 @@ class CausalModel:
 
         # Initializing the equivalence classes of children values
         # that produce a given parent value is expensive
-        self.equiv_classes = {}
+        self.equiv_classes: dict[str, dict[Any, list[dict[str, Any]]]] = {}
 
     # FUNCTIONS FOR RUNNING THE MODEL
 
-    def run_forward(self, intervention=None):
+    def new_trace(self, inputs: dict[str, Any] | None = None) -> CausalTrace:
         """
-        Run the causal model forward with optional interventions.
+        Create a new trace for running this causal model.
 
         Parameters:
         -----------
-        intervention : dict, optional
-            A dictionary mapping variables to their intervened values (default is None).
+        inputs : dict, optional
+            Input variables to set (default is None).
+            Should only contain input variables - computed variables will be
+            automatically computed from inputs.
 
         Returns:
         --------
-        dict
-            A dictionary mapping each variable to its computed value.
+        CausalTrace
+            A new trace object for setting inputs/interventions and getting values.
         """
-        # copy intervention to avoid modifying the original dictionary
-        local_intervention = copy.deepcopy(intervention)
+        return CausalTrace(
+            mechanisms=copy.deepcopy(self.mechanisms),
+            inputs=inputs,
+        )
 
-        if local_intervention is None:
-            local_intervention = {}
-
-        # clear raw_input because it should always be recomputed
-        if "raw_input" in local_intervention:
-            del local_intervention["raw_input"]
-
-        total_setting = defaultdict(None)
-        length = len(list(total_setting.keys()))
-        while length != len(self.variables):
-            for variable in self.variables:
-                for variable2 in self.parents[variable]:
-                    if variable2 not in total_setting:
-                        continue
-                if variable in local_intervention:
-                    total_setting[variable] = local_intervention[variable]
-                else:
-                    total_setting[variable] = self.mechanisms[variable](
-                        *[total_setting[parent] for parent in self.parents[variable]]
-                    )
-            length = len(list(total_setting.keys()))
-        return total_setting
-
-    def run_interchange(self, input_setting, counterfactual_inputs):
+    def run_interchange(
+        self, input_trace: CausalTrace, counterfactual_inputs: dict[str, CausalTrace]
+    ) -> CausalTrace:
         """
         Run the model with interchange interventions.
 
+        .. deprecated::
+            This method exists primarily for the "<-" cross-variable syntax.
+            For standard interchange (same variable name), prefer using copy + set directly::
+
+                # Instead of: result = model.run_interchange(trace, {"A": cf})
+                # Use:
+                result = trace.copy()
+                result["A"] = cf["A"]
+
         Parameters:
         -----------
-        input_setting : dict
-            A dictionary mapping input variables to their values.
-        counterfactual_inputs : dict
-            A dictionary mapping variables to their counterfactual input settings.
+        input_trace : CausalTrace
+            Input trace.
+        counterfactual_inputs : dict[str, CausalTrace]
+            A dictionary mapping variables to their counterfactual input traces.
             Variable names can use the format "original_var<-counterfactual_var" to specify
             different variable names in the original and counterfactual inputs.
 
         Returns:
         --------
-        dict
-            A dictionary mapping each variable to its computed value after
-            interchange interventions.
+        CausalTrace
+            A trace with the interchange intervention results.
+
+        Examples:
+        ---------
+        >>> # Cross-variable interchange (the main use case for this method)
+        >>> model.run_interchange(trace, {"A<-B": counterfactual_input})
+        >>> # Takes B's value from counterfactual, sets A in original
+
+        Notes:
+        ------
+        The "<-" syntax is useful when the variable naming differs between
+        original and counterfactual contexts, allowing flexible mapping of
+        values across different variable names.
         """
-        interchange_intervention = copy.deepcopy(input_setting)
+        # Create main trace with base inputs
+        trace = input_trace.copy()
+
+        # Process counterfactual inputs
         for var in counterfactual_inputs:
             # Check if var contains "<-" syntax
             if "<-" in var:
@@ -228,581 +241,156 @@ class CausalModel:
                 original_var = original_var.strip()
                 counterfactual_var = counterfactual_var.strip()
 
-                # Create separate original and counterfactual dicts
-                counterfactual_dict = copy.deepcopy(counterfactual_inputs[var])
+                # Create counterfactual trace
+                cf_trace = counterfactual_inputs[var]
 
-                # Run forward on counterfactual to get the counterfactual variable value
-                counterfactual_setting = self.run_forward(counterfactual_dict)
-
-                # Intervene on the original variable with the counterfactual variable's value
-                interchange_intervention[original_var] = counterfactual_setting[
-                    counterfactual_var
-                ]
+                # Intervene with counterfactual value
+                trace.intervene(original_var, cf_trace[counterfactual_var])
             else:
                 # Original behavior: both original and counterfactual use the same variable name
-                setting = self.run_forward(counterfactual_inputs[var])
-                interchange_intervention[var] = setting[var]
-        return self.run_forward(interchange_intervention)
+                cf_trace = counterfactual_inputs[var]
+                trace.intervene(var, cf_trace[var])
 
-    def new_raw_input(self, input_dict):
-        """
-        Compute and set the raw_input field for an input dictionary.
+        return trace
 
-        This is a convenience method that runs the causal model forward on the input
-        and updates the input dictionary with the computed raw_input value.
-
-        Parameters:
-        -----------
-        input_dict : dict
-            A dictionary mapping input variables to their values. This dictionary
-            will be modified in-place to include the "raw_input" field.
-
-        Returns:
-        --------
-        None
-            The input_dict is modified in-place.
-        """
-        # Remove raw_input if it exists to ensure fresh computation
-        if "raw_input" in input_dict:
-            del input_dict["raw_input"]
-        result = self.run_forward(input_dict)
-        input_dict["raw_input"] = result["raw_input"]
-
-    # FUNCTIONS FOR SAMPLING INPUTS AND GENERATING DATASETS
-
-    def sample_intervention(self, filter_func=None):
-        """
-        Sample a random intervention that satisfies an optional filter.
-
-        Parameters:
-        -----------
-        filter_func : function, optional
-            A function that takes an intervention and returns a boolean indicating
-            whether it satisfies the filter (default is None).
-
-        Returns:
-        --------
-        dict
-            A dictionary mapping variables to their sampled intervention values.
-        """
-        filter_func = (
-            filter_func if filter_func is not None else lambda x: len(x.keys()) > 0
-        )
-        intervention = {}
-        while not filter_func(intervention):
-            intervention = {}
-            while len(intervention.keys()) == 0:
-                for var in self.variables:
-                    if var in self.inputs or var in self.outputs:
-                        continue
-                    if random.choice([0, 1]) == 0:
-                        intervention[var] = random.choice(self.values[var])
-        return intervention
-
-    def sample_input(self, filter_func=None):
+    def sample_input(self, filter_func=None) -> CausalTrace:
         """
         Sample a random input that satisfies an optional filter when run through the model.
 
         Parameters:
         -----------
         filter_func : function, optional
-            A function that takes a setting and returns a boolean indicating
+            A function that takes a trace and returns a boolean indicating
             whether it satisfies the filter (default is None).
 
         Returns:
         --------
-        dict
-            A dictionary mapping input variables to their sampled values.
+        CausalTrace
+            A trace with sampled input values.
         """
         filter_func = filter_func if filter_func is not None else lambda x: True
-        input_setting = {var: random.choice(self.values[var]) for var in self.inputs}
-        total = self.run_forward(intervention=input_setting)
 
-        while not filter_func(total):
-            input_setting = {
-                var: random.choice(self.values[var]) for var in self.inputs
-            }
-            total = self.run_forward(intervention=input_setting)
+        inputs = {var: random.choice(self.values[var]) for var in self.inputs}
+        trace = self.new_trace(inputs)
 
-        input_setting["raw_input"] = total["raw_input"]
-        return input_setting
+        while not filter_func(trace):
+            inputs = {var: random.choice(self.values[var]) for var in self.inputs}
+            trace = self.new_trace(inputs)
 
-    def generate_dataset(self, size, input_sampler=None, filter_func=None):
+        return trace
+
+    def label_counterfactual_data(
+        self,
+        examples: list[CounterfactualExample],
+        target_variables: list[str],
+    ) -> list[dict[str, Any]]:
         """
-        Generate a dataset of inputs.
+        Labels examples with results from running interchange interventions.
 
-        Parameters:
-        -----------
-        size : int
-            The number of samples to generate.
-        input_sampler : function, optional
-            A function that samples inputs (default is self.sample_input).
-        filter_func : function, optional
-            A function that takes an input and returns a boolean indicating
-            whether it satisfies the filter (default is None).
-
-        Returns:
-        --------
-        Dataset
-            A Hugging Face Dataset with an "input" field.
-        """
-        if input_sampler is None:
-            input_sampler = self.sample_input
-        inputs = []
-        while len(inputs) < size:
-            inp = input_sampler()
-            if filter_func is None or filter_func(inp):
-                inputs.append(inp)
-        # Create and return a Hugging Face Dataset with a single "input" field.
-        return Dataset.from_dict({"input": inputs})
-
-    def label_counterfactual_data(self, dataset, target_variables: Sequence[str]):
-        """
-        Labels a dataset with results from running interchange interventions.
-
-        Takes a dataset containing inputs and counterfactual inputs, runs interchange
-        interventions using the specified target variables, and returns a new dataset
+        Takes examples containing inputs and counterfactual inputs, runs interchange
+        interventions using the specified target variables, and returns examples
         with labeled outputs.
 
         Parameters:
         -----------
-        dataset : Dataset
-            Dataset containing "input" and "counterfactual_inputs" fields.
-        target_variables : Sequence[str]
-            Sequence of variable names to use for interchange.
+        examples : list[CounterfactualExample]
+            List of examples with "input" and "counterfactual_inputs" fields.
+        target_variables : list
+            List of variable names to use for interchange.
 
         Returns:
         --------
-        CounterfactualDataset
-            A new dataset with labeled results from interchange interventions.
+        list[dict[str, Any]]
+            The examples with "label" and "setting" fields added.
         """
-        labels = []
-        settings = []
+        labels: list[Any] = []
+        settings: list[CausalTrace] = []
 
-        for example in dataset:
-            input = example["input"]
-            counterfactual_inputs = example["counterfactual_inputs"]
+        for example in examples:
+            trace: CausalTrace = example["input"]
+            counterfactual_traces: list[CausalTrace] = example["counterfactual_inputs"]
 
             # Handle target_variables element by element
             # Each element can be either a single variable name (str) or a list of variable names
             # If we have exactly one counterfactual but multiple target variables,
             # extend counterfactual_inputs by repeating the single counterfactual
-            if len(counterfactual_inputs) == 1 and len(target_variables) > 1:
-                counterfactual_inputs = counterfactual_inputs * len(target_variables)
+            if len(counterfactual_traces) == 1 and len(target_variables) > 1:
+                counterfactual_traces = counterfactual_traces * len(target_variables)
 
-            assert len(target_variables) <= len(counterfactual_inputs), (
-                f"target_variables has {len(target_variables)} elements but counterfactual_inputs only has {len(counterfactual_inputs)}"
+            assert len(target_variables) <= len(counterfactual_traces), (
+                f"target_variables has {len(target_variables)} elements but counterfactual_traces only has {len(counterfactual_traces)}"
             )
 
-            counterfactual_dict = {}
+            counterfactual_dict: dict[str, CausalTrace] = {}
             for i, var_element in enumerate(target_variables):
+                cf_trace = counterfactual_traces[i]
+
                 if isinstance(var_element, list):
                     # Element is a list of variables: assign counterfactual[i] to all variables in the list
                     for var in var_element:
-                        counterfactual_dict[var] = counterfactual_inputs[i]
+                        counterfactual_dict[var] = cf_trace
                 else:
                     # Element is a single variable: assign counterfactual[i] to this variable
-                    counterfactual_dict[var_element] = counterfactual_inputs[i]
+                    counterfactual_dict[var_element] = cf_trace
 
-            setting = self.run_interchange(input, counterfactual_dict)
+            # Perform interchange using run_interchange (supports A<-B syntax)
+            setting = self.run_interchange(trace, counterfactual_dict)
             labels.append(setting["raw_output"])
             settings.append(setting)
 
-        for setting, example in zip(settings, dataset):
-            example["input"]["raw_input"] = setting["raw_input"]
+        # Build result list with labels and settings added
+        result: list[dict[str, Any]] = []
+        for i, example in enumerate(examples):
+            result.append(
+                {
+                    **example,
+                    "label": labels[i],
+                    "setting": settings[i].to_dict(),
+                }
+            )
 
-        if "label" in dataset.dataset.features:
-            dataset.remove_column("label")
-        dataset.add_column("label", labels)
-        if "setting" in dataset.dataset.features:
-            dataset.remove_column("setting")
-        dataset.add_column("setting", settings)
-
-        return dataset
-
-    def label_data_with_variables(self, dataset, target_variables):
-        """
-        Labels a dataset based on variable settings from running the forward model.
-
-        Takes a dataset of inputs, runs the forward model on each input, and assigns
-        a unique label ID based on the values of the specified target variables.
-
-        Parameters:
-        -----------
-        dataset : Dataset
-            Dataset containing "input" field.
-        target_variables : list
-            List of variable names to use for labeling.
-
-        Returns:
-        --------
-        tuple
-            A tuple containing:
-                - Dataset: A new dataset with inputs and corresponding labels.
-                - dict: A mapping from concatenated target variable values to label IDs.
-        """
-        inputs = []
-        labels = []
-        label_to_setting = {}
-
-        new_id = 0
-        for example in dataset:
-            # Store input
-            inputs.append(example["input"])
-
-            # Run forward model and get target variable values
-            setting = self.run_forward(example["input"])
-            target_labels = [str(setting[var]) for var in target_variables]
-
-            # Assign or create a label ID
-            label_key = "".join(target_labels)
-            if label_key in label_to_setting:
-                id_value = label_to_setting[label_key]
-            else:
-                id_value = new_id
-                label_to_setting[label_key] = new_id
-                new_id += 1
-
-            labels.append(id_value)
-
-        return Dataset.from_dict({"input": inputs, "label": labels}), label_to_setting
+        return result
 
     def can_distinguish_with_dataset(
-        self, dataset, target_variables1, target_variables2
-    ):
+        self,
+        examples: list[CounterfactualExample],
+        target_variables1: list[str],
+        target_variables2: list[str] | None,
+        prints: bool = True,
+    ) -> dict[str, float | int]:
         """
         Check if the model can distinguish between two sets of target variables
-        using interchange interventions on a counterfactual dataset.
+        using interchange interventions on counterfactual examples.
         """
-
         count = 0
-        for example in dataset:
-            input = example["input"]
-            counterfactual_inputs = example["counterfactual_inputs"]
-            assert len(counterfactual_inputs) == 1
+        for example in examples:
+            trace: CausalTrace = example["input"]
+            counterfactual_traces: list[CausalTrace] = example["counterfactual_inputs"]
+            assert len(counterfactual_traces) == 1
 
+            cf_trace = counterfactual_traces[0]
+
+            # Perform interchange using run_interchange (supports A<-B syntax)
             setting1 = self.run_interchange(
-                input, {var: counterfactual_inputs[0] for var in target_variables1}
+                trace, {var: cf_trace for var in target_variables1}
             )
+
             if target_variables2 is not None:
                 setting2 = self.run_interchange(
-                    input, {var: counterfactual_inputs[0] for var in target_variables2}
+                    trace, {var: cf_trace for var in target_variables2}
                 )
                 if setting1["raw_output"] != setting2["raw_output"]:
                     count += 1
             else:
-                if setting1["raw_output"] != self.run_forward(input)["raw_output"]:
+                # Baseline is just the input trace (no counterfactual intervention)
+                if setting1["raw_output"] != trace["raw_output"]:
                     count += 1
 
-        proportion = count / len(dataset)
+        proportion = count / len(examples)
 
         logger.debug(
-            f"Can distinguish between {target_variables1} and {target_variables2}: {count} out of {len(dataset)} examples"
+            f"Can distinguish between {target_variables1} and {target_variables2}: {count} out of {len(examples)} examples"
         )
         logger.debug(f"Proportion of distinguishable examples: {proportion:.2f}")
 
         return {"proportion": proportion, "count": count}
-
-    def generate_equiv_classes(self):
-        """
-        Generate equivalence classes for each variable.
-
-        This method computes, for each non-input variable, the sets of parent values
-        that produce each possible value of the variable.
-        """
-        for var in self.variables:
-            if var in self.inputs or var in self.equiv_classes:
-                continue
-            self.equiv_classes[var] = {val: [] for val in self.values[var]}
-            for parent_values in itertools.product(
-                *[self.values[par] for par in self.parents[var]]
-            ):
-                value = self.mechanisms[var](*parent_values)
-                self.equiv_classes[var][value].append(
-                    {par: parent_values[i] for i, par in enumerate(self.parents[var])}
-                )
-
-    def find_live_paths(self, intervention):
-        """
-        Find all live causal paths in the model given an intervention.
-
-        A live path is a sequence of variables where changing the value of one
-        variable can affect the value of the next variable in the sequence.
-
-        Parameters:
-        -----------
-        intervention : dict
-            A dictionary mapping variables to their intervened values.
-
-        Returns:
-        --------
-        dict
-            A dictionary mapping path lengths to lists of paths.
-        """
-        actual_setting = self.run_forward(intervention)
-        paths = {1: [[variable] for variable in self.variables]}
-        step = 2
-        while True:
-            paths[step] = []
-            for path in paths[step - 1]:
-                for child in self.children[path[-1]]:
-                    actual_cause = False
-                    for value in self.values[path[-1]]:
-                        newintervention = copy.deepcopy(intervention)
-                        newintervention[path[-1]] = value
-                        counterfactual_setting = self.run_forward(newintervention)
-                        if counterfactual_setting[child] != actual_setting[child]:
-                            actual_cause = True
-                    if actual_cause:
-                        paths[step].append(copy.deepcopy(path) + [child])
-            if len(paths[step]) == 0:
-                break
-            step += 1
-        del paths[1]
-        return paths
-
-    def sample_input_tree_balanced(self, output_var=None, output_var_value=None):
-        """
-        Sample an input that leads to a specific output value using a balanced tree approach.
-
-        Parameters:
-        -----------
-        output_var : str, optional
-            The output variable to target (default is the first output variable).
-        output_var_value : any, optional
-            The desired value for the output variable (default is a random choice).
-
-        Returns:
-        --------
-        dict
-            A dictionary mapping input variables to their sampled values.
-        """
-        assert output_var is not None or len(self.outputs) == 1
-        self.generate_equiv_classes()
-
-        if output_var is None:
-            output_var = self.outputs[0]
-        if output_var_value is None:
-            output_var_value = random.choice(self.values[output_var])
-
-        def create_input(var, value, input_dict={}):
-            """
-            Recursively create an input that leads to the specified value for a variable.
-
-            Parameters:
-            -----------
-            var : str
-                The variable to target.
-            value : any
-                The desired value for the variable.
-            input_dict : dict, optional
-                The input dictionary to build upon (default is an empty dictionary).
-
-            Returns:
-            --------
-            dict
-                The updated input dictionary.
-            """
-            parent_values = random.choice(self.equiv_classes[var][value])
-            for parent in parent_values:
-                if parent in self.inputs:
-                    input_dict[parent] = parent_values[parent]
-                else:
-                    create_input(parent, parent_values[parent], input_dict)
-            return input_dict
-
-        input_setting = create_input(output_var, output_var_value)
-        for input_var in self.inputs:
-            if input_var not in input_setting:
-                input_setting[input_var] = random.choice(self.values[input_var])
-        return input_setting
-
-    def get_path_maxlen_filter(self, lengths):
-        """
-        Get a filter function that checks if the maximum length of any live path
-        is in a given set of lengths.
-
-        Parameters:
-        -----------
-        lengths : list or set
-            A list or set of path lengths to check against.
-
-        Returns:
-        --------
-        function
-            A filter function that takes a setting and returns a boolean.
-        """
-
-        def check_path(total_setting):
-            """
-            Check if the maximum length of any live path is in the specified lengths.
-
-            Parameters:
-            -----------
-            total_setting : dict
-                A dictionary mapping variables to their values.
-
-            Returns:
-            --------
-            bool
-                True if the maximum length is in the specified lengths, False otherwise.
-            """
-            input_setting = {var: total_setting[var] for var in self.inputs}
-            paths = self.find_live_paths(input_setting)
-            max_len = max(
-                [length for length in paths.keys() if len(paths[length]) != 0]
-            )
-            if max_len in lengths:
-                return True
-            return False
-
-        return check_path
-
-    def get_partial_filter(self, partial_setting):
-        """
-        Get a filter function that checks if a setting matches a partial setting.
-
-        Parameters:
-        -----------
-        partial_setting : dict
-            A dictionary mapping variables to their desired values.
-
-        Returns:
-        --------
-        function
-            A filter function that takes a setting and returns a boolean.
-        """
-
-        def compare(total_setting):
-            """
-            Check if a setting matches the partial setting.
-
-            Parameters:
-            -----------
-            total_setting : dict
-                A dictionary mapping variables to their values.
-
-            Returns:
-            --------
-            bool
-                True if the setting matches the partial setting, False otherwise.
-            """
-            for var in partial_setting:
-                if total_setting[var] != partial_setting[var]:
-                    return False
-            return True
-
-        return compare
-
-    def get_specific_path_filter(self, start, end):
-        """
-        Get a filter function that checks if there is a live path from a start
-        variable to an end variable.
-
-        Parameters:
-        -----------
-        start : str
-            The start variable of the path.
-        end : str
-            The end variable of the path.
-
-        Returns:
-        --------
-        function
-            A filter function that takes a setting and returns a boolean.
-        """
-
-        def check_path(total_setting):
-            """
-            Check if there is a live path from the start variable to the end variable.
-
-            Parameters:
-            -----------
-            total_setting : dict
-                A dictionary mapping variables to their values.
-
-            Returns:
-            --------
-            bool
-                True if there is a live path from start to end, False otherwise.
-            """
-            input_setting = {var: total_setting[var] for var in self.inputs}
-            paths = self.find_live_paths(input_setting)
-            for k in paths:
-                for path in paths[k]:
-                    if path[0] == start and path[-1] == end:
-                        return True
-            return False
-
-        return check_path
-
-
-def simple_example():
-    """
-    Run a simple example of a causal model.
-
-    This creates a small causal model with three variables plus raw_input/raw_output
-    and runs it with and without interventions.
-    """
-    variables = ["A", "B", "C", "raw_input", "raw_output"]
-    values = {
-        "A": [True, False],
-        "B": [True, False],
-        "C": [True, False],
-        "raw_input": None,
-        "raw_output": None,
-    }
-    parents = {
-        "A": [],
-        "B": [],
-        "C": ["A", "B"],
-        "raw_input": ["A", "B"],  # raw_input depends on input variables
-        "raw_output": ["C"],  # raw_output depends on output variables
-    }
-
-    def A():
-        return True
-
-    def B():
-        return False
-
-    def C(a, b):
-        return a and b
-
-    def raw_input(a, b):
-        return f"Input: A={a}, B={b}"
-
-    def raw_output(c):
-        return f"Output: C={c}"
-
-    mechanisms = {
-        "A": A,
-        "B": B,
-        "C": C,
-        "raw_input": raw_input,
-        "raw_output": raw_output,
-    }
-
-    model = CausalModel(variables, values, parents, mechanisms)
-    print_structure(model)
-
-    print("No intervention:")
-    result = model.run_forward()
-    print(result)
-    print(f"Raw input: {result['raw_input']}")
-    print(f"Raw output: {result['raw_output']}")
-    print()
-
-    print_setting(model, result)
-
-    print("Intervention setting A and B to TRUE:")
-    intervention_result = model.run_forward({"A": True, "B": True})
-    print(intervention_result)
-    print(f"Raw input: {intervention_result['raw_input']}")
-    print(f"Raw output: {intervention_result['raw_output']}")
-
-    print("Timesteps:", model.timesteps)
-
-
-if __name__ == "__main__":
-    simple_example()

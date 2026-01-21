@@ -1,16 +1,9 @@
 import pytest
 import torch
 import logging
-from typing import Any
 from unittest.mock import MagicMock, patch
-from torch.utils.data import DataLoader
 
 from causalab.neural.pyvene_core.collect import collect_features
-
-
-def shallow_collate_fn(batch: list[dict[str, Any]]) -> dict[str, list[Any]]:
-    """Collate function that preserves nested structures."""
-    return {key: [item[key] for item in batch] for key in batch[0].keys()}
 
 
 class TestCollectFeatures:
@@ -55,11 +48,6 @@ class TestCollectFeatures:
         mock_loaded_inputs,
     ):
         """Test basic feature collection functionality."""
-        # Create dataloader
-        dataloader = DataLoader(
-            mock_dataset, batch_size=2, collate_fn=shallow_collate_fn
-        )
-
         # Mock the intervenable model
         mock_intervenable_model = MagicMock()
 
@@ -80,9 +68,10 @@ class TestCollectFeatures:
         ):
             # Call the function
             result = collect_features(
-                dataloader,
+                mock_dataset,
                 mock_tiny_lm,
                 model_units,
+                batch_size=2,
             )
 
             # Verify that prepare_intervenable_model was called with "collect" intervention type
@@ -108,10 +97,6 @@ class TestCollectFeatures:
         caplog,
     ):
         """Test verbose output functionality."""
-        dataloader = DataLoader(
-            mock_dataset, batch_size=2, collate_fn=shallow_collate_fn
-        )
-
         mock_intervenable_model = MagicMock()
         mock_intervenable_model.side_effect = lambda *args, **kwargs: (
             (MagicMock(), [torch.randn(2, 32), torch.randn(2, 32)]),
@@ -130,9 +115,10 @@ class TestCollectFeatures:
             ),
         ):
             collect_features(
-                dataloader,
+                mock_dataset,
                 mock_tiny_lm,
                 model_units,
+                batch_size=2,
             )
 
             # Check that diagnostic information was logged
@@ -147,10 +133,6 @@ class TestCollectFeatures:
         mock_loaded_inputs,
     ):
         """Test that tensors are moved to CPU for memory efficiency."""
-        dataloader = DataLoader(
-            mock_dataset, batch_size=2, collate_fn=shallow_collate_fn
-        )
-
         # Create mock model that returns tensors on a specific device
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         mock_intervenable_model = MagicMock()
@@ -175,9 +157,10 @@ class TestCollectFeatures:
         ):
             # Call the function
             result = collect_features(
-                dataloader,
+                mock_dataset,
                 mock_tiny_lm,
                 model_units,
+                batch_size=2,
             )
 
             # Verify all tensors are on CPU
@@ -192,10 +175,6 @@ class TestCollectFeatures:
         mock_loaded_inputs,
     ):
         """Test that result tensors have correct shape (n_samples, n_features)."""
-        dataloader = DataLoader(
-            mock_dataset, batch_size=2, collate_fn=shallow_collate_fn
-        )
-
         hidden_size = 32
         mock_intervenable_model = MagicMock()
 
@@ -218,9 +197,10 @@ class TestCollectFeatures:
             patch.object(mock_tiny_lm, "load", return_value=mock_loaded_inputs),
         ):
             result = collect_features(
-                dataloader,
+                mock_dataset,
                 mock_tiny_lm,
                 model_units,
+                batch_size=2,
             )
 
             # Each tensor should have shape (n_samples, hidden_size)
@@ -283,10 +263,6 @@ class TestCollectFeaturesPyvene18Plus:
         mock_loaded_inputs,
     ):
         """Test processing of 4D attention head activations in pyvene 0.1.8+ format."""
-        dataloader = DataLoader(
-            mock_dataset, batch_size=2, collate_fn=shallow_collate_fn
-        )
-
         # Mock pyvene 0.1.8+ format: one tensor per unit with 4D shape
         # Shape: (batch_size=2, seq_len=1, num_heads=4, head_dim=8)
         mock_activations = [
@@ -308,7 +284,9 @@ class TestCollectFeaturesPyvene18Plus:
             patch("causalab.neural.pyvene_core.collect.delete_intervenable_model"),
             patch.object(mock_tiny_lm, "load", return_value=mock_loaded_inputs),
         ):
-            result = collect_features(dataloader, mock_tiny_lm, attention_head_units)
+            result = collect_features(
+                mock_dataset, mock_tiny_lm, attention_head_units, batch_size=2
+            )
 
             # Verify correct processing - result is dict keyed by unit ID
             assert len(result) == 2  # Two units
@@ -328,10 +306,6 @@ class TestCollectFeaturesPyvene18Plus:
         mock_loaded_inputs,
     ):
         """Test processing of 3D residual stream activations in pyvene 0.1.8+ format."""
-        dataloader = DataLoader(
-            mock_dataset, batch_size=2, collate_fn=shallow_collate_fn
-        )
-
         # Mock pyvene 0.1.8+ format: one tensor per unit with 3D shape
         # Shape: (batch_size=2, seq_len=1, hidden_dim=32)
         mock_activations = [
@@ -353,7 +327,9 @@ class TestCollectFeaturesPyvene18Plus:
             patch("causalab.neural.pyvene_core.collect.delete_intervenable_model"),
             patch.object(mock_tiny_lm, "load", return_value=mock_loaded_inputs),
         ):
-            result = collect_features(dataloader, mock_tiny_lm, residual_stream_units)
+            result = collect_features(
+                mock_dataset, mock_tiny_lm, residual_stream_units, batch_size=2
+            )
 
             # Verify correct processing - result is dict keyed by unit ID
             assert len(result) == 2  # Two units
@@ -369,10 +345,6 @@ class TestCollectFeaturesPyvene18Plus:
         self, mock_tiny_lm, mock_dataset, mock_loaded_inputs
     ):
         """Test handling of different activation shapes in the same call."""
-        dataloader = DataLoader(
-            mock_dataset, batch_size=2, collate_fn=shallow_collate_fn
-        )
-
         # Mixed units: some 2D, some 3D
         unit1 = MagicMock()
         unit1.id = "Unit1"
@@ -406,9 +378,10 @@ class TestCollectFeaturesPyvene18Plus:
         ):
             # MagicMock objects used as test doubles for AtomicModelUnit
             result = collect_features(
-                dataloader,
+                mock_dataset,
                 mock_tiny_lm,
                 mixed_units,  # pyright: ignore[reportArgumentType]
+                batch_size=2,
             )
 
             # Verify both shapes are handled correctly

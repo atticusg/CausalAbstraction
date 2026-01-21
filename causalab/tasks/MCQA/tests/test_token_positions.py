@@ -5,7 +5,7 @@ This script tests token position functions with actual tokenizer integration.
 It verifies that tokens are correctly identified in MCQA prompts.
 """
 
-from causalab.tasks.MCQA.causal_models import positional_causal_model, NUM_CHOICES
+from causalab.tasks.MCQA.causal_models import NUM_CHOICES
 from causalab.tasks.MCQA.counterfactuals import sample_answerable_question
 from causalab.tasks.MCQA.token_positions import create_token_positions
 from causalab.neural.pipeline import LMPipeline
@@ -19,11 +19,10 @@ def test_basic_tokenization():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     pipeline = LMPipeline("gpt2", max_new_tokens=1, device=device, max_length=32)
 
-    # Create a simple example
-    input_sample = sample_answerable_question()
-    output = positional_causal_model.run_forward(input_sample)
+    # sample_answerable_question() returns a fully computed CausalTrace
+    trace = sample_answerable_question()
 
-    prompt = output['raw_input']
+    prompt = trace["raw_input"]
     print(f"Prompt:\n{prompt}\n")
 
     # Tokenize
@@ -50,17 +49,16 @@ def test_get_symbol_index():
     # Create token positions
     token_positions = create_token_positions(pipeline)
 
-    # Create example
-    input_sample = sample_answerable_question()
-    output = positional_causal_model.run_forward(input_sample)
+    # sample_answerable_question() returns a fully computed CausalTrace
+    trace = sample_answerable_question()
 
-    print(f"Prompt:\n{output['raw_input']}\n")
+    print(f"Prompt:\n{trace['raw_input']}\n")
 
     # Test for each symbol position
     for i in range(NUM_CHOICES):
-        symbol = input_sample[f'symbol{i}']
-        token_pos = token_positions[f'symbol{i}']
-        indices = token_pos.index(input_sample)
+        symbol = trace[f"symbol{i}"]
+        token_pos = token_positions[f"symbol{i}"]
+        indices = token_pos.index(trace)
 
         print(f"Symbol {i}: '{symbol}'")
         print(f"  Token index: {indices}")
@@ -70,14 +68,15 @@ def test_get_symbol_index():
         assert len(indices) == 1, "Should return single index"
 
         # Decode the token at that position
-        tokenized = pipeline.load({"raw_input": input_sample['raw_input']})
-        tokens = tokenized['input_ids'][0]
+        tokenized = pipeline.load([trace])
+        tokens = tokenized["input_ids"][0]
         token_at_index = pipeline.tokenizer.decode([tokens[indices[0]]])
         print(f"  Token at index: {repr(token_at_index)}")
 
         # Note: The token might include whitespace, so we check if symbol is in it
-        assert symbol in token_at_index or token_at_index.strip() == symbol, \
+        assert symbol in token_at_index or token_at_index.strip() == symbol, (
             f"Token should contain symbol '{symbol}'"
+        )
 
     print("\n✓ Test 2 passed\n")
 
@@ -91,17 +90,17 @@ def test_get_correct_symbol_index():
 
     # Create token positions
     token_positions = create_token_positions(pipeline)
-    correct_symbol_pos = token_positions['correct_symbol']
+    correct_symbol_pos = token_positions["correct_symbol"]
 
     # Test multiple examples
     for i in range(5):
-        input_sample = sample_answerable_question()
-        output = positional_causal_model.run_forward(input_sample)
+        # sample_answerable_question() returns a fully computed CausalTrace
+        trace = sample_answerable_question()
 
-        correct_symbol = output['answer']
-        indices = correct_symbol_pos.index(input_sample)
+        correct_symbol = trace["answer"]
+        indices = correct_symbol_pos.index(trace)
 
-        print(f"Example {i+1}:")
+        print(f"Example {i + 1}:")
         print(f"  Correct answer: '{correct_symbol}'")
         print(f"  Token index: {indices}")
 
@@ -110,8 +109,8 @@ def test_get_correct_symbol_index():
         assert len(indices) == 1, "Should return single index"
 
         # Decode the token
-        tokenized = pipeline.load({"raw_input": input_sample['raw_input']})
-        tokens = tokenized['input_ids'][0]
+        tokenized = pipeline.load([trace])
+        tokens = tokenized["input_ids"][0]
         token_at_index = pipeline.tokenizer.decode([tokens[indices[0]]])
         print(f"  Token at index: {repr(token_at_index)}")
 
@@ -130,14 +129,14 @@ def test_token_position_objects():
 
     # Test token positions for each symbol
     for i in range(NUM_CHOICES):
-        token_pos = token_positions[f'symbol{i}']
+        token_pos = token_positions[f"symbol{i}"]
 
         print(f"Symbol {i} TokenPosition:")
         print(f"  ID: {token_pos.id}")
 
-        # Test with a sample
-        input_sample = sample_answerable_question()
-        indices = token_pos.index(input_sample)
+        # Test with a sample - sample_answerable_question() returns a CausalTrace
+        trace = sample_answerable_question()
+        indices = token_pos.index(trace)
 
         print(f"  Sample indices: {indices}")
         assert isinstance(indices, list), "Should return list of indices"
@@ -155,19 +154,19 @@ def test_correct_symbol_token_position():
 
     # Create all token positions
     token_positions = create_token_positions(pipeline)
-    token_pos = token_positions['correct_symbol']
+    token_pos = token_positions["correct_symbol"]
 
     print(f"Correct Symbol TokenPosition ID: {token_pos.id}")
 
     # Test with multiple samples
     for i in range(5):
-        input_sample = sample_answerable_question()
-        output = positional_causal_model.run_forward(input_sample)
+        # sample_answerable_question() returns a fully computed CausalTrace
+        trace = sample_answerable_question()
 
-        indices = token_pos.index(input_sample)
-        correct_answer = output['answer']
+        indices = token_pos.index(trace)
+        correct_answer = trace["answer"]
 
-        print(f"Sample {i+1}: Correct answer '{correct_answer}', indices {indices}")
+        print(f"Sample {i + 1}: Correct answer '{correct_answer}', indices {indices}")
 
         assert len(indices) == 1, "Should return single index"
 
@@ -183,27 +182,30 @@ def test_last_token_position():
 
     # Create all token positions
     token_positions = create_token_positions(pipeline)
-    token_pos = token_positions['last_token']
+    token_pos = token_positions["last_token"]
 
     print(f"Last Token TokenPosition ID: {token_pos.id}")
 
     # Test with samples
     for i in range(3):
-        input_sample = sample_answerable_question()
-        output = positional_causal_model.run_forward(input_sample)
+        # sample_answerable_question() returns a fully computed CausalTrace
+        trace = sample_answerable_question()
 
-        indices = token_pos.index(input_sample)
+        indices = token_pos.index(trace)
 
-        print(f"Sample {i+1}:")
+        print(f"Sample {i + 1}:")
         print(f"  Last token index: {indices}")
 
         # Decode to see what it is
-        tokens = pipeline.tokenizer.encode(output['raw_input'])
-        if indices[0] < len(tokens):
-            last_token = pipeline.tokenizer.decode([tokens[indices[0]]])
+        tokens = pipeline.tokenizer.encode(trace["raw_input"])
+        # indices is list[int] when batch=False (default)
+        first_idx = indices[0]
+        assert isinstance(first_idx, int), "Expected single index, not batch"
+        if first_idx < len(tokens):
+            last_token = pipeline.tokenizer.decode([tokens[first_idx]])
             print(f"  Last token: {repr(last_token)}")
         else:
-            print(f"  Index {indices[0]} is at boundary (total tokens: {len(tokens)})")
+            print(f"  Index {first_idx} is at boundary (total tokens: {len(tokens)})")
 
     print("\n✓ Test 6 passed\n")
 
@@ -248,12 +250,13 @@ def test_highlight_selected_token():
 
     token_positions = create_token_positions(pipeline)
 
-    input_sample = sample_answerable_question()
+    # sample_answerable_question() returns a fully computed CausalTrace
+    trace = sample_answerable_question()
 
     print("Highlighting tokens in sample prompt:\n")
 
     for name, token_pos in list(token_positions.items())[:4]:  # Just show first few
-        highlighted = token_pos.highlight_selected_token(input_sample)
+        highlighted = token_pos.highlight_selected_token(trace)
         print(f"{name}:")
         print(highlighted)
         print()
@@ -270,12 +273,12 @@ def test_edge_case_symbol_not_found():
 
     # Create token positions
     token_positions = create_token_positions(pipeline)
-    symbol0_pos = token_positions['symbol0']
+    symbol0_pos = token_positions["symbol0"]
 
     # Create a malformed input where symbol doesn't appear in raw_input
     input_sample = {
-        'symbol0': 'Z',
-        'raw_input': 'The banana is yellow. What color is the banana?\nA. blue\nB. yellow\nAnswer:'
+        "symbol0": "Z",
+        "raw_input": "The banana is yellow. What color is the banana?\nA. blue\nB. yellow\nAnswer:",
     }
 
     print("Testing with symbol 'Z' that doesn't appear in prompt...")
@@ -299,30 +302,36 @@ def test_period_tokens():
 
     token_positions = create_token_positions(pipeline)
 
-    input_sample = sample_answerable_question()
-    output = positional_causal_model.run_forward(input_sample)
+    # sample_answerable_question() returns a fully computed CausalTrace
+    trace = sample_answerable_question()
 
-    print(f"Prompt:\n{output['raw_input']}\n")
+    print(f"Prompt:\n{trace['raw_input']}\n")
 
     # Test symbol0_period
-    if 'symbol0_period' in token_positions:
-        period_pos = token_positions['symbol0_period']
-        indices = period_pos.index(input_sample)
+    if "symbol0_period" in token_positions:
+        period_pos = token_positions["symbol0_period"]
+        indices = period_pos.index(trace)
 
         print(f"Symbol0 period token index: {indices}")
 
         # Check it's right after symbol0
-        symbol0_pos = token_positions['symbol0']
-        symbol0_indices = symbol0_pos.index(input_sample)
+        symbol0_pos = token_positions["symbol0"]
+        symbol0_indices = symbol0_pos.index(trace)
+
+        # Type narrowing - indices are list[int] when batch=False (default)
+        period_idx = indices[0]
+        symbol_idx = symbol0_indices[0]
+        assert isinstance(period_idx, int) and isinstance(symbol_idx, int)
 
         print(f"Symbol0 index: {symbol0_indices}")
-        print(f"Expected period index: {symbol0_indices[0] + 1}")
-        print(f"Actual period index: {indices[0]}")
+        print(f"Expected period index: {symbol_idx + 1}")
+        print(f"Actual period index: {period_idx}")
 
         # Note: This might not always be exactly +1 depending on tokenization
         # but it should be close
-        assert indices[0] == symbol0_indices[0] + 1, \
+        assert period_idx == symbol_idx + 1, (
             "Period should be immediately after symbol (may fail with some tokenizers)"
+        )
 
     print("\n✓ Test 10 passed\n")
 
@@ -352,9 +361,9 @@ def main():
             print(f"⚠ Period token test failed (tokenizer-dependent): {e}")
             print("  This is expected with some tokenizers\n")
 
-        print("\n" + "="*70)
+        print("\n" + "=" * 70)
         print("🎉 All token position tests passed!")
-        print("="*70)
+        print("=" * 70)
         print("\nToken position functions available:")
         print("✓ create_token_positions - Factory function for all positions")
         print("✓ TokenPosition objects - Dynamic position identification")
@@ -363,6 +372,7 @@ def main():
     except Exception as e:
         print(f"\n❌ Test failed with error: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 

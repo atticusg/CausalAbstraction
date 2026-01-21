@@ -76,15 +76,14 @@ import os
 from pathlib import Path
 from typing import Dict, Any, List, Callable, Tuple
 
-from datasets import load_from_disk, Dataset
-
 from tqdm import tqdm
 
 from causalab.neural.pipeline import LMPipeline
+from causalab.causal.causal_utils import load_counterfactual_examples
 from causalab.neural.model_units import InterchangeTarget
 from causalab.neural.pyvene_core.interchange import run_interchange_interventions
 from causalab.causal.causal_model import CausalModel
-from causalab.causal.counterfactual_dataset import CounterfactualDataset
+from causalab.causal.counterfactual_dataset import CounterfactualExample
 from causalab.experiments.metric import (
     InterchangeMetric,
     score_intervention_outputs,
@@ -99,6 +98,7 @@ from causalab.experiments.visualizations import (
 logger = logging.getLogger(__name__)
 
 
+# currently unused but not dead code - usage to come
 def run_interchange_score_heatmap(
     causal_model: CausalModel,
     interchange_targets: Dict[tuple[Any, ...], InterchangeTarget],
@@ -110,6 +110,7 @@ def run_interchange_score_heatmap(
     metric: Callable[[Any, Any], bool],
     save_results: bool = True,
     verbose: bool = True,
+    source_pipeline: LMPipeline | None = None,
 ) -> Dict[str, Any]:
     """
     Run interchange interventions and generate score heatmaps for any component type.
@@ -126,7 +127,7 @@ def run_interchange_score_heatmap(
         interchange_targets: Pre-built Dict[tuple, InterchangeTarget] from any builder.
                             Should use mode="one_target_per_unit".
         dataset_path: Path to filtered dataset directory
-        pipeline: LMPipeline object with loaded model
+        pipeline: Target LMPipeline where interventions are applied
         target_variable_groups: List of variable groups to evaluate. Each group is a tuple
                                of variable names that are evaluated jointly.
                                (e.g., [("answer",), ("answer", "position")])
@@ -135,6 +136,8 @@ def run_interchange_score_heatmap(
         metric: Function to compare neural output with expected output
         save_results: Whether to save metadata and results to disk (default: True)
         verbose: Whether to print progress information
+        source_pipeline: If provided, collect activations from this pipeline instead
+            of the target pipeline. Enables cross-model patching.
 
     Returns:
         Dictionary containing:
@@ -163,11 +166,8 @@ def run_interchange_score_heatmap(
     )
 
     # Load dataset
-    dataset_name = Path(dataset_path).parent.name
-    hf_dataset = load_from_disk(dataset_path)
-    if not isinstance(hf_dataset, Dataset):
-        raise TypeError(f"Expected Dataset, got {type(hf_dataset).__name__}")
-    dataset = CounterfactualDataset(dataset=hf_dataset, id=dataset_name)
+    dataset_name = Path(dataset_path).stem
+    dataset = load_counterfactual_examples(dataset_path, causal_model)
 
     # Run interventions
     raw_results: Dict[tuple[Any, ...], Dict[str, Any]] = {}
@@ -184,6 +184,7 @@ def run_interchange_score_heatmap(
             interchange_target=target,
             batch_size=batch_size,
             output_scores=False,
+            source_pipeline=source_pipeline,
         )
     pbar.close()
 
@@ -267,9 +268,10 @@ def run_interchange_custom_score_heatmap(
     batch_size: int,
     output_dir: str,
     metric: InterchangeMetric,
-    causal_model: CausalModel | None = None,
+    causal_model: CausalModel,
     save_results: bool = True,
     verbose: bool = True,
+    source_pipeline: LMPipeline | None = None,
 ) -> Dict[str, Any]:
     """
     Run interchange interventions with custom metric and generate score heatmaps.
@@ -289,13 +291,15 @@ def run_interchange_custom_score_heatmap(
         interchange_targets: Pre-built Dict[tuple, InterchangeTarget] from any builder.
                             Should use mode="one_target_per_unit".
         dataset_path: Path to filtered dataset directory
-        pipeline: LMPipeline object with loaded model
+        pipeline: Target LMPipeline where interventions are applied
         batch_size: Batch size for evaluation
         output_dir: Output directory for results
         metric: InterchangeMetric defining the scoring function and data requirements
-        causal_model: Required if metric.needs_causal_expected is True
+        causal_model: CausalModel to use for deserializing CausalTrace objects
         save_results: Whether to save metadata and results to disk (default: True)
         verbose: Whether to print progress information
+        source_pipeline: If provided, collect activations from this pipeline instead
+            of the target pipeline. Enables cross-model patching.
 
     Returns:
         Dictionary containing:
@@ -340,10 +344,6 @@ def run_interchange_custom_score_heatmap(
 
     # Validate required arguments
     if metric.needs_causal_expected:
-        if causal_model is None:
-            raise ValueError(
-                "causal_model is required when metric.needs_causal_expected is True"
-            )
         if metric.target_variables is None:
             raise ValueError(
                 "metric.target_variables is required when metric.needs_causal_expected is True. "
@@ -362,11 +362,10 @@ def run_interchange_custom_score_heatmap(
     )
 
     # Load dataset
-    dataset_name = Path(dataset_path).parent.name
-    hf_dataset = load_from_disk(dataset_path)
-    if not isinstance(hf_dataset, Dataset):
-        raise TypeError(f"Expected Dataset, got {type(hf_dataset).__name__}")
-    dataset = CounterfactualDataset(dataset=hf_dataset, id=dataset_name)
+    dataset_name = Path(dataset_path).stem
+    dataset: list[CounterfactualExample] = load_counterfactual_examples(
+        dataset_path, causal_model
+    )
 
     # Compute original outputs if needed
     original_outputs = None
@@ -389,6 +388,7 @@ def run_interchange_custom_score_heatmap(
             interchange_target=target,
             batch_size=batch_size,
             output_scores=False,
+            source_pipeline=source_pipeline,
         )
     pbar.close()
 

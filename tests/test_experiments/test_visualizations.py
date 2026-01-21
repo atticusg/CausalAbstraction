@@ -4,6 +4,8 @@ Test suite for experiments/visualizations/
 Tests the visualization functions for attention head and residual stream interventions.
 """
 
+from typing import Dict, List, Optional
+
 import pytest
 import numpy as np
 import matplotlib
@@ -21,6 +23,7 @@ from causalab.experiments.visualizations import (
     extract_layer_head_from_unit_id,
     plot_residual_stream_heatmap,
 )
+from causalab.experiments.visualizations.unit_id import extract_grid_dimensions
 from causalab.experiments.visualizations.utils import (
     create_heatmap,
     create_binary_mask_heatmap,
@@ -375,3 +378,65 @@ class TestCreateBinaryMaskHeatmap:
                 )
             assert os.path.exists(save_path)
         plt.close("all")
+
+
+# ---------------------- Tests for extract_grid_dimensions ---------------------- #
+
+
+class TestExtractGridDimensions:
+    """Tests for the extract_grid_dimensions function."""
+
+    def test_token_position_ordering_preserved(self):
+        """Test that token position order is preserved, not alphabetically sorted."""
+        # Feature indices with non-alphabetical insertion order
+        feature_indices: Dict[str, Optional[List[int]]] = {
+            "ResidualStream(Layer-0,block_output,Token-zebra)": None,
+            "ResidualStream(Layer-0,block_output,Token-alpha)": None,
+            "ResidualStream(Layer-0,block_output,Token-middle)": None,
+        }
+        dims = extract_grid_dimensions("residual_stream", feature_indices)
+        # Should preserve insertion order, not alphabetical
+        assert dims["token_position_ids"] == ["zebra", "alpha", "middle"]
+        # Layers should still be sorted
+        assert dims["layers"] == [0]
+
+    def test_token_position_ordering_with_multiple_layers(self):
+        """Test token position ordering with multiple layers."""
+        feature_indices: Dict[str, Optional[List[int]]] = {
+            "ResidualStream(Layer-2,block_output,Token-last_token)": None,
+            "ResidualStream(Layer-0,block_output,Token-first_token)": None,
+            "ResidualStream(Layer-1,block_output,Token-middle_token)": None,
+            "ResidualStream(Layer-2,block_output,Token-first_token)": None,
+            "ResidualStream(Layer-0,block_output,Token-last_token)": None,
+        }
+        dims = extract_grid_dimensions("residual_stream", feature_indices)
+        # Token positions should preserve first-seen order
+        assert dims["token_position_ids"] == [
+            "last_token",
+            "first_token",
+            "middle_token",
+        ]
+        # Layers should be numerically sorted
+        assert dims["layers"] == [0, 1, 2]
+
+    def test_mlp_token_position_ordering(self):
+        """Test that MLP token positions also preserve order."""
+        feature_indices: Dict[str, Optional[List[int]]] = {
+            "MLP(Layer-0,mlp_output,Token-pos_c)": None,
+            "MLP(Layer-0,mlp_output,Token-pos_a)": None,
+            "MLP(Layer-0,mlp_output,Token-pos_b)": None,
+        }
+        dims = extract_grid_dimensions("mlp", feature_indices)
+        assert dims["token_position_ids"] == ["pos_c", "pos_a", "pos_b"]
+
+    def test_attention_head_dimensions(self):
+        """Test that attention head dimensions are still sorted."""
+        feature_indices: Dict[str, Optional[List[int]]] = {
+            "AttentionHead(Layer-2,Head-5,Token-last)": None,
+            "AttentionHead(Layer-0,Head-3,Token-last)": None,
+            "AttentionHead(Layer-1,Head-1,Token-last)": None,
+        }
+        dims = extract_grid_dimensions("attention_head", feature_indices)
+        # Both layers and heads should be sorted for attention
+        assert dims["layers"] == [0, 1, 2]
+        assert dims["heads"] == [1, 3, 5]

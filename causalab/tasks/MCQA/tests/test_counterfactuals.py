@@ -19,36 +19,30 @@ def test_sample_answerable_question():
     """Test that sample_answerable_question generates valid questions."""
     print("=== Test 1: Sample Answerable Question ===")
 
-    model = positional_causal_model
-
     print("Generating 10 answerable questions:\n")
 
     for i in range(10):
-        input_sample = sample_answerable_question()
-
-        # Run forward to get answer
-        output = model.run_forward(input_sample)
+        # sample_answerable_question() returns a CausalTrace with all computed values
+        trace = sample_answerable_question()
 
         print(f"Sample {i + 1}:")
-        print(f"  Object-Color: {input_sample['object_color']}")
-        print(f"  Choices: {input_sample['choice0']}, {input_sample['choice1']}")
-        print(f"  Symbols: {input_sample['symbol0']}, {input_sample['symbol1']}")
-        print(f"  Answer position: {output['answer_position']}")
-        print(f"  Answer: {output['answer']}")
+        print(f"  Object-Color: {trace['object']}, {trace['color']}")
+        print(f"  Choices: {trace['choice0']}, {trace['choice1']}")
+        print(f"  Symbols: {trace['symbol0']}, {trace['symbol1']}")
+        print(f"  Answer position: {trace['answer_position']}")
+        print(f"  Answer: {trace['answer']}")
 
         # Verify it's answerable (color is in choices)
-        color = input_sample["object_color"][1]
-        choices = [input_sample[f"choice{i}"] for i in range(NUM_CHOICES)]
+        color = trace["color"]
+        choices = [trace[f"choice{j}"] for j in range(NUM_CHOICES)]
         assert color in choices, f"Color {color} should be in choices {choices}"
 
         # Verify answer is not None
-        assert output["answer_position"] is not None, (
-            "Should have valid answer position"
-        )
-        assert output["answer"] is not None, "Should have valid answer"
+        assert trace["answer_position"] is not None, "Should have valid answer position"
+        assert trace["answer"] is not None, "Should have valid answer"
 
         # Verify symbols are unique
-        symbols = [input_sample[f"symbol{i}"] for i in range(NUM_CHOICES)]
+        symbols = [trace[f"symbol{j}"] for j in range(NUM_CHOICES)]
         assert len(symbols) == len(set(symbols)), "Symbols should be unique"
 
         # Verify choices are unique
@@ -62,50 +56,45 @@ def test_same_symbol_different_position():
     """Test same_symbol_different_position counterfactual generation."""
     print("=== Test 2: Same Symbol Different Position ===")
 
-    model = positional_causal_model
-
     print("Generating 5 counterfactual pairs:\n")
 
     for i in range(5):
         example = same_symbol_different_position()
-        input_sample = example["input"]
-        counterfactual = example["counterfactual_inputs"][0]
-
-        # Run forward on both
-        input_output = model.run_forward(input_sample)
-        counter_output = model.run_forward(counterfactual)
+        # example["input"] and example["counterfactual_inputs"][0] are already CausalTraces
+        input_trace = example["input"]
+        counter_trace = example["counterfactual_inputs"][0]
 
         print(f"Pair {i + 1}:")
-        print(f"  Input symbols: {input_sample['symbol0']}, {input_sample['symbol1']}")
+        print(f"  Input symbols: {input_trace['symbol0']}, {input_trace['symbol1']}")
         print(
-            f"  Counter symbols: {counterfactual['symbol0']}, {counterfactual['symbol1']}"
+            f"  Counter symbols: {counter_trace['symbol0']}, {counter_trace['symbol1']}"
         )
         print(
-            f"  Input answer position: {input_output['answer_position']} -> {input_output['answer']}"
+            f"  Input answer position: {input_trace['answer_position']} -> {input_trace['answer']}"
         )
         print(
-            f"  Counter answer position: {counter_output['answer_position']} -> {counter_output['answer']}"
+            f"  Counter answer position: {counter_trace['answer_position']} -> {counter_trace['answer']}"
         )
 
         # Verify symbols SET is the same (they're swapped in position)
-        input_symbols = {input_sample[f"symbol{j}"] for j in range(NUM_CHOICES)}
-        counter_symbols = {counterfactual[f"symbol{j}"] for j in range(NUM_CHOICES)}
+        input_symbols = {input_trace[f"symbol{j}"] for j in range(NUM_CHOICES)}
+        counter_symbols = {counter_trace[f"symbol{j}"] for j in range(NUM_CHOICES)}
         assert input_symbols == counter_symbols, (
             "Same symbols should be used (but swapped)"
         )
 
         # Verify answer positions are different
-        assert input_output["answer_position"] != counter_output["answer_position"], (
+        assert input_trace["answer_position"] != counter_trace["answer_position"], (
             "Answer positions should differ"
         )
 
         # Verify symbols and choices were swapped together
-        pos = input_output["answer_position"]
-        new_pos = counter_output["answer_position"]
-        assert input_sample[f"choice{pos}"] == counterfactual[f"choice{new_pos}"], (
+        pos = input_trace["answer_position"]
+        new_pos = counter_trace["answer_position"]
+        assert input_trace[f"choice{pos}"] == counter_trace[f"choice{new_pos}"], (
             "Choices should be swapped"
         )
-        assert input_sample[f"symbol{pos}"] == counterfactual[f"symbol{new_pos}"], (
+        assert input_trace[f"symbol{pos}"] == counter_trace[f"symbol{new_pos}"], (
             "Symbols should be swapped"
         )
 
@@ -119,47 +108,42 @@ def test_different_symbol():
     """Test different_symbol counterfactual generation."""
     print("=== Test 3: Different Symbol ===")
 
-    model = positional_causal_model
-
     print("Generating 5 counterfactual pairs:\n")
 
     for i in range(5):
         example = different_symbol()
-        input_sample = example["input"]
-        counterfactual = example["counterfactual_inputs"][0]
-
-        # Run forward on both
-        input_output = model.run_forward(input_sample)
-        counter_output = model.run_forward(counterfactual)
+        # example["input"] and example["counterfactual_inputs"][0] are already CausalTraces
+        input_trace = example["input"]
+        counter_trace = example["counterfactual_inputs"][0]
 
         print(f"Pair {i + 1}:")
-        print(f"  Input symbols: {input_sample['symbol0']}, {input_sample['symbol1']}")
+        print(f"  Input symbols: {input_trace['symbol0']}, {input_trace['symbol1']}")
         print(
-            f"  Counter symbols: {counterfactual['symbol0']}, {counterfactual['symbol1']}"
+            f"  Counter symbols: {counter_trace['symbol0']}, {counter_trace['symbol1']}"
         )
-        print(f"  Input answer: {input_output['answer']}")
-        print(f"  Counter answer: {counter_output['answer']}")
+        print(f"  Input answer: {input_trace['answer']}")
+        print(f"  Counter answer: {counter_trace['answer']}")
 
         # Verify all symbols are different
-        input_symbols = {input_sample[f"symbol{j}"] for j in range(NUM_CHOICES)}
-        counter_symbols = {counterfactual[f"symbol{j}"] for j in range(NUM_CHOICES)}
+        input_symbols = {input_trace[f"symbol{j}"] for j in range(NUM_CHOICES)}
+        counter_symbols = {counter_trace[f"symbol{j}"] for j in range(NUM_CHOICES)}
         assert input_symbols.isdisjoint(counter_symbols), (
             "All symbols should be different"
         )
 
         # Verify choices are the same
         for j in range(NUM_CHOICES):
-            assert input_sample[f"choice{j}"] == counterfactual[f"choice{j}"], (
+            assert input_trace[f"choice{j}"] == counter_trace[f"choice{j}"], (
                 f"Choice {j} should be same in both"
             )
 
         # Verify answer position is the same
-        assert input_output["answer_position"] == counter_output["answer_position"], (
+        assert input_trace["answer_position"] == counter_trace["answer_position"], (
             "Answer position should be same"
         )
 
         # Verify answer symbols are different
-        assert input_output["answer"] != counter_output["answer"], (
+        assert input_trace["answer"] != counter_trace["answer"], (
             "Answer symbols should differ"
         )
 
@@ -173,38 +157,29 @@ def test_random_counterfactual():
     """Test random_counterfactual generation."""
     print("=== Test 4: Random Counterfactual ===")
 
-    model = positional_causal_model
-
     print("Generating 5 random counterfactual pairs:\n")
 
     for i in range(5):
         example = random_counterfactual()
-        input_sample = example["input"]
-        counterfactual = example["counterfactual_inputs"][0]
-
-        # Run forward on both
-        input_output = model.run_forward(input_sample)
-        counter_output = model.run_forward(counterfactual)
+        # example["input"] and example["counterfactual_inputs"][0] are already CausalTraces
+        input_trace = example["input"]
+        counter_trace = example["counterfactual_inputs"][0]
 
         print(f"Pair {i + 1}:")
-        print(
-            f"  Input: {input_sample['object_color'][0]} is {input_sample['object_color'][1]}"
-        )
-        print(
-            f"  Counter: {counterfactual['object_color'][0]} is {counterfactual['object_color'][1]}"
-        )
-        print(f"  Input answer: {input_output['answer']}")
-        print(f"  Counter answer: {counter_output['answer']}")
+        print(f"  Input: {input_trace['object']} is {input_trace['color']}")
+        print(f"  Counter: {counter_trace['object']} is {counter_trace['color']}")
+        print(f"  Input answer: {input_trace['answer']}")
+        print(f"  Counter answer: {counter_trace['answer']}")
 
-        # Verify both are valid
-        assert "raw_input" in input_sample
-        assert "raw_output" in input_output
-        assert "raw_input" in counterfactual
-        assert "raw_output" in counter_output
+        # Verify both are valid (have computed values)
+        assert "raw_input" in input_trace
+        assert "raw_output" in input_trace
+        assert "raw_input" in counter_trace
+        assert "raw_output" in counter_trace
 
         # They should likely be different (but not guaranteed)
         print(
-            f"  Same prompt? {input_sample['raw_input'] == counterfactual['raw_input']}"
+            f"  Same prompt? {input_trace['raw_input'] == counter_trace['raw_input']}"
         )
 
     print("\n✓ All random counterfactuals generated successfully")
@@ -317,8 +292,6 @@ def test_counterfactual_validity():
     """Test that all counterfactuals produce valid prompts."""
     print("=== Test 8: Counterfactual Validity ===")
 
-    model = positional_causal_model
-
     # Test each type
     types = [
         ("same_symbol_different_position", same_symbol_different_position),
@@ -329,31 +302,24 @@ def test_counterfactual_validity():
     for name, generator in types:
         print(f"Testing {name}:")
 
-        for i in range(5):
+        for _ in range(5):
             example = generator()
-            input_sample = example["input"]
-            counterfactual = example["counterfactual_inputs"][0]
-
-            # Run forward
-            input_output = model.run_forward(input_sample)
-            counter_output = model.run_forward(counterfactual)
+            # example["input"] and example["counterfactual_inputs"][0] are already CausalTraces
+            input_trace = example["input"]
+            counter_trace = example["counterfactual_inputs"][0]
 
             # Check prompts are well-formed
-            assert len(input_output["raw_input"]) > 0, (
-                "Input prompt should not be empty"
-            )
-            assert len(counter_output["raw_input"]) > 0, (
+            assert len(input_trace["raw_input"]) > 0, "Input prompt should not be empty"
+            assert len(counter_trace["raw_input"]) > 0, (
                 "Counter prompt should not be empty"
             )
 
             # Check they contain expected elements
-            assert "What color" in input_output["raw_input"], "Should contain question"
-            assert "Answer:" in input_output["raw_input"], "Should contain Answer:"
+            assert "What color" in input_trace["raw_input"], "Should contain question"
+            assert "Answer:" in input_trace["raw_input"], "Should contain Answer:"
 
-            assert "What color" in counter_output["raw_input"], (
-                "Should contain question"
-            )
-            assert "Answer:" in counter_output["raw_input"], "Should contain Answer:"
+            assert "What color" in counter_trace["raw_input"], "Should contain question"
+            assert "Answer:" in counter_trace["raw_input"], "Should contain Answer:"
 
         print(f"  ✓ All {name} examples valid")
 

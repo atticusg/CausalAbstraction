@@ -1,7 +1,14 @@
 import unittest
-import random
 
 from causalab.causal.causal_model import CausalModel
+from causalab.causal.causal_utils import (
+    get_partial_filter,
+    get_specific_path_filter,
+    label_data_with_variables,
+    sample_intervention,
+)
+from causalab.causal.counterfactual_dataset import CounterfactualExample
+from causalab.causal.trace import Mechanism, input_var
 
 
 class ArithmeticCausalModel:
@@ -23,23 +30,6 @@ class ArithmeticCausalModel:
         CausalModel
             A causal model with variables for two-digit numbers and their sum and product.
         """
-        # Define variables - MUST include raw_input and raw_output
-        variables = [
-            "A1",
-            "A0",
-            "B1",
-            "B0",
-            "CARRY_SUM",
-            "SUM1",
-            "SUM0",
-            "PROD0",
-            "PROD1",
-            "PROD2",
-            "PROD3",
-            "raw_input",
-            "raw_output",
-        ]
-
         # Define possible values for each variable (digits 0-9, carry 0-1)
         values = {
             "A1": list(range(10)),
@@ -57,111 +47,77 @@ class ArithmeticCausalModel:
             "raw_output": None,  # String representation of output
         }
 
-        # Define parent relationships
-        parents = {
-            "A1": [],
-            "A0": [],
-            "B1": [],
-            "B0": [],
-            "CARRY_SUM": ["A0", "B0"],
-            "SUM0": ["A0", "B0"],
-            "SUM1": ["A1", "B1", "CARRY_SUM"],
-            "PROD0": ["A0", "B0"],
-            "PROD1": ["A0", "B1", "A1", "B0"],
-            "PROD2": ["A1", "B1", "A0", "B0"],
-            "PROD3": ["A1", "B1", "A0", "B0"],
-            "raw_input": ["A1", "A0", "B1", "B0"],  # Input depends on the digits
-            "raw_output": [
-                "SUM1",
-                "SUM0",
-                "PROD3",
-                "PROD2",
-                "PROD1",
-                "PROD0",
-            ],  # Output depends on results
-        }
-
-        # Define mechanisms
-        def A1():
-            return random.randint(0, 9)
-
-        def A0():
-            return random.randint(0, 9)
-
-        def B1():
-            return random.randint(0, 9)
-
-        def B0():
-            return random.randint(0, 9)
-
-        def CARRY_SUM(a0, b0):
-            return 1 if a0 + b0 >= 10 else 0
-
-        def SUM0(a0, b0):
-            return (a0 + b0) % 10
-
-        def SUM1(a1, b1, carry):
-            return (a1 + b1 + carry) % 10
-
-        def PROD0(a0, b0):
-            return (a0 * b0) % 10
-
-        def PROD1(a0, b1, a1, b0):
-            # Get carry from the ones place multiplication
-            carry = (a0 * b0) // 10
-            # Calculate the contribution from cross-multiplication
-            partial = a0 * b1 + a1 * b0 + carry
-            return partial % 10
-
-        # Fixed PROD2 function to include all needed parameters
-        def PROD2(a1, b1, a0, b0):
-            # Calculate the value directly
-            ones_place = a0 * b0
-            cross_terms = a0 * b1 + a1 * b0
-            tens_carry = ones_place // 10
-            prod1_carry = (cross_terms + tens_carry) // 10
-            partial = a1 * b1 + prod1_carry
-            return partial % 10
-
-        # Fixed PROD3 function to include all needed parameters
-        def PROD3(a1, b1, a0, b0):
-            # Calculate the final carry/thousands digit
-            ones_place = a0 * b0
-            cross_terms = a0 * b1 + a1 * b0
-            tens_carry = ones_place // 10
-            prod1_carry = (cross_terms + tens_carry) // 10
-            partial = a1 * b1 + prod1_carry
-            return partial // 10  # The thousands digit
-
-        def raw_input(a1, a0, b1, b0):
-            """Generate string representation of input."""
-            return f"{a1}{a0} + {b1}{b0} = ?, {a1}{a0} * {b1}{b0} = ?"
-
-        def raw_output(sum1, sum0, prod3, prod2, prod1, prod0):
-            """Generate string representation of output."""
-            sum_result = f"{sum1}{sum0}"
-            prod_result = f"{prod3}{prod2}{prod1}{prod0}".lstrip("0") or "0"
-            return f"Sum: {sum_result}, Product: {prod_result}"
-
+        # Define mechanisms using the new Mechanism API
         mechanisms = {
-            "A1": A1,
-            "A0": A0,
-            "B1": B1,
-            "B0": B0,
-            "CARRY_SUM": CARRY_SUM,
-            "SUM0": SUM0,
-            "SUM1": SUM1,
-            "PROD0": PROD0,
-            "PROD1": PROD1,
-            "PROD2": PROD2,
-            "PROD3": PROD3,
-            "raw_input": raw_input,
-            "raw_output": raw_output,
+            # Input variables (no parents)
+            "A1": input_var(list(range(10))),
+            "A0": input_var(list(range(10))),
+            "B1": input_var(list(range(10))),
+            "B0": input_var(list(range(10))),
+            # Carry for sum
+            "CARRY_SUM": Mechanism(
+                parents=["A0", "B0"],
+                compute=lambda t: 1 if t["A0"] + t["B0"] >= 10 else 0,
+            ),
+            # Sum digits
+            "SUM0": Mechanism(
+                parents=["A0", "B0"],
+                compute=lambda t: (t["A0"] + t["B0"]) % 10,
+            ),
+            "SUM1": Mechanism(
+                parents=["A1", "B1", "CARRY_SUM"],
+                compute=lambda t: (t["A1"] + t["B1"] + t["CARRY_SUM"]) % 10,
+            ),
+            # Product digits
+            "PROD0": Mechanism(
+                parents=["A0", "B0"],
+                compute=lambda t: (t["A0"] * t["B0"]) % 10,
+            ),
+            "PROD1": Mechanism(
+                parents=["A0", "B1", "A1", "B0"],
+                compute=lambda t: (
+                    (t["A0"] * t["B1"] + t["A1"] * t["B0"] + (t["A0"] * t["B0"]) // 10)
+                    % 10
+                ),
+            ),
+            "PROD2": Mechanism(
+                parents=["A1", "B1", "A0", "B0"],
+                compute=lambda t: (
+                    t["A1"] * t["B1"]
+                    + (
+                        t["A0"] * t["B1"]
+                        + t["A1"] * t["B0"]
+                        + (t["A0"] * t["B0"]) // 10
+                    )
+                    // 10
+                )
+                % 10,
+            ),
+            "PROD3": Mechanism(
+                parents=["A1", "B1", "A0", "B0"],
+                compute=lambda t: (
+                    t["A1"] * t["B1"]
+                    + (
+                        t["A0"] * t["B1"]
+                        + t["A1"] * t["B0"]
+                        + (t["A0"] * t["B0"]) // 10
+                    )
+                    // 10
+                )
+                // 10,
+            ),
+            # String representations
+            "raw_input": Mechanism(
+                parents=["A1", "A0", "B1", "B0"],
+                compute=lambda t: f"{t['A1']}{t['A0']} + {t['B1']}{t['B0']} = ?, {t['A1']}{t['A0']} * {t['B1']}{t['B0']} = ?",
+            ),
+            "raw_output": Mechanism(
+                parents=["SUM1", "SUM0", "PROD3", "PROD2", "PROD1", "PROD0"],
+                compute=lambda t: f"Sum: {t['SUM1']}{t['SUM0']}, Product: {str(t['PROD3']) + str(t['PROD2']) + str(t['PROD1']) + str(t['PROD0']).lstrip('0') or '0'}",
+            ),
         }
 
-        return CausalModel(
-            variables, values, parents, mechanisms, id="arithmetic_model"
-        )
+        return CausalModel(mechanisms, values, id="arithmetic_model")
 
 
 class TestCausalModel(unittest.TestCase):
@@ -208,7 +164,7 @@ class TestCausalModel(unittest.TestCase):
     def test_basic_arithmetic(self):
         """Test that the model correctly computes arithmetic operations."""
         # Test addition: 25 + 37 = 62
-        setting = self.model.run_forward({"A1": 2, "A0": 5, "B1": 3, "B0": 7})
+        setting = self.model.new_trace({"A1": 2, "A0": 5, "B1": 3, "B0": 7})
 
         # Check SUM digits
         self.assertEqual(setting["SUM0"], 2)
@@ -232,19 +188,19 @@ class TestCausalModel(unittest.TestCase):
     def test_edge_cases(self):
         """Test edge cases like zeros and carrying."""
         # Test with zeros: 20 + 09 = 29
-        setting = self.model.run_forward({"A1": 2, "A0": 0, "B1": 0, "B0": 9})
+        setting = self.model.new_trace({"A1": 2, "A0": 0, "B1": 0, "B0": 9})
         self.assertEqual(setting["SUM0"], 9)
         self.assertEqual(setting["SUM1"], 2)
         self.assertEqual(setting["CARRY_SUM"], 0)
 
         # Test with carrying in sum: 95 + 17 = 112
-        setting = self.model.run_forward({"A1": 9, "A0": 5, "B1": 1, "B0": 7})
+        setting = self.model.new_trace({"A1": 9, "A0": 5, "B1": 1, "B0": 7})
         self.assertEqual(setting["SUM0"], 2)
         self.assertEqual(setting["SUM1"], 1)
         self.assertEqual(setting["CARRY_SUM"], 1)
 
         # Test large product with carrying: 95 * 95 = 9025
-        setting = self.model.run_forward({"A1": 9, "A0": 5, "B1": 9, "B0": 5})
+        setting = self.model.new_trace({"A1": 9, "A0": 5, "B1": 9, "B0": 5})
         self.assertEqual(setting["PROD0"], 5)
         self.assertEqual(setting["PROD1"], 2)
         self.assertEqual(setting["PROD2"], 0)
@@ -253,11 +209,11 @@ class TestCausalModel(unittest.TestCase):
     def test_intervention(self):
         """Test interventions on the model."""
         # Run with no intervention
-        base_setting = self.model.run_forward({"A1": 2, "A0": 5, "B1": 3, "B0": 7})
+        base_setting = self.model.new_trace({"A1": 2, "A0": 5, "B1": 3, "B0": 7})
 
         # Run with intervention on CARRY_SUM
         # Forcing CARRY_SUM to 0 should change SUM1
-        intervened_setting = self.model.run_forward(
+        intervened_setting = self.model.new_trace(
             {"A1": 2, "A0": 5, "B1": 3, "B0": 7, "CARRY_SUM": 0}
         )
 
@@ -268,26 +224,6 @@ class TestCausalModel(unittest.TestCase):
         self.assertEqual(intervened_setting["SUM0"], base_setting["SUM0"])
         self.assertEqual(intervened_setting["PROD0"], base_setting["PROD0"])
 
-    def test_find_live_paths(self):
-        """Test finding live causal paths in the model."""
-        # Set up a specific input
-        input_setting = {"A1": 2, "A0": 5, "B1": 3, "B0": 7}
-
-        # Find live paths
-        paths = self.model.find_live_paths(input_setting)
-
-        # There should be paths of length 2, 3, etc.
-        self.assertTrue(len(paths[2]) > 0)
-
-        # There should be a path from A0 to SUM0
-        a0_to_sum0_path_exists = False
-        for path_length in paths:
-            for path in paths[path_length]:
-                if path[0] == "A0" and path[-1] == "SUM0":
-                    a0_to_sum0_path_exists = True
-                    break
-        self.assertTrue(a0_to_sum0_path_exists)
-
     def test_sample_input(self):
         """Test sampling inputs from the model."""
         # Sample an input
@@ -295,32 +231,23 @@ class TestCausalModel(unittest.TestCase):
 
         # Check that the input has all the required variables
         for var in self.model.inputs:
-            self.assertIn(var, input_setting)
+            self.assertTrue(var in input_setting)
             self.assertIn(input_setting[var], self.model.values[var])
-
-    def test_generate_dataset(self):
-        """Test generating a dataset from the model."""
-        # Generate a small dataset
-        dataset = self.model.generate_dataset(size=5)
-
-        # Check dataset size
-        self.assertEqual(len(dataset), 5)
-
-        # Check that each example has inputs
-        for example in dataset:
-            self.assertIn("input", example)
 
     def test_counterfactual_reasoning(self):
         """Test counterfactual reasoning with the model."""
         # Original scenario: 25 + 37
         original_input = {"A1": 2, "A0": 5, "B1": 3, "B0": 7}
+        original_trace = self.model.new_trace(original_input)
 
         # Counterfactual: What if B0 was 8 instead of 7?
-        # The format of counterfactual_inputs needs to match what run_interchange expects
-        counterfactual_input = {"B0": {"A1": 2, "A0": 5, "B1": 3, "B0": 8}}
+        counterfactual_input = {"A1": 2, "A0": 5, "B1": 3, "B0": 8}
+        counterfactual_trace = self.model.new_trace(counterfactual_input)
 
-        # Run interchange intervention
-        result = self.model.run_interchange(original_input, counterfactual_input)
+        # Run interchange intervention - swap B0 from counterfactual into original
+        result = self.model.run_interchange(
+            original_trace, {"B0": counterfactual_trace}
+        )
 
         # The result should have B0=8, but the rest from the original input
         self.assertEqual(result["B0"], 8)
@@ -337,18 +264,16 @@ class TestCausalModel(unittest.TestCase):
         # SUM1 should reflect the carry (2+3+1=6)
         self.assertEqual(result["SUM1"], 6)
 
-    def test_run_forward_doesnt_mutate_intervention(self):
-        """Test that run_forward doesn't mutate the intervention dictionary."""
-        intervention = {"raw_input": "test", "A1": 2, "CARRY_SUM": 1}
-        original = intervention.copy()
+    def test_new_trace_doesnt_mutate_inputs(self):
+        """Test that new_trace doesn't mutate the input dictionary."""
+        inputs = {"raw_input": "test", "A1": 2, "CARRY_SUM": 1}
+        original = inputs.copy()
 
-        # Run forward should not modify the intervention dict
-        self.model.run_forward(intervention)
+        # new_trace should not modify the input dict
+        self.model.new_trace(inputs)
 
-        # Verify intervention dict remains unchanged
-        self.assertEqual(
-            intervention, original, "run_forward should not mutate intervention dict"
-        )
+        # Verify input dict remains unchanged
+        self.assertEqual(inputs, original, "new_trace should not mutate input dict")
 
 
 class TestMoreComplexCausalModel(unittest.TestCase):
@@ -359,7 +284,6 @@ class TestMoreComplexCausalModel(unittest.TestCase):
     def setUp(self):
         """Set up a simplified causal model for testing."""
         # Simple model: A -> B -> C (with required raw_input and raw_output)
-        variables = ["A", "B", "C", "raw_input", "raw_output"]
         values = {
             "A": [0, 1],
             "B": [0, 1],
@@ -367,56 +291,31 @@ class TestMoreComplexCausalModel(unittest.TestCase):
             "raw_input": None,
             "raw_output": None,
         }
-        parents = {
-            "A": [],
-            "B": ["A"],
-            "C": ["B"],
-            "raw_input": ["A"],
-            "raw_output": ["C"],
-        }
-
-        def A():
-            return random.choice([0, 1])
-
-        def B(a):
-            return a  # B equals A
-
-        def C(b):
-            return b  # C equals B
-
-        def raw_input(a):
-            return f"Input A={a}"
-
-        def raw_output(c):
-            return f"Output C={c}"
 
         mechanisms = {
-            "A": A,
-            "B": B,
-            "C": C,
-            "raw_input": raw_input,
-            "raw_output": raw_output,
+            "A": input_var([0, 1]),
+            "B": Mechanism(parents=["A"], compute=lambda t: t["A"]),
+            "C": Mechanism(parents=["B"], compute=lambda t: t["B"]),
+            "raw_input": Mechanism(
+                parents=["A"], compute=lambda t: f"Input A={t['A']}"
+            ),
+            "raw_output": Mechanism(
+                parents=["C"], compute=lambda t: f"Output C={t['C']}"
+            ),
         }
-        self.model = CausalModel(
-            variables, values, parents, mechanisms, id="simple_model"
-        )
+        self.model = CausalModel(mechanisms, values, id="simple_model")
 
     def test_label_data_with_variables(self):
         """Test labeling a dataset based on variable settings."""
-        # Create a simple dataset
-        from datasets import Dataset
-
-        # Create test inputs that will result in specific variable values
-        test_data = [
-            {"A": 0},  # Should result in B=0, C=0
-            {"A": 1},  # Should result in B=1, C=1
-            {"A": 0},  # Should result in B=0, C=0 (duplicate)
-        ]
-        dataset = Dataset.from_dict({"input": test_data})
+        # Create test traces - label_data_with_variables reads from existing traces
+        # Generate traces using the model's forward pass
+        test_inputs = [{"A": 0}, {"A": 1}, {"A": 0}]
+        test_data = [self.model.new_trace(inp) for inp in test_inputs]
 
         # Label the dataset based on variable C
-        labeled_dataset, label_mapping = self.model.label_data_with_variables(
-            dataset, ["C"]
+        data_list = [{"input": trace} for trace in test_data]
+        labeled_dataset, label_mapping = label_data_with_variables(
+            self.model, data_list, ["C"]
         )
 
         # Check that we get back a properly labeled dataset
@@ -428,7 +327,7 @@ class TestMoreComplexCausalModel(unittest.TestCase):
         self.assertIn("1", label_mapping)  # C=1
 
         # Check that labels are assigned correctly
-        labels = labeled_dataset["label"]
+        labels = [item["label"] for item in labeled_dataset]
         self.assertEqual(
             labels[0], labels[2]
         )  # Both have A=0, so same C value, same label
@@ -442,7 +341,7 @@ class TestMoreComplexCausalModel(unittest.TestCase):
         # Run the sampling multiple times to increase chance of getting an intervention
         got_intervention = False
         for _ in range(50):  # Try multiple times
-            intervention = self.model.sample_intervention()
+            intervention = sample_intervention(self.model)
             if len(intervention) > 0:
                 got_intervention = True
                 self.assertNotIn(
@@ -467,7 +366,7 @@ class TestMoreComplexCausalModel(unittest.TestCase):
     def test_filters(self):
         """Test the various filter functions."""
         # Test partial filter
-        partial_filter = self.model.get_partial_filter({"A": 1, "B": 1})
+        partial_filter = get_partial_filter({"A": 1, "B": 1})
 
         # This setting should match the filter
         self.assertTrue(
@@ -496,7 +395,7 @@ class TestMoreComplexCausalModel(unittest.TestCase):
         )
 
         # Test path filter
-        path_filter = self.model.get_specific_path_filter("A", "C")
+        path_filter = get_specific_path_filter(self.model, "A", "C")
 
         # Set up a specific input where A affects C
         self.assertTrue(
@@ -520,88 +419,52 @@ class TestNewCausalModelMethods(unittest.TestCase):
     def setUp(self):
         """Set up a simple model for testing new methods."""
         # Create a very simple model for testing: Input -> Processing -> Output
-        variables = ["input_val", "processed_val", "raw_input", "raw_output"]
         values = {
             "input_val": [1, 2, 3],
             "processed_val": [2, 4, 6],
             "raw_input": None,
             "raw_output": None,
         }
-        parents = {
-            "input_val": [],
-            "processed_val": ["input_val"],
-            "raw_input": ["input_val"],
-            "raw_output": ["processed_val"],
-        }
-
-        def input_val():
-            return random.choice([1, 2, 3])
-
-        def processed_val(inp):
-            return inp * 2  # Simply double the input
-
-        def raw_input(inp):
-            return f"Input: {inp}"
-
-        def raw_output(proc):
-            return f"Output: {proc}"
 
         mechanisms = {
-            "input_val": input_val,
-            "processed_val": processed_val,
-            "raw_input": raw_input,
-            "raw_output": raw_output,
+            "input_val": input_var([1, 2, 3]),
+            "processed_val": Mechanism(
+                parents=["input_val"], compute=lambda t: t["input_val"] * 2
+            ),
+            "raw_input": Mechanism(
+                parents=["input_val"], compute=lambda t: f"Input: {t['input_val']}"
+            ),
+            "raw_output": Mechanism(
+                parents=["processed_val"],
+                compute=lambda t: f"Output: {t['processed_val']}",
+            ),
         }
 
-        self.model = CausalModel(
-            variables, values, parents, mechanisms, id="test_new_methods"
-        )
+        self.model = CausalModel(mechanisms, values, id="test_new_methods")
 
     def test_label_counterfactual_data(self):
-        """Test the new label_counterfactual_data method."""
-        # This method would typically work with CounterfactualDataset objects
-        # For now, we'll create a mock dataset structure
+        """Test the label_counterfactual_data method."""
+        # Create test data using CausalTrace objects
+        input1 = self.model.new_trace({"input_val": 1})
+        cf1 = self.model.new_trace({"input_val": 2})
 
-        # Create a simple mock dataset
-        class MockDataset:
-            def __init__(self, data):
-                self.data = data
-                self.dataset = self  # Some methods expect this attribute
-                self.features = {"input": None, "counterfactual_inputs": None}
+        input2 = self.model.new_trace({"input_val": 2})
+        cf2 = self.model.new_trace({"input_val": 3})
 
-            def __iter__(self):
-                return iter(self.data)
-
-            def __len__(self):
-                return len(self.data)
-
-            def remove_column(self, col_name):
-                # Mock implementation
-                pass
-
-            def add_column(self, col_name, data):
-                # Mock implementation - we'll just store it
-                for i, item in enumerate(data):
-                    self.data[i][col_name] = item
-                return self
-
-        # Create test data
-        test_data = [
-            {"input": {"input_val": 1}, "counterfactual_inputs": [{"input_val": 2}]},
-            {"input": {"input_val": 2}, "counterfactual_inputs": [{"input_val": 3}]},
+        test_data: list[CounterfactualExample] = [
+            {"input": input1, "counterfactual_inputs": [cf1]},
+            {"input": input2, "counterfactual_inputs": [cf2]},
         ]
 
-        mock_dataset = MockDataset(test_data)
-
         # Test the method
-        result = self.model.label_counterfactual_data(mock_dataset, ["processed_val"])
+        result = self.model.label_counterfactual_data(test_data, ["processed_val"])
 
         # Check that labels were added
-        self.assertEqual(len(result.data), 2)
+        self.assertEqual(len(result), 2)
         # First example: interchange processed_val from input_val=2 -> processed_val=4
-        self.assertEqual(result.data[0]["label"], "Output: 4")
+        self.assertEqual(result[0]["label"], "Output: 4")
         # Second example: interchange processed_val from input_val=3 -> processed_val=6
-        self.assertEqual(result.data[1]["label"], "Output: 6")
+        self.assertEqual(result[1]["label"], "Output: 6")
 
 
 if __name__ == "__main__":

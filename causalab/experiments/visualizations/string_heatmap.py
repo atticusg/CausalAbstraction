@@ -12,6 +12,7 @@ import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 
+from causalab.causal.trace import CausalTrace, Mechanism
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_position_builder import TokenPosition
 
@@ -46,7 +47,14 @@ def plot_residual_stream_intervention_heatmap(
             to see which outputs are most common. Overrides show_scores when True.
     """
     # Extract actual tokens from prompt for x-axis labels
-    loaded = pipeline.load(prompt)
+    # Convert prompt string to CausalTrace
+    prompt_trace = CausalTrace(
+        mechanisms={
+            "raw_input": Mechanism(parents=[], compute=lambda t: t["raw_input"])
+        },
+        inputs={"raw_input": prompt},
+    )
+    loaded = pipeline.load([prompt_trace])
     token_ids = loaded["input_ids"][0]
     token_labels = []
     for i, token_pos in enumerate(token_positions):
