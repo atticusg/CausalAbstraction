@@ -91,8 +91,8 @@ Comprehensive test suite covering all core components with specialized tests for
 ### Installation
 
 ```bash
-git clone https://github.com/goodfire-ai/causalab-internal.git
-cd causalab-internal
+git clone https://github.com/goodfire-ai/causalab.git
+cd causalab
 uv sync
 ```
 
