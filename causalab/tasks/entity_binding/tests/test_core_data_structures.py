@@ -1,9 +1,4 @@
-"""
-DEPRECATED: This task is outdated and may not reflect current best practices.
-See causalab/tasks/MCQA/ for an up-to-date example.
-
-Tests for core data structures: EntityBindingTaskConfig, EntityGroup, BindingMatrix
-"""
+"""Tests for core data structures: EntityBindingTaskConfig, EntityGroup, BindingMatrix."""
 
 import pytest
 from causalab.tasks.entity_binding.config import (
@@ -56,7 +51,7 @@ def test_love_config():
     assert config.entity_roles == {0: "person", 1: "food"}
     assert len(config.entity_pools[0]) == 6  # 6 people
     assert len(config.entity_pools[1]) == 6  # 6 foods
-    assert config.statement_template == "{entity_e0} loves {entity_e1}"
+    assert config.statement_template == "{e0} loves {e1}"
 
     # Test prompt wrapper fields
     assert hasattr(config, "prompt_prefix")
@@ -74,17 +69,20 @@ def test_action_config():
     assert len(config.entity_pools[0]) == 8  # 8 people
     assert len(config.entity_pools[1]) == 8  # 8 objects
     assert len(config.entity_pools[2]) == 8  # 8 locations
-    assert config.statement_template == "{entity_e0} put {entity_e1} in the {entity_e2}"
+    assert config.statement_template == "{e0} put {e1} in the {e2}"
 
 
 def test_prompt_wrapper_defaults():
     """Test that prompt wrapper fields have sensible defaults."""
     config = create_sample_love_config()
 
-    # Default values should be empty strings
-    assert config.prompt_prefix == ""
-    assert config.prompt_suffix == ""
-    assert config.statement_question_separator == " "
+    # Sample configs come with instruction-tuned defaults
+    assert (
+        config.prompt_prefix
+        == "We will ask a question about the following sentences.\n\n"
+    )
+    assert config.prompt_suffix == "\nAnswer:"
+    assert config.statement_question_separator == " "  # Default from dataclass
 
 
 def test_prompt_wrapper_customization():

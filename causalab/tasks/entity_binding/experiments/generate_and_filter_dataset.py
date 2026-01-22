@@ -1,9 +1,5 @@
 #!/usr/bin/env -S uv run python
-"""
-DEPRECATED: This task is outdated and may not reflect current best practices.
-See causalab/tasks/MCQA/ for an up-to-date example.
-
-Universal Dataset Generation and Filtering Script for Entity Binding
+"""Universal Dataset Generation and Filtering Script for Entity Binding.
 
 This script generates counterfactual datasets and filters them based on model performance.
 Saves both the original (unfiltered) and filtered datasets.
@@ -14,14 +10,12 @@ Usage:
     python generate_and_filter_dataset.py --config action --test  # Test mode
 """
 
-import sys
-
-sys.path.append("/mnt/polished-lake/home/atticus/CausalAbstraction")
-
 import argparse
-import torch
-from pathlib import Path
 import json
+import sys
+from pathlib import Path
+
+import torch
 
 from causalab.tasks.entity_binding.experiment_config import (
     get_task_config,
@@ -67,19 +61,36 @@ def main():
         help="Number of counterfactual pairs to generate (default: 128)",
     )
     parser.add_argument(
-        "--output",
-        type=str,
-        default=None,
-        help="Output directory (default: auto-generated from config)",
-    )
-    parser.add_argument(
         "--batch-size",
         type=int,
         default=32,
         help="Batch size for filtering (default: 32)",
     )
     parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Output directory (default: auto-generated from config)",
+    )
+    parser.add_argument(
         "--test", action="store_true", help="Test mode: size=8, batch_size=8"
+    )
+    parser.add_argument(
+        "--change-answer",
+        action="store_true",
+        help="For swap_query_group: change the answer entity in counterfactuals",
+    )
+    parser.add_argument(
+        "--query-indices",
+        type=str,
+        default=None,
+        help="Fix query indices (comma-separated, e.g., '0' or '0,1'). Default: random",
+    )
+    parser.add_argument(
+        "--answer-index",
+        type=int,
+        default=None,
+        help="Fix answer index (e.g., 0 or 1). Default: random",
     )
 
     args = parser.parse_args()
@@ -90,10 +101,18 @@ def main():
         args.batch_size = 8
         print("\n*** TEST MODE: size=8, batch_size=8 ***\n")
 
+    # Parse query_indices if provided
+    parsed_query_indices = None
+    if args.query_indices is not None:
+        parsed_query_indices = tuple(
+            int(x.strip()) for x in args.query_indices.split(",")
+        )
+
     # Auto-generate output path if not specified
-    if args.output is None:
+    if args.output_dir is None:
         test_suffix = "_test" if args.test else ""
-        args.output = f"tasks/entity_binding/datasets/{args.config}_{args.counterfactual}{test_suffix}"
+        change_answer_suffix = "_change_answer" if args.change_answer else ""
+        args.output_dir = f"tasks/entity_binding/datasets/{args.config}_{args.counterfactual}{change_answer_suffix}{test_suffix}"
 
     # Configuration
     print("=" * 70)
@@ -105,8 +124,11 @@ def main():
     print(f"  Model: {args.model}")
     print(f"  Dataset size: {args.size}")
     print(f"  Batch size: {args.batch_size}")
-    print(f"  Output: {args.output}")
+    print(f"  Output: {args.output_dir}")
     print(f"  Test mode: {args.test}")
+    print(f"  Change answer: {args.change_answer}")
+    print(f"  Query indices: {parsed_query_indices}")
+    print(f"  Answer index: {args.answer_index}")
     print()
 
     # Get task configuration
@@ -121,6 +143,12 @@ def main():
     except ValueError as e:
         print(f"Error: {e}")
         return 1
+
+    # Apply fixed query_indices and answer_index if provided
+    if parsed_query_indices is not None:
+        config.fixed_query_indices = parsed_query_indices
+    if args.answer_index is not None:
+        config.fixed_answer_index = args.answer_index
 
     # Create causal model
     causal_model = get_causal_model(config)
@@ -139,7 +167,7 @@ def main():
     dataset: list[CounterfactualExample] = generate_counterfactual_samples(
         args.size, cf_generator
     )
-    print(f"✓ Generated {len(dataset)} pairs")
+    print(f"Generated {len(dataset)} pairs")
     print()
 
     # Show example
@@ -154,7 +182,7 @@ def main():
     print(f"  Device: {device}")
 
     pipeline = LMPipeline(args.model, max_new_tokens=5, device=device, max_length=256)
-    print("✓ Model loaded")
+    print("Model loaded")
     print()
 
     # Get checker function
@@ -179,31 +207,31 @@ def main():
     # Check if we have enough data
     if len(filtered_dataset) == 0:
         print(
-            "⚠ WARNING: No examples passed filtering! Model may not be capable of this task."
+            "WARNING: No examples passed filtering! Model may not be capable of this task."
         )
         return 1
     elif len(filtered_dataset) < args.size * 0.5 and not args.test:
         print(
-            f"⚠ WARNING: Only {len(filtered_dataset)}/{args.size} examples passed. "
+            f"WARNING: Only {len(filtered_dataset)}/{args.size} examples passed. "
             f"Consider increasing dataset size or checking model capability."
         )
         print()
 
     # Save datasets
-    output_path = Path(args.output)
+    output_path = Path(args.output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
     # Save original (unfiltered) dataset
     original_path = output_path / "original_dataset.json"
     print(f"Saving original dataset to {original_path}...")
     save_counterfactual_examples(dataset, str(original_path))
-    print(f"✓ Original dataset saved ({len(dataset)} examples)")
+    print(f"Original dataset saved ({len(dataset)} examples)")
 
     # Save filtered dataset
     filtered_path = output_path / "filtered_dataset.json"
     print(f"Saving filtered dataset to {filtered_path}...")
     save_counterfactual_examples(filtered_dataset, str(filtered_path))
-    print(f"✓ Filtered dataset saved ({len(filtered_dataset)} examples)")
+    print(f"Filtered dataset saved ({len(filtered_dataset)} examples)")
     print()
 
     # Save metadata
@@ -214,6 +242,11 @@ def main():
         "original_size": len(dataset),
         "filtered_size": len(filtered_dataset),
         "keep_rate": len(filtered_dataset) / len(dataset),
+        "change_answer": args.change_answer,
+        "fixed_query_indices": list(parsed_query_indices)
+        if parsed_query_indices
+        else None,
+        "fixed_answer_index": args.answer_index,
         "task_config": {
             "max_groups": config.max_groups,
             "entities_per_group": config.max_entities_per_group,
@@ -226,11 +259,11 @@ def main():
     metadata_path = output_path / "dataset_metadata.json"
     with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=2)
-    print(f"✓ Metadata saved to {metadata_path}")
+    print(f"Metadata saved to {metadata_path}")
     print()
 
     print("=" * 70)
-    print("✓ Dataset generation and filtering complete!")
+    print("Dataset generation and filtering complete!")
     print("=" * 70)
     print(f"\nOutputs saved to: {output_path}")
     print(f"  - Original dataset: {original_path} ({len(dataset)} examples)")

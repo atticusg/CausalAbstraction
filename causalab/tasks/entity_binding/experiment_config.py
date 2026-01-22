@@ -1,8 +1,4 @@
-"""
-DEPRECATED: This task is outdated and may not reflect current best practices.
-See causalab/tasks/MCQA/ for an up-to-date example.
-
-Task Plugin Interface for Entity Binding
+"""Task Plugin Interface for Entity Binding.
 
 This module provides a standardized interface for the entity binding task
 to work with the universal experiment scripts.
@@ -12,15 +8,17 @@ from typing import Dict, Callable, Any, List
 from causalab.tasks.entity_binding.config import (
     create_sample_love_config,
     create_sample_action_config,
-    EntityBindingTaskConfig
+    EntityBindingTaskConfig,
 )
 from causalab.tasks.entity_binding.causal_models import (
-    create_positional_causal_model,
-    create_positional_entity_causal_model
+    create_positional_entity_causal_model,
 )
 from causalab.tasks.entity_binding.counterfactuals import swap_query_group
-from causalab.tasks.entity_binding.token_positions import get_entity_token_indices_structured
+from causalab.tasks.entity_binding.token_positions import (
+    get_statement_entity_token_positions,
+)
 from causalab.neural.token_position_builder import TokenPosition, get_last_token_index
+from causalab.neural.pipeline import LMPipeline
 
 
 def get_task_config(config_name: str) -> EntityBindingTaskConfig:
@@ -36,18 +34,22 @@ def get_task_config(config_name: str) -> EntityBindingTaskConfig:
     Raises:
         ValueError: If config_name is not recognized
     """
-    if config_name == 'love':
+    if config_name == "love":
         config = create_sample_love_config()
         config.max_groups = 2
-    elif config_name == 'action':
+    elif config_name == "action":
         config = create_sample_action_config()
         config.max_groups = 3
-    elif config_name == 'positional_entity':
+    elif config_name == "positional_entity":
         config = create_sample_love_config()
         config.max_groups = 2
-        config.fixed_query_indices = (0,)  # Fix query indices for positional experiments
+        config.fixed_query_indices = (
+            0,
+        )  # Fix query indices for positional experiments
     else:
-        raise ValueError(f"Unknown config name: {config_name}. Use 'love', 'action', or 'positional_entity'")
+        raise ValueError(
+            f"Unknown config name: {config_name}. Use 'love', 'action', or 'positional_entity'"
+        )
 
     # Add instruction wrapper for better performance
     config.prompt_prefix = "We will ask a question about the following sentences.\n\n"
@@ -57,13 +59,16 @@ def get_task_config(config_name: str) -> EntityBindingTaskConfig:
     return config
 
 
-def get_causal_model(config: EntityBindingTaskConfig, model_type: str = 'positional'):
+def get_causal_model(
+    config: EntityBindingTaskConfig, model_type: str = "positional_entity"
+):
     """
     Get causal model for the given configuration.
 
     Args:
         config: Task configuration
-        model_type: 'positional' or 'positional_entity'
+        model_type: 'positional_entity' (default). 'positional' is accepted for backwards
+                    compatibility but uses the same model.
 
     Returns:
         CausalModel object
@@ -71,15 +76,15 @@ def get_causal_model(config: EntityBindingTaskConfig, model_type: str = 'positio
     Raises:
         ValueError: If model_type is not recognized
     """
-    if model_type == 'positional':
-        return create_positional_causal_model(config)
-    elif model_type == 'positional_entity':
+    if model_type in ("positional", "positional_entity"):
         return create_positional_entity_causal_model(config)
     else:
-        raise ValueError(f"Unknown model type: {model_type}. Use 'positional' or 'positional_entity'")
+        raise ValueError(f"Unknown model type: {model_type}. Use 'positional_entity'")
 
 
-def get_counterfactual_generator(cf_name: str, config: EntityBindingTaskConfig) -> Callable:
+def get_counterfactual_generator(
+    cf_name: str, config: EntityBindingTaskConfig
+) -> Callable:
     """
     Get counterfactual generator function by name.
 
@@ -93,13 +98,19 @@ def get_counterfactual_generator(cf_name: str, config: EntityBindingTaskConfig) 
     Raises:
         ValueError: If cf_name is not recognized
     """
-    if cf_name == 'swap_query_group':
+    if cf_name == "swap_query_group":
         return lambda: swap_query_group(config)
     else:
-        raise ValueError(f"Unknown counterfactual generator: {cf_name}. Use 'swap_query_group'")
+        raise ValueError(
+            f"Unknown counterfactual generator: {cf_name}. Use 'swap_query_group'"
+        )
 
 
-def get_token_positions(pipeline, config: EntityBindingTaskConfig, position_type: str = 'last_token') -> Dict[str, TokenPosition]:
+def get_token_positions(
+    pipeline: LMPipeline,
+    config: EntityBindingTaskConfig,
+    position_type: str = "last_token",
+) -> Dict[str, TokenPosition]:
     """
     Get token positions for the experiment.
 
@@ -116,31 +127,30 @@ def get_token_positions(pipeline, config: EntityBindingTaskConfig, position_type
     """
     token_positions = {}
 
-    if position_type == 'last_token':
-        token_positions['last_token'] = TokenPosition(
-            lambda x: get_last_token_index(x, pipeline),
-            pipeline,
-            id="last_token"
+    if position_type == "last_token":
+        token_positions["last_token"] = TokenPosition(
+            lambda x: get_last_token_index(x, pipeline), pipeline, id="last_token"
         )
-    elif position_type == 'both_e1':
+    elif position_type == "both_e1":
         # For positional entity experiments - both e1 entities
         def indexer_both_e1(input_dict, is_original=True):
             """Return last tokens of both e1 entities, with order based on is_original."""
             # Convert query_indices to tuple if it's a list
-            if 'query_indices' in input_dict and isinstance(input_dict['query_indices'], list):
+            if "query_indices" in input_dict and isinstance(
+                input_dict["query_indices"], list
+            ):
                 input_dict = dict(input_dict)
-                input_dict['query_indices'] = tuple(input_dict['query_indices'])
+                input_dict["query_indices"] = tuple(input_dict["query_indices"])
 
             tokens_list = []
             for group_idx in [0, 1]:
                 try:
-                    tokens = get_entity_token_indices_structured(
+                    tokens = get_statement_entity_token_positions(
                         input_dict,
                         pipeline,
                         config,
                         group_idx=group_idx,
                         entity_idx=1,  # e1 is the second entity
-                        region='statement'
                     )
                     if tokens:
                         tokens_list.append(tokens[-1])
@@ -156,28 +166,31 @@ def get_token_positions(pipeline, config: EntityBindingTaskConfig, position_type
             # Filter out None values and return
             return [t for t in tokens_list if t is not None]
 
-        token_positions['both_e1'] = TokenPosition(
-            indexer_both_e1,
-            pipeline,
-            is_original=True,
-            id="both_e1_last_tokens"
+        token_positions["both_e1"] = TokenPosition(
+            indexer_both_e1, pipeline, is_original=True, id="both_e1_last_tokens"
         )
     else:
-        raise ValueError(f"Unknown position type: {position_type}. Use 'last_token' or 'both_e1'")
+        raise ValueError(
+            f"Unknown position type: {position_type}. Use 'last_token' or 'both_e1'"
+        )
 
     return token_positions
 
 
-def get_checker() -> Callable:
+def get_checker() -> Callable[[dict[str, str], str], bool]:
     """
     Get checker function for verifying model outputs match causal model outputs.
 
     Returns:
         Checker function that takes (neural_output, causal_output) and returns bool
     """
-    def checker(neural_output, causal_output):
+
+    def checker(neural_output: dict[str, str], causal_output: str) -> bool:
         """Check if neural network output matches causal model output."""
-        return causal_output in neural_output["string"] or neural_output["string"].strip() in causal_output
+        return (
+            causal_output in neural_output["string"]
+            or neural_output["string"].strip() in causal_output
+        )
 
     return checker
 
@@ -192,19 +205,15 @@ def get_default_target_variables(config_name: str) -> List[List[str]]:
     Returns:
         List of target variable lists
     """
-    if config_name in ['love', 'action']:
-        return [
-            ["positional_query_group"],
-            ["query_entity"],
-            ["raw_output"]
-        ]
-    elif config_name == 'positional_entity':
+    if config_name in ["love", "action"]:
+        return [["positional_query_group"], ["query_entity"], ["raw_output"]]
+    elif config_name == "positional_entity":
         return [
             [
                 "positional_entity_g0_e1<-positional_entity_g1_e1",
                 "positional_entity_g1_e1<-positional_entity_g0_e1",
                 "positional_entity_g0_e0<-positional_entity_g1_e0",
-                "positional_entity_g1_e0<-positional_entity_g0_e0"
+                "positional_entity_g1_e0<-positional_entity_g0_e0",
             ]
         ]
     else:
@@ -221,10 +230,7 @@ def get_pipeline_config(config_name: str) -> Dict[str, Any]:
     Returns:
         Dictionary with pipeline config parameters
     """
-    if config_name in ['love', 'action', 'positional_entity']:
-        return {
-            'max_new_tokens': 5,
-            'max_length': 256
-        }
+    if config_name in ["love", "action", "positional_entity"]:
+        return {"max_new_tokens": 5, "max_length": 256}
     else:
         raise ValueError(f"Unknown config name: {config_name}")

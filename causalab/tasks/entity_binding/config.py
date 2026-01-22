@@ -1,8 +1,4 @@
-"""
-DEPRECATED: This task is outdated and may not reflect current best practices.
-See causalab/tasks/MCQA/ for an up-to-date example.
-
-Core data structures for Entity Binding tasks.
+"""Core data structures for Entity Binding tasks.
 
 This module provides the fundamental data structures needed to represent
 entity binding tasks with arbitrary numbers of entity groups and entities per group.
@@ -10,6 +6,103 @@ entity binding tasks with arbitrary numbers of entity groups and entities per gr
 
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
+
+from causalab.neural.token_position_builder import Template
+
+
+def _build_conjoined_template(
+    template: str,
+    num_repetitions: int,
+    delimiters: List[str],
+    group_prefix: str = "g",
+    capitalize_first: bool = True,
+) -> str:
+    """
+    Build a conjoined template with unique variable names for each repetition.
+
+    Takes a template like "{e0} loves {e1}" and creates:
+    "{g0_e0} loves {g0_e1}, {g1_e0} loves {g1_e1}."
+
+    This enables the declarative token position system to reference each
+    variable by its unique group-qualified name.
+
+    Args:
+        template: Template string with {variable} placeholders, e.g., "{e0} loves {e1}"
+        num_repetitions: Number of times to repeat the template
+        delimiters: List of delimiters of length num_repetitions.
+                    delimiters[i] is inserted after statement i.
+        group_prefix: Prefix for group index (default "g"). Variables are
+                      transformed as: "{e0}" -> "{g0_e0}"
+        capitalize_first: Whether to capitalize first letter of first statement
+
+    Returns:
+        A new template string with unique variable names per repetition.
+
+    Example:
+        >>> _build_conjoined_template("{e0} loves {e1}", 2, [" and ", "."])
+        "{g0_e0} loves {g0_e1} and {g1_e0} loves {g1_e1}."
+    """
+    if num_repetitions == 0:
+        return ""
+
+    if len(delimiters) != num_repetitions:
+        raise ValueError(
+            f"Expected {num_repetitions} delimiters, got {len(delimiters)}"
+        )
+
+    # Parse the template to find variables
+    parsed = Template(template)
+
+    result_parts = []
+
+    for rep_idx in range(num_repetitions):
+        # Build this repetition with group-qualified variable names
+        for part_type, content in parsed.parts:
+            if part_type == "literal":
+                result_parts.append(content)
+            else:  # variable
+                # Transform variable name: "e0" -> "g0_e0"
+                new_name = f"{group_prefix}{rep_idx}_{content}"
+                result_parts.append("{" + new_name + "}")
+
+        # Add delimiter after this repetition
+        result_parts.append(delimiters[rep_idx])
+
+    result = "".join(result_parts)
+
+    # Capitalize first character if requested
+    if capitalize_first and result:
+        result = result[0].upper() + result[1:]
+
+    return result
+
+
+def _expand_delimiters(delimiters: List[str], num_statements: int) -> List[str]:
+    """
+    Expand FILL-style delimiter spec to a list of the correct length.
+
+    Args:
+        delimiters: Delimiter spec with "FILL" marker, e.g. [", ", "FILL", ", and ", "."]
+        num_statements: Number of statements to join
+
+    Returns:
+        List of delimiters of length num_statements
+    """
+    fill_index = delimiters.index("FILL")
+    filler = delimiters[fill_index - 1]
+    result = delimiters[: fill_index - 1] + delimiters[fill_index + 1 :]
+
+    while len(result) < num_statements:
+        result.insert(fill_index - 1, filler)
+
+    if len(result) > num_statements:
+        result = result[-num_statements:]
+
+    # For 2 statements, strip the comma from ", and " to get " and "
+    if num_statements == 2 and ", and" in result[0]:
+        result[0] = result[0].lstrip(",")
+
+    return result
 
 
 @dataclass
@@ -39,6 +132,39 @@ class EntityBindingTaskConfig:
     fixed_query_indices: Optional[Tuple[int, ...]] = (
         None  # If set, always use these query indices
     )
+    fixed_answer_index: Optional[int] = None  # If set, always use this answer index
+
+    def build_mega_template(
+        self,
+        active_groups: int,
+        query_indices: Tuple[int, ...],
+        answer_index: int,
+    ) -> str:
+        """
+        Build the mega template string for a given configuration.
+
+        The mega template combines the conjoined statement template with the question template.
+        Variable names in the result:
+        - Statement entities: g0_e0, g0_e1, g1_e0, g1_e1, ...
+        - Question entities: query_entity, person, food, object, location, ...
+
+        Args:
+            active_groups: Number of active groups
+            query_indices: Tuple of entity indices being queried
+            answer_index: Index of the answer entity
+
+        Returns:
+            Complete mega template string
+        """
+        delimiters = _expand_delimiters(self.delimiters, active_groups)
+        statement_template_str = _build_conjoined_template(
+            self.statement_template, active_groups, delimiters
+        )
+        question_template_str = self.question_templates.get(
+            (query_indices, answer_index), ""
+        )
+        body = f"{statement_template_str}{self.statement_question_separator}{question_template_str}"
+        return f"{self.prompt_prefix}{body}{self.prompt_suffix}"
 
 
 class EntityGroup:
@@ -117,14 +243,16 @@ def create_sample_love_config() -> EntityBindingTaskConfig:
             0: ["Pete", "Ann", "Tim", "Bob", "Sue", "Kate"],
             1: ["jam", "pie", "cake", "bread", "soup", "tea"],
         },
-        statement_template="{entity_e0} loves {entity_e1}",
+        statement_template="{e0} loves {e1}",
         delimiters=[", ", "FILL", ", and ", "."],
         question_templates={
             # Query person (index 0), answer food (index 1)
-            ((0,), 1): "What does {query_entity} love?",
+            ((0,), 1): "What does {person} love?",
             # Query food (index 1), answer person (index 0)
-            ((1,), 0): "Who loves {query_entity}?",
+            ((1,), 0): "Who loves {food}?",
         },
+        prompt_prefix="We will ask a question about the following sentences.\n\n",
+        prompt_suffix="\nAnswer:",
     )
 
 
@@ -143,7 +271,7 @@ def create_sample_action_config() -> EntityBindingTaskConfig:
             1: ["jam", "water", "book", "coin", "pen", "key", "phone", "watch"],
             2: ["cup", "box", "table", "shelf", "drawer", "bag", "pocket", "basket"],
         },
-        statement_template="{entity_e0} put {entity_e1} in the {entity_e2}",
+        statement_template="{e0} put {e1} in the {e2}",
         delimiters=[", ", "FILL", ", and ", "."],
         question_templates={
             # === SINGLE ENTITY QUERIES ===

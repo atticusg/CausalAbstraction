@@ -1,7 +1,4 @@
 """
-DEPRECATED: This task is outdated and may not reflect current best practices.
-See causalab/tasks/MCQA/ for an up-to-date example.
-
 Counterfactual dataset generation for entity binding tasks.
 
 This module provides functions to generate counterfactual examples by
@@ -9,12 +6,19 @@ swapping entity groups while keeping the query the same.
 """
 
 import random
-from typing import Dict, Any
-from .causal_models import create_direct_causal_model, sample_valid_entity_binding_input
+
+from causalab.causal.counterfactual_dataset import CounterfactualExample
+
+from .causal_models import (
+    create_positional_entity_causal_model,
+    sample_valid_entity_binding_input,
+)
 from .config import EntityBindingTaskConfig
 
 
-def swap_query_group(config: EntityBindingTaskConfig) -> Dict[str, Any]:
+def swap_query_group(
+    config: EntityBindingTaskConfig, change_answer: bool = False
+) -> CounterfactualExample:
     """
     Generate a counterfactual by swapping the queried entity group with another group.
 
@@ -46,115 +50,44 @@ def swap_query_group(config: EntityBindingTaskConfig) -> Dict[str, Any]:
     ----------
     config : EntityBindingTaskConfig
         The task configuration
+    change_answer : bool, optional
+        If True, replace the answer entity in the counterfactual with a new entity
+        from the same pool (different from all entities in the sample). This creates
+        a counterfactual with a different expected answer. Default is False.
 
     Returns
     -------
-    Dict[str, Any]
-        Dictionary with:
-        - "input": The original input sample
-        - "counterfactual_inputs": List containing one counterfactual sample
+    CounterfactualExample
     """
     # Create causal model
-    model = create_direct_causal_model(config)
-
-    # Sample a valid input (will use config.fixed_query_indices if set)
-    input_sample = sample_valid_entity_binding_input(config)
-
-    # Regenerate raw_input for the input sample
-
-    # Identify which group is being queried
-    query_group = input_sample["query_group"]
-    active_groups = input_sample["active_groups"]
-
-    # Choose a different group to swap with
-    other_groups = [g for g in range(active_groups) if g != query_group]
-    if not other_groups:
-        # Only one group active, return random counterfactual instead
-        counterfactual_input = sample_valid_entity_binding_input(config)
-        return {"input": input_sample.to_dict() if hasattr(input_sample, "to_dict") else input_sample, "counterfactual_inputs": [counterfactual_input]}
-
-    swap_group = random.choice(other_groups)
-
-    # Create counterfactual by swapping the entity groups
-    counterfactual = input_sample.to_dict() if hasattr(input_sample, "to_dict") else input_sample.copy()
-
-    # Swap entities between query_group and swap_group
-    entities_per_group = input_sample["entities_per_group"]
-    for e in range(entities_per_group):
-        key_query = f"entity_g{query_group}_e{e}"
-        key_swap = f"entity_g{swap_group}_e{e}"
-
-        # Swap the entities
-        counterfactual[key_query] = input_sample[key_swap]
-        counterfactual[key_swap] = input_sample[key_query]
-
-    # KEY: Update query_group to follow where the original query entity moved
-    # After the swap, the original query entity is now at swap_group
-    counterfactual["query_group"] = swap_group
-
-    # This keeps the SAME QUESTION (asking about the same entity)
-    # but the statement has changed (entities in different positions)
-
-    # Remove raw_input if copied
-    if "raw_input" in counterfactual:
-        del counterfactual["raw_input"]
-
-
-    return {"input": input_sample.to_dict() if hasattr(input_sample, "to_dict") else input_sample, "counterfactual_inputs": [counterfactual]}
-
-
-def swap_query_group_preserve_answer(config: EntityBindingTaskConfig) -> Dict[str, Any]:
-    """
-    Generate a counterfactual by swapping entity groups AND adjusting the query.
-
-    Unlike swap_query_group, this version keeps the ANSWER the same by also
-    changing which entity is queried.
-
-    Example:
-        Input:     "Pete loves jam, and Ann loves pie. What does Pete love?"
-        Expected answer: "jam"
-
-        Counterfactual: "Ann loves pie, and Pete loves jam. What does Ann love?"
-        Expected answer: "pie" (different answer because we're querying different entity)
-
-    This tests whether the model can retrieve the correct binding regardless of
-    which entity is queried.
-
-    Parameters
-    ----------
-    config : EntityBindingTaskConfig
-        The task configuration
-
-    Returns
-    -------
-    Dict[str, Any]
-        Dictionary with:
-        - "input": The original input sample
-        - "counterfactual_inputs": List containing one counterfactual sample
-    """
-    # Create causal model
-    model = create_direct_causal_model(config)
+    model = create_positional_entity_causal_model(config)
 
     # Sample a valid input
-    input_sample = sample_valid_entity_binding_input(config)
+    input_sample = sample_valid_entity_binding_input(config, model=model)
 
-    # Regenerate raw_input for the input sample
-
-    # Identify which group is being queried
+    # Get query_group directly from the input sample
     query_group = input_sample["query_group"]
     active_groups = input_sample["active_groups"]
 
     # Choose a different group to swap with
     other_groups = [g for g in range(active_groups) if g != query_group]
     if not other_groups:
-        # Only one group active, return random counterfactual instead
-        counterfactual_input = sample_valid_entity_binding_input(config)
-        return {"input": input_sample.to_dict() if hasattr(input_sample, "to_dict") else input_sample, "counterfactual_inputs": [counterfactual_input]}
+        # Only one group active - cannot swap, fall back to random counterfactual
+        import warnings
+
+        warnings.warn(
+            f"swap_query_group called with only one active group ({active_groups}). "
+            "Falling back to random counterfactual sampling."
+        )
+        counterfactual = sample_valid_entity_binding_input(config, model=model)
+        return CounterfactualExample(
+            input=input_sample, counterfactual_inputs=[counterfactual]
+        )
 
     swap_group = random.choice(other_groups)
 
-    # Create counterfactual by swapping the entity groups
-    counterfactual = input_sample.to_dict() if hasattr(input_sample, "to_dict") else input_sample.copy()
+    # Build counterfactual dict from INPUT variables only
+    cf_dict = {var: input_sample[var] for var in model.inputs}
 
     # Swap entities between query_group and swap_group
     entities_per_group = input_sample["entities_per_group"]
@@ -163,98 +96,49 @@ def swap_query_group_preserve_answer(config: EntityBindingTaskConfig) -> Dict[st
         key_swap = f"entity_g{swap_group}_e{e}"
 
         # Swap the entities
-        counterfactual[key_query] = input_sample[key_swap]
-        counterfactual[key_swap] = input_sample[key_query]
+        cf_dict[key_query], cf_dict[key_swap] = cf_dict[key_swap], cf_dict[key_query]
 
-    # ALSO swap which group is queried to preserve the semantic meaning
-    counterfactual["query_group"] = swap_group
+    # KEY: Update query_group and query_e{e} to follow where the original query entity moved
+    # After the swap, the original query entities are now at swap_group
+    cf_dict["query_group"] = swap_group
 
-    # Regenerate the prompt and answer for the counterfactual
-    # Remove raw_input if copied, will be regenerated
-    if "raw_input" in counterfactual:
-        del counterfactual["raw_input"]
-
-
-    return {"input": input_sample.to_dict() if hasattr(input_sample, "to_dict") else input_sample, "counterfactual_inputs": [counterfactual]}
-
-
-def swap_non_query_groups(config: EntityBindingTaskConfig) -> Dict[str, Any]:
-    """
-    Generate a counterfactual by swapping two NON-QUERIED entity groups.
-
-    This tests whether the model is affected by changes to irrelevant entities.
-    The query group stays the same, and so does the answer.
-
-    Example:
-        Input:     "Pete loves jam, Ann loves pie, and Bob loves cake. What does Pete love?"
-        Expected answer: "jam"
-
-        Counterfactual: "Pete loves jam, Bob loves cake, and Ann loves pie. What does Pete love?"
-        Expected answer: "jam" (still correct, Ann and Bob swapped but Pete unchanged)
-
-    This is a control condition - the model should give the same answer since
-    the queried entity hasn't changed.
-
-    Parameters
-    ----------
-    config : EntityBindingTaskConfig
-        The task configuration
-
-    Returns
-    -------
-    Dict[str, Any]
-        Dictionary with:
-        - "input": The original input sample
-        - "counterfactual_inputs": List containing one counterfactual sample
-    """
-    # Create causal model
-    model = create_direct_causal_model(config)
-
-    # Sample a valid input with at least 3 groups
-    input_sample = sample_valid_entity_binding_input(config)
-    # Ensure we have at least 3 active groups
-    if input_sample["active_groups"] < 3:
-        input_sample["active_groups"] = min(3, config.max_groups)
-
-    # Regenerate raw_input for the input sample
-
-    # Identify which group is being queried
-    query_group = input_sample["query_group"]
-    active_groups = input_sample["active_groups"]
-
-    # Find two non-queried groups to swap
-    non_query_groups = [g for g in range(active_groups) if g != query_group]
-    if len(non_query_groups) < 2:
-        # Not enough groups to swap, return same input
-        return {"input": input_sample.to_dict() if hasattr(input_sample, "to_dict") else input_sample, "counterfactual_inputs": [input_sample.copy()]}
-
-    group1, group2 = random.sample(non_query_groups, 2)
-
-    # Create counterfactual by swapping these two groups
-    counterfactual = input_sample.to_dict() if hasattr(input_sample, "to_dict") else input_sample.copy()
-
-    # Swap entities between group1 and group2
-    entities_per_group = input_sample["entities_per_group"]
+    # Set query_e{e} from the entities at swap_group (which now has original entities)
     for e in range(entities_per_group):
-        key1 = f"entity_g{group1}_e{e}"
-        key2 = f"entity_g{group2}_e{e}"
+        cf_dict[f"query_e{e}"] = cf_dict[f"entity_g{swap_group}_e{e}"]
 
-        # Swap the entities
-        counterfactual[key1] = input_sample[key2]
-        counterfactual[key2] = input_sample[key1]
+    # Optionally change the answer entity to a new one
+    if change_answer:
+        answer_index = cf_dict["answer_index"]
+        # The answer entity is at position answer_index in the queried group
+        # After swap, the queried group is swap_group
+        answer_key = f"entity_g{swap_group}_e{answer_index}"
 
-    # The query_group stays the same, so the answer should be the same
+        # Collect all entities currently in the sample
+        used_entities = set()
+        for g in range(cf_dict["active_groups"]):
+            for e in range(cf_dict["entities_per_group"]):
+                entity = cf_dict.get(f"entity_g{g}_e{e}")
+                if entity:
+                    used_entities.add(entity)
 
-    # Regenerate the prompt for the counterfactual
-    # Remove raw_input if copied, will be regenerated
-    if "raw_input" in counterfactual:
-        del counterfactual["raw_input"]
+        # Get available entities from the same pool (same entity role)
+        available = [
+            ent for ent in config.entity_pools[answer_index] if ent not in used_entities
+        ]
+
+        if available:
+            new_answer = random.choice(available)
+            cf_dict[answer_key] = new_answer
+            # Also update query_e{answer_index} if it was the answer position
+            cf_dict[f"query_e{answer_index}"] = new_answer
+
+    # Create counterfactual trace - this computes raw_input, raw_output, etc.
+    counterfactual = model.new_trace(cf_dict)
+
+    return {"input": input_sample, "counterfactual_inputs": [counterfactual]}
 
 
-    return {"input": input_sample.to_dict() if hasattr(input_sample, "to_dict") else input_sample, "counterfactual_inputs": [counterfactual]}
-
-
-def random_counterfactual(config: EntityBindingTaskConfig) -> Dict[str, Any]:
+def random_counterfactual(config: EntityBindingTaskConfig) -> CounterfactualExample:
     """
     Generate a completely random counterfactual by sampling two independent inputs.
 
@@ -267,70 +151,17 @@ def random_counterfactual(config: EntityBindingTaskConfig) -> Dict[str, Any]:
 
     Returns
     -------
-    Dict[str, Any]
+    CounterfactualExample
         Dictionary with:
-        - "input": The original input sample
-        - "counterfactual_inputs": List containing one counterfactual sample
+        - "input": The original input sample (CausalTrace)
+        - "counterfactual_inputs": List containing one counterfactual sample (CausalTrace)
     """
-    model = create_direct_causal_model(config)
+    model = create_positional_entity_causal_model(config)
 
-    # Sample two independent inputs
-    input_sample = sample_valid_entity_binding_input(config)
+    # Sample two independent inputs as CausalTraces
+    input_sample = sample_valid_entity_binding_input(config, model=model)
+    counterfactual = sample_valid_entity_binding_input(config, model=model)
 
-    counterfactual = sample_valid_entity_binding_input(config)
-
-    return {"input": input_sample.to_dict() if hasattr(input_sample, "to_dict") else input_sample, "counterfactual_inputs": [counterfactual]}
-
-
-# Example usage and testing
-if __name__ == "__main__":
-    from .config import create_sample_love_config
-
-    config = create_sample_love_config()
-
-    print("=" * 70)
-    print("COUNTERFACTUAL DATASET EXAMPLES")
-    print("=" * 70)
-
-    # Test swap_query_group
-    print("\n1. SWAP QUERY GROUP (query same entity, but it has different binding)")
-    print("-" * 70)
-    example = swap_query_group(config)
-    input_s = example["input"]
-    counter_s = example["counterfactual_inputs"][0]
-
-    print(f"Input:          {input_s['raw_input']}")
-    print(f"Answer:         {input_s['raw_output']}")
-    print(f"Query group:    {input_s['query_group']}")
-    print()
-    print(f"Counterfactual: {counter_s['raw_input']}")
-    print(f"Answer:         {counter_s['raw_output']}")
-    print(f"Query group:    {counter_s['query_group']}")
-
-    # Test swap_non_query_groups (if enough groups)
-    if config.max_groups >= 3:
-        print("\n2. SWAP NON-QUERY GROUPS (answer should stay the same)")
-        print("-" * 70)
-        example = swap_non_query_groups(config)
-        input_s = example["input"]
-        counter_s = example["counterfactual_inputs"][0]
-
-        print(f"Input:          {input_s['raw_input']}")
-        print(f"Answer:         {input_s['raw_output']}")
-        print()
-        print(f"Counterfactual: {counter_s['raw_input']}")
-        print(f"Answer:         {counter_s['raw_output']}")
-        print(f"Same answer?    {input_s['raw_output'] == counter_s['raw_output']}")
-
-    # Test random_counterfactual
-    print("\n3. RANDOM COUNTERFACTUAL (completely independent)")
-    print("-" * 70)
-    example = random_counterfactual(config)
-    input_s = example["input"]
-    counter_s = example["counterfactual_inputs"][0]
-
-    print(f"Input:          {input_s['raw_input']}")
-    print(f"Answer:         {input_s['raw_output']}")
-    print()
-    print(f"Counterfactual: {counter_s['raw_input']}")
-    print(f"Answer:         {counter_s['raw_output']}")
+    return CounterfactualExample(
+        input=input_sample, counterfactual_inputs=[counterfactual]
+    )
