@@ -1,6 +1,6 @@
 # Causal Abstraction for Mechanistic Interpretability
 
-[![Tests](https://github.com/goodfire-ai/causalab/actions/workflows/test.yml/badge.svg)](https://github.com/goodfire-ai/causalab/actions/workflows/test.yml)
+[![Tests](https://github.com/goodfire-ai/causalab/actions/workflows/test.yml/badge.svg)
 
 This repository supports mechanistic interpretability experiments that reverse engineer what algorithm a neural network implements with causal abstraction.
 
