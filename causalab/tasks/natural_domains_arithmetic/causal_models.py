@@ -15,10 +15,30 @@ from .config import NaturalDomainConfig
 
 
 _RANDOM_WORD_POOL: list[str] = [
-    "apple", "stone", "blade", "crown", "pearl", "flame",
-    "river", "storm", "chair", "glass", "cloud", "dream",
-    "tiger", "maple", "frost", "piano", "lemon", "coral",
-    "steel", "patch", "torch", "wheat", "brick", "lodge",
+    "apple",
+    "stone",
+    "blade",
+    "crown",
+    "pearl",
+    "flame",
+    "river",
+    "storm",
+    "chair",
+    "glass",
+    "cloud",
+    "dream",
+    "tiger",
+    "maple",
+    "frost",
+    "piano",
+    "lemon",
+    "coral",
+    "steel",
+    "patch",
+    "torch",
+    "wheat",
+    "brick",
+    "lodge",
 ]
 
 
