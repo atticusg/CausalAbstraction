@@ -16,11 +16,60 @@ from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Pipeline", "LMPipeline"]
+__all__ = ["Pipeline", "LMPipeline", "resolve_device"]
+
+# ---------------------------------------------------------------------------
+# Compat patches
+# ---------------------------------------------------------------------------
+
+_patched_extra_special_tokens = False
+
+
+def _patch_extra_special_tokens() -> None:
+    """Work around transformers <5 bug with list-valued extra_special_tokens.
+
+    Some newer tokenizer configs (e.g. Gemma 4) ship extra_special_tokens as a
+    list, but ``_set_model_specific_special_tokens`` in transformers 4.57.x
+    unconditionally calls ``.keys()`` on the value, raising AttributeError.
+    See https://github.com/huggingface/transformers/issues/45376
+    """
+    global _patched_extra_special_tokens
+    if _patched_extra_special_tokens:
+        return
+    _patched_extra_special_tokens = True
+
+    from transformers import tokenization_utils_base as _tub
+
+    _orig = _tub.PreTrainedTokenizerBase._set_model_specific_special_tokens
+
+    def _safe_set_model_specific_special_tokens(self, special_tokens):
+        if isinstance(special_tokens, list):
+            special_tokens = {}
+        return _orig(self, special_tokens)
+
+    _tub.PreTrainedTokenizerBase._set_model_specific_special_tokens = (
+        _safe_set_model_specific_special_tokens
+    )
+
 
 # ---------------------------------------------------------------------------
 # Helper utils
 # ---------------------------------------------------------------------------
+
+
+def resolve_device(device: str | None = None) -> str:
+    """Resolve a device string, supporting ``"auto"`` for platform detection.
+
+    Priority for ``"auto"`` (or *None*): **cuda → mps → cpu**.
+    Explicit values (``"cuda"``, ``"mps"``, ``"cpu"``) are returned as-is.
+    """
+    if device is None or device == "auto":
+        if torch.cuda.is_available():
+            return "cuda"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
+    return device
 
 
 def _infer_device_and_dtype(
@@ -32,8 +81,8 @@ def _infer_device_and_dtype(
     If dtype is None, defaults to "auto" which tells transformers to use the
     dtype from the model's config (e.g., bfloat16 if the model was saved that way).
     """
-    if requested_device is None:
-        requested_device = "cuda" if torch.cuda.is_available() else "cpu"
+    if requested_device is None or requested_device == "auto":
+        requested_device = resolve_device()
     if requested_dtype is None:
         requested_dtype = "auto"
     return requested_device, requested_dtype
@@ -111,6 +160,7 @@ class LMPipeline(Pipeline):
         position_ids: bool = False,
         use_chat_template: bool = False,
         padding_side: str | None = "left",
+        load_weights: bool = True,
         **kwargs: Any,
     ) -> None:
         self.max_new_tokens = max_new_tokens
@@ -119,6 +169,7 @@ class LMPipeline(Pipeline):
         self.position_ids = position_ids
         self.use_chat_template = use_chat_template
         self.padding_side = padding_side
+        self.load_weights = load_weights
         self._init_extra_kwargs = kwargs
         super().__init__(model_or_name)
 
@@ -127,6 +178,8 @@ class LMPipeline(Pipeline):
     # ------------------------------------------------------------------
 
     def _setup_model(self) -> None:
+        _patch_extra_special_tokens()
+
         device, dtype = _infer_device_and_dtype(
             self._init_extra_kwargs.get("device"), self._init_extra_kwargs.get("dtype")
         )
@@ -140,16 +193,46 @@ class LMPipeline(Pipeline):
             self.tokenizer = AutoTokenizer.from_pretrained(
                 self.model_or_name, token=hf_token
             )
-            self.model = AutoModelForCausalLM.from_pretrained(  # type: ignore[call-arg]
-                self.model_or_name,
+            device_map = self._init_extra_kwargs.get("device_map")
+            pretrained_kwargs: dict[str, Any] = dict(
                 config=self._init_extra_kwargs.get("config"),
                 token=hf_token,
-                torch_dtype=dtype,  # Pass dtype to from_pretrained ("auto" uses config)
-            ).to(device=device)
-            if hasattr(self.model.config, "_attn_implementation"):
-                self.model.config._attn_implementation = "eager"
-            if hasattr(self.model.config, "use_cache"):
-                self.model.config.use_cache = False
+                dtype=dtype,
+            )
+            if device_map is not None:
+                pretrained_kwargs["device_map"] = device_map
+            if self.load_weights:
+                self.model = AutoModelForCausalLM.from_pretrained(  # type: ignore[call-arg]
+                    self.model_or_name, **pretrained_kwargs
+                )
+                if device_map is None:
+                    self.model = self.model.to(device=device)
+                if self._init_extra_kwargs.get("eager_attn", True):
+                    if hasattr(self.model.config, "_attn_implementation"):
+                        self.model.config._attn_implementation = "eager"
+                if hasattr(self.model.config, "use_cache"):
+                    self.model.config.use_cache = False
+                # We always greedy-decode (do_sample=False); strip sampling-only
+                # fields from generation_config so transformers doesn't warn that
+                # temperature/top_p are being ignored on every generate() call.
+                gen_cfg = getattr(self.model, "generation_config", None)
+                if gen_cfg is not None:
+                    gen_cfg.do_sample = False
+                    gen_cfg.temperature = None
+                    gen_cfg.top_p = None
+                    gen_cfg.top_k = None
+            else:
+                # Tokenizer + config only: skip weight load. Forward passes will fail;
+                # this mode is for code paths that only need hidden_size + tokenization
+                # (e.g. building InterchangeTargets for cached-feature manifold fitting).
+                from types import SimpleNamespace
+                from transformers import AutoConfig
+
+                hf_config = AutoConfig.from_pretrained(
+                    self.model_or_name,
+                    token=hf_token,
+                )
+                self.model = SimpleNamespace(config=hf_config)
         else:
             # Pre-loaded model: move to device, and only convert dtype if explicit
             self.model = self.model_or_name.to(device)
@@ -294,7 +377,8 @@ class LMPipeline(Pipeline):
         scores = [s.detach().cpu() for s in (out.scores or [])]
         seq = out.sequences[:, -self.max_new_tokens :].detach().cpu()
         del inputs, out
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         gc.collect()
         return {
             "scores": scores,

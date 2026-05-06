@@ -1,0 +1,5 @@
+defaults:
+  - base
+  - task: natural_domains_arithmetic_weekdays
+  - model: llama31_8b
+  - _self_

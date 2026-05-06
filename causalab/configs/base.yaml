@@ -1,0 +1,10 @@
+seed: 42
+experiment_root: artifacts/${task.name}/${model.id}
+
+slurm:
+  time: "04:00:00"
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null

@@ -1,0 +1,46 @@
+# @package subspace
+_name_: subspace
+_subdir: ${.method}_k${.k_features}
+_output_dir: ${experiment_root}/subspace/${._subdir}
+
+method: pca                  # pca | das | dbm | boundless
+k_features: 64
+batch_size: 32
+
+# Component to operate on. Used by all methods; the grid axes depend on type.
+#   residual_stream: layers x token_positions
+#   attention_head:  layers x heads (single token_position)
+#   mlp:             layers x token_positions
+component_type: residual_stream
+
+layers: null                 # list[int] or null. null = auto-resolve from locate/. Single item = single-cell mode.
+token_positions: [last_token]   # list of position names; null = all positions from task. Used by residual_stream and mlp.
+heads: null                  # list[int] or null. null = all heads. Used by attention_head only.
+token_position: null         # single position name. Used by attention_head only.
+
+# Optional multi-mode sweep. When set, the analysis iterates each entry,
+# merging it onto the analysis-level defaults and writing artifacts under
+# {_output_dir}/{mode.name or mode.component_type}/.
+# Each entry is a dict that overrides any analysis field (e.g.
+# component_type, layers, k_features, ...). Leave null for single-mode runs.
+modes: null
+
+visualization:
+  figure_format: pdf
+  colormap: ${task.colormap}  # inherited from task config
+  vis_dims: null  # which PC dims to plot, e.g. [0,1,2] or [1,3,5]. null = first 3
+  detailed_hover: false  # show all causal variables + raw_input in hover labels
+  max_hover_chars: 50  # max chars for raw_input in hover (truncated with ...)
+das:
+  training_epoch: 4
+  lr: 0.001
+dbm:
+  training_epoch: 20
+  lr: 0.001
+  regularization_coefficient: 0.1
+  tie_masks: false           # true = binary on/off per unit; false = per-feature-dim masks
+boundless:
+  training_epoch: 20
+  lr: 0.001
+  regularization_coefficient: 0.1
+  # tie_masks is always False for boundless (enforced in code, not configurable)

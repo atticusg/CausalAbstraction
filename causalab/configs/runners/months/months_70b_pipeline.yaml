@@ -1,0 +1,34 @@
+# @package _global_
+defaults:
+- /base
+- /task: natural_domains_arithmetic_months
+- /model: llama31_70b
+- /analysis/baseline
+- /analysis/subspace
+- /analysis/activation_manifold
+- /analysis/output_manifold
+- /analysis/path_steering
+- _self_
+
+task:
+  target_variable: result
+  n_train: 1000
+  n_test: 1000
+
+locate:
+  layers: [70]
+
+subspace:
+  layers: [70]
+
+activation_manifold:
+  layers: [70]
+  intrinsic_mode: parameter
+
+output_manifold:
+  intrinsic_mode: parameter
+
+path_steering:
+  num_steps_along_path: 100
+  isometry:
+    n_interior_per_pair: 1

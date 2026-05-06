@@ -1,0 +1,29 @@
+name: graph_walk
+variant: cylinder_9x9
+max_new_tokens: 1
+colormap: dark_seismic
+colormap2: null
+color_by_dim: 0
+intervention_metric: kl
+reference_source: empirical
+n_train: 1000
+n_test: 50
+enumerate_all: false
+balanced: false
+resample_variable: all
+distance_function: hellinger
+# Graph walk tasks require a task_cfg for factory creation
+graph_type: cylinder
+graph_size: 9
+graph_size_2: 9
+context_length: 2048
+separator: "|"
+no_backtrack: true
+show_graph_edges: true
+
+isometry:
+  distance_function: ${task.distance_function}
+  grid_range: [0, 80]
+  grid_resolution: 21
+  bin_positions: null
+

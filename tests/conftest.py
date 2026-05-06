@@ -9,7 +9,7 @@ from causalab.causal.causal_model import CausalModel
 from causalab.causal.trace import Mechanism, input_var
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.LM_units import ResidualStream
-from causalab.neural.token_position_builder import TokenPosition
+from causalab.neural.token_positions import TokenPosition
 
 
 @pytest.fixture(scope="session")

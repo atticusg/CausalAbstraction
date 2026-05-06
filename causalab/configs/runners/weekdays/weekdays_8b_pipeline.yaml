@@ -1,0 +1,29 @@
+# @package _global_
+defaults:
+- /base
+- /task: natural_domains_arithmetic_weekdays
+- /model: llama31_8b
+- /analysis/baseline
+- /analysis/subspace
+- /analysis/activation_manifold
+- /analysis/output_manifold
+- /analysis/path_steering
+- /analysis/pullback
+- _self_
+
+task:
+  target_variable: result
+
+locate:
+  layers: [28]
+
+subspace:
+  layers: [28]
+
+activation_manifold:
+  layers: [28]
+
+path_steering:
+  n_extra_pairs: 29
+  isometry:
+    n_interior_per_pair: 4

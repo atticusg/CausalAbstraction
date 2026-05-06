@@ -15,8 +15,13 @@ import pytest
 import torch
 
 from causalab.neural.LM_units import ResidualStream, AttentionHead, MLP
-from causalab.neural.token_position_builder import get_substring_token_ids
-import causalab.neural.featurizers as F
+from causalab.neural.token_positions import get_substring_token_ids
+import causalab.neural.featurizer as F
+from causalab.methods.trained_subspace.subspace import (
+    SubspaceFeaturizer as _SubspaceFeaturizer,
+)
+
+F.SubspaceFeaturizer = _SubspaceFeaturizer  # type: ignore[attr-defined]
 
 
 # --------------------------------------------------------------------------- #

@@ -2,89 +2,154 @@
 
 ![Tests](https://github.com/goodfire-ai/causalab/actions/workflows/test.yml/badge.svg)
 
-This repository supports mechanistic interpretability experiments that reverse engineer what algorithm a neural network implements with causal abstraction.
+A framework for **mechanistic interpretability** — reverse-engineering the algorithms language models use internally using **causal abstraction**.
 
-## Overview
+You write a high-level causal model describing *how you think* an LM solves a task, then run experiments to test whether the LM's internal components actually implement that algorithm.
 
- This codebase follows a causal abstraction approach, where we hypothesize high-level causal models of how LLMs might solve tasks, and then locate where and how these abstract variables are represented in the model.
+## Quick Start
+
+Causalab is built to be driven by a **coding agent** (e.g. Claude Code). The fast path:
+
+1. Clone and install:
+   ```bash
+   git clone https://github.com/goodfire-ai/causalab.git
+   cd causalab
+   uv sync
+   ```
+2. Open the directory in your coding agent of choice.
+3. Describe what you want to do — e.g. *"walk me through the codebase"*, *"set up a new task from this spec"*, *"run the weekdays pipeline"*. The agent routes the request through the matching skill (`/getting-started`, `/setup-task`, `/run-experiment`, …).
+
+Prefer to look around first? Run the end-to-end weekdays pipeline (Llama-3.1-8B, ≥24 GB VRAM):
+
+```bash
+./scripts/run_exp.sh weekdays_8b_pipeline          # inline
+./scripts/run_exp.sh --slurm weekdays_8b_pipeline  # sbatch
+```
+
+Or open [`demos/weekdays_geometry.ipynb`](demos/weekdays_geometry.ipynb) for the same pipeline rendered as a notebook.
+
+## Working with a coding agent
+
+The full workflow is skill-driven. Each skill is a focused entry point — invoke it by name (`/<skill>`), or describe your goal and let the agent route to it.
+
+### Investigating a task — `/setup-task`
+
+Use `/setup-task` to explore, understand, or create a task. Whether you want to inspect an existing task's causal model, browse its counterfactuals, or build a new task from scratch, this is the entry point.
+
+```
+/setup-task                     # interactive
+/setup-task path/to/spec.md     # from a spec file
+/setup-task path/to/paper.pdf   # from a paper PDF
+```
+
+### Running experiments — `/plan-experiment` then `/run-experiment`
+
+`/plan-experiment` crystallizes a research objective into `RESEARCH_OBJECTIVE.md` + `PLAN.md` (analysis DAG, sweep strategy, expected artifacts). `/run-experiment` then materializes the runner config(s) and executes the pipeline. `/interpret-experiment` is auto-invoked at the end and writes a single `result/REPORT.md` grounded in the plan.
+
+```
+/plan-experiment
+/run-experiment
+```
+
+### All available skills
+
+| Command | What it does |
+|---------|-------------|
+| `/research-session` | Bootstrap a session directory at the start of a research workflow |
+| `/development-session` | Load engineering context at the start of codebase work |
+| `/getting-started` | Onboarding walkthrough |
+| `/setup-task` | Create, explore, or investigate a task |
+| `/plan-experiment` | Crystallize a research objective into `RESEARCH_OBJECTIVE.md` + `PLAN.md` |
+| `/run-experiment` | Materialize runner configs from the plan and execute |
+| `/interpret-experiment` | Auto-invoked after `/run-experiment` — writes `result/REPORT.md` |
+| `/replicate-paper` | Reproduce results from a research paper |
+| `/document-issues` | Document failures, confusions, and workarounds |
+
+## Core Concepts
 
 ### Causal Models
-A causal model (causal_model.py) consists of:
 
-- **Variables**: Concepts that might be represented in the neural network
-- **Values**: Possible assignments to each variable
-- **Parent-Child Relationships**: Directed relationships showing causal dependencies
-- **Mechanisms**: Functions that compute a variable's value given its parents' values
+A causal model is your hypothesis about how the LM solves a task. It consists of:
+
+- **Variables**: concepts that might be represented in the network (e.g., "subject name", "indirect object")
+- **Values**: possible assignments to each variable
+- **Parent–Child Relationships**: directed dependencies
+- **Mechanisms**: functions that compute a variable's value given its parents'
 
 ### Causal Abstraction
 
-Mechanistic interpretability aims to reverse-engineer what algorithm a neural network implements to achieve a particular capability. Causal abstraction is a theoretical framework that grounds out these notions; an algorithm is a causal model, a neural network is a causal model, and the notion of implementation is the relation of causal abstraction between two models. The algorithm is a **high-level causal model** and the neural network is a **low-level causal model**.  When the high-level mechanisms are accurate simplifications of the low-level mechanisms, the algorithm is a **causal abstraction** of the low-level causal model.
-
-### Neural Network Features
-
-What are the basic building blocks we should look at when trying to understand how AI systems work internally? This question is still being debated among researchers. 
-The causal abstraction framework remains agnostic to this question by allowing for building blocks of any shape and sizes that we call **features**. The features of a hidden vector in a neural network are accessed via an invertible **featurizer**, which might be an orthogonal matrix, the identity function, or an autoencoder. The neural network components are implemented in the `neural/` directory with modular access to different model units.
-
+Mechanistic interpretability aims to reverse-engineer the algorithm a network implements. Causal abstraction grounds this: an algorithm is a causal model, a network is a causal model, and "implementation" is the abstraction relation between two models. The algorithm is a **high-level causal model**, the network is a **low-level causal model**, and when the high-level mechanisms are accurate simplifications of the low-level mechanisms, the algorithm is a **causal abstraction** of the network.
 
 ### Interchange Interventions
-We use interchange interventions to test if a variable in a high-level causal model aligns with specific features in the LLM. An interchange intervention replaces values from one input with values from another input, allowing us to isolate and test specific causal pathways.
 
+Interchange interventions test whether a high-level variable aligns with specific features in the LM. The intervention replaces activations from one input with activations from a counterfactual input, isolating one causal pathway at a time.
 
-The codebase implements five baseline approaches for feature construction and selection:
+Method-level techniques for *constructing* the feature space being intervened on — DAS, DBM, PCA, Boundless DAS, SAE — live in [`causalab/methods/`](causalab/methods/) and are selected as options inside analyses (e.g. `subspace.method: das`, `locate.method: interchange`).
 
-1. **Full Vector**: Uses the entire hidden vector without any transformations.
+## Available Analyses
 
-2. **DAS (Distributed Alignment Search)**: Learns orthogonal directions with supervision from the causal model.
+The runner is built around eight named **analyses**. Each answers a specific research question and may consume artifacts from earlier analyses. Chain them in a single run by listing multiple `- /analysis/<name>` entries in a runner config's `defaults:` block.
 
-3. **DBM (Desiderata-Based Masking)**: Learns binary masks over features using the causal model for supervision. Can be applied to select neurons (standard dimensions of hidden vectors), PCA components, or SAE features.
+| Analysis | Research question | Depends on |
+|---|---|---|
+| **baseline** | Can the model solve the task? Are counterfactual generators well-formed? | — |
+| **locate** | Which (layer, token_position) encodes each causal variable? | baseline |
+| **subspace** | What k-dimensional subspace captures the variable's representation? | locate |
+| **activation_manifold** | What is the geometric structure of activations as the variable varies? | subspace |
+| **output_manifold** | What is the geometry of output distributions on the probability simplex? | baseline |
+| **path_steering** | Does the subspace/manifold faithfully preserve causal structure? | subspace, activation_manifold |
+| **pullback** | What activation trajectories realize prescribed belief-space paths? | activation_manifold, output_manifold |
+| **attention_pattern** | Which attention heads attend to which token types? | — |
 
-4. **PCA (Principal Component Analysis)**: Uses unsupervised orthogonal directions derived from principal components. DBM can be used to align principal components with a high-level causal variable.
-
-5. **SAE (Sparse Autoencoder)**: Leverages pre-trained sparse autoencoders like GemmaScope and LlamaScope. DBM can be used to align SAE features with a high-level causal variable.
+Each analysis is configured by a Hydra YAML at `causalab/configs/analysis/<name>.yaml` and invoked through a runner config under `causalab/configs/runners/<group>/<name>.yaml`.
 
 ## Repository Structure
 
-### Core Components
+The codebase follows a strict layering. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full breakdown, layering invariants, and config conventions.
 
-#### `causal/`
-- `causal_model.py`: Implementation of causal models with variables, values, parent-child relationships, and mechanisms for counterfactual generation and intervention mechanics
-- `counterfactual_dataset.py`: Dataset handling for counterfactual data generation and management
+```
+causalab/
+├── causal/        # Causal model primitives
+├── tasks/         # Task definitions (causal_models.py, counterfactuals.py, …)
+├── neural/        # Pyvene API surface — pipeline.py, units.py, LM_units.py,
+│                  #   featurizer.py, activations/
+├── methods/       # Reusable interpretability tools — DAS, DBM, PCA, SAE,
+│                  #   manifold builders, scoring metrics
+├── io/            # Single source of truth for disk I/O + shared plot primitives
+├── analyses/      # Research-question wrappers (baseline/, locate/, subspace/, …)
+├── runner/        # Hydra dispatcher — run_exp.py
+└── configs/       # Hydra configs — analysis/, model/, task/, runners/
+demos/             # Onboarding notebooks + the weekdays_geometry pipeline notebook
+artifacts/         # Run outputs, keyed by task / model / analysis (gitignored)
+```
 
-#### `neural/`
-- `pipeline.py`: Abstract base pipeline and LM pipeline classes for consistent interaction with different language models
-- `model_units.py`: Base classes for accessing model components and features in transformer architectures
-- `LM_units.py`: Language model specific components for residual stream and attention head access
-- `featurizers.py`: Invertible feature space definitions with forward/inverse featurizer modules and intervention utilities
+**Dependency flow:** `tasks/` and `causal/` are independent. `neural/` depends on neither. `io/` depends only on `neural/`, `tasks/`, `causal/`. `methods/` depends on `neural/`, `causal/`, `io/`. `analyses/` depends on all four. `runner/` is a thin shell over `analyses/`.
 
-#### `experiments/`
-- `pyvene_core.py`: Core utilities for creating, managing, and running intervention experiments using the pyvene library
-- `intervention_experiment.py`: General intervention experiment framework
-- `filter_experiment.py`: Filtering and selection experiments
-- `benchmark_experiment.py`: Benchmark experiment utilities
-- `config.py`: Configuration management for experiments
-- `experiment_utils.py`: Utility functions for experiments
-- `visualizations.py`: Visualization tools for experiment results
-- `LM_experiments/`: Language model specific experiments
-  - `attention_head_experiment.py`: Experiments targeting attention head components
-  - `residual_stream_experiment.py`: Experiments on residual stream representations
-  - `LM_utils.py`: Utility functions for language model experiments
+### Task packages (`causalab/tasks/<name>/`)
 
-#### `tasks/`
-Task implementations organized by directory. Each task contains:
-- `causal_models.py`: Task-specific causal model definitions
-- `counterfactuals.py`: Counterfactual generation logic
-- `token_positions.py`: Token position specifications for interventions
+Each task is a self-contained Python package consumed by the analyses through a fixed interface:
 
-Available tasks:
-- `MCQA/`: Multiple Choice Question Answering task implementation with positional causal model
+| File | Purpose |
+|------|---------|
+| `causal_models.py` | Causal model: variables, values, mechanisms |
+| `counterfactuals.py` | Generates counterfactual pairs for each variable |
+| `token_positions.py` | Maps variable names to token positions in the input |
+| `config.py` | Constants: variable value lists, max tokens, task name |
+| `templates.py` | Input text templates with placeholders |
 
-Outdated tasks:
-- `IOI/`: Indirect Object Identification task (example from literature)
-- `entity_binding/`: Entity binding task
-- `general_addition/`: General addition task
+Tasks and analyses are fully separated — define a new task and every analysis works automatically.
 
-#### `tests/`
-Comprehensive test suite covering all core components with specialized tests for pyvene integration in `test_pyvene_core/`
+### Where results land
+
+```
+artifacts/{task}/{model}/{analysis}/
+├── *.json / metadata.json     # Results + resolved Hydra config snapshot
+├── *.safetensors / *.pt       # Tensors (activations, weights, distributions)
+├── *.png / *.pdf              # Plots
+└── *.html                     # Interactive visualizations
+```
+
+The path encodes the run, so cross-model and cross-analysis comparisons are direct file-system operations. Re-running the same runner config rewrites the directory; copy artifacts aside if you want to keep an old run.
 
 ## Getting Started
 
@@ -96,40 +161,49 @@ cd causalab
 uv sync
 ```
 
-To install for development, also run:
+For development:
 
 ```bash
-uv run pre-commit install  # Set up git hooks
+uv run pre-commit install  # set up git hooks
 ```
 
-### Key Dependencies
+### Recommended starting points
 
-- **PyTorch**: Deep learning framework for model operations
-- **pyvene**: Library for causal interventions on neural networks
-- **transformers**: Hugging Face library for language model access
-- **datasets**: Hugging Face datasets library for data management
-- **scikit-learn**: For dimensionality reduction techniques like PCA
-- **pytest**: Testing framework
+- **End-to-end pipeline (recommended):** [`demos/weekdays_geometry.ipynb`](demos/weekdays_geometry.ipynb) chains baseline → subspace → activation_manifold → output_manifold → path_steering → pullback on Llama-3.1-8B. The same pipeline runs from the CLI as `./scripts/run_exp.sh weekdays_8b_pipeline`. Minimum hardware: 1 GPU with ≥24 GB VRAM.
+- **Causal model primer:** [`demos/causal_model_demo.ipynb`](demos/causal_model_demo.ipynb) walks through defining a causal model and counterfactual dataset.
 
-### Quick Start with Onboarding Tutorial
+### Tab completion for `run_exp.sh`
 
-The best way to understand the codebase is through the onboarding tutorial notebooks in `demos/onboarding_tutorial/`:
-
-1. **[01_define_MCQA_task.ipynb](demos/onboarding_tutorial/01_define_MCQA_task.ipynb)**: Learn how to define causal models and counterfactual datasets
-2. **[02_trace_residual_stream.ipynb](demos/onboarding_tutorial/02_trace_residual_stream.ipynb)**: Trace information flow through language model layers
-3. **[03_localize_with_patching.ipynb](demos/onboarding_tutorial/03_localize_with_patching.ipynb)**: Localize causal variables using activation patching
-4. **[04_train_ DAS_and_DBM.ipynb](demos/onboarding_tutorial/04_train_%20DAS_and_DBM.ipynb)**: Train precise interventions with supervised methods
-
-### Running Tests
-
-This is the baseline test set that the pre-merge check uses.
+Tab-complete runner config names when invoking `./scripts/run_exp.sh`:
 
 ```bash
-uv run pytest -m "not slow and not gpu"
+# bash
+source scripts/completion.bash
+# zsh
+source scripts/completion.zsh
 ```
 
-For full coverage, you may simply run:
+To enable permanently from the repo root:
 
 ```bash
-uv run pytest
+# bash
+echo "source $(pwd)/scripts/completion.bash" >> ~/.bashrc
+# zsh
+echo "source $(pwd)/scripts/completion.zsh" >> ~/.zshrc
+```
+
+### Submitting a slurm job
+
+`run_exp.sh` is the single entry point for both inline and slurm runs. Pass `--slurm` to dispatch as `sbatch`; `--gres=gpu:N` is resolved from the model config's `slurm.gpus` and `--time` from the runner's `slurm.time` (default in `causalab/configs/base.yaml`). CLI flags `--gpus`, `--time`, `--qos` override.
+
+```bash
+./scripts/run_exp.sh --slurm weekdays_8b_pipeline
+./scripts/run_exp.sh --slurm --qos=opportunistic --time=08:00:00 weekdays_8b_pipeline
+```
+
+### Running tests
+
+```bash
+uv run pytest -m "not slow and not gpu"  # quick
+uv run pytest                            # full
 ```

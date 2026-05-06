@@ -1,0 +1,111 @@
+# @package pullback
+_name_: pullback
+
+# Which subspace and activation_manifold to use (null = auto-discover from filesystem)
+subspace: null
+activation_manifold: null
+
+# Skip the LBFGS step inside embedding optimization but still collect geometric/linear
+# comparison distributions. Independent of caching.
+skip_optimization: false
+
+# Pair selection.
+# - null (default): unbiased sample governed by `max_pairs`. Aggregate
+#   `activation_dist_from_manifold.json` summary is computed.
+# - list of [start, end] string pairs: compute ONLY these pairs. Aggregate
+#   metrics are skipped (a cherry-picked subset cannot yield unbiased stats —
+#   a warning is logged at the start of the run).
+selected_pairs: null
+# Only consulted when `selected_pairs: null`. If total pairs > max_pairs,
+# randomly subsamples (deterministic via seed). null = all W×(W-1)/2 pairs.
+max_pairs: 25
+
+# When false (default): run the full pipeline — recompute the output-space geodesic
+# and the embedding optimization for `selected_pair_indices`, write/merge into the
+# caches (`geodesic_paths.pt` and `optimization_results.pt`).
+# When true: load both caches and visualize what's there. Requires `selected_pairs`
+# to be set; missing pair entries are logged loudly and skipped, not raised. The
+# aggregate `activation_dist_from_manifold.json` summary is also skipped (the
+# cherry-picked subset would bias it).
+replot_only: false
+n_prompts: 16         # samples per (base_class, cf_class) pair
+batch_size: 32
+
+# ── Belief path: traces the trained output manifold between class centroids ──
+# Pullback REQUIRES the output_manifold analysis to have run first; there is
+# no fallback.
+belief_path:
+  n_steps: 20
+  # null = auto-discover under {experiment_root}/output_manifold/, including
+  # the task target_variable subdir written by the output_manifold analysis.
+  output_manifold_ckpt: null
+
+# ── Embedding path optimization (trajectory in k-dim PCA subspace) ──
+embedding_optim:
+  n_steps: 20             # independent from belief_path.n_steps
+  # Restrict optimization to the first k_opt PCA dims (slice of the featurizer's
+  # k_features). null = optimize in full k_features. Dropped dims (k_opt..k_features)
+  # are held at each sample's base activation values during the intervention; for
+  # storage / manifold-distance / 3D viz they are padded with the training-feature
+  # mean. Comparison paths (geometric, linear) and the centroid-defined start/end
+  # remain in full k_features.
+  #
+  # Accepts a scalar OR a list to sweep multiple values in one run. Each entry
+  # produces its own optimized trajectory; all variants are overlaid in the per-pair
+  # 3D plots (Hellinger PCA + activation space) with teal-shaded colors, and land
+  # in their own subdirs for the 1-D belief-trajectory plots
+  # (belief_paths/optimized_<label>/). Labels: null → "full", int k → f"k{k}".
+  # Examples: `k_opt: null`, `k_opt: 5`, `k_opt: [3, 5, 10]`, `k_opt: [null, 5, 10]`.
+  k_opt: 32
+  init: knn_graph              # "linear", "knn_graph", or "geometric" (uses precomputed manifold geodesic)
+  k_init: 20                   # k-NN neighbors for embedding graph init
+  fix_start: false
+  fix_end: false
+  path_length_weight: 0        # regularization weight for embedding-space path length (0 = off)
+  norm_reg_weight: 0           # weight for penalizing ||v_path[t]|| deviation from
+                               # the linearly-interpolated centroid norm (0 = off).
+                               # Pulls the path's magnitude back to centroid-scale,
+                               # which discourages the high-norm "shortcut" basins
+                               # the unconstrained optimizer otherwise drifts into.
+  convergence_window: 2          # stop when relative change < convergence_tol for this many consecutive steps
+  convergence_tol: 0.001         # relative change threshold for early stopping
+  fwd_chunk_size: 4            # batch this many timesteps into one forward pass (0 = sequential)
+  max_path_snapshots: 1    # max optimization snapshots to save for visualization (0 = all)
+  log_spaced_snapshots: true  # use log spacing (more resolution on early steps)
+  trajectory_param: free_points    # "free_points" or "tps"
+  name: lbfgs                  # "lbfgs", "adam", "basin_hopping", or "neb"
+  spring_k: 0.1                    # NEB spring constant (only used with name: neb)
+  tps:
+    n_control_points: 10       # total including endpoints
+    smoothness: 0.0            # 0 = exact interpolation at control points
+  adam:
+    steps: 250
+    lr: 0.5
+  lbfgs:
+    steps: 50
+    lr: 1.0
+    max_iter: 5
+    line_search_fn: strong_wolfe
+  basin_hopping:
+    n_hops: 50
+    step_size: 0.5
+    temperature: 1.0
+    n_candidates: 5
+    lbfgs_steps: 5
+    lbfgs_lr: 1.0
+    lbfgs_max_iter: 20
+    lbfgs_line_search_fn: strong_wolfe
+
+# ── Visualization ──
+visualization:
+  figure_format: pdf
+  belief_trajectories: true      # per-pair belief trajectory Plotly plot
+  embedding_diagnostics: true    # per-pair embedding conformal diagnostics
+  embedding_3d: true             # 3D manifold trajectory plot
+  hellinger_pca_3d: true         # per-pair Hellinger PCA 3D overlay
+  plot_belief_target: true       # overlay the fitted belief-target trace (red) on the Hellinger PCA plot
+
+# Path modes for comparison (geometric, linear_subspace, linear)
+path_modes:
+  - geometric
+  - linear

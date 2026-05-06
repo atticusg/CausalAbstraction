@@ -16,15 +16,15 @@ from unittest.mock import patch
 import tempfile
 import os
 
-from causalab.experiments.visualizations import (
+from causalab.io.plots import (
     plot_attention_head_heatmap,
     plot_attention_head_mask,
     get_selected_heads,
     extract_layer_head_from_unit_id,
     plot_residual_stream_heatmap,
 )
-from causalab.experiments.visualizations.unit_id import extract_grid_dimensions
-from causalab.experiments.visualizations.utils import (
+from causalab.io.plots.unit_id import extract_grid_dimensions
+from causalab.io.plots.utils import (
     create_heatmap,
     create_binary_mask_heatmap,
 )
@@ -225,6 +225,7 @@ class TestPlotAttentionHeadMask:
                     layers=[0, 1],
                     heads=[0, 1],
                     save_path=save_path,
+                    figure_format="png",
                 )
             assert os.path.exists(save_path)
         plt.close("all")
@@ -282,6 +283,7 @@ class TestPlotResidualStreamHeatmap:
                     layers=[0, 1],
                     token_position_ids=["pos_0", "pos_1"],
                     save_path=save_path,
+                    figure_format="png",
                 )
             assert os.path.exists(save_path)
         plt.close("all")
@@ -330,6 +332,7 @@ class TestCreateHeatmap:
                     x_labels=["X0", "X1"],
                     y_labels=["Y0", "Y1"],
                     save_path=save_path,
+                    figure_format="png",
                 )
             assert os.path.exists(save_path)
         plt.close("all")
@@ -375,6 +378,7 @@ class TestCreateBinaryMaskHeatmap:
                     x_labels=["X0", "X1"],
                     y_labels=["Y0", "Y1"],
                     save_path=save_path,
+                    figure_format="png",
                 )
             assert os.path.exists(save_path)
         plt.close("all")

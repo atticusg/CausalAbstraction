@@ -1,0 +1,15 @@
+# @package _global_
+defaults:
+- /base
+- /task: natural_domains_arithmetic_weekdays
+- /model: llama31_8b
+- /analysis/output_manifold
+- _self_
+task:
+  target_variable: result
+  enumerate_all: true
+
+output_manifold:
+  intrinsic_mode: parameter     # (cos, sin) circular embedding — same as activation_manifold
+  intrinsic_dim: 2
+  smoothness: 0.0

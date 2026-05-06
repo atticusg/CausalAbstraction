@@ -1,15 +1,22 @@
-# Codebase Conventions
+## Mode detection
 
-**Question the approach, not just the implementation.** Before improving a cache, ask if caching is the right solution. Before handling an edge case, ask if that case can actually occur. Before adding backwards compatibility, check if the old version is still used. Before fixing code to match a test, consider whether the test should change instead.
+At the first user message of a session, you MUST determine which session skill to invoke. Exactly one of `/research-session` or `/development-session` must be invoked before any other work — no substantive action happens until a session is active.
 
-**Understand root causes.** When something breaks, dig into WHY - what led to this bug, why didn't the type checker catch it, is this a symptom of a deeper design problem?
+- **Research mode** (`/research-session`) — research-flavored work: running experiments, analyzing results, setting up tasks, replicating papers, exploring datasets, interpreting model internals.
+- **Development mode** (`/development-session`) — codebase work: bug fixes, refactors, dependency bumps, editing skills, doc/typo fixes, infrastructure changes, tooling work.
 
-**Simplify where possible.** Remove flags by detecting conditions automatically. Split functions that do too much. Use libraries instead of reimplementing.
+Decision rule:
 
-**Be pragmatic.** Not everything needs to be fixed immediately. If something is a "hint for the future" rather than a required change, say so.
+- **Intent is clear** → invoke the corresponding session skill directly and silently. Do not announce the classification.
+- **Intent is ambiguous, unclear, or unspecified** → explicitly ask the user which mode applies. Do not guess, and do not proceed until the user answers.
 
-**Make sure code demonstrates its value.** Especially for notebooks - results should clearly show the value of the feature. If examples don't cleanly separate or outputs are confusing, consider whether there's a better setup.
+## Pointers
 
-**Think about implications.** What do the results mean? How does this approach compare to alternatives? What conclusions should we draw?
+- **Codebase architecture, layering rules, invariants** → [`ARCHITECTURE.md`](ARCHITECTURE.md) (root).
+- **Artifact serialization** → see ARCHITECTURE.md "Artifact serialization policy".
+- **Research-session conventions** (session dir layout, active-session protocol) → [`.claude/skills/research-session/CONVENTIONS.md`](.claude/skills/research-session/CONVENTIONS.md).
+- **Per-skill behavior** → `.claude/skills/<name>/SKILL.md`.
 
-**Check the abstraction level.** Is there too much functionality in one place? Are we reimplementing something a library already does?
+## Skill routing
+
+If the user's request maps to a skill, do NOT launch Explore agents or do manual codebase exploration. Instead, immediately ask to exit plan mode (via ExitPlanMode) so you can invoke the skill. Skills handle their own discovery, planning, and user approval — plan mode is redundant for skill-eligible requests. Only bypass a skill when the user explicitly asks for something outside the skill's scope or requests a manual approach.

@@ -1,0 +1,44 @@
+# @package _global_
+defaults:
+- /base
+- /task: natural_domains_arithmetic_alphabet
+- /model: llama31_8b
+- /analysis/baseline
+- /analysis/subspace
+- /analysis/activation_manifold
+- /analysis/output_manifold
+- /analysis/path_steering
+- /analysis/pullback
+- _self_
+
+# n=2 alphabet: C-Z (24 classes), highest-accuracy slice (83% baseline).
+task:
+  target_variable: result
+  n_train: 1000
+  n_test: 1000
+  number_range: 2
+  result_entities: [C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z]
+
+locate:
+  layers: [28]
+
+subspace:
+  layers: [28]
+
+activation_manifold:
+  layers: [28]
+  intrinsic_mode: parameter
+
+output_manifold:
+  intrinsic_mode: parameter
+
+path_steering:
+  num_steps_along_path: 150
+  isometry:
+    n_interior_per_pair: 1
+
+pullback:
+  embedding_optim:
+    init: linear
+    trajectory_param: tps
+    norm_reg_weight: 5.0e-4

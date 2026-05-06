@@ -1,0 +1,7 @@
+id: llama31_70b
+name: meta-llama/Llama-3.1-70B
+device: auto
+dtype: bfloat16
+eager_attn: false
+slurm:
+  gpus: 4

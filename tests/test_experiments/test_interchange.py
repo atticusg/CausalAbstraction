@@ -7,7 +7,7 @@ import pytest
 from typing import Any
 from unittest.mock import MagicMock
 
-from causalab.experiments.metric import causal_score_intervention_outputs
+from causalab.methods.metric import causal_score_intervention_outputs
 
 
 def create_mock_cf_dataset(size: int = 3) -> Any:

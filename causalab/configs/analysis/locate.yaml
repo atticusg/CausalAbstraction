@@ -1,0 +1,24 @@
+# @package locate
+_name_: locate
+_subdir: ${.method}
+_output_dir: ${experiment_root}/locate/${._subdir}
+
+method: interchange
+batch_size: 32
+layers: null
+token_positions: null      # list of token-position names from the task; null = all
+component: residual_stream
+mode: centroid
+n_steer: 50
+source_model: null         # set to a model name to enable cross-model patching;
+                           # activations are then collected from this model and
+                           # patched into the primary model (cfg.model.name).
+
+visualization:
+  figure_format: pdf
+  single_pair_trace: true
+
+dbm:                         # used when method: dbm_binary
+  training_epoch: 20
+  lr: 0.001
+  regularization_coefficient: 100  # locate-side default; subspace uses a different one

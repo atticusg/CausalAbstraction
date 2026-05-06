@@ -1,0 +1,6 @@
+id: llama32_1b_instruct
+name: meta-llama/Llama-3.2-1B-Instruct
+device: auto
+dtype: bfloat16
+slurm:
+  gpus: 1

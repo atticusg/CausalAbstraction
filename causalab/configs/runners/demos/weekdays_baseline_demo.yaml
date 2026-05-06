@@ -1,0 +1,14 @@
+# @package _global_
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_weekdays
+  - /model: llama31_8b # llama32_1b_instruct cannot solve this task
+  - /analysis/baseline
+  - _self_
+task:
+  enumerate_all: true # Enumerate all examples in the training set, test = train
+  target_variable: result
+
+baseline:
+  visualization:
+    figure_format: png

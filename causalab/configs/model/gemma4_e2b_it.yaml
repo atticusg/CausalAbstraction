@@ -1,0 +1,6 @@
+id: gemma4_e2b_it
+name: google/gemma-4-E2B-it
+device: auto
+dtype: bfloat16
+slurm:
+  gpus: 1

@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 import torch
 from unittest.mock import Mock
-from causalab.neural.token_position_builder import build_token_position_factories
+from causalab.neural.token_positions import build_token_position_factories
 
 
 @pytest.fixture

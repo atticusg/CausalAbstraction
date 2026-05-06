@@ -1,0 +1,22 @@
+name: natural_domains_arithmetic
+domain_type: alphabet
+variant: alphabet
+number_range: null
+number_groups: null
+max_new_tokens: 1
+colormap: vanimo
+colormap_range: [0.15, 0.85]
+colormap2: null
+intervention_metric: kl
+reference_source: empirical
+n_train: 1000
+n_test: 50
+enumerate_all: true
+balanced: false
+resample_variable: all
+distance_function: hellinger
+isometry:
+  distance_function: ${task.distance_function}
+  grid_range: [0, 26]
+  grid_resolution: 150
+  bin_positions: null

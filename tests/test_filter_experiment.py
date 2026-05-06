@@ -10,7 +10,7 @@ from typing import Any
 from unittest import mock
 import torch
 
-from causalab.experiments.filter import filter_dataset
+from causalab.methods.filter import filter_dataset
 
 
 # ---------------------- Fixtures ---------------------- #

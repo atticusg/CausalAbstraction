@@ -1,0 +1,12 @@
+# @package output_manifold
+_name_: output_manifold
+_subdir: ${.method}_s${.smoothness}
+_output_dir: ${experiment_root}/output_manifold/${._subdir}
+
+method: spline
+smoothness: 0.0
+intrinsic_dim: 1
+intrinsic_mode: pca            # "parameter" or "pca"
+max_control_points: "all"      # int or "all"; subsamples evenly spaced centroids before TPS fit
+batch_size: 32
+colormap: ${task.colormap}

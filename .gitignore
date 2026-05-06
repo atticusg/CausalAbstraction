@@ -4,6 +4,12 @@ __pycache__
 *.egg-info/
 /dist/
 /build/
+.config
+.zed
+.vscode
+
+# Claude
+.claude/settings.json
 
 # Testing and coverage artifacts
 .coverage
@@ -13,11 +19,20 @@ htmlcov/
 pytest.xml
 .pytest_cache/
 
+/artifacts*
 /content/
 /results/
 /logs/
+/output/
+/multirun/
+*.log
+/figures/
+/slurm_logs/
 
 /.venv/
+
+# NFS temp files
+.nfs*
 
 /demos/onboarding_tutorial/*result*/
 /demos/onboarding_tutorial/*logs/
@@ -27,6 +42,15 @@ pytest.xml
 /causalab/tasks/**/*results
 /causalab/tasks/**/*datasets
 /causalab/tasks/**/*logs
+/causalab/tasks/**/outputs/
 
-# NFS temp files
-.nfs*
+/agent_logs/
+.vscode/settings.json
+.env
+
+*/worktrees*
+
+# Generated files
+/figures/*.pdf
+**/output/*.html
+**/output/*.png

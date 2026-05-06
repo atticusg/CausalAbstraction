@@ -1,0 +1,6 @@
+id: gpt2
+name: gpt2
+device: auto
+dtype: float32
+slurm:
+  gpus: 1

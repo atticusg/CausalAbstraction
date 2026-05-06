@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_weekdays
+  - /model: llama31_8b
+  - /analysis/path_steering
+  - _self_
+task:
+  target_variable: result
+path_steering:
+  subspace: pca_k32
+  # Include the L{layer}_{token_position} cell-segment that
+  # activation_manifold writes when token_positions is set, so the loader
+  # finds the spline featurizer instead of falling back to identity.
+  activation_manifold: L28_last_token/spline_s0.0
+  selected_pairs: [["Monday", "Thursday"]]
+  path_modes: [geometric, linear]
+  visualization:
+    figure_format: png

@@ -1,42 +1,18 @@
 """Neural network components and utilities."""
 
-from .LM_units import ResidualStream, AttentionHead
-from .featurizers import (
-    IdentityFeaturizerModule,
-    IdentityInverseFeaturizerModule,
-    Featurizer,
-    build_feature_interchange_intervention,
-    build_feature_collect_intervention,
-    SubspaceFeaturizerModule,
-    SubspaceInverseFeaturizerModule,
-    SubspaceFeaturizer,
-    SAEFeaturizerModule,
-    SAEInverseFeaturizerModule,
-    SAEFeaturizer,
-)
-from .model_units import (
+from .LM_units import ResidualStream, AttentionHead, MLP
+from .units import (
     ComponentIndexer,
     AtomicModelUnit,
     InterchangeTarget,
 )
-from .pipeline import Pipeline, LMPipeline
+from .pipeline import Pipeline, LMPipeline, resolve_device
 
 __all__ = [
     # LM_units
     "ResidualStream",
     "AttentionHead",
-    # featurizers
-    "IdentityFeaturizerModule",
-    "IdentityInverseFeaturizerModule",
-    "Featurizer",
-    "build_feature_interchange_intervention",
-    "build_feature_collect_intervention",
-    "SubspaceFeaturizerModule",
-    "SubspaceInverseFeaturizerModule",
-    "SubspaceFeaturizer",
-    "SAEFeaturizerModule",
-    "SAEInverseFeaturizerModule",
-    "SAEFeaturizer",
+    "MLP",
     # model_units
     "ComponentIndexer",
     "AtomicModelUnit",
@@ -44,4 +20,5 @@ __all__ = [
     # pipeline
     "Pipeline",
     "LMPipeline",
+    "resolve_device",
 ]
