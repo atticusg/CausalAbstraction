@@ -1,0 +1,119 @@
+# @package path_steering
+_name_: path_steering
+_output_dir: ${experiment_root}/path_steering
+
+eval_criteria:
+  - isometry
+  - coherence
+  - distance_from_behavior_manifold
+
+path_modes:
+  - geometric
+  - linear
+
+# Pair selection.
+# - null (default): unbiased random sample governed by `max_pairs`. All
+#   aggregate criteria summaries (results_summary.csv, paired_ttest_*.json,
+#   criteria/*/metrics.json, isometry) are written.
+# - list of [start, end] string pairs: compute ONLY these pairs. Aggregate
+#   criteria writes are skipped (a cherry-picked subset cannot yield unbiased
+#   stats — a warning is logged at the start of the run). Per-pair caches
+#   (pair_distributions.safetensors) are still merged into prior runs, so a
+#   subsequent unbiased run can reuse the work.
+selected_pairs: null
+# Only consulted when `selected_pairs: null`. If total pairs > max_pairs,
+# randomly subsamples (deterministic via seed). null = all W*(W-1)/2 pairs.
+max_pairs: 50
+# Extra cross-path pairs sampled from the dense vertex set (centroids + K
+# isometry interior points), required to have support union >= 3 so they
+# don't lie on any single i↔j geodesic. Augments centroid pairs for the
+# path-based criteria (coherence, distance_from_behavior_manifold).
+n_extra_pairs: 0
+n_prompts: 16           # number of base prompts per centroid pair
+n_eval_samples: 100
+batch_size: 32
+subspace: null
+activation_manifold: null
+encode_mode: nearest_centroid  # or "nearest_point" for Gauss-Newton projection
+
+# When false (default): run the full pipeline — compute pair_distributions for
+# the selected pairs, write/merge into the per-mode caches, evaluate criteria
+# (when selected_pairs is null), and render plots.
+# When true: load cached pair_distributions and visualize what's there.
+# Requires `selected_pairs` to be set; missing pairs are logged loudly and
+# skipped, not raised.
+replot_only: false
+
+# Lightweight mode: skip path interventions and other criteria, recompute only
+# the isometry score (and re-save its artifacts). Reads cached manifolds +
+# centroids; useful for iterating on `isometry.n_interior_per_pair` /
+# `n_arc_steps` without re-running interventions. Mutually exclusive with
+# replot_only. Does not require `selected_pairs`.
+recompute_isometry: false
+
+# Shared defaults for path-based metrics
+num_steps_along_path: 50
+
+isometry:
+  n_arc_steps: 150
+  distance_function: null  # override task default; null = use task config
+  # Dense-grid extension: K equispaced interior points along each centroid-pair
+  # geodesic, in addition to the W centroids. K=0 → centroid-pairs only.
+  # Pairs of vertices on the same i↔j geodesic are excluded from the correlation.
+  n_interior_per_pair: 0
+
+oversteer:
+  frac: 0.0       # 0 = disabled; controls how far beyond the target to go (as fraction of path length)
+  num_steps: 10   # number of steps in the overshoot region (independent of num_steps_along_path)
+
+# ---------------------------------------------------------------------------
+# Visualization
+# ---------------------------------------------------------------------------
+
+# Global viz defaults (consumed by every viz that doesn't override).
+visualization:
+  figure_format: pdf
+
+# Which visualizations to render. Names are dispatched by string match in
+# path_steering/main.py; per-viz parameters live in same-named blocks below.
+visualizations:
+  - path_visualization
+  - isometry_visualization
+  - dual_manifold
+
+path_visualization:
+  colormaps:
+    - ${task.colormap}
+    - ${task.colormap2}
+  path_colors:
+    geometric: black
+    linear: darkgray
+  full_vocab_softmax: true
+  # Which PCA component indices to render in the 3D path plots
+  # (vis/paths/3d_paths/<a>_<b>.html). Length 3, all indices < k_features.
+  # null = top 3 components [0, 1, 2]. Examples: [0, 1, 2], [0, 1, 3].
+  pca_components: null
+  # Optional: list of concept-value labels to highlight in the per-pair plots.
+  # When set, these values keep their colormap color and appear in the legend
+  # (along with "other"); all other values are dimmed and dropped from the
+  # legend. ``null`` = color all values normally.
+  # Example: ["D", "O", "Z"]
+  colored_concepts_in_legend: null
+  # Optional [width, height] in inches for per-pair plots
+  # (paths/<mode>/pair_<a>_<b>.<fmt>). ``null`` = use defaults: (10, 5) for the
+  # line-plot branch (scalar tasks); (3.2 * n_snapshots, 3.5) for the
+  # grid-flow branch (2D-spatial tasks).
+  figsize: null
+  # Multiplier on title/axis-label/tick/legend font sizes for per-pair plots.
+  # Useful when shrinking ``figsize`` — matplotlib font sizes are absolute
+  # (points), so a smaller figure makes the same text occupy a larger fraction
+  # of the canvas. 1.0 = unchanged.
+  font_scale: 1.0
+
+isometry_visualization:
+  figure_format: ${..visualization.figure_format}
+  n_mds_components: 3
+  hover_label_format: grid_coords
+
+# `dual_manifold` accepts no per-viz config — colormap and color_by_dim are
+# read from `task_cfg`.

@@ -18,7 +18,7 @@ import logging
 import os
 from typing import Any
 
-from causalab.neural.model_units import (
+from causalab.neural.units import (
     AtomicModelUnit,
     ComponentIndexer,
     Featurizer,

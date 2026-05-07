@@ -10,7 +10,6 @@ import logging
 import random
 import numpy as np
 import torch
-import json
 
 
 if TYPE_CHECKING:
@@ -310,87 +309,6 @@ def display_counterfactual_examples(
         print(f"\n... {len(examples) - num_examples} more examples not shown")
 
     return displayed_examples
-
-
-def save_counterfactual_examples(
-    examples: list[CounterfactualExample],
-    path: str,
-) -> None:
-    """
-    Save a list of counterfactual examples to disk as JSON.
-
-    Args:
-        examples: List of CounterfactualExample dicts to save.
-        path: File path to save the JSON to (should end in .json).
-    """
-
-    def serialize_example(ex: CounterfactualExample) -> dict[str, Any]:
-        return {
-            "input": ex["input"].to_dict(),
-            "counterfactual_inputs": [t.to_dict() for t in ex["counterfactual_inputs"]],
-        }
-
-    serialized = [serialize_example(ex) for ex in examples]
-    with open(path, "w") as f:
-        json.dump(serialized, f, indent=2)
-
-
-def load_counterfactual_examples(
-    path: str, causal_model: "CausalModel"
-) -> list[CounterfactualExample]:
-    """
-    Load a list of counterfactual examples from disk.
-
-    Args:
-        path: File path to load the JSON from.
-        causal_model: CausalModel to use for deserializing CausalTrace objects
-
-    Returns:
-        List of CounterfactualExamples
-    """
-    with open(path) as f:
-        data = json.load(f)
-    return deserialize_counterfactual_examples(data, causal_model)
-
-
-def deserialize_counterfactual_examples(
-    dataset: Sequence[CounterfactualExample], causal_model: "CausalModel"
-) -> list[CounterfactualExample]:
-    """
-    Convert dicts loaded from disk back to CausalTraces.
-
-    When a dataset is saved to disk, CausalTrace objects are serialized to dicts.
-    This function converts them back to CausalTraces using the causal model's mechanisms.
-
-    Args:
-        dataset: List of CounterfactualExample dicts (from load_counterfactual_examples).
-        causal_model: CausalModel to use for reconstructing traces.
-
-    Returns:
-        List of CounterfactualExample with CausalTrace objects instead of dicts.
-    """
-    result = []
-    for example in dataset:
-        input_data = example["input"]
-        cf_inputs_data = example["counterfactual_inputs"]
-
-        # Convert to CausalTrace if it's a dict
-        if isinstance(input_data, dict):
-            input_trace = causal_model.new_trace(input_data)
-        else:
-            input_trace = input_data
-
-        # Convert counterfactual inputs
-        cf_traces = []
-        for cf_data in cf_inputs_data:
-            if isinstance(cf_data, dict):
-                cf_traces.append(causal_model.new_trace(cf_data))
-            else:
-                cf_traces.append(cf_data)
-
-        result.append({"input": input_trace, "counterfactual_inputs": cf_traces})
-
-    return result
 
 
 # ============================================================================

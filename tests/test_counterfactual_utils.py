@@ -9,6 +9,8 @@ from unittest import mock
 from causalab.causal.causal_utils import (
     generate_counterfactual_samples,
     display_counterfactual_examples,
+)
+from causalab.io.counterfactuals import (
     save_counterfactual_examples,
     load_counterfactual_examples,
 )

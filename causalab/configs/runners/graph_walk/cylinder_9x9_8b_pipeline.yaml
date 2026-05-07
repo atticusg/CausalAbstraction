@@ -1,0 +1,47 @@
+# @package _global_
+defaults:
+- /base
+- /task: graph_walk_cylinder_9x9
+- /model: llama31_8b
+- /analysis/baseline
+- /analysis/subspace
+- /analysis/activation_manifold
+- /analysis/output_manifold
+- /analysis/path_steering
+# - /analysis/pullback
+- _self_
+
+task:
+  target_variable: node_coordinates
+
+# Batch sizes lowered for graph_walk's 2048-token context — eager attention
+# allocates ~64 GB at batch_size=32, OOM on a single H200.
+baseline:
+  batch_size: 8
+
+locate:
+  layers: [28]
+  batch_size: 8
+
+subspace:
+  layers: [28]
+  k_features: 64
+  batch_size: 8
+  token_positions: [last]   # graph_walk's position name; default 'last_token' is for natural-domain tasks
+
+activation_manifold:
+  layers: [28]
+  intrinsic_mode: parameter
+  intrinsic_dim: 2
+  batch_size: 8
+  token_positions: [last]
+
+output_manifold:
+  intrinsic_mode: parameter
+  intrinsic_dim: 2
+  batch_size: 8
+
+path_steering:
+  batch_size: 8
+  num_steps_along_path: 20
+  n_prompts: 5

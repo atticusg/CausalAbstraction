@@ -10,9 +10,9 @@ This test suite verifies that:
 
 import unittest
 from unittest.mock import Mock
-from causalab.neural.model_units import ComponentIndexer, AtomicModelUnit
-from causalab.neural.token_position_builder import TokenPosition
-from causalab.neural.featurizers import Featurizer
+from causalab.neural.units import ComponentIndexer, AtomicModelUnit
+from causalab.neural.token_positions import TokenPosition
+from causalab.neural.featurizer import Featurizer
 
 
 class TestComponentIndexerIsOriginal(unittest.TestCase):

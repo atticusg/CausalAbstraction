@@ -1,3 +1,5 @@
+"""CausalModel class definition"""
+
 import logging
 import random
 from typing import Any
@@ -35,6 +37,10 @@ class CausalModel:
         values: dict[str, Any],
         print_pos: dict[str, tuple[int, int]] | None = None,
         id: str = "null",
+        embeddings: dict[str, Any] | None = None,
+        periods: dict[str, float] | None = None,
+        output_token_values: dict[str, list] | None = None,
+        input_filter: Any = None,
     ) -> None:
         """
         Initialize a CausalModel instance.
@@ -49,10 +55,27 @@ class CausalModel:
             Positions for plotting (default is None).
         id : str, optional
             Identifier for the model.
+        embeddings : dict, optional
+            Per-variable coordinate embedding functions.
+        periods : dict, optional
+            Per-variable periods for cyclic variables (e.g. {"day": 7}).
+        output_token_values : dict, optional
+            Per-variable deduplicated output token values, for variables
+            where multiple causal values map to the same output token.
+        input_filter : callable, optional
+            A predicate ``f(trace) -> bool`` applied after the input variables
+            are set. Used to drop boundary-violating combinations (e.g. an
+            alphabet "letter+N" task where ``ord(entity) + N`` exceeds Z).
+            Filter is consulted by ``enumerate_inputs``, ``sample_input`` and
+            ``n_unique_inputs``.
         """
         self.mechanisms = mechanisms
         self.values = values
         self.id = id
+        self.embeddings: dict[str, Any] = embeddings or {}
+        self.periods: dict[str, float] = periods or {}
+        self.output_token_values: dict[str, list] | None = output_token_values
+        self.input_filter = input_filter
         # Derive variables from mechanisms
         self.variables = list(self.mechanisms.keys())
 
@@ -253,6 +276,36 @@ class CausalModel:
 
         return trace
 
+    def enumerate_inputs(self) -> list[CausalTrace]:
+        """Return a trace for every unique combination of input variable values.
+
+        If ``self.input_filter`` is set, traces failing the predicate are
+        dropped (used by tasks with boundary constraints like the linear
+        alphabet, where some entity+number combinations are invalid).
+        """
+        import itertools
+
+        input_vars = self.inputs
+        value_lists = [self.values[var] for var in input_vars]
+        traces = []
+        for combo in itertools.product(*value_lists):
+            inputs = dict(zip(input_vars, combo))
+            trace = self.new_trace(inputs)
+            if self.input_filter is not None and not self.input_filter(trace):
+                continue
+            traces.append(trace)
+        return traces
+
+    @property
+    def n_unique_inputs(self) -> int:
+        """Total number of unique input combinations (post-filter if applicable)."""
+        if self.input_filter is None:
+            n = 1
+            for var in self.inputs:
+                n *= len(self.values[var])
+            return n
+        return len(self.enumerate_inputs())
+
     def sample_input(self, filter_func=None) -> CausalTrace:
         """
         Sample a random input that satisfies an optional filter when run through the model.
@@ -268,12 +321,18 @@ class CausalModel:
         CausalTrace
             A trace with sampled input values.
         """
-        filter_func = filter_func if filter_func is not None else lambda x: True
+        explicit = filter_func if filter_func is not None else lambda x: True
+        model_filter = (
+            self.input_filter if self.input_filter is not None else lambda x: True
+        )
+
+        def _passes(t: CausalTrace) -> bool:
+            return model_filter(t) and explicit(t)
 
         inputs = {var: random.choice(self.values[var]) for var in self.inputs}
         trace = self.new_trace(inputs)
 
-        while not filter_func(trace):
+        while not _passes(trace):
             inputs = {var: random.choice(self.values[var]) for var in self.inputs}
             trace = self.new_trace(inputs)
 
@@ -283,6 +342,7 @@ class CausalModel:
         self,
         examples: list[CounterfactualExample],
         target_variables: list[str],
+        label_variable: str = "raw_output",
     ) -> list[dict[str, Any]]:
         """
         Labels examples with results from running interchange interventions.
@@ -335,7 +395,7 @@ class CausalModel:
 
             # Perform interchange using run_interchange (supports A<-B syntax)
             setting = self.run_interchange(trace, counterfactual_dict)
-            labels.append(setting["raw_output"])
+            labels.append(setting[label_variable])
             settings.append(setting)
 
         # Build result list with labels and settings added

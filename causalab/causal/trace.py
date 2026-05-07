@@ -14,10 +14,12 @@ class Mechanism:
     Attributes:
         parents: List of parent variable names this mechanism depends on.
         compute: Function that takes a CausalTrace and returns the computed value.
+        lazy: If True, value is only computed when accessed (not eagerly on parent change).
     """
 
     parents: list[str]
     compute: Callable[["CausalTrace"], Any]
+    lazy: bool = False
 
     def __call__(self, trace: "CausalTrace") -> Any:
         """Allow mechanism to be called directly like a function."""
@@ -74,9 +76,21 @@ class CausalTrace:
                 self.children[parent].append(var)
 
         self._values: dict[str, Any] = {}
+        self._pinned: set[str] = (
+            set()
+        )  # Variables explicitly provided (not to be overwritten)
 
+        # Set all explicit inputs and pin them so recomputation won't overwrite
         for var, val in inputs.items():
-            self._set(var, val)
+            self._values[var] = val
+            self._pinned.add(var)
+
+        # Recompute descendants from all set variables
+        for var in list(self._values):
+            self._recompute_descendants(var)
+
+        # Clear pins after initialization
+        self._pinned.clear()
 
     def _set(self, variable: str, value: Any) -> "CausalTrace":
         """
@@ -90,7 +104,7 @@ class CausalTrace:
 
     def get(self, variable: str) -> Any:
         """
-        Get a variable's value.
+        Get a variable's value. Computes lazy mechanisms on first access.
 
         Parameters:
         -----------
@@ -103,6 +117,12 @@ class CausalTrace:
             The variable's value.
         """
         if variable not in self._values:
+            # Try to compute if it's a lazy mechanism with all parents ready
+            if variable in self.mechanisms and self.mechanisms[variable].lazy:
+                mechanism = self.mechanisms[variable]
+                if all(p in self._values for p in mechanism.parents):
+                    self._values[variable] = mechanism(self)
+                    return self._values[variable]
             raise KeyError(
                 f"Variable '{variable}' has not been computed yet or is not in the trace"
             )
@@ -177,6 +197,7 @@ class CausalTrace:
     def _recompute_descendants(self, variable: str) -> None:
         """
         Recursively recompute all descendants of a variable.
+        Skips lazy mechanisms (they are computed on access instead).
 
         Parameters:
         -----------
@@ -185,6 +206,13 @@ class CausalTrace:
         """
         for child in self.children[variable]:
             mechanism = self.mechanisms[child]
+            if mechanism.lazy:
+                # Invalidate cached value so it's recomputed on next access
+                self._values.pop(child, None)
+                continue
+            # Skip pinned variables (explicitly provided during initialization)
+            if child in self._pinned:
+                continue
             # Only compute if all parents are ready
             if all(p in self._values for p in mechanism.parents):
                 # Compute using mechanism

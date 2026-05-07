@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+- /base
+- /task: natural_domains_arithmetic_weekdays
+- /model: llama31_8b
+- /analysis/subspace
+- _self_
+task:
+  target_variable: result
+  enumerate_all: true # training on all possible examples, test = train
+  resample_variable: entity
+
+
+subspace:
+  method: pca
+  layers: [0, 8, 16, 24]
+  k_features: 4
+  visualization:
+    figure_format: png

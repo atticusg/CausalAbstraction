@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+- /base
+- /task: natural_domains_arithmetic_weekdays
+- /model: llama32_1b_instruct
+- /analysis/pullback
+- _self_
+task:
+  target_variable: result
+
+pullback:
+  n_prompts: 16
+  belief_path:
+    n_steps: 15
+  embedding_optim:
+    n_steps: 15
+    name: lbfgs
+  visualization:
+    figure_format: png

@@ -1,0 +1,20 @@
+# @package _global_
+defaults:
+- /base
+- /task: natural_domains_arithmetic_weekdays
+- /model: llama31_8b   # llama32_1b_instruct cannot solve this task
+- /analysis/locate
+- _self_
+task:
+  target_variable: result
+  enumerate_all: true # Enumerate all examples in the training set, test = []
+  intervention_metric: string_match
+  resample_variable: entity
+
+locate:
+  method: interchange
+  mode: pairwise
+  layers: [0, 8, 16, 24]
+  n_steer: 16
+  visualization:
+    figure_format: png

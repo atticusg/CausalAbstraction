@@ -1,0 +1,20 @@
+# @package _global_
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_weekdays
+  - /model: llama31_8b # llama32_1b_instruct cannot solve this task
+  - /analysis/locate
+  - _self_
+task:
+  enumerate_all: true # Enumerate all examples in the training set, test = []
+  intervention_metric: string_match
+  resample_variable: all # <-- changing to all variables, since we don't use counterfactual pairs anyways, the centroids will be our counterfactual pairs.
+  target_variable: result
+
+locate:
+  method: interchange
+  mode: centroid # <-- changing to centroid mode
+  layers: [0, 8, 16, 18, 20, 24]
+  n_steer: 16
+  visualization:
+    figure_format: png

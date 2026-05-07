@@ -1,10 +1,5 @@
-"""Task definitions and implementations.
+"""Task definitions for causal abstraction experiments.
 
-Active tasks:
-    - MCQA: Multiple-choice question answering task (actively maintained)
-
-Deprecated tasks (not actively maintained):
-    - IOI: Indirect Object Identification task
-    - entity_binding: Entity binding task
-    - general_addition: General addition task
+See ``causalab/tasks/README.md`` for task structure, required exports,
+and how to create a new task.
 """

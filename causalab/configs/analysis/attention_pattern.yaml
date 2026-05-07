@@ -1,0 +1,23 @@
+# @package attention_pattern
+_name_: attention_pattern
+_output_dir: ${experiment_root}/attention_pattern
+
+n_examples: 8             # number of correct examples to generate
+max_attempts: 100          # max sampling attempts to find n_examples correct ones
+
+layers: null               # list[int] or null = scan all layers
+heads: null                # list[int] or null = scan all heads
+
+source_token_types: null   # list of task token position names (e.g. [last_token]), or null to skip
+target_token_types: null   # list of task token position names, or null to skip
+
+ignore_first_token: true   # exclude attention sink from heatmaps
+max_tokens_display: 40     # max tokens shown on comparison grid axes
+
+visualization:
+  figure_format: pdf
+  per_head_heatmaps: true      # save per-(layer,head) attention heatmap for first example
+  average_heatmaps: true       # save averaged attention heatmap (same-length examples only)
+  statistics_charts: true      # save per-(layer,head) statistics bar chart
+  token_type_heatmaps: true   # save token-type attention heatmap per (layer,head)
+  head_comparison_grid: true   # save multi-head comparison grid per layer

@@ -5,8 +5,13 @@ pytest unit-tests for the core abstractions in model_units.py
 
 import pytest
 
-import causalab.neural.model_units as MU
-import causalab.neural.featurizers as F  # the module we just rewrote
+import causalab.neural.units as MU
+import causalab.neural.featurizer as F
+from causalab.methods.trained_subspace.subspace import (
+    SubspaceFeaturizer as _SubspaceFeaturizer,
+)
+
+F.SubspaceFeaturizer = _SubspaceFeaturizer  # type: ignore[attr-defined]
 
 
 # --------------------------------------------------------------------------- #

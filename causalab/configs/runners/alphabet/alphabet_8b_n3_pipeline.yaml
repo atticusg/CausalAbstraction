@@ -1,0 +1,33 @@
+# @package _global_
+defaults:
+- /base
+- /task: natural_domains_arithmetic_alphabet
+- /model: llama31_8b
+- /analysis/baseline
+- /analysis/subspace
+- /analysis/activation_manifold
+- /analysis/output_manifold
+- _self_
+
+# n=3 alphabet: addends ∈ {one, two, three}. Same 24-class output as n=2
+# (result_entities C-Z), separate artifact dir via task.variant=alphabet_n3.
+task:
+  target_variable: result
+  n_train: 1000
+  n_test: 1000
+  number_range: 3
+  result_entities: [C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z]
+  variant: alphabet_n3
+
+locate:
+  layers: [28]
+
+subspace:
+  layers: [28]
+
+activation_manifold:
+  layers: [28]
+  intrinsic_mode: parameter
+
+output_manifold:
+  intrinsic_mode: parameter

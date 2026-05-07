@@ -1,0 +1,20 @@
+# @package _global_
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_weekdays
+  - /model: llama31_8b
+  - /analysis/activation_manifold
+  - _self_
+task:
+  target_variable: result
+activation_manifold:
+  manifold_intrinsic_coords: parameter
+  method: spline
+  smoothness: 0.0
+  subspace: pca_k32
+  k_features: 32
+  skip_decoding_eval: false
+  layers: [28]
+  token_positions: [last_token]
+  visualization:
+    figure_format: png

@@ -1,0 +1,24 @@
+# @package {{ANALYSIS_NAME}}
+# Hydra config for the session-local analysis `{{ANALYSIS_NAME}}`.
+# Mounted at cfg.{{ANALYSIS_NAME}} via the # @package directive.
+# The runner's session-code search path picks this file up automatically when
+# CAUSALAB_SESSION_CODE is set (set by scripts/run_exp.sh whenever
+# --experiment-root lives under agent_logs/).
+
+_name_: {{ANALYSIS_NAME}}             # sentinel — must match ANALYSIS_NAME in main.py
+_subdir: {{SUBDIR_PATTERN}}           # e.g. ${.method} or ${.method}_k${.k_features}
+_output_dir: ${experiment_root}/{{ANALYSIS_NAME}}/${._subdir}
+
+# {{CONFIG_KNOBS_FROM_SPEC_SECTION_4}}
+# Each knob from set_up_analysis.md §4 with its proposed default.
+# Do NOT include n_train, n_test, enumerate_all, balanced — those live in cfg.task.* (invariant 12).
+# Do NOT include seed — lives at cfg.seed.
+
+# Example knobs (replace with the real ones from the spec):
+# method: interchange
+# layers: null
+# heads: null
+# batch_size: ${batch_size}
+
+visualization:
+  figure_format: pdf                  # png or pdf — invariant 6
