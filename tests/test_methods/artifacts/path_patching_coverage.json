@@ -1,0 +1,61 @@
+{
+  "pyvene_pin": "896a7dd47267",
+  "families": {
+    "gpt2": {
+      "attention_value_output": "supported",
+      "head_attention_value_output": "supported",
+      "mlp_output": "supported",
+      "mlp_activation": "supported",
+      "block_input": "supported",
+      "block_output": "supported",
+      "query_output": "supported",
+      "key_output": "supported",
+      "value_output": "supported",
+      "head_query_output": "supported",
+      "head_key_output": "supported",
+      "head_value_output": "supported"
+    },
+    "gpt_neox": {
+      "attention_value_output": "supported",
+      "head_attention_value_output": "supported",
+      "mlp_output": "supported",
+      "mlp_activation": "supported",
+      "block_input": "supported",
+      "block_output": "supported",
+      "query_output": "unsupported",
+      "key_output": "unsupported",
+      "value_output": "unsupported",
+      "head_query_output": "unsupported",
+      "head_key_output": "unsupported",
+      "head_value_output": "unsupported"
+    },
+    "llama": {
+      "attention_value_output": "supported",
+      "head_attention_value_output": "supported",
+      "mlp_output": "supported",
+      "mlp_activation": "supported",
+      "block_input": "supported",
+      "block_output": "supported",
+      "query_output": "supported",
+      "key_output": "supported",
+      "value_output": "supported",
+      "head_query_output": "supported",
+      "head_key_output": "supported",
+      "head_value_output": "supported"
+    },
+    "gemma2": {
+      "attention_value_output": "supported",
+      "head_attention_value_output": "supported",
+      "mlp_output": "supported",
+      "mlp_activation": "supported",
+      "block_input": "supported",
+      "block_output": "supported",
+      "query_output": "supported",
+      "key_output": "supported",
+      "value_output": "supported",
+      "head_query_output": "supported",
+      "head_key_output": "supported",
+      "head_value_output": "supported"
+    }
+  }
+}
