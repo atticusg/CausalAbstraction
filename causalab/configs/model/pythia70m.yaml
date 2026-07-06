@@ -1,0 +1,6 @@
+id: pythia70m
+name: EleutherAI/pythia-70m-deduped
+device: auto
+dtype: float32
+slurm:
+  gpus: 1

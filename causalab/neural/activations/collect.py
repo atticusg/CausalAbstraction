@@ -22,6 +22,7 @@ from causalab.causal.counterfactual_dataset import (
 )
 from pyvene import IntervenableModel  # type: ignore[reportMissingTypeStubs]
 
+from causalab.neural.padding import shift_unit_indices_for_padding
 from causalab.neural.activations.intervenable_model import (
     prepare_intervenable_model,
     delete_intervenable_model,
@@ -138,6 +139,15 @@ def collect_features(
 
         # Load inputs through pipeline
         loaded_inputs = pipeline.load(batched_inputs)
+
+        # Indexers work in unpadded per-example coordinates; convert to the
+        # padded batch coordinates this batch was actually loaded with.
+        indices = [
+            shift_unit_indices_for_padding(
+                model_unit, unit_indices, loaded_inputs["attention_mask"]
+            )
+            for model_unit, unit_indices in zip(model_units, indices)
+        ]
 
         # Use shared helper to collect activations
         result = _collect_activations_single_batch(
