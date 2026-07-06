@@ -87,12 +87,13 @@ def shift_unit_indices_for_padding(
     second element is one position list per example). Head indices are
     positionless and pass through untouched.
     """
-    unit_kind = getattr(unit, "unit", "pos")
+    unit_kind = getattr(unit, "unit", None)
     if unit_kind == "pos":
         return shift_indices_for_padding(indices, attention_mask)
     if unit_kind == "h.pos":
         heads, positions = indices
         return [heads, shift_indices_for_padding(positions, attention_mask)]
-    # Unknown unit layout (or a mock in tests): leave indices untouched —
-    # the pre-fix behavior — rather than guess at the structure.
+    # Unknown or missing unit layout (e.g. a mock in tests, or a custom unit
+    # class): leave indices untouched — the pre-fix behavior — rather than
+    # guess at the structure.
     return indices
