@@ -280,7 +280,9 @@ def resolve_descriptor(
     config = model.config
     model_type = config.model_type
     if model_type not in _FAMILIES:
-        raise NotImplementedError(
+        from .provenance import UnsupportedArchitectureError
+
+        raise UnsupportedArchitectureError(
             f"path_patching has no architecture descriptor for model_type="
             f"{model_type!r}. Supported: {SUPPORTED_MODEL_TYPES}. Add a "
             f"_FamilySpec and validate it with guards.run_construction_guards."

@@ -91,10 +91,17 @@ class PatchEngine:
         self._w_out: list[Tensor | None] = [None] * L  # lazy: (d_ff, d) float32
         self._attn_pre_clean: dict[tuple[str, int], Tensor] = {}
         self._mlp_trunk_clean: dict[int, Tensor] = {}
-        from .provenance import log_provenance
+        from .provenance import check_capability, log_provenance
 
-        #: capture-point provenance (pyvene-named / pyvene-path / raw-hook /
-        #: direct-module-call, with reason codes); also logged at INFO once.
+        # capability contract: every pyvene unit the engine and its twin
+        # need must exist in the family's mapping, else this raises
+        # UnsupportedArchitectureError before anything is patched.
+        self.capability = check_capability(
+            model,
+            ["path-patching cache collection", "reference-twin interventions"],
+        )
+        #: which pyvene units / module calls this engine uses (pyvene-named /
+        #: pyvene-path / direct-module-call); also logged at INFO once.
         self.provenance: list[dict[str, Any]] = log_provenance(desc)
         self.guard_report: dict[str, Any] | None = None
         if run_guards:

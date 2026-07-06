@@ -5,13 +5,19 @@ GATED: everything here requires ``attention_style == "fused-qkv-absolute"``
 raises :class:`NotImplementedError` otherwise. The main path-patching engine
 is unaffected by this gate — it never recomputes attention.
 
-Capture is pyvene-native: per-head q/k/v come from pyvene's
-``head_query_output`` / ``head_key_output`` / ``head_value_output``
-components (pyvene splits GPT-2's fused ``c_attn`` itself). Pre-softmax
-scores are **derived arithmetic** on the captured q/k — the score tensor is
-not a module boundary anywhere (gap registry: ``kv:scores``,
-``no-module-boundary``), and no intervention on it is ever needed: analytic
+Capture is pyvene, like everything in this package: per-head q/k/v come from
+pyvene's ``query_output`` / ``key_output`` / ``value_output`` components
+(pyvene splits GPT-2's fused ``c_attn`` itself), and construction runs the
+same capability check as the engine — a family whose mapping lacks these
+units raises :class:`UnsupportedArchitectureError`. Pre-softmax scores are
+**derived arithmetic** on the captured q/k; the score tensor is not a module
+boundary anywhere, and no intervention on it is ever needed: analytic
 K/V-side patching recomputes scores from cached q/k.
+
+K/V capture requires ``attn_implementation="eager"`` at pipeline load
+(causalab's ``LMPipeline`` default): fused sdpa/flash kernels do not
+materialize what pyvene's attention units need, and eager is cheap at
+analysis scale. Construction verifies this.
 
 Design notes for generalization beyond GPT-2 (agreed direction; deliberately
 NOT implemented here):
@@ -20,7 +26,10 @@ NOT implemented here):
   already rotated it by its source position's angle. Patching a key along a
   path therefore requires rotating the key *delta* by the patched position's
   angle before re-scoring; raw cache-to-cache key substitution is only valid
-  when clean and counterfactual token positions coincide.
+  when clean and counterfactual token positions coincide. Pre-rotation keys
+  collected via pyvene (``key_output`` is the projection output, before RoPE)
+  with the rotation applied in engine arithmetic is pyvene-native — no hooks
+  needed.
 * **GQA models**: the honest unit for key/value path edges is the *KV head*,
   with effects fanning out to every query head in its group — that is what
   is causally separable in the weights. Per-query-head value semantics would
@@ -28,11 +37,11 @@ NOT implemented here):
   analytic engine could later offer as pure cache arithmetic (duplicate the
   cached k/v per group member, re-average one query head's z); KV-head edges
   should remain the default.
-* **Reference twin**: the K/V twin should stay pyvene-native — replace
-  per-head k/v at the patched position via replace interventions
-  (``head_key_output`` / ``head_value_output``) and let the model's own
-  attention recompute. Analytic scores are reconstructable from cached q/k,
-  so no score-tensor intervention is ever needed.
+* **Reference twin**: the K/V twin should stay pyvene — replace per-head k/v
+  at the patched position via replace interventions (``head_key_output`` /
+  ``head_value_output``) and let the model's own attention recompute.
+  Analytic scores are reconstructable from cached q/k, so no score-tensor
+  intervention is ever needed.
 """
 
 from __future__ import annotations
@@ -104,6 +113,17 @@ def build_attn_detail_cache(
     is validation-scale machinery.
     """
     _require_fused_absolute(desc, "attention-detail capture")
+    from .provenance import check_capability
+
+    check_capability(desc.model, ["K/V attention-detail collection"])
+    attn_impl = getattr(desc.model.config, "_attn_implementation", "eager")
+    if attn_impl != "eager":
+        raise RuntimeError(
+            f"K/V attention-detail capture requires attn_implementation="
+            f"'eager' (got {attn_impl!r}): fused sdpa/flash kernels do not "
+            f"materialize what pyvene's attention units need. causalab's "
+            f"LMPipeline loads models eager by default."
+        )
     inputs = [{"raw_input": x} if isinstance(x, str) else x for x in inputs]
     L, H, DH = desc.n_layers, desc.n_heads, desc.head_dim
 
