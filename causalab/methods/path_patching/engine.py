@@ -83,10 +83,10 @@ class PatchEngine:
         self.device = device or next(model.parameters()).device
         self.model_dtype = next(model.parameters()).dtype
         L = desc.n_layers
-        self._w_o = [desc.attn_out_weight(l).float() for l in range(L)]
+        self._w_o = [desc.attn_out_weight(li).float() for li in range(L)]
         self._b_o = [
-            b.float() if (b := desc.attn_out_bias(l)) is not None else None
-            for l in range(L)
+            b.float() if (b := desc.attn_out_bias(li)) is not None else None
+            for li in range(L)
         ]
         self._w_out: list[Tensor | None] = [None] * L  # lazy: (d_ff, d) float32
         self._attn_pre_clean: dict[tuple[str, int], Tensor] = {}
@@ -151,7 +151,9 @@ class PatchEngine:
             return xn * (1.0 + w)
         return xn * w
 
-    def _attn_pre_norm_clean(self, cache_key: str, cache: PatchCache, layer: int) -> Tensor:
+    def _attn_pre_norm_clean(
+        self, cache_key: str, cache: PatchCache, layer: int
+    ) -> Tensor:
         """The attention branch's output before its post-norm (reconstructed
         as z @ W_O + bias; validated by the additivity guard)."""
         key = (cache_key, layer)
@@ -199,9 +201,10 @@ class PatchEngine:
         kind = sender[0]
         if kind == "head":
             _, layer, head = sender
-            dz = self._at(to_cache, "z", layer)[:, head] - self._at(
-                from_cache, "z", layer
-            )[:, head]
+            dz = (
+                self._at(to_cache, "z", layer)[:, head]
+                - self._at(from_cache, "z", layer)[:, head]
+            )
             w = self._w_o[layer][
                 head * self.desc.head_dim : (head + 1) * self.desc.head_dim
             ]
@@ -274,9 +277,9 @@ class PatchEngine:
                     else self._at(from_cache, "mlp_branch", layer)
                 )
                 frozen = pre if freeze_norms else None
-                d = self._apply_norm(post, pre + raw, frozen_at=frozen) - self._apply_norm(
-                    post, pre, frozen_at=frozen
-                )
+                d = self._apply_norm(
+                    post, pre + raw, frozen_at=frozen
+                ) - self._apply_norm(post, pre, frozen_at=frozen)
             total = d if total is None else total + d
         for e in embed_acc:
             total = e if total is None else total + e
@@ -306,15 +309,24 @@ class PatchEngine:
         )
         return self._apply_norm(post, m, frozen_at=frozen)
 
-    def tail_logits(self, final_resid: Tensor, *, freeze_at: Tensor | None = None) -> Tensor:
+    def tail_logits(
+        self, final_resid: Tensor, *, freeze_at: Tensor | None = None
+    ) -> Tensor:
         """Final logits from a reassembled final-position residual, through
-        the model's own final norm + LM head (+ softcapping)."""
+        the model's own final norm + LM head (+ softcapping).
+
+        Softcapping runs in the LM head's output dtype, mirroring the HF
+        forward exactly — applying it in float32 instead rounds differently
+        and costs ~1 bf16 ulp at the cap scale (caught by the patch-nothing
+        closure guard on Gemma-2)."""
         x = self._apply_norm(self.desc.final_norm(), final_resid, frozen_at=freeze_at)
-        logits = self.desc.lm_head()(x.to(self.model_dtype)).float()
+        logits = self.desc.lm_head()(x.to(self.model_dtype))
         cap = self.desc.final_logit_softcapping
         if cap is not None:
-            logits = cap * torch.tanh(logits / cap)
-        return logits.cpu()
+            logits = logits / cap
+            logits = torch.tanh(logits)
+            logits = logits * cap
+        return logits.float().cpu()
 
     @torch.no_grad()
     def patched_logits(
@@ -370,7 +382,9 @@ class PatchEngine:
                 final = final + deltas[k]
         if spec.sender_to_logits:
             final = final + sd
-        freeze_at = base.final_resid(self.position).to(self.device) if freeze_norms else None
+        freeze_at = (
+            base.final_resid(self.position).to(self.device) if freeze_norms else None
+        )
         return self.tail_logits(final, freeze_at=freeze_at)
 
     # ------------------------------------------------------------------
@@ -382,7 +396,9 @@ class PatchEngine:
         circuit_heads: Sequence[tuple[int, int]],
         circuit_mlps: Sequence[int],
         direction: str = "sufficiency",
-        head_receiver_mlps: Sequence[int] | dict[tuple[int, int], Sequence[int]] | None = None,
+        head_receiver_mlps: Sequence[int]
+        | dict[tuple[int, int], Sequence[int]]
+        | None = None,
     ) -> Tensor:
         """Patched logits for a circuit evaluation.
 
@@ -397,16 +413,13 @@ class PatchEngine:
         if head_receiver_mlps is None:
             head_receiver_mlps = list(circuit_mlps)
         if not isinstance(head_receiver_mlps, dict):
-            head_receiver_mlps = {
-                hd: list(head_receiver_mlps) for hd in circuit_heads
-            }
+            head_receiver_mlps = {hd: list(head_receiver_mlps) for hd in circuit_heads}
         if direction == "sufficiency":
             base, restore = self.cf, self.clean
         elif direction == "necessity":
             base, restore = self.clean, self.cf
         else:
             raise ValueError(direction)
-        base_key = "clean" if base is self.clean else "cf"
 
         # per-(layer, head-subset) trunk deltas, grouped per branch so any
         # branch post-norm applies to the summed raw delta
@@ -414,7 +427,7 @@ class PatchEngine:
             if not heads:
                 return None
             return self.trunk_delta(
-                ("group", [("head", l, h) for l, h in heads]),
+                ("group", [("head", hl, hh) for hl, hh in heads]),
                 from_cache=base,
                 to_cache=restore,
             )
@@ -424,10 +437,10 @@ class PatchEngine:
         subset_cache: dict[frozenset, Tensor | None] = {}
         for k in sorted(circuit_mlps):
             feeding = [
-                (l, h)
-                for (l, h) in all_heads
-                if self.desc.head_feeds_mlp(l, k)
-                and k in head_receiver_mlps.get((l, h), ())
+                (hl, hh)
+                for (hl, hh) in all_heads
+                if self.desc.head_feeds_mlp(hl, k)
+                and k in head_receiver_mlps.get((hl, hh), ())
             ]
             key = frozenset(feeding)
             if key not in subset_cache:

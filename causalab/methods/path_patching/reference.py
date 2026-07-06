@@ -112,10 +112,9 @@ class _TrunkOutputAdjust(pv.ConstantSourceIntervention):
         assert self.store is not None
         if self.record_key is not None:
             assert self.reference is not None
-            self.store[self.record_key] = (
-                base.float()
-                - self.reference.to(base.device).float().reshape(base.shape)
-            )
+            self.store[self.record_key] = base.float() - self.reference.to(
+                base.device
+            ).float().reshape(base.shape)
         out = base
         for t in self.compensation_static:
             out = out + t.to(base.dtype).to(base.device).reshape(base.shape)
@@ -138,11 +137,9 @@ def _downstream_components(
     if kind == "embed":
         return list(range(desc.n_layers)), list(range(desc.n_layers))
     layer = sender[1]
-    attn_layers = [l for l in range(desc.n_layers) if l > layer]
+    attn_layers = [li for li in range(desc.n_layers) if li > layer]
     if kind == "head":
-        mlp_layers = [
-            m for m in range(desc.n_layers) if desc.head_feeds_mlp(layer, m)
-        ]
+        mlp_layers = [m for m in range(desc.n_layers) if desc.head_feeds_mlp(layer, m)]
     else:  # mlp / neuron / neuron_group
         mlp_layers = [m for m in range(desc.n_layers) if m > layer]
     return attn_layers, mlp_layers
@@ -173,9 +170,7 @@ def reference_patched_logits(
         engine = PatchEngine(
             desc, cache_clean, cache_cf, position=position, run_guards=False
         )
-    inputs_clean = [
-        {"raw_input": x} if isinstance(x, str) else x for x in inputs_clean
-    ]
+    inputs_clean = [{"raw_input": x} if isinstance(x, str) else x for x in inputs_clean]
     loaded = pipeline.load(list(inputs_clean))
     mask = loaded["attention_mask"]
     pos_padded = padded_position(mask, position_index)
@@ -244,13 +239,13 @@ def reference_patched_logits(
 
     # ---- 2. freeze downstream components at clean values ----
     attn_layers, mlp_layers = _downstream_components(desc, sender)
-    for l in attn_layers:
-        z_clean = cache_clean.z[position][:, l].reshape(batch, -1)
+    for li in attn_layers:
+        z_clean = cache_clean.z[position][:, li].reshape(batch, -1)
 
         def setup_freeze_attn(iv, val=z_clean):
             iv.payload = val
 
-        add("attention_value_output", l, "pos", _ValueSetter, setup_freeze_attn)
+        add("attention_value_output", li, "pos", _ValueSetter, setup_freeze_attn)
     for m in mlp_layers:
         if m in receivers:
             continue
@@ -282,8 +277,7 @@ def reference_patched_logits(
                 live_keys.append(f"recv{j}")
         # does anything downstream need this receiver's live output delta?
         needs_record = k not in spec.receivers_to_logits or any(
-            kk > k and (k, kk) not in spec.receiver_to_receiver
-            for kk in spec.receivers
+            kk > k and (k, kk) not in spec.receiver_to_receiver for kk in spec.receivers
         )
 
         if static_terms or live_keys:

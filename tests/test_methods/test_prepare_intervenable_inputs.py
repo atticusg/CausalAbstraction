@@ -66,8 +66,7 @@ class TestPrepareIntervenableInputs:
             for unit in units:
                 unit.index_component = MagicMock(
                     side_effect=lambda x, batch=False, is_original=None: [
-                        [0, 1],
-                        [0, 1],
+                        [0, 1] for _ in x
                     ]
                     if batch
                     else [0, 1]
@@ -131,8 +130,7 @@ class TestPrepareIntervenableInputs:
             for unit in units:
                 unit.index_component = MagicMock(
                     side_effect=lambda x, batch=False, is_original=None: [
-                        [0, 1],
-                        [0, 1],
+                        [0, 1] for _ in x
                     ]
                     if batch
                     else [0, 1]
@@ -237,8 +235,7 @@ class TestPrepareIntervenableInputs:
                 # IMPORTANT: use 'batch' as parameter name to match code
                 unit.index_component = MagicMock(
                     side_effect=lambda x, batch=False, is_original=None: [
-                        [0, 1],
-                        [0, 1],
+                        [0, 1] for _ in x
                     ]
                     if batch
                     else [0, 1]
@@ -323,8 +320,7 @@ class TestPrepareIntervenableInputs:
                 # CRITICAL FIX: Use 'batch' as parameter name to match function call
                 unit.index_component = MagicMock(
                     side_effect=lambda x, batch=False, is_original=None: [
-                        [0, 1],
-                        [0, 1],
+                        [0, 1] for _ in x
                     ]
                     if batch
                     else [0, 1]
