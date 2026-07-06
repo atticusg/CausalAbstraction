@@ -23,6 +23,7 @@ from causalab.causal.counterfactual_dataset import (
     CounterfactualExample,
     LabeledCounterfactualExample,
 )
+from causalab.neural.padding import shift_unit_indices_for_padding
 from causalab.neural.pipeline import Pipeline
 from causalab.neural.units import InterchangeTarget
 from causalab.neural.activations.intervenable_model import (
@@ -103,6 +104,28 @@ def prepare_intervenable_inputs(
     batched_counterfactuals = [
         pipeline.load(batched_counterfactual)
         for batched_counterfactual in batched_counterfactuals
+    ]
+
+    # Indexers work in unpadded per-example coordinates; convert to the
+    # padded batch coordinates each batch was actually loaded with. Base and
+    # counterfactual batches pad independently, so each gets its own shift.
+    flat_units = [model_unit for group in interchange_target for model_unit in group]
+    base_indices = [
+        shift_unit_indices_for_padding(
+            model_unit, unit_indices, batched_base["attention_mask"]
+        )
+        for model_unit, unit_indices in zip(flat_units, base_indices)
+    ]
+    cf_masks = [
+        loaded_cf["attention_mask"]
+        for group, loaded_cf in zip(interchange_target, batched_counterfactuals)
+        for _model_unit in group
+    ]
+    counterfactual_indices = [
+        shift_unit_indices_for_padding(model_unit, unit_indices, cf_mask)
+        for model_unit, unit_indices, cf_mask in zip(
+            flat_units, counterfactual_indices, cf_masks
+        )
     ]
 
     inv_locations = {"sources->base": (counterfactual_indices, base_indices)}

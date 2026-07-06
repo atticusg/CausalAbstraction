@@ -1,0 +1,6 @@
+id: gemma2_2b
+name: google/gemma-2-2b
+device: auto
+dtype: bfloat16
+slurm:
+  gpus: 1
