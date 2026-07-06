@@ -201,13 +201,21 @@ class LMPipeline(Pipeline):
             )
             if device_map is not None:
                 pretrained_kwargs["device_map"] = device_map
+            # Explicit attention backend, passed through to from_pretrained so
+            # transformers validates it. When set, it wins over the legacy
+            # eager_attn flag (which flips the config post-load instead).
+            attn_implementation = self._init_extra_kwargs.get("attn_implementation")
+            if attn_implementation is not None:
+                pretrained_kwargs["attn_implementation"] = attn_implementation
             if self.load_weights:
                 self.model = AutoModelForCausalLM.from_pretrained(  # type: ignore[call-arg]
                     self.model_or_name, **pretrained_kwargs
                 )
                 if device_map is None:
                     self.model = self.model.to(device=device)
-                if self._init_extra_kwargs.get("eager_attn", True):
+                if attn_implementation is None and self._init_extra_kwargs.get(
+                    "eager_attn", True
+                ):
                     if hasattr(self.model.config, "_attn_implementation"):
                         self.model.config._attn_implementation = "eager"
                 if hasattr(self.model.config, "use_cache"):

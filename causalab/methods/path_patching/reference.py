@@ -138,7 +138,10 @@ def _downstream_components(
         return list(range(desc.n_layers)), list(range(desc.n_layers))
     layer = sender[1]
     attn_layers = [li for li in range(desc.n_layers) if li > layer]
-    if kind == "head":
+    if kind in ("head", "kv"):
+        # a K/V patch surfaces as the owning layer's (group) z, so its
+        # downstream footprint is a head's: same-layer MLP included on
+        # sequential trunks
         mlp_layers = [m for m in range(desc.n_layers) if desc.head_feeds_mlp(layer, m)]
     else:  # mlp / neuron / neuron_group
         mlp_layers = [m for m in range(desc.n_layers) if m > layer]
@@ -158,6 +161,7 @@ def reference_patched_logits(
     position: str = "end",
     position_index: int | Sequence[int] = -1,
     engine: PatchEngine | None = None,
+    sender_trunk_delta: Tensor | None = None,
 ) -> Tensor:
     """Patched final logits (N, vocab) via a live intervened forward.
 
@@ -165,6 +169,26 @@ def reference_patched_logits(
     coordinates (matching what the caches were built at for ``position``).
     ``engine`` (optional) supplies the sender's cached trunk delta for
     excluded-sender-edge cancellation; one is built without guards if absent.
+
+    K/V sender (the twin side of :class:`~.kv.KVPatchEngine`)::
+
+        ("kv", layer, kv_index, {
+            "k": (N, dh) pre-rotation replacement keys at the patched
+                 position, or None to leave keys alone,
+            "v": (N, dh) replacement values, or None,
+            "position_index": the patched K/V position, unpadded
+                 per-example coordinates (int or per-example sequence),
+        })
+
+    pyvene replaces the named KV head's k/v at that position via its
+    ``head_key_output`` / ``head_value_output`` units (pre-rotation hooks:
+    the model applies its own rotation to the replaced key downstream), the
+    model's own attention recomputes the layer's z everywhere — scoring,
+    softmax, softcapping, sliding windows, and GQA fan-out all come from the
+    model — and the freeze recipe isolates the (kv -> layer-z -> spec) path.
+    For a "kv" sender with excluded edges, pass ``sender_trunk_delta`` (the
+    analytic K/V trunk delta) since the engine cannot derive it from a
+    sender tuple.
     """
     if engine is None:
         engine = PatchEngine(
@@ -179,8 +203,18 @@ def reference_patched_logits(
     store: dict[str, Tensor] = {}
     configs: list[dict[str, Any]] = []
     setups: list[Any] = []  # callables run on the instantiated interventions
+    locs: list[dict[str, Any] | None] = []  # per-config unit-location override
 
-    def add(component: str, layer: int, unit: str, cls: type, setup) -> None:
+    def add(
+        component: str,
+        layer: int,
+        unit: str,
+        cls: type,
+        setup,
+        *,
+        head: int | None = None,
+        positions: list[int] | None = None,
+    ) -> None:
         configs.append(
             {
                 "component": component,
@@ -190,12 +224,37 @@ def reference_patched_logits(
             }
         )
         setups.append(setup)
+        locs.append(
+            None
+            if head is None and positions is None
+            else {"head": head, "positions": positions}
+        )
 
     receivers = set(spec.receivers)
     kind = sender[0]
 
     # ---- 1. sender substitution (cf value at the position) ----
-    if kind == "head":
+    if kind == "kv":
+        _, s_layer, s_kv, kv_payload = sender
+        kv_pos_padded = padded_position(mask, kv_payload["position_index"])
+        for quantity, comp in (("k", "head_key_output"), ("v", "head_value_output")):
+            val = kv_payload.get(quantity)
+            if val is None:
+                continue
+
+            def setup_kv(iv, val=val):
+                iv.payload = val
+
+            add(
+                comp,
+                s_layer,
+                "h.pos",
+                _ValueSetter,
+                setup_kv,
+                head=s_kv,
+                positions=kv_pos_padded,
+            )
+    elif kind == "head":
         _, s_layer, s_head = sender
         z_cf = cache_cf.z[position][:, s_layer, s_head]  # (N, dh)
 
@@ -257,12 +316,28 @@ def reference_patched_logits(
         add("mlp_output", m, "pos", _ValueSetter, setup_freeze_mlp)
 
     # ---- 3+4. per-receiver cancellation + trunk restoration + recording ----
-    sender_trunk_delta = engine.trunk_delta(sender).cpu()  # (N, d)
+    if sender_trunk_delta is not None:
+        sender_trunk_delta = sender_trunk_delta.cpu()
+    elif kind == "kv":
+        # only needed when the spec excludes edges; the analytic K/V trunk
+        # delta must then be supplied by the caller
+        needs_delta = (not spec.sender_to_logits) or any(
+            k not in spec.sender_to and desc.head_feeds_mlp(sender[1], k)
+            for k in spec.receivers
+        )
+        if needs_delta:
+            raise ValueError(
+                "a 'kv' sender with excluded edges needs sender_trunk_delta "
+                "(use KVPatchEngine.kv_trunk_delta)"
+            )
+        sender_trunk_delta = torch.zeros(batch, desc.d_model)
+    else:
+        sender_trunk_delta = engine.trunk_delta(sender).cpu()  # (N, d)
 
     def sender_upstream_of_mlp(k: int) -> bool:
         if kind == "embed":
             return True
-        if kind == "head":
+        if kind in ("head", "kv"):
             return desc.head_feeds_mlp(sender[1], k)
         return sender[1] < k
 
@@ -359,14 +434,22 @@ def reference_patched_logits(
             iv = iv[0] if isinstance(iv, tuple) else iv
             setup(iv)
 
-        # unit locations: heads use [head, pos] pairs, others positions only
+        # unit locations: heads use [head, pos] pairs, others positions only;
+        # a per-config override (K/V senders) names its own head index and
+        # patched position, everything else acts at the receiver position
         indices: list[Any] = []
-        for cfg in configs:
+        for cfg, loc in zip(configs, locs):
             if cfg["unit"] == "h.pos":
-                head = sender[2]
-                indices.append([[[head]] * batch, [[p] for p in pos_padded]])
+                head = sender[2] if loc is None else loc["head"]
+                positions = (
+                    pos_padded if loc is None else (loc["positions"] or pos_padded)
+                )
+                indices.append([[[head]] * batch, [[p] for p in positions]])
             else:
-                indices.append([[p] for p in pos_padded])
+                positions = (
+                    pos_padded if loc is None else (loc["positions"] or pos_padded)
+                )
+                indices.append([[p] for p in positions])
         location_map = {"sources->base": (indices, indices)}
         # pyvene returns (base_outputs, intervened_outputs) here; the
         # patched run is the second element.

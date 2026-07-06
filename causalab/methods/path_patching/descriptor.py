@@ -37,6 +37,9 @@ __all__ = [
 ]
 
 
+QKVStyle = Literal["fused-split3", "separate", "fused-interleaved"]
+
+
 @dataclass(frozen=True)
 class _FamilySpec:
     """Static per-family module naming (relative attribute paths)."""
@@ -54,6 +57,15 @@ class _FamilySpec:
     out_proj_is_conv1d: bool  # GPT-2 Conv1D (x @ W) vs nn.Linear (x @ W.T)
     attention_style_default: AttentionStyle
     norm_kind: NormKind
+    # ---- attention detail (K/V-side patching) ----
+    attn_module: str  # on a block: the attention module
+    attn_pre_norm: str  # on a block: norm applied to the attention branch input
+    qkv_style: QKVStyle  # how q/k/v projections are parameterized
+    q_proj: str  # on a block: query projection ("" for fused styles)
+    k_proj: str
+    v_proj: str
+    qkv_fused: str  # on a block: the fused projection ("" for separate)
+    rotary_emb_path: str | None  # on the CausalLM model: shared rotary module
 
 
 _FAMILIES: dict[str, _FamilySpec] = {
@@ -71,6 +83,14 @@ _FAMILIES: dict[str, _FamilySpec] = {
         out_proj_is_conv1d=True,
         attention_style_default="fused-qkv-absolute",
         norm_kind="layernorm",
+        attn_module="attn",
+        attn_pre_norm="ln_1",
+        qkv_style="fused-split3",
+        q_proj="",
+        k_proj="",
+        v_proj="",
+        qkv_fused="attn.c_attn",
+        rotary_emb_path=None,
     ),
     "gpt_neox": _FamilySpec(
         layers_path="gpt_neox.layers",
@@ -86,6 +106,14 @@ _FAMILIES: dict[str, _FamilySpec] = {
         out_proj_is_conv1d=False,
         attention_style_default="rotary",
         norm_kind="layernorm",
+        attn_module="attention",
+        attn_pre_norm="input_layernorm",
+        qkv_style="fused-interleaved",
+        q_proj="",
+        k_proj="",
+        v_proj="",
+        qkv_fused="attention.query_key_value",
+        rotary_emb_path="gpt_neox.rotary_emb",
     ),
     "llama": _FamilySpec(
         layers_path="model.layers",
@@ -101,6 +129,14 @@ _FAMILIES: dict[str, _FamilySpec] = {
         out_proj_is_conv1d=False,
         attention_style_default="rotary",
         norm_kind="rmsnorm",
+        attn_module="self_attn",
+        attn_pre_norm="input_layernorm",
+        qkv_style="separate",
+        q_proj="self_attn.q_proj",
+        k_proj="self_attn.k_proj",
+        v_proj="self_attn.v_proj",
+        qkv_fused="",
+        rotary_emb_path="model.rotary_emb",
     ),
     "gemma2": _FamilySpec(
         layers_path="model.layers",
@@ -116,6 +152,14 @@ _FAMILIES: dict[str, _FamilySpec] = {
         out_proj_is_conv1d=False,
         attention_style_default="rotary",
         norm_kind="rmsnorm",
+        attn_module="self_attn",
+        attn_pre_norm="input_layernorm",
+        qkv_style="separate",
+        q_proj="self_attn.q_proj",
+        k_proj="self_attn.k_proj",
+        v_proj="self_attn.v_proj",
+        qkv_fused="",
+        rotary_emb_path="model.rotary_emb",
     ),
 }
 
@@ -145,12 +189,23 @@ class ArchitectureDescriptor:
     norm_kind: NormKind
     n_layers: int
     n_heads: int
+    n_kv_heads: int
     head_dim: int
     d_model: int
     d_ff: int
     final_logit_softcapping: float | None
     spec: _FamilySpec
     model: nn.Module  # the CausalLM model
+
+    @property
+    def kv_group_size(self) -> int:
+        """Query heads per KV head (1 on standard multi-head attention)."""
+        return self.n_heads // self.n_kv_heads
+
+    def query_heads_of_kv(self, kv_index: int) -> list[int]:
+        """The query heads that read KV head ``kv_index``'s keys/values."""
+        g = self.kv_group_size
+        return list(range(kv_index * g, (kv_index + 1) * g))
 
     # ---------------- module handles ----------------
     def layer(self, layer_idx: int) -> nn.Module:
@@ -177,6 +232,63 @@ class ArchitectureDescriptor:
         if self.spec.mlp_post_norm is None:
             return None
         return _get_by_path(self.layer(layer_idx), self.spec.mlp_post_norm)
+
+    # ---------------- attention-detail module handles (K/V patching) ----------
+    def attn(self, layer_idx: int) -> nn.Module:
+        return _get_by_path(self.layer(layer_idx), self.spec.attn_module)
+
+    def attn_pre_norm(self, layer_idx: int) -> nn.Module:
+        """Norm applied to the attention branch's input residual."""
+        return _get_by_path(self.layer(layer_idx), self.spec.attn_pre_norm)
+
+    def rotary_emb(self) -> nn.Module | None:
+        if self.spec.rotary_emb_path is None:
+            return None
+        return _get_by_path(self.model, self.spec.rotary_emb_path)
+
+    def attn_scaling(self, layer_idx: int) -> float:
+        """The score scaling the model's own attention applies, read off the
+        attention module (not re-derived from config heuristics)."""
+        mod = self.attn(layer_idx)
+        scaling = getattr(mod, "scaling", None)
+        if scaling is not None:  # llama / gemma2 style
+            return float(scaling)
+        # GPT-2 style
+        s = 1.0
+        if getattr(mod, "scale_attn_weights", True):
+            s /= self.head_dim**0.5
+        if getattr(mod, "scale_attn_by_inverse_layer_idx", False):
+            s /= float(getattr(mod, "layer_idx", layer_idx) + 1)
+        return s
+
+    def attn_logit_softcapping(self) -> float | None:
+        return getattr(self.model.config, "attn_logit_softcapping", None)
+
+    def attn_sliding_window(self, layer_idx: int) -> int | None:
+        """This layer's sliding window (None = full attention), read off the
+        attention module the way the model's own mask construction does."""
+        return getattr(self.attn(layer_idx), "sliding_window", None)
+
+    def qkv_new(
+        self, layer_idx: int, normed: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Run the layer's own q/k/v projections on an (already pre-normed)
+        input. Returns (q, k, v) with flat last dims (n_heads*head_dim for q,
+        n_kv_heads*head_dim for k/v), pre-rotation. Direct module call, same
+        provenance class as receiver MLP re-evaluation."""
+        if self.spec.qkv_style == "separate":
+            q = _get_by_path(self.layer(layer_idx), self.spec.q_proj)(normed)
+            k = _get_by_path(self.layer(layer_idx), self.spec.k_proj)(normed)
+            v = _get_by_path(self.layer(layer_idx), self.spec.v_proj)(normed)
+            return q, k, v
+        if self.spec.qkv_style == "fused-split3":
+            fused = _get_by_path(self.layer(layer_idx), self.spec.qkv_fused)(normed)
+            return tuple(fused.split(fused.shape[-1] // 3, dim=-1))  # type: ignore[return-value]
+        raise NotImplementedError(
+            f"qkv_style={self.spec.qkv_style!r} (per-head-interleaved fused QKV) "
+            f"has no analytic q/k/v accessor; this family is refused by the "
+            f"K/V capability check before reaching here."
+        )
 
     # ---------------- weight accessors (x @ W convention) ----------------
     def attn_out_weight(self, layer_idx: int) -> torch.Tensor:
@@ -256,6 +368,7 @@ class ArchitectureDescriptor:
             "norm_kind": self.norm_kind,
             "n_layers": self.n_layers,
             "n_heads": self.n_heads,
+            "n_kv_heads": self.n_kv_heads,
             "head_dim": self.head_dim,
             "d_model": self.d_model,
             "d_ff": self.d_ff,
@@ -321,6 +434,7 @@ def resolve_descriptor(
         norm_kind=spec.norm_kind,
         n_layers=n_layers,
         n_heads=n_heads,
+        n_kv_heads=n_kv_heads,
         head_dim=head_dim,
         d_model=d_model,
         d_ff=d_ff,

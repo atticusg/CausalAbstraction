@@ -67,6 +67,12 @@ REQUIRED_UNITS: dict[str, tuple[str, ...]] = {
         "key_output",
         "value_output",
     ),
+    "K/V reference-twin interventions": (
+        "head_key_output",
+        "head_value_output",
+        "attention_value_output",
+        "mlp_output",
+    ),
 }
 
 
@@ -186,14 +192,25 @@ def capture_provenance(desc) -> list[CapturePoint]:
             "norm inputs have no named unit",
         ),
     ]
-    if desc.attention_style == "fused-qkv-absolute":
+    mapping = _family_mapping(desc.model) or {}
+    if all(u in mapping for u in REQUIRED_UNITS["K/V attention-detail collection"]):
         points.append(
             CapturePoint(
-                "K/V detail (gated module)",
+                "K/V detail",
                 "(head_)query/key/value_output",
                 "pyvene-named",
-                "pre-softmax scores are derived arithmetic on the captured "
-                "q/k (no module boundary exists for scores; none is needed)",
+                "captured at the projection output (pre-rotation on rotary "
+                "families); pre-softmax scores are derived arithmetic on the "
+                "captured q/k (no module boundary exists for scores; none is "
+                "needed), with rotation, scaling, softcapping and windowing "
+                "applied via the model's own modules/attributes",
+            )
+        )
+        points.append(
+            CapturePoint(
+                "K/V recompute (patched k/v from a residual delta)",
+                "attention pre-norm + q/k/v projections invoked on cached tensors",
+                "direct-module-call",
             )
         )
     return points

@@ -34,6 +34,7 @@ def load_pipeline(
     device: str | None = None,
     dtype: str | None = None,
     eager_attn: bool | None = None,
+    attn_implementation: str | None = None,
 ):
     """Load an ``LMPipeline`` from explicit parameters."""
     from causalab.neural.pipeline import LMPipeline, resolve_device
@@ -60,6 +61,10 @@ def load_pipeline(
         model_kwargs["dtype"] = DTYPE_MAP.get(dtype, torch.bfloat16)
     if eager_attn is False:
         model_kwargs["eager_attn"] = False
+    if attn_implementation is not None:
+        # model YAMLs pass this through (e.g. attn_implementation: eager for
+        # K/V-side path patching); wins over eager_attn, see LMPipeline
+        model_kwargs["attn_implementation"] = attn_implementation
 
     pipeline = LMPipeline(model_name, max_new_tokens=max_new_tokens, **model_kwargs)
 

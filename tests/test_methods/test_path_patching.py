@@ -327,3 +327,215 @@ def test_unmapped_family_is_refused():
     model = AutoModelForCausalLM.from_config(cfg)
     with pytest.raises(UnsupportedArchitectureError):
         resolve_descriptor(model)
+
+
+# ---------------------------------------------------------------------------
+# K/V-side patching (tiny-random, CPU)
+# ---------------------------------------------------------------------------
+
+from causalab.methods.path_patching import (  # noqa: E402
+    KVEdge,
+    KVHead,
+    KVPatchEngine,
+    SlidingWindowError,
+    build_attn_detail_cache,
+)
+
+KV_FAMILIES = ["gpt2", "llama", "gemma2"]  # gpt_neox: refused (no pyvene units)
+PATCH_POS = 3  # unpadded index of the K/V-patched position in the fixtures
+
+
+def _build_kv_engine(family, factory, model=None):
+    pipeline = factory(model if model is not None else _tiny_model(family))
+    # config-built tiny models default to sdpa; the K/V surface requires the
+    # eager contract (its refusal has its own test below)
+    pipeline.model.config._attn_implementation = "eager"
+    desc = resolve_descriptor(pipeline.model)
+    positions = {"end": -1, "mid": PATCH_POS}
+    clean = build_patch_cache(pipeline, desc, TEXTS_CLEAN, positions, batch_size=4)
+    cf = build_patch_cache(pipeline, desc, TEXTS_CF, positions, batch_size=4)
+    engine_end = PatchEngine(desc, clean, cf, position="end")
+    engine_mid = PatchEngine(desc, clean, cf, position="mid", run_guards=False)
+    det_clean = build_attn_detail_cache(pipeline, desc, TEXTS_CLEAN, positions)
+    det_cf = build_attn_detail_cache(pipeline, desc, TEXTS_CF, positions)
+    kv = KVPatchEngine(engine_end, engine_mid, det_clean, det_cf, position_patch="mid")
+    return pipeline, desc, clean, cf, engine_end, kv
+
+
+class TestKVHeadMapping:
+    def test_query_heads_of_kv_partition(self):
+        model = _tiny_model("llama")  # 4 query heads, 2 kv heads
+        desc = resolve_descriptor(model)
+        assert desc.kv_group_size == 2
+        assert desc.query_heads_of_kv(0) == [0, 1]
+        assert desc.query_heads_of_kv(1) == [2, 3]
+        assert KVHead.for_query_head(desc, 1, 3) == KVHead(1, 1)
+
+    def test_mha_is_group_of_one(self):
+        desc = resolve_descriptor(_tiny_model("gpt2"))
+        assert desc.kv_group_size == 1
+        assert desc.query_heads_of_kv(5) == [5]
+
+
+@pytest.mark.parametrize("family", KV_FAMILIES)
+class TestKVEndToEnd:
+    def test_k1_guard_and_zero_delta_closure(
+        self, family, gpt2_tokenizer_pipeline_factory
+    ):
+        _, desc, clean, cf, engine_end, kv = _build_kv_engine(
+            family, gpt2_tokenizer_pipeline_factory
+        )
+        assert kv.guard_report["K1_z_reconstruction_clean"] <= 1e-4
+        # zero residual delta -> exactly zero trunk delta (any dtype)
+        edges = [KVEdge(KVHead(1, 0), patch_k=True, patch_v=True)]
+        zero = torch.zeros(clean.n_examples, desc.d_model)
+        d = kv.kv_trunk_delta(edges, zero)
+        assert torch.equal(d, torch.zeros_like(d))
+        logits = engine_end.patched_logits(d, PathSpec.cascade())
+        err = (logits - clean.logits["end"]).abs().max().item()
+        assert err <= 2e-3
+
+    def test_substitution_twin_agreement(self, family, gpt2_tokenizer_pipeline_factory):
+        pipeline, desc, clean, cf, engine_end, kv = _build_kv_engine(
+            family, gpt2_tokenizer_pipeline_factory
+        )
+        det_cf = kv.detail["cf"]
+        bidx = torch.arange(det_cf.n_examples)
+        p_cf = torch.tensor(det_cf.positions["mid"])
+        cases = [
+            KVEdge(KVHead(1, 0), patch_v=True),
+            KVEdge(KVHead(2, desc.n_kv_heads - 1), patch_k=True, patch_v=False),
+            KVEdge(KVHead(2, 0), patch_k=True, patch_v=True),
+        ]
+        for edge in cases:
+            analytic = engine_end.patched_logits(
+                kv.kv_trunk_delta([edge]), PathSpec.cascade()
+            )
+            L, j = edge.kv.layer, edge.kv.kv_index
+            payload = {
+                "k": det_cf.k_all[bidx, L, j, p_cf] if edge.patch_k else None,
+                "v": det_cf.v_all[bidx, L, j, p_cf] if edge.patch_v else None,
+                "position_index": PATCH_POS,
+            }
+            ref = reference_patched_logits(
+                pipeline,
+                desc,
+                TEXTS_CLEAN,
+                clean,
+                cf,
+                ("kv", L, j, payload),
+                PathSpec.cascade(),
+                engine=engine_end,
+            )
+            err = (analytic - ref).abs().max().item()
+            assert err <= 2e-3, (family, edge, err)
+
+    def test_rotation_negative_control(self, family, gpt2_tokenizer_pipeline_factory):
+        """A deliberately unrotated key delta must produce a different
+        trunk delta than the correct rotation on rotary families (and the
+        identical one on GPT-2, where rotation is identity). The comparison
+        is at the trunk-delta level: on tiny random models the downstream
+        logit effect of a single key patch can sit below any absolute
+        logit tolerance, which would make a logits-level control vacuous."""
+        _, desc, clean, cf, engine_end, kv = _build_kv_engine(
+            family, gpt2_tokenizer_pipeline_factory
+        )
+        edge = KVEdge(KVHead(2, 0), patch_k=True, patch_v=False)
+        d_correct = kv.kv_trunk_delta([edge])
+        d_wrong = kv.kv_trunk_delta([edge], rotate_key_delta=False)
+        scale = d_correct.abs().max().clamp_min(1e-12)
+        rel = ((d_correct - d_wrong).abs().max() / scale).item()
+        assert d_correct.abs().max() > 0, "key patch had no effect at all"
+        if desc.attention_style == "fused-qkv-absolute":
+            assert rel <= 1e-5, "rotation is identity on GPT-2; paths must agree"
+        else:
+            assert rel > 1e-2, (
+                "unrotated key delta matched the rotated one; the rotation "
+                "term has no teeth in this configuration"
+            )
+
+    def test_eager_contract_refused(self, family, gpt2_tokenizer_pipeline_factory):
+        pipeline = gpt2_tokenizer_pipeline_factory(_tiny_model(family))
+        pipeline.model.config._attn_implementation = "sdpa"
+        desc = resolve_descriptor(pipeline.model)
+        with pytest.raises(RuntimeError, match="attn_implementation"):
+            build_attn_detail_cache(
+                pipeline, desc, TEXTS_CLEAN, {"end": -1, "mid": PATCH_POS}
+            )
+
+
+def test_kv_refused_on_gpt_neox(gpt2_tokenizer_pipeline_factory):
+    """gpt_neox has no pyvene q/k/v units (fused per-head-interleaved QKV):
+    the K/V surface must refuse it by name, never fall back to hooks."""
+    pipeline = gpt2_tokenizer_pipeline_factory(_tiny_model("gpt_neox"))
+    desc = resolve_descriptor(pipeline.model)
+    with pytest.raises(UnsupportedArchitectureError, match="key_output"):
+        build_attn_detail_cache(
+            pipeline, desc, TEXTS_CLEAN, {"end": -1, "mid": PATCH_POS}
+        )
+
+
+def test_kv_fanout_is_confined_to_the_group(gpt2_tokenizer_pipeline_factory):
+    """Patching one KV head's value changes the reconstructed z of exactly
+    its query-head group (verified structurally on cached activations)."""
+    _, desc, clean, cf, engine_end, kv = _build_kv_engine(
+        "llama", gpt2_tokenizer_pipeline_factory
+    )
+    det = kv.detail["clean"]
+    layer, j = 1, 0
+    v_patched = det.v_all[:, layer].clone()
+    bidx = torch.arange(det.n_examples)
+    p = torch.tensor(det.positions["mid"])
+    v_patched[bidx, j, p] = v_patched[bidx, j, p] + 1.0
+    z_base = kv._z_from_qkv(
+        layer,
+        det.q["end"][:, layer],
+        det.k_all[:, layer],
+        det.v_all[:, layer],
+        "clean",
+    )
+    z_new = kv._z_from_qkv(
+        layer, det.q["end"][:, layer], det.k_all[:, layer], v_patched, "clean"
+    )
+    dz = (z_new - z_base).abs().amax(dim=(0, 2))  # per query head
+    group = set(desc.query_heads_of_kv(j))
+    for h in range(desc.n_heads):
+        if h in group:
+            assert dz[h] > 0, f"group head {h} unaffected"
+        else:
+            assert dz[h] == 0, f"non-group head {h} affected"
+
+
+def test_kv_sliding_window_refusal(gpt2_tokenizer_pipeline_factory):
+    """Gemma-2 sliding layers must refuse a patch position outside the
+    window and accept one inside; full-attention layers always accept."""
+    from transformers import Gemma2Config, Gemma2ForCausalLM
+
+    torch.manual_seed(0)
+    model = Gemma2ForCausalLM(
+        Gemma2Config(
+            num_hidden_layers=4,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            hidden_size=32,
+            head_dim=8,
+            intermediate_size=64,
+            vocab_size=TINY_VOCAB,
+            final_logit_softcapping=30.0,
+            attn_logit_softcapping=50.0,
+            max_position_embeddings=128,
+            sliding_window=4,
+        )
+    )
+    _, desc, clean, cf, engine_end, kv = _build_kv_engine(
+        "gemma2", gpt2_tokenizer_pipeline_factory, model=model
+    )
+    sliding = [li for li in range(4) if desc.attn_sliding_window(li) is not None]
+    full = [li for li in range(4) if desc.attn_sliding_window(li) is None]
+    assert sliding and full, "tiny config must mix sliding and full layers"
+    # the fixtures end >= 10 tokens after PATCH_POS=3, window is 4 -> refuse
+    with pytest.raises(SlidingWindowError, match=f"layer {sliding[0]}"):
+        kv.kv_trunk_delta([KVEdge(KVHead(sliding[0], 0))])
+    # a full-attention layer accepts the same edge
+    d = kv.kv_trunk_delta([KVEdge(KVHead(full[0], 0))])
+    assert torch.isfinite(d).all()

@@ -291,6 +291,46 @@ class PatchEngine:
     # ------------------------------------------------------------------
     # patched forward
     # ------------------------------------------------------------------
+    @torch.no_grad()
+    def receiver_deltas(
+        self,
+        sender_delta: Tensor,
+        spec: PathSpec,
+        *,
+        base_cache: PatchCache | None = None,
+        freeze_norms: bool = False,
+    ) -> dict[int, Tensor]:
+        """Per-receiver trunk-output deltas at this engine's position.
+
+        Runs the spec's receiver cascade on a precomputed (N, d) sender
+        trunk delta and returns each receiver MLP's output delta, without
+        assembling final logits — the building block for feeding a receiver
+        chain into something other than the logits (e.g. the K/V engine's
+        patched positions).
+        """
+        base = base_cache or self.clean
+        sd = sender_delta.to(self.device).float()
+        deltas: dict[int, Tensor] = {}
+        for k in spec.receivers:
+            inp = torch.zeros_like(sd)
+            live = False
+            if k in spec.sender_to:
+                inp = inp + sd
+                live = True
+            for j, kk in spec.receiver_to_receiver:
+                if kk == k and j in deltas:
+                    inp = inp + deltas[j]
+                    live = True
+            if not live:
+                deltas[k] = torch.zeros_like(sd)
+                continue
+            resid = self.resid_for_mlp(base, k)
+            freeze_at = resid if freeze_norms else None
+            new = self._mlp_branch_fn(k, resid + inp, freeze_at=freeze_at)
+            old = self.mlp_trunk_contribution(base, k)
+            deltas[k] = new - old
+        return deltas
+
     def _mlp_branch_fn(
         self, layer: int, resid: Tensor, *, freeze_at: Tensor | None = None
     ) -> Tensor:
@@ -356,25 +396,9 @@ class PatchEngine:
                 sender, from_cache=base, to_cache=to_cache, freeze_norms=freeze_norms
             )
 
-        deltas: dict[int, Tensor] = {}
-        for k in spec.receivers:
-            inp = torch.zeros_like(sd)
-            live = False
-            if k in spec.sender_to:
-                inp = inp + sd
-                live = True
-            for j, kk in spec.receiver_to_receiver:
-                if kk == k and j in deltas:
-                    inp = inp + deltas[j]
-                    live = True
-            if not live:
-                deltas[k] = torch.zeros_like(sd)
-                continue
-            resid = self.resid_for_mlp(base, k)
-            freeze_at = resid if freeze_norms else None
-            new = self._mlp_branch_fn(k, resid + inp, freeze_at=freeze_at)
-            old = self.mlp_trunk_contribution(base, k)
-            deltas[k] = new - old
+        deltas = self.receiver_deltas(
+            sd, spec, base_cache=base, freeze_norms=freeze_norms
+        )
 
         final = base.final_resid(self.position).to(self.device).float()
         for k in spec.receivers_to_logits:
