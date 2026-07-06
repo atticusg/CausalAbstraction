@@ -4,3 +4,4 @@ device: auto
 dtype: float32
 slurm:
   gpus: 1
+attn_implementation: eager
