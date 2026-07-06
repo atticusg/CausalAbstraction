@@ -216,6 +216,20 @@ Granularity ceiling unchanged: edges are atomic (no treeified patching), and
 the score tensor is never a module boundary — analytic K/V patching
 recomputes scores from cached q/k.
 
+**Anchor.** During development the K/V machinery was anchored against a
+hook-based replication of Hanna et al. (2023): it reproduces the paper's
+appendix analyses (Figs 11–13 and the full-circuit evaluation) at float
+precision (all 243 Fig 12–13 sweep cells ≤4.2e-7 and the 97 Fig 11 cells
+≤1.6e-6; full-circuit probability difference to 1.2e-7) when composed with
+that analysis's conventions — head
+z-deltas routed into MLPs 8–9 only while the MLP cascade runs over 8–11, the
+full-circuit K/V restoration built from summed cached component deltas, and
+base-side statistics with unrestored queries. Those are analysis-level
+composition choices, not engine semantics: they live in the anchoring
+analysis's driver, and every one of them is expressible through the public
+primitives above (`kv_trunk_delta` with `base_cache`, `trunk_delta` over a
+component group, receiver routing in the caller).
+
 ## Worked example: an iterative path-patching sweep
 
 With any set of clean/counterfactual prompt pairs (templated prompts that
