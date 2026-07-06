@@ -334,8 +334,10 @@ def reference_patched_logits(
             else:
                 indices.append([[p] for p in pos_padded])
         location_map = {"sources->base": (indices, indices)}
+        # pyvene returns (base_outputs, intervened_outputs) here; the
+        # patched run is the second element.
         result = iv_model(loaded, unit_locations=location_map)
-        output = result[0][0]
+        output = result[1]
         logits = output.logits.float()
         idx = torch.tensor(pos_padded, device=logits.device)
         out = logits[torch.arange(batch, device=logits.device), idx]
