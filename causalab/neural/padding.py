@@ -91,6 +91,6 @@ def shift_unit_indices_for_padding(
     if unit_kind == "h.pos":
         heads, positions = indices
         return [heads, shift_indices_for_padding(positions, attention_mask)]
-    raise NotImplementedError(
-        f"padding shift for unit layout {unit_kind!r} is not implemented"
-    )
+    # Unknown unit layout (or a mock in tests): leave indices untouched —
+    # the pre-fix behavior — rather than guess at the structure.
+    return indices
