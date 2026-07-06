@@ -50,14 +50,27 @@ def shift_indices_for_padding(
         )
     out: list[list[int]] = []
     seq_len = attention_mask.shape[1]
-    for row, shift in zip(indices, shifts):
-        shifted = [p + shift for p in row]
-        for p in shifted:
+    true_lens = attention_mask.long().sum(dim=1).tolist()
+    for row, shift, true_len in zip(indices, shifts, true_lens):
+        # A negative index is end-relative in the example's TRUE (unpadded)
+        # sequence — the documented ``TokenPosition(lambda x: [-1], ...)``
+        # API — so it resolves against the real last token, not the padded
+        # tensor edge.
+        shifted = []
+        for orig in row:
+            q = orig if orig >= 0 else true_len + orig
+            if not 0 <= q < true_len:
+                raise IndexError(
+                    f"unpadded index {orig} is out of range for its example "
+                    f"(true length {true_len})"
+                )
+            p = q + shift
             if not 0 <= p < seq_len:
                 raise IndexError(
-                    f"shifted position {p} outside the padded sequence "
-                    f"(length {seq_len}); the unpadded index was out of range"
+                    f"unpadded index {orig} resolves to padded position {p}, "
+                    f"outside the padded sequence (length {seq_len})"
                 )
+            shifted.append(p)
         out.append(shifted)
     return out
 
