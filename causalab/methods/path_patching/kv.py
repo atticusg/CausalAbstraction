@@ -475,14 +475,17 @@ class KVPatchEngine:
     # patched k/v construction
     # ------------------------------------------------------------------
     def _kv_delta_from_resid(
-        self, layer: int, delta_resid: Tensor, base: str
+        self, layer: int, delta_resid: Tensor, base: str, freeze_prenorm: bool = False
     ) -> tuple[Tensor, Tensor]:
         """(Δk, Δv) at the patched position for every KV head of ``layer``,
         pre-rotation, from a residual delta at that position.
 
         Formed as ``proj(norm(x+Δ)) − proj(norm(x))`` through the model's own
         pre-norm and projections (direct module calls, model dtype), so a
-        zero residual delta gives exactly zero.
+        zero residual delta gives exactly zero. ``freeze_prenorm`` freezes
+        the pre-norm's normalization denominator at the base residual's
+        value (rust-circuit-style linearized norm), the same diagnostic the
+        engine offers via ``freeze_norms``.
         """
         cache = self._cache(base)
         eng = self.engine_patch
@@ -492,8 +495,12 @@ class KVPatchEngine:
             x = eng._at(cache, "block_out", layer - 1)
         norm = self.desc.attn_pre_norm(layer)
         d = delta_resid.to(self.device).float()
-        normed_new = norm((x + d).to(self.model_dtype))
-        normed_old = norm(x.to(self.model_dtype))
+        if freeze_prenorm:
+            normed_new = eng._apply_norm(norm, x + d, frozen_at=x).to(self.model_dtype)
+            normed_old = eng._apply_norm(norm, x, frozen_at=x).to(self.model_dtype)
+        else:
+            normed_new = norm((x + d).to(self.model_dtype))
+            normed_old = norm(x.to(self.model_dtype))
         _, k_new, v_new = self.desc.qkv_new(layer, normed_new)
         _, k_old, v_old = self.desc.qkv_new(layer, normed_old)
         KV, DH = self.desc.n_kv_heads, self.desc.head_dim
@@ -534,6 +541,7 @@ class KVPatchEngine:
         base_cache: str = "clean",
         patch_q: bool = False,
         rotate_key_delta: bool = True,
+        freeze_prenorm: bool = False,
     ) -> Tensor:
         """(N, d) change in the edges' layers' attention-branch trunk
         contributions at the end position when the named KV heads' keys
@@ -591,7 +599,9 @@ class KVPatchEngine:
                     if isinstance(input_deltas, Mapping)
                     else input_deltas
                 )
-                dk_all, dv_all = self._kv_delta_from_resid(layer, dr, base_cache)
+                dk_all, dv_all = self._kv_delta_from_resid(
+                    layer, dr, base_cache, freeze_prenorm
+                )
                 for e in layer_edges:
                     j = e.kv.kv_index
                     deltas_ready[j] = (
