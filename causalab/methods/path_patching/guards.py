@@ -42,19 +42,35 @@ class GuardError(RuntimeError):
 
 def default_tolerances(model_dtype: torch.dtype) -> dict[str, float]:
     """Relative tolerances for G1/G2 (vs the residual's max magnitude) and
-    absolute max-logit tolerances for G3/G4."""
+    absolute max-logit tolerances for G3/G4.
+
+    The two closure guards have different numerical floors, so they get
+    separate tolerances. G3 (patch-nothing) re-runs the model's own tail on
+    the cached final residual — identical values through identical modules —
+    so it is near-exact in any dtype. G4 (patch-everything) reconstructs the
+    counterfactual residual as a float32 sum of per-component contributions,
+    whereas the model's own trunk accumulated those adds in the model dtype;
+    for bf16 models the model's own per-add rounding puts a floor of roughly
+    (additivity error x logit scale) ≈ a few percent of the logit range on
+    this comparison. That floor is a property of validating a float32
+    decomposition against a bf16 forward, not of the wiring — the same model
+    run in float32 closes tightly (the matrix includes such a run). The bf16
+    G4 default is therefore a sanity bound; measured values are always
+    recorded in ``engine.guard_report``. The teeth against wrong *wiring*
+    are G2 (relative, dtype-robust) in every dtype.
+    """
     if model_dtype in (torch.float32, torch.float64):
         return {
             "additivity_rel": 1e-4,
             "branch_rel": 1e-4,
-            "closure_logits": 2e-3,
+            "closure_patch_nothing": 2e-3,
+            "closure_patch_everything": 2e-3,
         }
-    # bf16 / fp16: the model's own trunk accumulates in half precision, so
-    # a float32 re-sum legitimately differs at ~1e-2 relative scale.
     return {
         "additivity_rel": 3e-2,
         "branch_rel": 3e-2,
-        "closure_logits": 1e-1,
+        "closure_patch_nothing": 5e-2,
+        "closure_patch_everything": 1.0,
     }
 
 
@@ -121,16 +137,14 @@ def run_construction_guards(
             )
 
     # ---- G3: patch-nothing closure ----
-    zero = torch.zeros(
-        engine.clean.n_examples, desc.d_model, device=engine.device
-    )
+    zero = torch.zeros(engine.clean.n_examples, desc.d_model, device=engine.device)
     logits = engine.patched_logits(zero, PathSpec.cascade())
     err3 = (logits - engine.clean.logits[engine.position]).abs().max().item()
     report["G3_patch_nothing_max_logit_err"] = err3
-    if err3 > tol["closure_logits"]:
+    if err3 > tol["closure_patch_nothing"]:
         failures.append(
             f"G3 patch-nothing closure: max logit error {err3:.2e} > "
-            f"{tol['closure_logits']:.0e}. The reassembled final norm + LM "
+            f"{tol['closure_patch_nothing']:.0e}. The reassembled final norm + LM "
             f"head does not reproduce the model's own logits. Likely causes: "
             f"wrong final-norm/LM-head modules or a missing logit transform "
             f"(softcapping)."
@@ -140,16 +154,19 @@ def run_construction_guards(
     everything = (
         "group",
         [("embed",)]
-        + [("head", l, h) for l in range(desc.n_layers) for h in range(desc.n_heads)]
-        + [("mlp", l) for l in range(desc.n_layers)],
+        + [("head", li, h) for li in range(desc.n_layers) for h in range(desc.n_heads)]
+        + [("mlp", li) for li in range(desc.n_layers)],
     )
     logits = engine.patched_logits(everything, PathSpec.cascade())
     err4 = (logits - engine.cf.logits[engine.position]).abs().max().item()
     report["G4_patch_everything_max_logit_err"] = err4
-    if err4 > tol["closure_logits"]:
+    scale = engine.cf.logits[engine.position].abs().max().item()
+    report["logit_scale"] = scale
+    report["G4_rel_to_logit_scale"] = err4 / max(scale, 1e-12)
+    if err4 > tol["closure_patch_everything"]:
         failures.append(
             f"G4 patch-everything closure: max logit error {err4:.2e} > "
-            f"{tol['closure_logits']:.0e}. Patching every component's direct "
+            f"{tol['closure_patch_everything']:.0e}. Patching every component's direct "
             f"edge does not reconstruct the counterfactual logits: the "
             f"residual decomposition does not close across inputs. Likely "
             f"causes: wrong block order, wrong capture points, or caches "

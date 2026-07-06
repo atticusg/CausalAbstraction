@@ -34,8 +34,12 @@ from causalab.methods.path_patching import (
 )
 from causalab.neural.padding import shift_indices_for_padding
 
-METHOD_DIR = Path(__file__).resolve().parents[2] / "causalab" / "methods" / "path_patching"
-COVERAGE_ARTIFACT = Path(__file__).resolve().parent / "artifacts" / "path_patching_coverage.json"
+METHOD_DIR = (
+    Path(__file__).resolve().parents[2] / "causalab" / "methods" / "path_patching"
+)
+COVERAGE_ARTIFACT = (
+    Path(__file__).resolve().parent / "artifacts" / "path_patching_coverage.json"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -105,8 +109,8 @@ def test_coverage_table_matches_committed_artifact():
     committed = json.loads(COVERAGE_ARTIFACT.read_text())
     assert current == committed, (
         "pyvene coverage changed (pin bump?). If intentional, regenerate: "
-        "uv run python -c \"import json; from causalab.methods.path_patching "
-        "import coverage_table; print(json.dumps(coverage_table(), indent=2))\" "
+        'uv run python -c "import json; from causalab.methods.path_patching '
+        'import coverage_table; print(json.dumps(coverage_table(), indent=2))" '
         f"> {COVERAGE_ARTIFACT}"
     )
 
@@ -229,7 +233,9 @@ def _build_engine(family, factory, **kwargs):
 
 @pytest.mark.parametrize("family", ["gpt2", "gpt_neox", "llama", "gemma2"])
 class TestTinyRandomEndToEnd:
-    def test_guards_pass_and_provenance_reported(self, family, gpt2_tokenizer_pipeline_factory):
+    def test_guards_pass_and_provenance_reported(
+        self, family, gpt2_tokenizer_pipeline_factory
+    ):
         _, desc, clean, cf = _build_engine(family, gpt2_tokenizer_pipeline_factory)
         engine = PatchEngine(desc, clean, cf)
         assert engine.guard_report["G3_patch_nothing_max_logit_err"] <= 2e-3
@@ -237,7 +243,9 @@ class TestTinyRandomEndToEnd:
         mechanisms = {p["mechanism"] for p in engine.provenance}
         assert mechanisms <= {"pyvene-named", "pyvene-path", "direct-module-call"}
 
-    def test_cascade_shorthand_bit_identical(self, family, gpt2_tokenizer_pipeline_factory):
+    def test_cascade_shorthand_bit_identical(
+        self, family, gpt2_tokenizer_pipeline_factory
+    ):
         _, desc, clean, cf = _build_engine(family, gpt2_tokenizer_pipeline_factory)
         engine = PatchEngine(desc, clean, cf)
         recv = [2, 3]
@@ -251,26 +259,37 @@ class TestTinyRandomEndToEnd:
         )
         sender = ("mlp", 0)
         assert torch.equal(
-            engine.patched_logits(sender, short), engine.patched_logits(sender, explicit)
+            engine.patched_logits(sender, short),
+            engine.patched_logits(sender, explicit),
         )
 
     def test_twin_agreement(self, family, gpt2_tokenizer_pipeline_factory):
-        pipeline, desc, clean, cf = _build_engine(family, gpt2_tokenizer_pipeline_factory)
+        pipeline, desc, clean, cf = _build_engine(
+            family, gpt2_tokenizer_pipeline_factory
+        )
         engine = PatchEngine(desc, clean, cf)
         cases = [
             (("head", 1, 2), PathSpec.cascade()),
             (("mlp", 0), PathSpec.cascade([2, 3], direct_to_logits=False)),
-            (("head", 0, 1), PathSpec.cascade([2, 3], direct_to_logits=False).without_edge(2, 3)),
+            (
+                ("head", 0, 1),
+                PathSpec.cascade([2, 3], direct_to_logits=False).without_edge(2, 3),
+            ),
         ]
         for sender, spec in cases:
             analytic = engine.patched_logits(sender, spec)
             ref = reference_patched_logits(
                 pipeline, desc, TEXTS_CLEAN, clean, cf, sender, spec, engine=engine
             )
-            assert (analytic - ref).abs().max().item() <= 2e-3, (sender, spec.describe())
+            assert (analytic - ref).abs().max().item() <= 2e-3, (
+                sender,
+                spec.describe(),
+            )
 
 
-def test_misdeclared_block_order_fails_branch_wiring_guard(gpt2_tokenizer_pipeline_factory):
+def test_misdeclared_block_order_fails_branch_wiring_guard(
+    gpt2_tokenizer_pipeline_factory,
+):
     """A parallel-residual model declared sequential must be refused by G2."""
     _, desc, clean, cf = _build_engine(
         "gpt_neox", gpt2_tokenizer_pipeline_factory, block_order="sequential"
@@ -287,9 +306,11 @@ def test_post_ln_trunk_fails_additivity_guard(gpt2_tokenizer_pipeline_factory):
     block = pipeline.model.transformer.h[2]
     block._original_forward = block.forward
 
-    def post_ln_forward(self, hidden_states, **kwargs):
-        out = self._original_forward(hidden_states, **kwargs)
-        return (self.ln_1(out[0]),) + out[1:] if isinstance(out, tuple) else self.ln_1(out)
+    def post_ln_forward(self, hidden_states, *args, **kwargs):
+        out = self._original_forward(hidden_states, *args, **kwargs)
+        return (
+            (self.ln_1(out[0]),) + out[1:] if isinstance(out, tuple) else self.ln_1(out)
+        )
 
     block.forward = types.MethodType(post_ln_forward, block)
     desc = resolve_descriptor(pipeline.model)

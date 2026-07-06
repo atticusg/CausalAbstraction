@@ -166,11 +166,11 @@ def build_attn_detail_cache(
         a = act if isinstance(act, Tensor) else torch.cat(list(act))
         store[m] = per_head(a.reshape(bsz, T, -1).float().cpu())
 
-    k_all = torch.stack([store[("k", l)] for l in range(L)], dim=1)
-    v_all = torch.stack([store[("v", l)] for l in range(L)], dim=1)
+    k_all = torch.stack([store[("k", li)] for li in range(L)], dim=1)
+    v_all = torch.stack([store[("v", li)] for li in range(L)], dim=1)
     bidx = torch.arange(bsz)
     pidx = torch.tensor(pos)
-    q_pos = torch.stack([store[("q", l)][bidx, :, pidx] for l in range(L)], dim=1)
+    q_pos = torch.stack([store[("q", li)][bidx, :, pidx] for li in range(L)], dim=1)
 
     # derived arithmetic — gap registry: kv:scores (no-module-boundary);
     # the score tensor is never hooked or intervened on.

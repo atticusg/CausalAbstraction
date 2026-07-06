@@ -103,9 +103,7 @@ class PathSpec:
         if not rec:
             return cls(sender_to_logits=direct_to_logits)
         sender_to = frozenset(rec) if multipath == "all" else frozenset({rec[0]})
-        r2r = frozenset(
-            (j, k) for i, j in enumerate(rec) for k in rec[i + 1 :]
-        )
+        r2r = frozenset((j, k) for i, j in enumerate(rec) for k in rec[i + 1 :])
         return cls(
             receivers=rec,
             sender_to=sender_to,

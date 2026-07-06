@@ -29,7 +29,9 @@ def _per_example_shifts(attention_mask: Tensor) -> list[int]:
     mask = attention_mask.long()
     total = mask.shape[1]
     true_len = mask.sum(dim=1)
-    first_real = mask.argmax(dim=1)  # (total - true_len) under left padding, 0 under right
+    first_real = mask.argmax(
+        dim=1
+    )  # (total - true_len) under left padding, 0 under right
     # first_real is where unpadded index 0 was placed; that IS the shift.
     del total, true_len
     return [int(s) for s in first_real]
