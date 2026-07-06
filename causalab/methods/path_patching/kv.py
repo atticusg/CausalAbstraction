@@ -723,10 +723,16 @@ class KVPatchEngine:
         pre-rotation q/k/v through the analytic score path, must match the
         cached attention_value_output. This exercises rotation, GQA fan-in,
         scaling, softcapping, masks, and softmax in one check."""
+        # bf16 K1 is a sanity bound, not a precision target (same stance as
+        # the engine's G4): reconstructing in float32 what the model
+        # accumulated in bf16 has a model-size-dependent rounding floor —
+        # measured 1.6e-2 on Gemma-2-2B and 4.3e-2 on Llama-3.1-8B, while
+        # the same models in float32 close at ~1e-6 (proving the
+        # conventions) and genuine wiring errors show up at O(1).
         tol = {
             "z_reconstruction_rel": 1e-4
             if self.model_dtype in (torch.float32, torch.float64)
-            else 3e-2,
+            else 1e-1,
         }
         if tolerances:
             tol.update(tolerances)
