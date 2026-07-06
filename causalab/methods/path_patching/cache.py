@@ -78,7 +78,7 @@ def padded_position(attention_mask: Tensor, position: int | Sequence[int]) -> li
             raise IndexError(f"position {p} out of range for example {i} (length {n})")
         idx = int(first_real[i]) + q
         if mask[i, idx] != 1:
-            raise AssertionError(f"internal error: padded index {idx} lands on padding")
+            raise AssertionError(f"internal error: padded index {idx} falls on padding")
         out.append(idx)
     return out
 
@@ -221,7 +221,9 @@ def build_patch_cache(
             indices = [flat for _ in units]
 
             location_map = {"sources->base": (indices, indices)}
-            result = intervenable_model(loaded, unit_locations=location_map)
+            result = intervenable_model(
+                loaded, unit_locations=location_map, output_original_output=True
+            )
             collected = result[0][1]
             model_output = result[0][0]
 

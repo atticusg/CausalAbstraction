@@ -1,33 +1,26 @@
-"""Capture-point provenance: gap registry, runtime report, coverage table.
+"""Capability checking, capture provenance, and pyvene coverage.
 
-Every activation capture or intervention point this package uses is labeled
-with its *mechanism*:
+causalab's contract is that a model works iff its family is in pyvene's
+mapping — every intervention routes through ``IntervenableModel``. This
+method keeps that contract exactly: there are **no raw torch hooks anywhere**
+(grep-checkable), and every capture point is either a pyvene *named*
+component or a pyvene *dotted module path* (pyvene's own fallback resolution;
+still an ``IntervenableModel`` intervention, not a hook of ours).
 
-* ``pyvene-named``    a component in pyvene's per-family mapping
-* ``pyvene-path``     pyvene's dotted module-path fallback (still pyvene —
-                      no hooks of ours — but not covered by the named
-                      vocabulary, so it carries a reason code)
-* ``raw-hook``        a torch hook of our own (K/V module only); requires a
-                      gap-registry entry, enforced by the hygiene test
-* ``direct-module-call``  the engine invoking a module on cached tensors
-                      (receiver re-evaluation, tail); no hook involved
-* ``unsupported``     not available for this family
+Three surfaces:
 
-Reason codes for anything not pyvene-named:
-
-* ``mapping-lacks-entry``    pyvene's mapping has no unit for this point
-* ``unit-is-wrong-quantity`` pyvene has a similarly-named unit but it
-                             captures the wrong tensor (e.g. ``mlp_activation``
-                             is the gate activation, not the gated product a
-                             neuron sender needs)
-* ``family-unmapped``        pyvene does not map this model family at all
-* ``no-module-boundary``     the quantity is not any module's input/output
-                             (e.g. pre-softmax attention scores)
-
-The registry exists for drift detection as much as for review: the coverage
-table is regenerated in tests against the installed pyvene, so a pin bump
-that adds or moves units surfaces as a table diff instead of a silent
-behavior change.
+* :func:`check_capability` — at engine construction, verify that every
+  pyvene unit the requested operation needs exists in the family's mapping;
+  otherwise raise :class:`UnsupportedArchitectureError` naming the missing
+  units and the operation that needs them. Unsupported means unsupported,
+  same as the rest of the library.
+* :func:`capture_provenance` — document which pyvene units an engine uses
+  (named vs dotted-path); exposed as ``engine.provenance`` and written into
+  validation results JSONs.
+* :func:`coverage_table` — supported/unsupported per family × component,
+  generated from the installed pyvene. Regenerated in tests and diffed
+  against the committed artifact, so a pyvene pin bump surfaces as a table
+  diff instead of a silent behavior change.
 """
 
 from __future__ import annotations
@@ -39,112 +32,81 @@ from typing import Literal
 
 logger = logging.getLogger(__name__)
 
-Mechanism = Literal[
-    "pyvene-named", "pyvene-path", "raw-hook", "direct-module-call", "unsupported"
-]
-ReasonCode = Literal[
-    "mapping-lacks-entry",
-    "unit-is-wrong-quantity",
-    "family-unmapped",
-    "no-module-boundary",
-]
+Mechanism = Literal["pyvene-named", "pyvene-path", "direct-module-call"]
 
 __all__ = [
-    "GAP_REGISTRY",
-    "GapEntry",
     "CapturePoint",
+    "UnsupportedArchitectureError",
     "capture_provenance",
+    "check_capability",
     "coverage_table",
     "pyvene_pin",
-    "register_gap",
 ]
 
 
-@dataclass(frozen=True)
-class GapEntry:
-    site: str  # "<module>:<symbol>" of the code site
-    component: str
-    model_families: tuple[str, ...]
-    reason: ReasonCode
-    note: str = ""
+class UnsupportedArchitectureError(NotImplementedError):
+    """The model family lacks pyvene units this operation needs."""
 
 
-GAP_REGISTRY: dict[str, GapEntry] = {}
+# pyvene named units each operation requires, beyond family membership.
+REQUIRED_UNITS: dict[str, tuple[str, ...]] = {
+    "path-patching cache collection": (
+        "attention_value_output",
+        "mlp_output",
+        "block_input",
+        "block_output",
+    ),
+    "reference-twin interventions": (
+        "attention_value_output",
+        "head_attention_value_output",
+        "mlp_output",
+        "block_input",
+    ),
+    "K/V attention-detail collection": (
+        "query_output",
+        "key_output",
+        "value_output",
+    ),
+}
 
 
-def register_gap(entry: GapEntry) -> None:
-    GAP_REGISTRY[entry.site] = entry
+def _family_mapping(model) -> dict | None:
+    """The installed pyvene's component mapping for this model's class."""
+    from pyvene.models.intervenable_modelcard import type_to_module_mapping
+
+    return type_to_module_mapping.get(type(model))
 
 
-# ---------------------------------------------------------------------------
-# Registrations. Import-time, so the hygiene test can cross-check code sites
-# against the registry without executing any model code.
-# ---------------------------------------------------------------------------
+def check_capability(model, operations: list[str]) -> dict[str, list[str]]:
+    """Verify pyvene covers ``operations`` for this model; raise otherwise.
 
-# The package currently has ZERO raw hooks (pyvene's gpt2 mapping splits the
-# fused c_attn itself, so even K/V capture is pyvene-named). The registry
-# still records the one no-module-boundary quantity, which is *derived*
-# arithmetic rather than a capture:
-register_gap(
-    GapEntry(
-        site="kv:scores",
-        component="pre-softmax masked attention scores",
-        model_families=("gpt2",),
-        reason="no-module-boundary",
-        note=(
-            "scores are computed inline in HF attention (no module I/O); "
-            "derived analytically from captured q/k, never hooked or "
-            "intervened on"
-        ),
-    )
-)
-
-# pyvene-path (dotted fallback) captures — pyvene-native, registered for
-# visibility and for the coverage table:
-register_gap(
-    GapEntry(
-        site="cache:component_neuron_values",
-        component="mlp down-projection input (neuron values)",
-        model_families=("gpt2", "gpt_neox", "llama", "gemma2"),
-        reason="unit-is-wrong-quantity",
-        note=(
-            "pyvene's mlp_activation captures act_fn output, which for gated "
-            "MLPs (Llama/Gemma) is the gate activation alone, not the "
-            "act(gate)*up product a neuron sender needs; the down-projection "
-            "input is the right quantity on every family."
-        ),
-    )
-)
-register_gap(
-    GapEntry(
-        site="reference:component_mlp_pre_norm_input",
-        component="MLP branch pre-norm input",
-        model_families=("gpt2", "gpt_neox", "llama", "gemma2"),
-        reason="mapping-lacks-entry",
-        note="no named unit for norm inputs; used for excluded-edge cancellation",
-    )
-)
-register_gap(
-    GapEntry(
-        site="reference:component_mlp_trunk_output",
-        component="MLP branch trunk contribution (post-norm output where present)",
-        model_families=("gemma2",),
-        reason="mapping-lacks-entry",
-        note=(
-            "pyvene's mlp_output is the MLP module output, which on Gemma-2 "
-            "is pre-post-norm; the trunk contribution is the post-norm output"
-        ),
-    )
-)
-register_gap(
-    GapEntry(
-        site="reference:component_final_norm_input",
-        component="final norm input",
-        model_families=("gpt2", "gpt_neox", "llama", "gemma2"),
-        reason="mapping-lacks-entry",
-        note="no named unit; used for direct-edge cancellation at the logits",
-    )
-)
+    Returns {operation: [units used]} for provenance on success.
+    """
+    mapping = _family_mapping(model)
+    if mapping is None:
+        raise UnsupportedArchitectureError(
+            f"pyvene has no component mapping for model class "
+            f"{type(model).__name__} (pyvene pin {pyvene_pin()}); causalab "
+            f"methods require the model family to be in pyvene's mapping. "
+            f"Operations requested: {operations}."
+        )
+    used: dict[str, list[str]] = {}
+    problems: list[str] = []
+    for op in operations:
+        required = REQUIRED_UNITS[op]
+        missing = [u for u in required if u not in mapping]
+        if missing:
+            problems.append(
+                f"{op!r} needs pyvene unit(s) {missing} that "
+                f"{type(model).__name__}'s mapping does not define"
+            )
+        used[op] = list(required)
+    if problems:
+        raise UnsupportedArchitectureError(
+            "unsupported architecture for path patching (pyvene pin "
+            f"{pyvene_pin()}):\n- " + "\n- ".join(problems)
+        )
+    return used
 
 
 def pyvene_pin() -> str:
@@ -169,13 +131,11 @@ class CapturePoint:
     name: str
     component: str
     mechanism: Mechanism
-    reason: ReasonCode | None = None
-    gap_site: str | None = None
+    note: str = ""
 
 
 def capture_provenance(desc) -> list[CapturePoint]:
-    """Provenance of every capture/intervention point the engine, cache, and
-    reference twin use for this descriptor's family."""
+    """The pyvene units and module calls an engine for this family uses."""
     points = [
         CapturePoint("head values (z)", desc.component_head_values(), "pyvene-named"),
         CapturePoint("mlp branch output", desc.component_mlp_branch(), "pyvene-named"),
@@ -187,20 +147,20 @@ def capture_provenance(desc) -> list[CapturePoint]:
             "neuron values",
             desc.component_neuron_values(0).replace("[0]", "[i]"),
             "pyvene-path",
-            "unit-is-wrong-quantity",
-            "cache:component_neuron_values",
+            "pyvene's mlp_activation is the gate activation; a neuron sender "
+            "needs the down-projection input (the gated product on "
+            "Llama/Gemma), addressed by module path",
         ),
         CapturePoint(
             "receiver MLP re-evaluation",
-            "mlp branch modules on cached tensors",
+            "mlp branch modules invoked on cached tensors",
             "direct-module-call",
         ),
         CapturePoint(
             "tail (final norm + LM head + softcapping)",
-            "final norm / LM head modules on cached tensors",
+            "final norm / LM head modules invoked on cached tensors",
             "direct-module-call",
         ),
-        # reference twin intervention points
         CapturePoint(
             "twin: sender/freeze substitution",
             "head_attention_value_output / attention_value_output / mlp_output",
@@ -210,47 +170,30 @@ def capture_provenance(desc) -> list[CapturePoint]:
             "twin: pre-norm input cancellation",
             desc.component_mlp_pre_norm_input(0).replace("[0]", "[i]"),
             "pyvene-path",
-            "mapping-lacks-entry",
-            "reference:component_mlp_pre_norm_input",
+            "norm inputs have no named unit",
         ),
         CapturePoint(
             "twin: receiver trunk-output recording",
             desc.component_mlp_trunk_output(0).replace("[0]", "[i]"),
             "pyvene-path",
-            "mapping-lacks-entry" if desc.spec.mlp_post_norm else None,
-            "reference:component_mlp_trunk_output" if desc.spec.mlp_post_norm else None,
+            "the trunk contribution is the branch post-norm's output on "
+            "Gemma-2; the MLP module's output elsewhere",
         ),
         CapturePoint(
             "twin: final-norm input cancellation",
             desc.component_final_norm_input(),
             "pyvene-path",
-            "mapping-lacks-entry",
-            "reference:component_final_norm_input",
+            "norm inputs have no named unit",
         ),
     ]
     if desc.attention_style == "fused-qkv-absolute":
         points.append(
             CapturePoint(
                 "K/V detail (gated module)",
-                "(head_)query/key/value_output; scores derived from cached q/k",
+                "(head_)query/key/value_output",
                 "pyvene-named",
-            )
-        )
-        points.append(
-            CapturePoint(
-                "K/V detail: pre-softmax scores",
-                "derived arithmetic on captured q/k (never hooked)",
-                "direct-module-call",
-                "no-module-boundary",
-                "kv:scores",
-            )
-        )
-    else:
-        points.append(
-            CapturePoint(
-                "K/V detail (gated module)",
-                "n/a for this attention style",
-                "unsupported",
+                "pre-softmax scores are derived arithmetic on the captured "
+                "q/k (no module boundary exists for scores; none is needed)",
             )
         )
     return points
@@ -279,39 +222,30 @@ _NAMED_COMPONENTS = (
     "mlp_activation",
     "block_input",
     "block_output",
-    "head_key_output",
+    "query_output",
+    "key_output",
+    "value_output",
     "head_query_output",
+    "head_key_output",
     "head_value_output",
-)
-_LOGICAL_POINTS = (
-    ("neuron values (down-proj input)", "pyvene-path", "unit-is-wrong-quantity"),
-    ("MLP pre-norm input", "pyvene-path", "mapping-lacks-entry"),
-    ("final norm input", "pyvene-path", "mapping-lacks-entry"),
-    ("pre-softmax attention scores", "derived-from-cache", "no-module-boundary"),
 )
 
 
 def coverage_table() -> dict:
-    """family × component → mechanism, generated from the installed pyvene.
-
-    Regenerated in tests and diffed against the committed artifact so a
-    pyvene pin bump surfaces as a table diff.
-    """
+    """family × pyvene component → supported/unsupported, from the installed
+    pyvene. The drift-detection artifact for pin bumps."""
     import importlib
 
     table: dict[str, dict[str, str]] = {}
     for family in _COVERAGE_FAMILIES:
-        mod = importlib.import_module(f"pyvene.models.{family}.modelings_intervenable_{family}")
+        mod = importlib.import_module(
+            f"pyvene.models.{family}.modelings_intervenable_{family}"
+        )
         mapping = getattr(mod, f"{family}_lm_type_to_module_mapping", None) or getattr(
             mod, f"{family}_type_to_module_mapping"
         )
-        row: dict[str, str] = {}
-        for comp in _NAMED_COMPONENTS:
-            row[comp] = "pyvene-named" if comp in mapping else "unsupported"
-        for name, mech, reason in _LOGICAL_POINTS:
-            if name == "pre-softmax attention scores" and family != "gpt2":
-                row[name] = "unsupported (gated)"
-            else:
-                row[name] = f"{mech} ({reason})"
-        table[family] = row
+        table[family] = {
+            comp: "supported" if comp in mapping else "unsupported"
+            for comp in _NAMED_COMPONENTS
+        }
     return {"pyvene_pin": pyvene_pin(), "families": table}

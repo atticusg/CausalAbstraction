@@ -34,10 +34,10 @@ from .engine import PatchEngine, Sender
 from .guards import GuardError, default_tolerances, run_construction_guards
 from .kv import AttnDetailCache, build_attn_detail_cache
 from .provenance import (
-    GAP_REGISTRY,
     CapturePoint,
-    GapEntry,
+    UnsupportedArchitectureError,
     capture_provenance,
+    check_capability,
     coverage_table,
     pyvene_pin,
 )
@@ -47,10 +47,10 @@ __all__ = [
     "ArchitectureDescriptor",
     "AttnDetailCache",
     "CapturePoint",
-    "GAP_REGISTRY",
-    "GapEntry",
     "GuardError",
+    "UnsupportedArchitectureError",
     "capture_provenance",
+    "check_capability",
     "coverage_table",
     "pyvene_pin",
     "PatchCache",
