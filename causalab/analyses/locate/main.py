@@ -341,6 +341,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         device=cfg.model.device,
         dtype=cfg.model.get("dtype"),
         eager_attn=cfg.model.get("eager_attn"),
+        attn_implementation=cfg.model.get("attn_implementation"),
     )
 
     # Optionally load a source pipeline for cross-model patching.
@@ -360,6 +361,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             device=cfg.model.device,
             dtype=cfg.model.get("dtype"),
             eager_attn=cfg.model.get("eager_attn"),
+            attn_implementation=cfg.model.get("attn_implementation"),
         )
 
     logger.info("Locate scan over variables: %s", target_variables)

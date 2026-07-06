@@ -32,7 +32,14 @@ from .descriptor import (
 from .edges import PathSpec
 from .engine import PatchEngine, Sender
 from .guards import GuardError, default_tolerances, run_construction_guards
-from .kv import AttnDetailCache, build_attn_detail_cache
+from .kv import (
+    AttnDetailCache,
+    KVEdge,
+    KVHead,
+    KVPatchEngine,
+    SlidingWindowError,
+    build_attn_detail_cache,
+)
 from .provenance import (
     CapturePoint,
     UnsupportedArchitectureError,
@@ -48,6 +55,10 @@ __all__ = [
     "AttnDetailCache",
     "CapturePoint",
     "GuardError",
+    "KVEdge",
+    "KVHead",
+    "KVPatchEngine",
+    "SlidingWindowError",
     "UnsupportedArchitectureError",
     "capture_provenance",
     "check_capability",

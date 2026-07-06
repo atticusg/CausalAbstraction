@@ -150,6 +150,28 @@ def _null_indexer() -> ComponentIndexer:
     return ComponentIndexer(lambda _x: [], id="path_patching_explicit")
 
 
+def keep_last_dim_on_collects(intervenable_model) -> None:
+    """Opt every collect intervention out of pyvene's flatten/slice cycle.
+
+    pyvene's ``do_intervention`` flattens a multi-position gather
+    ``(batch, n_positions, d) -> (batch, n_positions*d)`` and the collect
+    then slices ``[..., :interchange_dim]`` where ``interchange_dim`` is
+    ``component_dim * max_number_of_units``. causalab's unit wrapper always
+    leaves ``max_number_of_units`` at 1 (everything else in the library
+    intervenes at exactly one position), so collecting more than one
+    position per example silently keeps only the first ``d`` of the
+    flattened row and unflattens the remainder into garbage —
+    ``(batch, n_positions, d/n_positions)``. Setting pyvene's own
+    ``keep_last_dim`` flag (the documented opt-out, used by its
+    ``SourcelessIntervention``) skips the flatten entirely, making the
+    slice a no-op at any position count, single-position collection
+    included.
+    """
+    for itv in intervenable_model.interventions.values():
+        obj = itv[0] if isinstance(itv, tuple) else itv
+        obj.keep_last_dim = True
+
+
 @torch.no_grad()
 def build_patch_cache(
     pipeline: Any,
@@ -195,6 +217,7 @@ def build_patch_cache(
     intervenable_model = prepare_intervenable_model(
         pipeline, units, intervention_type="collect"
     )
+    keep_last_dim_on_collects(intervenable_model)
 
     store: dict[tuple[str, int], list[Tensor]] = {m: [] for m in unit_meta}
     logits_store: list[Tensor] = []

@@ -145,20 +145,76 @@ changes the trunk downstream, not just what the norm sees. The twin pairs
 every pre-norm cancellation with a trunk-output restoration on the same
 receiver (`_TrunkOutputAdjust`) to keep the recipe exact.
 
-## K/V-side attention detail (gated)
+## K/V-side attention detail
 
-`build_attn_detail_cache` captures per-head q/k/v (pyvene
-`query/key/value_output`; scores are derived arithmetic on cached q/k — the
-score tensor is not a module boundary and never needs intervening on). It is
-**gated to GPT-2-style attention** (`fused-qkv-absolute`) and raises
-`NotImplementedError` on rotary/GQA models, with the agreed generalization
-direction documented in `kv.py`: rotate key deltas by the patched position's
-angle before re-scoring (pre-rotation keys via pyvene + rotation in engine
-arithmetic is pyvene-native); use KV heads, not query heads, as the edge unit
-under GQA; keep the K/V twin as pyvene replace interventions on
-`head_key_output`/`head_value_output`. K/V capture requires
-`attn_implementation="eager"` (the `LMPipeline` default) — fused kernels do
-not materialize what pyvene's attention units need.
+Edges that end at an attention head's **keys or values at one patched token
+position** (the App. 8 analyses of Hanna et al.: what feeds a head's k/v at
+an earlier prompt position). General across the same families as the engine, under the same
+support policy: available iff pyvene's mapping has `query/key/value_output`
+(collection) and `head_key_output`/`head_value_output` (twin) for the family.
+gpt_neox has none of them (its fused QKV projection interleaves q/k/v per
+head, and pyvene's mapping comments the units out), so Pythia-style models
+raise `UnsupportedArchitectureError` at construction — no hook fallback.
+
+```python
+from causalab.methods.path_patching import (
+    KVEdge, KVHead, KVPatchEngine, build_attn_detail_cache,
+)
+
+# "src": the patched upstream position (say, the prompt's subject token)
+positions = {"end": -1, "src": -5}
+clean = build_patch_cache(pipeline, desc, clean_texts, positions)
+cf = build_patch_cache(pipeline, desc, cf_texts, positions)
+engine_end = PatchEngine(desc, clean, cf, position="end")
+engine_src = PatchEngine(desc, clean, cf, position="src", run_guards=False)
+det_clean = build_attn_detail_cache(pipeline, desc, clean_texts, positions)
+det_cf = build_attn_detail_cache(pipeline, desc, cf_texts, positions)
+kv = KVPatchEngine(engine_end, engine_src, det_clean, det_cf,
+                   position_patch="src")   # runs guard K1
+
+# sender m0's delta at src entering a7.h10's values, then on to the logits:
+delta_src = engine_src.trunk_delta(("mlp", 0))
+edges = [KVEdge(KVHead.for_query_head(desc, 7, 10), patch_v=True)]
+logits = engine_end.patched_logits(kv.kv_trunk_delta(edges, delta_src),
+                                   PathSpec.cascade())
+```
+
+Design points, each enforced or verified at construction:
+
+* **Pre-rotation capture, model-applied rotation.** pyvene's
+  `key_output`/`value_output` hook the projection outputs; on rotary
+  families that is before RoPE, so cached keys are position-disentangled.
+  Score reconstruction applies the model's own rotary module at the actual
+  position ids; rotation is linear, so rotating a patched key equals
+  rotating the key delta. `rotate_key_delta=False` exists purely as a
+  negative control (it must disagree with the twin on rotary families).
+* **KV heads are the edge unit.** `KVHead(layer, kv_index)` is what is
+  causally separable in the weights; z-deltas fan out across the query-head
+  group (`desc.query_heads_of_kv`). Standard MHA is group size 1.
+  Per-query-head value paths do not exist in the weights; a
+  TransformerLens-style expansion would be pure cache arithmetic on top and
+  is deliberately not a default.
+* **Eager contract.** Construction refuses non-eager loads by name
+  (`LMPipeline(..., attn_implementation="eager")` /
+  `attn_implementation: eager` in the model YAML). No silent re-loading.
+* **Sliding windows** (Gemma-2): an edge whose patched position the end
+  position cannot attend to within the layer's window raises
+  `SlidingWindowError` naming the layer and window.
+* **Guard K1**: reconstructed per-head z at the end position must match the
+  cached `attention_value_output` on both caches — rotation, GQA fan-in,
+  scaling, softcapping, masks and softmax verified in one check (tight in
+  float32; bf16 floor recorded, as with G4).
+* **Twin.** `reference_patched_logits` accepts a
+  `("kv", layer, kv_index, payload)` sender: pyvene replaces the KV head's
+  pre-rotation k/v at the patched position and the model's own attention
+  recomputes — scoring, softmax, softcapping, windows, GQA fan-out all come
+  from the model. The twin validates atomic K/V edges; multi-edge
+  composition is anchored against the GPT-2 numbers of a hook-based
+  replication of Hanna et al. (2023).
+
+Granularity ceiling unchanged: edges are atomic (no treeified patching), and
+the score tensor is never a module boundary — analytic K/V patching
+recomputes scores from cached q/k.
 
 ## Worked example: an iterative path-patching sweep
 

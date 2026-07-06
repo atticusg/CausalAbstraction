@@ -144,6 +144,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         device=cfg.model.device,
         dtype=cfg.model.get("dtype"),
         eager_attn=cfg.model.get("eager_attn"),
+        attn_implementation=cfg.model.get("attn_implementation"),
     )
 
     # --- Generate correct examples ---
