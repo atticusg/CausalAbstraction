@@ -13,6 +13,14 @@ the receiving module's input:
   upstream receiver's *live* output delta, recorded earlier in the same
   forward pass (upstream modules run first, so the value is available).
 
+One pyvene mechanic matters here: setter interventions scatter IN PLACE, and
+a pre-norm's input tensor is the residual-stream tensor itself, so a
+subtraction at a receiver's pre-norm input would otherwise leak into the
+trunk permanently. Every such subtraction is therefore paired with a
+trunk-output adjustment on the same receiver that adds the subtracted terms
+back after the MLP has consumed the cancelled input (see
+:class:`_TrunkOutputAdjust`).
+
 Everything runs through pyvene: static substitutions, freezes, delta
 subtraction, and live recording are all constant-source interventions
 attached via pyvene's component mappings (dotted-path fallback for norm
@@ -78,21 +86,43 @@ class _DeltaSubtract(pv.ConstantSourceIntervention):
         return out
 
 
-class _LiveDeltaRecorder(pv.ConstantSourceIntervention):
-    """Record (live - reference) for the gathered slice; pass through."""
+class _TrunkOutputAdjust(pv.ConstantSourceIntervention):
+    """Per-receiver trunk-output intervention: record and/or compensate.
+
+    pyvene setter hooks scatter IN PLACE into the hooked tensor, and the
+    pre-MLP norm's input tensor *is* the residual-stream tensor in every
+    supported block — so a delta subtracted at a receiver's pre-norm input
+    also vanishes from the trunk from that point on. This intervention,
+    placed on the same receiver's trunk-output component (which the block
+    adds to the residual AFTER the MLP ran on the cancelled input), adds the
+    subtracted terms back, restoring the trunk exactly. It also records the
+    receiver's live output delta (live - clean reference) for downstream
+    excluded-edge cancellation.
+    """
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self.reference: Tensor | None = None
-        self.key: str = ""
+        self.reference: Tensor | None = None  # clean trunk contribution
+        self.record_key: str | None = None
+        self.compensation_static: list[Tensor] = []
+        self.compensation_live: list[str] = []
         self.store: dict[str, Tensor] | None = None
 
     def forward(self, base, source=None, subspaces=None, **kwargs):
-        assert self.reference is not None and self.store is not None
-        self.store[self.key] = (
-            base.float() - self.reference.to(base.device).float().reshape(base.shape)
-        )
-        return base
+        assert self.store is not None
+        if self.record_key is not None:
+            assert self.reference is not None
+            self.store[self.record_key] = (
+                base.float()
+                - self.reference.to(base.device).float().reshape(base.shape)
+            )
+        out = base
+        for t in self.compensation_static:
+            out = out + t.to(base.dtype).to(base.device).reshape(base.shape)
+        for k in self.compensation_live:
+            assert k in self.store, f"live delta {k!r} not recorded before use"
+            out = out + self.store[k].to(base.dtype).to(base.device).reshape(base.shape)
+        return out
 
 
 def _downstream_components(
@@ -231,36 +261,9 @@ def reference_patched_logits(
 
         add("mlp_output", m, "pos", _ValueSetter, setup_freeze_mlp)
 
-    # ---- 3. live recorders on receivers whose outgoing edges are cut ----
-    for j in spec.receivers:
-        cut_r2r = any(
-            (j, k) not in spec.receiver_to_receiver
-            for k in spec.receivers
-            if k > j
-        )
-        cut_logits = j not in spec.receivers_to_logits
-        if not (cut_r2r or cut_logits):
-            continue
-        ref = engine.mlp_trunk_contribution(cache_clean, j).cpu()
-
-        def setup_rec(iv, ref=ref, key=f"recv{j}"):
-            iv.reference = ref
-            iv.key = key
-            iv.store = store
-
-        add(
-            desc.component_mlp_trunk_output(j),
-            j,
-            "pos",
-            _LiveDeltaRecorder,
-            setup_rec,
-        )
-
-    # ---- 4. cancellation subtractors ----
+    # ---- 3+4. per-receiver cancellation + trunk restoration + recording ----
     sender_trunk_delta = engine.trunk_delta(sender).cpu()  # (N, d)
 
-    # at each receiver k: subtract the sender's delta if S->k is excluded but
-    # the sender is upstream of k; subtract live deltas of excluded (j, k)
     def sender_upstream_of_mlp(k: int) -> bool:
         if kind == "embed":
             return True
@@ -269,6 +272,7 @@ def reference_patched_logits(
         return sender[1] < k
 
     for k in spec.receivers:
+        # terms this receiver's pre-norm input must NOT see
         static_terms: list[Tensor] = []
         live_keys: list[str] = []
         if k not in spec.sender_to and sender_upstream_of_mlp(k):
@@ -276,21 +280,57 @@ def reference_patched_logits(
         for j in spec.receivers:
             if j < k and (j, k) not in spec.receiver_to_receiver:
                 live_keys.append(f"recv{j}")
-        if not static_terms and not live_keys:
-            continue
-
-        def setup_sub(iv, st=static_terms, lk=live_keys):
-            iv.static_terms = st
-            iv.live_keys = lk
-            iv.store = store
-
-        add(
-            desc.component_mlp_pre_norm_input(k),
-            k,
-            "pos",
-            _DeltaSubtract,
-            setup_sub,
+        # does anything downstream need this receiver's live output delta?
+        needs_record = k not in spec.receivers_to_logits or any(
+            kk > k and (k, kk) not in spec.receiver_to_receiver
+            for kk in spec.receivers
         )
+
+        if static_terms or live_keys:
+            # pyvene scatters IN PLACE and the pre-norm's input tensor IS the
+            # residual stream, so this subtraction also leaks into the trunk;
+            # the matching _TrunkOutputAdjust below adds it back after the
+            # MLP has consumed the cancelled input.
+            def setup_sub(iv, st=static_terms, lk=live_keys):
+                iv.static_terms = st
+                iv.live_keys = lk
+                iv.store = store
+
+            add(
+                desc.component_mlp_pre_norm_input(k),
+                k,
+                "pos",
+                _DeltaSubtract,
+                setup_sub,
+            )
+
+        if static_terms or live_keys or needs_record:
+            ref = (
+                engine.mlp_trunk_contribution(cache_clean, k).cpu()
+                if needs_record
+                else None
+            )
+
+            def setup_adj(
+                iv,
+                ref=ref,
+                key=f"recv{k}" if needs_record else None,
+                st=list(static_terms),
+                lk=list(live_keys),
+            ):
+                iv.reference = ref
+                iv.record_key = key
+                iv.compensation_static = st
+                iv.compensation_live = lk
+                iv.store = store
+
+            add(
+                desc.component_mlp_trunk_output(k),
+                k,
+                "pos",
+                _TrunkOutputAdjust,
+                setup_adj,
+            )
 
     # at the final norm input: cancel the sender's direct edge and any
     # receiver->logits edge the spec excludes
