@@ -539,3 +539,98 @@ def test_kv_sliding_window_refusal(gpt2_tokenizer_pipeline_factory):
     # a full-attention layer accepts the same edge
     d = kv.kv_trunk_delta([KVEdge(KVHead(full[0], 0))])
     assert torch.isfinite(d).all()
+
+
+# ---------------------------------------------------------------------------
+# multi-position collect: the shipped keep_last_dim path is position-correct
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("family", ["gpt2", "llama"])
+class TestMultiPositionCollect:
+    """Regression guard for the keep_last_dim fix (verified empirically against
+    pinned pyvene 896a7dd4): without it, pyvene's flatten/slice cycle keeps only
+    the first d values of a multi-position gather under causalab's single-unit
+    wrapper, so a two-position collect would return position 1's vector split
+    across both position slots. These tests pin the *fixed* path: collects run
+    through ``keep_last_dim_on_collects`` must match a plain forward hook at
+    every position."""
+
+    @staticmethod
+    def _wrapper_collect(model, batch, positions):
+        from types import SimpleNamespace
+
+        from causalab.methods.path_patching.cache import keep_last_dim_on_collects
+        from causalab.neural.activations import (
+            delete_intervenable_model,
+            prepare_intervenable_model,
+        )
+        from causalab.neural.units import AtomicModelUnit, ComponentIndexer
+
+        unit = AtomicModelUnit(
+            0,
+            "block_output",
+            ComponentIndexer(lambda _x: [], id="explicit"),
+            id="collect_block0",
+        )
+        im = prepare_intervenable_model(
+            SimpleNamespace(model=model), [unit], intervention_type="collect"
+        )
+        keep_last_dim_on_collects(im)
+        try:
+            indices = [positions]
+            with torch.no_grad():
+                result = im(
+                    batch,
+                    unit_locations={"sources->base": (indices, indices)},
+                    output_original_output=True,
+                )
+            return result[0][1][0].detach().clone()
+        finally:
+            delete_intervenable_model(im)
+
+    @staticmethod
+    def _ground_truth(model, batch, positions):
+        block = (
+            model.transformer.h[0]
+            if hasattr(model, "transformer")
+            else model.model.layers[0]
+        )
+        captured = {}
+
+        def hook(mod, args, out):
+            captured["h"] = (out[0] if isinstance(out, tuple) else out).detach().clone()
+
+        handle = block.register_forward_hook(hook)
+        with torch.no_grad():
+            model(**batch)
+        handle.remove()
+        idx = torch.tensor(positions)
+        return torch.stack([captured["h"][i, idx[i]] for i in range(idx.shape[0])])
+
+    @staticmethod
+    def _batch():
+        torch.manual_seed(7)
+        return {
+            "input_ids": torch.randint(1, 257, (2, 8)),
+            "attention_mask": torch.ones(2, 8, dtype=torch.long),
+        }
+
+    def test_two_position_collect_matches_forward_hook(self, family):
+        model = _tiny_model(family)
+        model.eval()
+        batch = self._batch()
+        positions = [[2, 5], [3, 6]]
+        gt = self._ground_truth(model, batch, positions)
+        collected = self._wrapper_collect(model, batch, positions)
+        assert tuple(collected.shape) == tuple(gt.shape)
+        assert torch.equal(collected, gt)
+
+    def test_single_position_collect_matches_forward_hook(self, family):
+        model = _tiny_model(family)
+        model.eval()
+        batch = self._batch()
+        positions = [[2], [3]]
+        gt = self._ground_truth(model, batch, positions)
+        collected = self._wrapper_collect(model, batch, positions)
+        assert torch.equal(collected.reshape(gt.shape), gt)
