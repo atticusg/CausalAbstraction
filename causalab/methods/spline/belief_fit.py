@@ -221,7 +221,7 @@ def _save_belief_checkpoint(
     )
 
 
-def _compute_intrinsic_ranges(
+def _compute_intrinsic_ranges(  # pyright: ignore[reportUnusedFunction]
     manifold: SplineManifold,
 ) -> tuple[tuple[float, float], ...]:
     """Compute intrinsic coordinate ranges from control points."""
@@ -307,7 +307,7 @@ def fit_belief_tps_pca(
 
     # Optionally subsample control points (e.g. for large domains)
     if isinstance(max_control_points, int):
-        from causalab.methods.spline.train import _subsample_control_points
+        from causalab.methods.spline.train import _subsample_control_points  # pyright: ignore[reportPrivateUsage]
 
         control_points, centroid_hellinger = _subsample_control_points(
             control_points.float(),
@@ -462,7 +462,7 @@ def fit_belief_tps_parameter(
 
     # Optionally subsample control points (e.g. for large domains)
     if isinstance(max_control_points, int):
-        from causalab.methods.spline.train import _subsample_control_points
+        from causalab.methods.spline.train import _subsample_control_points  # pyright: ignore[reportPrivateUsage]
 
         control_points, centroid_hellinger = _subsample_control_points(
             control_points.float(),

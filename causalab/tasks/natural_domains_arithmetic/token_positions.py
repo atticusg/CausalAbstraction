@@ -6,7 +6,7 @@ token positions are resolved per-example based on trace["template"].
 """
 
 from causalab.neural.token_positions import (
-    build_token_position_factories,
+    build_token_positions,
     TokenPosition,
 )
 from causalab.neural.pipeline import LMPipeline
@@ -33,19 +33,26 @@ def _build_specs(template: str) -> dict[str, TokenPositionSpec]:
 
 def create_token_positions(
     pipeline: LMPipeline,
-    template: str | None = None,
+    template: str | list[str] | None = None,
     templates: list[str] | None = None,
 ) -> dict[str, TokenPosition]:
     """Create all token positions for the natural_domains_arithmetic task.
 
     Args:
         pipeline: The tokenizer pipeline.
-        template: Single template string.
+        template: Single template string, or a list (forwarded as ``templates``
+            for multi-template configs).
         templates: List of template strings (for multi-template tasks).
 
     Returns:
         Dict mapping position names to TokenPosition objects.
     """
+    # Accept template= as either a single string or the list-of-templates form;
+    # NaturalDomainConfig.template is typed `str | list[str]`.
+    if isinstance(template, list):
+        templates = templates if templates is not None else template
+        template = None
+
     if templates is not None:
         return _create_multi_template_positions(pipeline, templates)
 
@@ -56,13 +63,7 @@ def create_token_positions(
         )
 
     specs = _build_specs(template)
-    factories = build_token_position_factories(specs, template)
-
-    token_positions = {}
-    for name, factory in factories.items():
-        token_positions[name] = factory(pipeline)
-
-    return token_positions
+    return build_token_positions(specs, template, pipeline)
 
 
 def _create_multi_template_positions(
@@ -76,11 +77,7 @@ def _create_multi_template_positions(
     # Build per-template position objects
     per_template: dict[str, dict[str, TokenPosition]] = {}
     for tmpl in templates:
-        specs = _build_specs(tmpl)
-        factories = build_token_position_factories(specs, tmpl)
-        per_template[tmpl] = {
-            name: factory(pipeline) for name, factory in factories.items()
-        }
+        per_template[tmpl] = build_token_positions(_build_specs(tmpl), tmpl, pipeline)
 
     # Collect all position names across templates
     all_names: set[str] = set()

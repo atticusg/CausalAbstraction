@@ -57,7 +57,7 @@ import numpy as np
 import torch
 
 from causalab.causal.trace import CausalTrace
-from causalab.neural.pipeline import LMPipeline
+from causalab.neural.pipeline import LMPipeline, ensure_position_ids
 from causalab.neural.token_positions import TokenPosition
 
 logger = logging.getLogger(__name__)
@@ -125,14 +125,18 @@ def get_attention_patterns(
 
     # Process prompts
     for prompt in prompts:
-        # Tokenize input (load expects a list)
-        encoded = pipeline.load([prompt])
+        # Tokenize input (load expects a list). ensure_position_ids guards the
+        # plain forward below: if a fixed max_length left-pads this single prompt,
+        # an absolute-position model would otherwise number positions from the pad
+        # tokens (see causalab.neural.pipeline.ensure_position_ids).
+        encoded = ensure_position_ids(pipeline.load([prompt]))
 
         # Forward pass with attention output
         with torch.no_grad():
             outputs = pipeline.model(
                 input_ids=encoded["input_ids"],
                 attention_mask=encoded["attention_mask"],
+                position_ids=encoded["position_ids"],
                 output_attentions=True,
             )
 

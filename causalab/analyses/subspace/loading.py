@@ -54,7 +54,7 @@ def load_subspace_onto_target(
                 if os.path.isfile(meta_path):
                     with open(meta_path) as f:
                         meta = json.load(f)
-                    layer = meta.get("layer", 0)
+                    layer = int(meta.get("layer", 0) or 0)
                 else:
                     layer = 0
             load_featurizer(das_dir, target, layer, pos_id)

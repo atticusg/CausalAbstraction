@@ -34,6 +34,7 @@ from torch import Tensor
 from causalab.methods.distances import (
     DISTANCE_LABELS as _DISTANCE_LABELS,
 )
+from causalab.io.plots.figure_format import normalize_figure_format
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +149,7 @@ def _decoded_path_length_batched(
     return out
 
 
-def _decoded_path_length(
+def _decoded_path_length(  # pyright: ignore[reportUnusedFunction]
     u_a: Tensor,
     u_b: Tensor,
     decode_fn: Callable[[Tensor], Tensor],
@@ -202,6 +203,57 @@ def _get_manifold_device(manifold: Any) -> torch.device:
 # ---------------------------------------------------------------------------
 # Manifold-vs-manifold isometry
 # ---------------------------------------------------------------------------
+
+
+def check_isometry_manifold_alignment(
+    activation_manifold: Any,
+    belief_manifold: Any,
+    *,
+    missing_class_hint: str | None = None,
+) -> None:
+    """Pre-flight: verify the activation and belief manifolds align by class index.
+
+    Isometry compares the two manifolds' ``control_points`` row-by-row (each row
+    is one class) and requires equal counts. The activation manifold forms one
+    centroid per class **present in its training sample**, while the belief
+    manifold enumerates **all** classes; a debug-size pass or an ultra-sparse
+    class set therefore drops underpopulated classes from the activation side
+    and breaks the alignment.
+
+    Call this *before* the expensive path-collection step so the failure is fast
+    and the message names the real cause, rather than surfacing as an opaque
+    mismatch (or a downstream ``stack([])``) deep in the run.
+
+    Args:
+        activation_manifold: Manifold whose ``control_points`` are the
+            activation-side centroids.
+        belief_manifold: Output (belief) manifold whose ``control_points``
+            enumerate every class.
+        missing_class_hint: Optional diagnostic appended to the error (e.g. the
+            names of classes with no training centroid this run).
+
+    Raises:
+        ValueError: if the centroid counts differ, with actionable guidance.
+    """
+    n_act = int(activation_manifold.control_points.shape[0])
+    n_bel = int(belief_manifold.control_points.shape[0])
+    if n_act == n_bel:
+        return
+    hint = f"\n{missing_class_hint}" if missing_class_hint else ""
+    raise ValueError(
+        f"Activation manifold has {n_act} centroids but belief manifold has "
+        f"{n_bel}; cannot align by class index (isometry compares control_points "
+        "row-by-row and requires equal counts). The activation manifold forms "
+        "one centroid per class present in its training sample, while the belief "
+        "manifold enumerates all classes — a debug-size pass or an ultra-sparse "
+        "class set drops underpopulated classes from the activation side. Fix: "
+        "set task.enumerate_all=true with n_train >= n_unique_inputs so every "
+        "class is sampled, or restrict the value space to classes with enough "
+        "train members. To run without isometry, drop 'isometry' from the "
+        "analysis eval_criteria — the pair-based criteria (coherence, "
+        "distance_from_behavior_manifold) tolerate missing centroids and still "
+        f"run.{hint}"
+    )
 
 
 def compute_isometry_from_manifolds(
@@ -261,11 +313,9 @@ def compute_isometry_from_manifolds(
     act_cps = activation_manifold.control_points  # (W, d_act)
     bel_cps_raw = belief_manifold.control_points  # (W, d_bel)
     W = act_cps.shape[0]
-    if W != bel_cps_raw.shape[0]:
-        raise ValueError(
-            f"Activation manifold has {W} centroids but belief manifold has "
-            f"{bel_cps_raw.shape[0]}; cannot align by class index."
-        )
+    # Backstop for the centroid-count alignment; path_steering runs the same
+    # check as an early pre-flight (before the expensive path collection).
+    check_isometry_manifold_alignment(activation_manifold, belief_manifold)
     if act_cps.shape[1] != bel_cps_raw.shape[1]:
         raise ValueError(
             f"Activation control_points have dim {act_cps.shape[1]} but belief "
@@ -455,7 +505,7 @@ def compute_isometry_from_manifolds(
 # ---------------------------------------------------------------------------
 
 
-def _save_isometry_artifacts(
+def _save_isometry_artifacts(  # pyright: ignore[reportUnusedFunction]
     metrics: dict[str, Any],
     D_manifold: np.ndarray,
     D_output: np.ndarray,
@@ -511,7 +561,7 @@ def _plot_isometry_scatter(
     metrics: dict[str, Any],
     output_dir: str,
     distance_function: str = "hellinger",
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     from causalab.io.plots.distance_plots import plot_distance_scatter
 
@@ -693,7 +743,7 @@ def visualize_isometry(
         metrics,
         plot_dir,
         distance_function=distance_function,
-        figure_format=viz_cfg.get("figure_format", "pdf"),
+        figure_format=normalize_figure_format(viz_cfg.get("figure_format")),
     )
     n_mds = viz_cfg.get("n_mds_components", 3)
     _plot_isometry_mds(

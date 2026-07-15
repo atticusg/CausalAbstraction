@@ -66,7 +66,7 @@ This is the only position analyses need: graph-walk experiments measure activati
 ./scripts/run_exp.sh cylinder_9x9_8b       # 9×9 cylinder
 ```
 
-Outputs land under `artifacts/graph_walk/<model>/<analysis>/...` per `ARCHITECTURE.md` invariant 7.
+Outputs land under `artifacts/graph_walk/<model>/<analysis>/...` per `docs/CODEBASE.md` invariant 7.
 
 ### Note on the legacy `representation_emergence` experiment
 

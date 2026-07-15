@@ -2,12 +2,32 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 import torch
 from torch import Tensor
 
 from causalab.neural.featurizer import Featurizer
+
+
+def _over_leading_dims(x: Tensor, fn: Callable[[Tensor], Tensor]) -> Tensor:
+    """Apply ``fn`` — which assumes a 2-D ``(rows, d)`` input — over arbitrary
+    leading dims by flattening them into one row axis, then restoring them.
+
+    The spline manifold's ``encode``/``fwd``/``inv`` hard-code a 2-D batch layout
+    (``argmin(dim=1)``, ``z[:, :k]``, ``torch.arange(x.shape[0])``). Feature
+    interventions set ``keep_last_dim=True``, so a featurizer is handed
+    ``(b, num_pos, d)`` (per-position application) rather than ``(b, d)`` — and
+    even the single-token path arrives as ``(b, 1, d)``. Flatten the leading
+    ``(b, num_pos)`` into rows so each position is projected independently, then
+    reshape back. For a genuine 2-D input this is a no-op (``x.dim() <= 2``), so
+    the offline callers that pass ``(n, d)`` directly are unaffected.
+    """
+    if x.dim() <= 2:
+        return fn(x)
+    lead = x.shape[:-1]
+    out = fn(x.reshape(-1, x.shape[-1]))
+    return out.reshape(*lead, out.shape[-1])
 
 
 class ManifoldFeaturizerModule(torch.nn.Module):
@@ -34,7 +54,10 @@ class ManifoldFeaturizerModule(torch.nn.Module):
     def forward(self, x: Tensor) -> tuple[Tensor, None]:
         dtype = self._manifold_dtype()
         self.manifold.to(x.device)
-        z, _logdet = self.manifold.fwd(x.to(dtype))  # type: ignore[attr-defined]
+        z = _over_leading_dims(
+            x.to(dtype),
+            lambda t: self.manifold.fwd(t)[0],  # type: ignore[attr-defined]
+        )
         return z.to(x.dtype), None
 
 
@@ -56,7 +79,10 @@ class ManifoldInverseFeaturizerModule(torch.nn.Module):
     def forward(self, z: Tensor, error: None) -> Tensor:
         dtype = self._manifold_dtype()
         self.manifold.to(z.device)
-        x, _logdet = self.manifold.inv(z.to(dtype))  # type: ignore[attr-defined]
+        x = _over_leading_dims(
+            z.to(dtype),
+            lambda t: self.manifold.inv(t)[0],  # type: ignore[attr-defined]
+        )
         return x.to(z.dtype)
 
 
@@ -97,13 +123,18 @@ class ManifoldProjectFeaturizerModule(torch.nn.Module):
         self.manifold.to(x.device)
         mean = self._mean.to(x.device)
         std = self._std.to(x.device)
-        # standardize
+        # standardize (broadcasts over any leading dims)
         x_std = (x - mean) / (std + self._eps)
-        # encode → get intrinsic coords
-        z, _ = self.manifold.fwd(x_std.to(dtype))  # type: ignore[attr-defined]
-        u = z[:, : self.manifold.intrinsic_dim]  # type: ignore[attr-defined]
-        # decode → back to standardized ambient space
-        x_proj_std = self.manifold.decode(u, r=None).to(x.dtype)  # type: ignore[attr-defined]
+
+        # encode → slice intrinsic coords → decode, projected back to standardized
+        # ambient space. The manifold ops below assume a 2-D row layout (the
+        # `z[:, :k]` slice in particular), so flatten the leading dims first.
+        def _project(t: Tensor) -> Tensor:
+            z, _ = self.manifold.fwd(t)  # type: ignore[attr-defined]
+            u = z[:, : self.manifold.intrinsic_dim]  # type: ignore[attr-defined]
+            return self.manifold.decode(u, r=None)  # type: ignore[attr-defined]
+
+        x_proj_std = _over_leading_dims(x_std.to(dtype), _project).to(x.dtype)
         # unstandardize
         x_proj = x_proj_std * (std + self._eps) + mean
         return x_proj, None
@@ -197,12 +228,7 @@ class ManifoldFeaturizer(Featurizer):
             "requires_grad": self._trainable,
         }
         # Save manifold config for reliable reconstruction
-        if hasattr(self._manifold, "get_config"):
-            additional_config["manifold_config"] = self._manifold.get_config()
-        else:
-            flow_config = getattr(self._manifold, "config", None)
-            if flow_config is not None:
-                additional_config["flow_config"] = flow_config.to_dict()
+        additional_config["manifold_config"] = self._manifold.get_config()
 
         return {
             "model_info": {
@@ -231,29 +257,25 @@ class ManifoldFeaturizer(Featurizer):
             if k.startswith("manifold.")
         }
 
-        is_spline = (
-            manifold_config is not None and manifold_config.get("type") == "spline"
+        if manifold_config is None or manifold_config.get("type") != "spline":
+            raise ValueError(
+                "ManifoldFeaturizer.from_dict only supports spline manifolds; "
+                f"got manifold_config={manifold_config!r}. Normalizing-flow "
+                "manifolds are no longer supported."
+            )
+
+        from causalab.methods.spline.manifold import SplineManifold
+
+        mc = manifold_config
+        manifold = SplineManifold(
+            control_points=manifold_sd["control_points"],
+            target_points=manifold_sd["target_points"],
+            intrinsic_dim=mc["intrinsic_dim"],
+            ambient_dim=mc["ambient_dim"],
+            smoothness=mc["smoothness"],
+            periodic_dims=mc.get("periodic_dims"),
+            periods=mc.get("periods"),
         )
-        if is_spline:
-            from causalab.methods.spline.manifold import SplineManifold
-
-            mc = manifold_config
-            manifold = SplineManifold(
-                control_points=manifold_sd["control_points"],
-                target_points=manifold_sd["target_points"],
-                intrinsic_dim=mc["intrinsic_dim"],
-                ambient_dim=mc["ambient_dim"],
-                smoothness=mc["smoothness"],
-                periodic_dims=mc.get("periodic_dims"),
-                periods=mc.get("periods"),
-            )
-        else:
-            from causalab.methods.flow import build_realNVP_flow_from_state_dict
-
-            manifold = build_realNVP_flow_from_state_dict(
-                manifold_sd,
-                config=additional["flow_config"],
-            )
 
         feat = cls(
             manifold,
@@ -262,7 +284,5 @@ class ManifoldFeaturizer(Featurizer):
             id=model_info.get("featurizer_id", "manifold"),
         )
 
-        if not is_spline:
-            feat.featurizer.load_state_dict(featurizer_sd)
         manifold.requires_grad_(requires_grad)
         return feat

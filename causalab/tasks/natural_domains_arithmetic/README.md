@@ -66,7 +66,7 @@ Each position is built by `causalab.neural.token_positions.build_token_position_
 
 `counterfactuals.py::generate_dataset(model, n, seed)` returns `n` examples of shape `{"input": ..., "counterfactual_inputs": [...]}` where both base and counterfactual are independent samples — every input variable may differ.
 
-Single-variable counterfactuals (only one variable resampled) are configured via the runner config rather than the task module: set `task.resample_variable: <var>` and `runner/helpers.py::generate_datasets` re-derives the counterfactuals. This is required when running `analysis/locate` in `pairwise` mode (see `ARCHITECTURE.md` §5) — pairwise patching is only meaningful when exactly one input variable changes.
+Single-variable counterfactuals (only one variable resampled) are configured via the runner config rather than the task module: set `task.resample_variable: <var>` and `runner/helpers.py::generate_datasets` re-derives the counterfactuals. This is required when running `analysis/locate` in `pairwise` mode (see `docs/CODEBASE.md` §5) — pairwise patching is only meaningful when exactly one input variable changes.
 
 ## How to Run
 
@@ -83,9 +83,9 @@ Each domain has at least one runner preset already wired up:
 ./scripts/run_exp.sh weekdays_8b_pipeline
 ```
 
-Available analyses for this task: `baseline`, `locate`, `subspace`, `activation_manifold`, `output_manifold`, `path_steering`, `pullback` (see the project root `ARCHITECTURE.md` and per-analysis READMEs for what each one answers).
+Available analyses for this task: `baseline`, `locate`, `subspace`, `activation_manifold`, `output_manifold`, `path_steering`, `pullback` (see `docs/CODEBASE.md` and per-analysis READMEs for what each one answers).
 
-Outputs land under `artifacts/natural_domains_arithmetic/<model>/<analysis>/...` per `ARCHITECTURE.md` invariant 7.
+Outputs land under `artifacts/natural_domains_arithmetic/<model>/<analysis>/...` per `docs/CODEBASE.md` invariant 7.
 
 ## Files
 

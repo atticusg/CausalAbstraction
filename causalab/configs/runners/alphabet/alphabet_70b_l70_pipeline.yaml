@@ -24,6 +24,7 @@ locate:
 
 subspace:
   layers: [70]
+  token_positions: [last_token]   # explicit single-cell position (#257)
 
 activation_manifold:
   layers: [70]

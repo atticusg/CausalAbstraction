@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, cast
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ def run_dbm_binary_scan(
     metric: Callable,
     position_names: list[str] | None = None,
     dbm_cfg: Mapping[str, Any] | None = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> dict[str, Any]:
     """Run DBM binary masking over a (layer × token_position) grid.
 
@@ -96,7 +96,8 @@ def run_dbm_binary_scan(
         pipeline=pipeline,
         target_variable_group=("raw_output",),
         metric=metric,
-        config=mask_config,
+        # ExperimentConfig (TypedDict) is structurally compatible with dict[str, Any]
+        config=cast(dict[str, Any], mask_config),
     )
 
     scores_per_cell: dict[tuple[int, Any], float] = {

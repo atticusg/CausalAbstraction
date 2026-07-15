@@ -1,0 +1,23 @@
+# @package _global_
+# Chat-mode locked-values baseline for tests/end_to_end/goldens — chat-coherent
+# (Qwen3-4B-Instruct-2507). Demonstrates the chat-template path end-to-end: an
+# instruct model that scores ~0.05 under the raw 1-token contract clears the 0.9
+# golden floor (measured 0.939) once wrapped in its chat template with a
+# terseness directive. Device follows the fixture (`auto` → CUDA when available).
+defaults:
+- /base
+- /task: natural_domains_arithmetic_weekdays
+- /model: chat-coherent
+- /analysis/baseline
+- _self_
+
+# n_train ≥ n_unique_inputs (49 = 7 days × 7 number-words) makes the task's
+# `enumerate_all: true` branch fire: train == test == the full 7×7 input space,
+# fully deterministic, no sampling. `max_new_tokens` stays at the task default
+# of 1 (the strict single-token contract the directive is designed to satisfy).
+task:
+  target_variable: result
+  n_train: 49
+
+baseline:
+  batch_size: 8

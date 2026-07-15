@@ -1,0 +1,317 @@
+{
+  "samples": [
+    {
+      "counterfactual_inputs": [
+        {
+          "active_groups": 2,
+          "answer_index": 0,
+          "entities_per_group": 2,
+          "entity_g0_e0": "Tim",
+          "entity_g0_e1": "soup",
+          "entity_g1_e0": "Sue",
+          "entity_g1_e1": "bread",
+          "positional_answer": 0,
+          "positional_entity_g0_e0": 0,
+          "positional_entity_g0_e1": 0,
+          "positional_entity_g1_e0": 1,
+          "positional_entity_g1_e1": 1,
+          "positional_query_e0": [],
+          "positional_query_e1": [
+            0
+          ],
+          "query_e0": "Tim",
+          "query_e1": "soup",
+          "query_group": 0,
+          "query_indices": [
+            1
+          ],
+          "question_template": "Who loves {food}?",
+          "raw_input": "We will ask a question about the following sentences.\n\nTim loves soup and Sue loves bread. Who loves soup?\nAnswer: ",
+          "raw_output": "Tim",
+          "statement_template": "{e0} loves {e1}"
+        }
+      ],
+      "input": {
+        "active_groups": 2,
+        "answer_index": 0,
+        "entities_per_group": 2,
+        "entity_g0_e0": "Tim",
+        "entity_g0_e1": "soup",
+        "entity_g1_e0": "Sue",
+        "entity_g1_e1": "bread",
+        "positional_answer": 1,
+        "positional_entity_g0_e0": 0,
+        "positional_entity_g0_e1": 0,
+        "positional_entity_g1_e0": 1,
+        "positional_entity_g1_e1": 1,
+        "positional_query_e0": [],
+        "positional_query_e1": [
+          1
+        ],
+        "query_e0": "Sue",
+        "query_e1": "bread",
+        "query_group": 1,
+        "query_indices": [
+          1
+        ],
+        "question_template": "Who loves {food}?",
+        "raw_input": "We will ask a question about the following sentences.\n\nTim loves soup and Sue loves bread. Who loves bread?\nAnswer: ",
+        "raw_output": "Sue",
+        "statement_template": "{e0} loves {e1}"
+      },
+      "seed": 0
+    },
+    {
+      "counterfactual_inputs": [
+        {
+          "active_groups": 2,
+          "answer_index": 1,
+          "entities_per_group": 2,
+          "entity_g0_e0": "Pete",
+          "entity_g0_e1": "bread",
+          "entity_g1_e0": "Sue",
+          "entity_g1_e1": "soup",
+          "positional_answer": 1,
+          "positional_entity_g0_e0": 0,
+          "positional_entity_g0_e1": 0,
+          "positional_entity_g1_e0": 1,
+          "positional_entity_g1_e1": 1,
+          "positional_query_e0": [
+            1
+          ],
+          "positional_query_e1": [],
+          "query_e0": "Sue",
+          "query_e1": "soup",
+          "query_group": 1,
+          "query_indices": [
+            0
+          ],
+          "question_template": "What does {person} love?",
+          "raw_input": "We will ask a question about the following sentences.\n\nPete loves bread and Sue loves soup. What does Sue love?\nAnswer: ",
+          "raw_output": "soup",
+          "statement_template": "{e0} loves {e1}"
+        }
+      ],
+      "input": {
+        "active_groups": 2,
+        "answer_index": 1,
+        "entities_per_group": 2,
+        "entity_g0_e0": "Pete",
+        "entity_g0_e1": "bread",
+        "entity_g1_e0": "Sue",
+        "entity_g1_e1": "soup",
+        "positional_answer": 0,
+        "positional_entity_g0_e0": 0,
+        "positional_entity_g0_e1": 0,
+        "positional_entity_g1_e0": 1,
+        "positional_entity_g1_e1": 1,
+        "positional_query_e0": [
+          0
+        ],
+        "positional_query_e1": [],
+        "query_e0": "Pete",
+        "query_e1": "bread",
+        "query_group": 0,
+        "query_indices": [
+          0
+        ],
+        "question_template": "What does {person} love?",
+        "raw_input": "We will ask a question about the following sentences.\n\nPete loves bread and Sue loves soup. What does Pete love?\nAnswer: ",
+        "raw_output": "bread",
+        "statement_template": "{e0} loves {e1}"
+      },
+      "seed": 1
+    },
+    {
+      "counterfactual_inputs": [
+        {
+          "active_groups": 2,
+          "answer_index": 1,
+          "entities_per_group": 2,
+          "entity_g0_e0": "Tim",
+          "entity_g0_e1": "soup",
+          "entity_g1_e0": "Ann",
+          "entity_g1_e1": "tea",
+          "positional_answer": 0,
+          "positional_entity_g0_e0": 0,
+          "positional_entity_g0_e1": 0,
+          "positional_entity_g1_e0": 1,
+          "positional_entity_g1_e1": 1,
+          "positional_query_e0": [
+            0
+          ],
+          "positional_query_e1": [],
+          "query_e0": "Tim",
+          "query_e1": "soup",
+          "query_group": 0,
+          "query_indices": [
+            0
+          ],
+          "question_template": "What does {person} love?",
+          "raw_input": "We will ask a question about the following sentences.\n\nTim loves soup and Ann loves tea. What does Tim love?\nAnswer: ",
+          "raw_output": "soup",
+          "statement_template": "{e0} loves {e1}"
+        }
+      ],
+      "input": {
+        "active_groups": 2,
+        "answer_index": 1,
+        "entities_per_group": 2,
+        "entity_g0_e0": "Tim",
+        "entity_g0_e1": "soup",
+        "entity_g1_e0": "Ann",
+        "entity_g1_e1": "tea",
+        "positional_answer": 1,
+        "positional_entity_g0_e0": 0,
+        "positional_entity_g0_e1": 0,
+        "positional_entity_g1_e0": 1,
+        "positional_entity_g1_e1": 1,
+        "positional_query_e0": [
+          1
+        ],
+        "positional_query_e1": [],
+        "query_e0": "Ann",
+        "query_e1": "tea",
+        "query_group": 1,
+        "query_indices": [
+          0
+        ],
+        "question_template": "What does {person} love?",
+        "raw_input": "We will ask a question about the following sentences.\n\nTim loves soup and Ann loves tea. What does Ann love?\nAnswer: ",
+        "raw_output": "tea",
+        "statement_template": "{e0} loves {e1}"
+      },
+      "seed": 2
+    },
+    {
+      "counterfactual_inputs": [
+        {
+          "active_groups": 2,
+          "answer_index": 1,
+          "entities_per_group": 2,
+          "entity_g0_e0": "Sue",
+          "entity_g0_e1": "bread",
+          "entity_g1_e0": "Kate",
+          "entity_g1_e1": "jam",
+          "positional_answer": 1,
+          "positional_entity_g0_e0": 0,
+          "positional_entity_g0_e1": 0,
+          "positional_entity_g1_e0": 1,
+          "positional_entity_g1_e1": 1,
+          "positional_query_e0": [
+            1
+          ],
+          "positional_query_e1": [],
+          "query_e0": "Kate",
+          "query_e1": "jam",
+          "query_group": 1,
+          "query_indices": [
+            0
+          ],
+          "question_template": "What does {person} love?",
+          "raw_input": "We will ask a question about the following sentences.\n\nSue loves bread and Kate loves jam. What does Kate love?\nAnswer: ",
+          "raw_output": "jam",
+          "statement_template": "{e0} loves {e1}"
+        }
+      ],
+      "input": {
+        "active_groups": 2,
+        "answer_index": 1,
+        "entities_per_group": 2,
+        "entity_g0_e0": "Sue",
+        "entity_g0_e1": "bread",
+        "entity_g1_e0": "Kate",
+        "entity_g1_e1": "jam",
+        "positional_answer": 0,
+        "positional_entity_g0_e0": 0,
+        "positional_entity_g0_e1": 0,
+        "positional_entity_g1_e0": 1,
+        "positional_entity_g1_e1": 1,
+        "positional_query_e0": [
+          0
+        ],
+        "positional_query_e1": [],
+        "query_e0": "Sue",
+        "query_e1": "bread",
+        "query_group": 0,
+        "query_indices": [
+          0
+        ],
+        "question_template": "What does {person} love?",
+        "raw_input": "We will ask a question about the following sentences.\n\nSue loves bread and Kate loves jam. What does Sue love?\nAnswer: ",
+        "raw_output": "bread",
+        "statement_template": "{e0} loves {e1}"
+      },
+      "seed": 3
+    },
+    {
+      "counterfactual_inputs": [
+        {
+          "active_groups": 2,
+          "answer_index": 0,
+          "entities_per_group": 2,
+          "entity_g0_e0": "Kate",
+          "entity_g0_e1": "bread",
+          "entity_g1_e0": "Bob",
+          "entity_g1_e1": "pie",
+          "positional_answer": 1,
+          "positional_entity_g0_e0": 0,
+          "positional_entity_g0_e1": 0,
+          "positional_entity_g1_e0": 1,
+          "positional_entity_g1_e1": 1,
+          "positional_query_e0": [],
+          "positional_query_e1": [
+            1
+          ],
+          "query_e0": "Bob",
+          "query_e1": "pie",
+          "query_group": 1,
+          "query_indices": [
+            1
+          ],
+          "question_template": "Who loves {food}?",
+          "raw_input": "We will ask a question about the following sentences.\n\nKate loves bread and Bob loves pie. Who loves pie?\nAnswer: ",
+          "raw_output": "Bob",
+          "statement_template": "{e0} loves {e1}"
+        }
+      ],
+      "input": {
+        "active_groups": 2,
+        "answer_index": 0,
+        "entities_per_group": 2,
+        "entity_g0_e0": "Kate",
+        "entity_g0_e1": "bread",
+        "entity_g1_e0": "Bob",
+        "entity_g1_e1": "pie",
+        "positional_answer": 0,
+        "positional_entity_g0_e0": 0,
+        "positional_entity_g0_e1": 0,
+        "positional_entity_g1_e0": 1,
+        "positional_entity_g1_e1": 1,
+        "positional_query_e0": [],
+        "positional_query_e1": [
+          0
+        ],
+        "query_e0": "Kate",
+        "query_e1": "bread",
+        "query_group": 0,
+        "query_indices": [
+          1
+        ],
+        "question_template": "Who loves {food}?",
+        "raw_input": "We will ask a question about the following sentences.\n\nKate loves bread and Bob loves pie. Who loves bread?\nAnswer: ",
+        "raw_output": "Kate",
+        "statement_template": "{e0} loves {e1}"
+      },
+      "seed": 4
+    }
+  ],
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "task": "entity_binding"
+}

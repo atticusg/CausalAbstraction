@@ -14,7 +14,7 @@ from torch import Tensor
 from omegaconf import DictConfig, OmegaConf
 
 from causalab.runner.helpers import (
-    _task_config_for_metadata,
+    _task_config_for_metadata,  # pyright: ignore[reportPrivateUsage]
     resolve_task,
     generate_datasets,
     build_targets_for_grid,
@@ -40,6 +40,11 @@ from causalab.tasks.loader import load_task_counterfactuals
 logger = logging.getLogger(__name__)
 
 ANALYSIS_NAME = "path_steering"
+
+# ``colormap`` and ``colormap2`` are resolved through the ``${task.colormap}`` /
+# ``${task.colormap2}`` interpolations in path_steering.yaml (the two path
+# colormaps). Validated up front by the runner (#264).
+REQUIRED_TASK_KEYS = ("colormap", "colormap2")
 
 
 def _sample_pairs(
@@ -89,7 +94,7 @@ def _compute_and_save_isometry(
     """
     from causalab.methods.scores.isometry import (
         compute_isometry_from_manifolds,
-        _save_isometry_artifacts,
+        _save_isometry_artifacts,  # pyright: ignore[reportPrivateUsage]
     )
 
     n_arc_steps = isometry_cfg.get("n_arc_steps", 150)
@@ -214,9 +219,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         )
 
     # Load task + model (once)
-    task, task_cfg_raw = resolve_task(
+    task, task_cfg_raw = resolve_task(  # pyright: ignore[reportUnusedVariable]
         task_name=cfg.task.name,
-        task_config=OmegaConf.to_container(cfg.task, resolve=True),
+        task_config=OmegaConf.to_container(cfg.task, resolve=True),  # pyright: ignore[reportArgumentType]  # OmegaConf.to_container returns broad Any; at runtime a DictConfig produces dict[str, Any]
         target_variable=cfg.task.get("target_variable"),
         seed=cfg.seed,
     )
@@ -224,6 +229,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         pipeline = load_lite_pipeline(
             model_name=cfg.model.name,
             max_new_tokens=cfg.task.max_new_tokens,
+            use_chat_template=cfg.model.get("chat_template", False),
         )
     else:
         pipeline = load_pipeline(
@@ -233,9 +239,13 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             device=cfg.model.device,
             dtype=cfg.model.get("dtype"),
             eager_attn=cfg.model.get("eager_attn"),
+            use_chat_template=cfg.model.get("chat_template", False),
+            chat_answer_directive=cfg.model.get("chat_answer_directive"),
         )
 
     # Build graph-edge metadata for visualization on graph_walk tasks
+    _graph_edges: list[tuple[int, int]] | None = None
+    _graph_edge_node_coords: dict[int, dict[str, float]] | None = None
     if cfg.task.name == "graph_walk":
         from causalab.tasks.graph_walk.graphs import build_graph
 
@@ -250,8 +260,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             for j in neighbors
             if j > i
         ]
+        assert task.intervention_variable is not None
+        _intervention_var: str = task.intervention_variable
         _graph_edge_node_coords = {
-            i: {task.intervention_variable: float(i)} for i in range(_graph.n_nodes)
+            i: {_intervention_var: float(i)} for i in range(_graph.n_nodes)
         }
 
     if task.intervention_variable is None:
@@ -278,6 +290,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
 
         is_linear_baseline = m_sub == "linear"
 
+        m_meta: dict = {}
         if not is_linear_baseline:
             m_meta = load_activation_manifold_metadata(
                 root, ss_sub, m_sub, target_variable=tv
@@ -307,6 +320,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
 
             ss_method = ss_meta.get("method", "pca")
             k_features = ss_meta.get("k_features")
+            assert k_features is not None, (
+                f"subspace metadata for {ss_sub} missing 'k_features'"
+            )
             subspace_out_dir = os.path.join(root, "subspace", ss_sub)
             if tv:
                 subspace_out_dir = os.path.join(subspace_out_dir, tv)
@@ -357,8 +373,13 @@ def main(cfg: DictConfig) -> dict[str, Any]:
 
         # Resolve path modes once per (subspace, manifold) combo
         path_modes_cfg = list(
-            OmegaConf.to_container(analysis.get("path_modes"), resolve=True)
+            OmegaConf.to_container(analysis.get("path_modes"), resolve=True)  # pyright: ignore[reportArgumentType]  # OmegaConf.to_container returns Any; runtime ListConfig produces an iterable list
         )
+        _belief_space_dists: dict[str, Tensor] = {}
+        _geo_pair_grid_points: Tensor | None = None
+        _geo_pair_distributions: Tensor | None = None
+        _lin_pair_grid_points: Tensor | None = None
+        _lin_pair_distributions: Tensor | None = None
         path_modes = resolve_path_modes(
             path_modes_cfg=path_modes_cfg,
             composed_featurizer=featurizer
@@ -370,11 +391,16 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         from causalab.methods.metric import tokenize_variable_values
         import itertools
 
+        # One score-token group per intervention value (aligned with the value
+        # pairs below), from the variable's declared ``output_tokens`` forms.
         values = task.intervention_values
+        _var_map = (task.causal_model.output_tokens or {}).get(
+            task.intervention_variable or "", {}
+        )
         var_indices = tokenize_variable_values(
             pipeline.tokenizer,
-            values,
-            task.result_token_pattern,
+            list(values),
+            lambda v: _var_map[v],
         )
         num_steps = analysis.num_steps_along_path
         oversteer_frac = float(
@@ -388,7 +414,6 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         n_total_steps = num_steps + oversteer_steps
         n_prompts = min(analysis.n_prompts, len(filtered_samples))
         batch_size = analysis.batch_size
-        distance_function = task_cfg.get("distance_function", "hellinger")
 
         # Generate pair indices (same for all path modes)
         n_values = len(values)
@@ -564,12 +589,19 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         manifold_obj = None
         feat_mean = feat_std = None
         # Determine whether this featurizer pipeline carries a manifold stage.
-        has_manifold = len(featurizer.stages) >= 2 and hasattr(
-            featurizer.stages[-1].featurizer, "manifold"
+        # `stages` is only present on ComposedFeaturizer subclass; base Featurizer
+        # lacks it (the call site may pass either via the load_subspace_onto_target /
+        # load_featurizer paths above).
+        _stages = getattr(featurizer, "stages", None)
+        has_manifold = (
+            _stages is not None
+            and len(_stages) >= 2
+            and hasattr(_stages[-1].featurizer, "manifold")
         )
         if has_manifold:
-            manifold_obj = featurizer.stages[-1].featurizer.manifold.to(device)
-            std_stage = featurizer.stages[-2].featurizer
+            assert _stages is not None
+            manifold_obj = _stages[-1].featurizer.manifold.to(device)
+            std_stage = _stages[-2].featurizer
             feat_mean = std_stage._mean.to(device)
             feat_std = std_stage._std.to(device)
             standardized = (pca_centroids - feat_mean) / (feat_std + 1e-6)
@@ -582,9 +614,42 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             spline_centroids = pca_centroids
 
         from causalab.analyses.path_steering.path_mode import (
-            _build_geodesic_path,
-            _build_linear_path_kd,
+            _build_geodesic_path,  # pyright: ignore[reportPrivateUsage]
+            _build_linear_path_kd,  # pyright: ignore[reportPrivateUsage]
         )
+
+        # Pre-flight: isometry aligns the activation and belief manifolds by
+        # class index and needs equal centroid counts. Check now — before the
+        # expensive path collection below — so a mismatch (debug-size pass or
+        # ultra-sparse class set) fails fast with an actionable message instead
+        # of crashing deep inside compute_isometry_from_manifolds. Only fires
+        # when isometry will actually run; pair-based criteria tolerate missing
+        # centroids and are unaffected.
+        if (
+            "isometry" in metrics
+            and not replot_only
+            and analysis.selected_pairs is None
+            and belief_manifold_eval is not None
+            and manifold_obj is not None
+        ):
+            from causalab.methods.scores.isometry import (
+                check_isometry_manifold_alignment,
+            )
+
+            _missing_classes = [
+                value_strs[i] for i in range(n_values) if not bool(centroid_mask[i])
+            ]
+            _missing_hint = (
+                f"This run has no activation centroid for {len(_missing_classes)} "
+                f"class(es): {_missing_classes}."
+                if _missing_classes
+                else None
+            )
+            check_isometry_manifold_alignment(
+                manifold_obj,
+                belief_manifold_eval,
+                missing_class_hint=_missing_hint,
+            )
 
         for pm in path_modes:
             logger.info("=== Path mode: %s ===", pm.label)
@@ -639,6 +704,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 # Try loading from cache, filtering to requested pairs
                 pair_distributions = None
                 pair_grid_points = None
+                computed_pairs: list[tuple[int, int]] = list(pairs)
                 if os.path.exists(cached_path):
                     _cached = _sf_load(cached_path)
                     _cached_dists = _cached["pair_distributions"]
@@ -788,6 +854,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                     # Save paths — merge into existing cache if selected_pairs
                     os.makedirs(paths_dir, exist_ok=True)
                     _existing_compatible = False
+                    _existing: dict = {}
                     if analysis.selected_pairs is not None and os.path.exists(
                         cached_path
                     ):
@@ -808,12 +875,14 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                         _all_dists = [_existing["pair_distributions"]]
                         # Only use existing grid_points if it matches the pair count
                         _existing_gp = _existing.get("pair_grid_points")
-                        _gp_valid = (
-                            _existing_gp is not None
-                            and _existing_gp.shape[0] == len(_existing_pairs)
-                            and pair_grid_points is not None
+                        _gp_valid = _existing_gp is not None and _existing_gp.shape[
+                            0
+                        ] == len(_existing_pairs)
+                        _all_gp: list[Tensor] = (
+                            [_existing_gp]
+                            if _gp_valid and _existing_gp is not None
+                            else []
                         )
-                        _all_gp = [_existing_gp] if _gp_valid else []
                         for pi, p in enumerate(pairs):
                             if p not in _existing_pairs:
                                 _all_pairs.append(p)
@@ -862,8 +931,6 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                             )
 
                 # Collect for belief-space path plot
-                if "_belief_space_dists" not in locals():
-                    _belief_space_dists = {}
                 _belief_space_dists[pm.label] = pair_distributions
 
                 # Stash per-mode grid points and distributions
@@ -910,7 +977,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                     # alpha-grid lines up.
                     if belief_manifold_eval is not None:
                         belief_cp = belief_manifold_eval.control_points
-                        vertices_belief = [belief_cp[i] for i in range(W_extras)]
+                        vertices_belief = [
+                            belief_cp[i]  # pyright: ignore[reportIndexIssue]  # nn.Module __getattr__ widens registered buffer Tensor type
+                            for i in range(W_extras)
+                        ]
                     for i in range(W_extras):
                         for j in range(i + 1, W_extras):
                             interior = pm.build_path(
@@ -922,9 +992,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                             for k in range(K_iso):
                                 vertices.append((interior[k], frozenset({i, j})))
                             if vertices_belief is not None:
+                                assert belief_manifold_eval is not None
                                 belief_interior = _build_geodesic_path(
-                                    belief_cp[i],
-                                    belief_cp[j],
+                                    belief_cp[i],  # pyright: ignore[reportIndexIssue, reportPossiblyUnboundVariable]  # belief_cp bound when belief_manifold_eval is not None
+                                    belief_cp[j],  # pyright: ignore[reportIndexIssue, reportPossiblyUnboundVariable]  # belief_cp bound when belief_manifold_eval is not None
                                     K_iso + 2,
                                     belief_manifold_eval,
                                 )[1 : K_iso + 1]
@@ -1044,7 +1115,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 if belief_manifold_eval is not None:
                     belief_cp = belief_manifold_eval.control_points
                     eps_list = [
-                        torch.stack([belief_cp[i].cpu(), belief_cp[j].cpu()])
+                        torch.stack([belief_cp[i].cpu(), belief_cp[j].cpu()])  # pyright: ignore[reportIndexIssue]  # nn.Module __getattr__ widens registered buffer Tensor type
                         for i, j in pairs
                     ]
                     if vertices_belief is not None:
@@ -1105,11 +1176,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                     plot_saved_pair_distributions,
                 )
 
-                score_labels = (
-                    [str(v) for v in task.output_token_values]
-                    if task.output_token_values
-                    else [str(v) for v in values]
-                )
+                # One label per score column; var_indices above is per
+                # intervention value, so labels track ``values`` one-to-one.
+                score_labels = [str(v) for v in values]
                 _path_viz_cfg = analysis.get("path_visualization", {})
                 _colored_concepts = _path_viz_cfg.get(
                     "colored_concepts_in_legend", None
@@ -1128,8 +1197,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                     path_mode_label=pm.label,
                     score_labels=score_labels,
                     colormap=task_cfg.get("colormap", "rainbow"),
-                    output_token_values=task.output_token_values
-                    or task.intervention_values,
+                    grid_values=task.intervention_values,
                     per_pair_snap_indices=None,
                     color_by_dim=task_cfg.get("color_by_dim", 0),
                     figure_format=figure_fmt,
@@ -1143,6 +1211,167 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 if pm.featurizer_override is not None:
                     for u in interchange_target.flatten():
                         u.set_featurizer(featurizer)
+
+        # --- Receptive field: decision-map over the top-2 activation PCs.
+        # Sweeps a 2-D grid over the chosen subspace PCs and steers the model at
+        # each grid point (those two PCs set to the grid value, the rest held at
+        # each base prompt's value), recording the argmax output class. Needs the
+        # live pipeline, so it runs here and caches an artifact the viz loop (and
+        # replot_only) renders from. Grid, point cloud, centroids, and both
+        # steering-path families are all stored in the same [c0, c1] columns.
+        if "receptive_field" in visualizations and not replot_only:
+            try:
+                from causalab.analyses.subspace import load_subspace_onto_target
+                from causalab.methods.steer.collect import collect_grid_distributions
+                from safetensors.torch import save_file as _rf_save
+
+                _rf_cfg = analysis.get("receptive_field", {})
+                _rf_res = int(_rf_cfg.get("grid_res", 11))
+                _rf_comp = list(_rf_cfg.get("pca_components", [0, 1]))
+                _comps = [int(c) for c in _rf_comp]  # 2 dims -> 2D field, 3 -> 3D
+                if _comps != list(range(len(_comps))):
+                    logger.warning(
+                        "receptive_field.pca_components=%s are not the leading "
+                        "subspace dims; the partial-dim intervention sets the FIRST "
+                        "%d featurizer dims, so the field axes may not match. Use "
+                        "[0,1] (2D) or [0,1,2] (3D).",
+                        _comps,
+                        len(_comps),
+                    )
+                _rf_np = min(
+                    int(_rf_cfg.get("n_prompts", n_prompts)), len(eval_samples)
+                )
+                _rf_fvs = bool(_rf_cfg.get("full_vocab_softmax", True))
+                _rf_pad = float(_rf_cfg.get("range_pad", 0.05))
+
+                # Install the bare subspace (PCA) featurizer so a (G, 2) grid sets
+                # output dims = PC _c0, _c1. Post-loop the target may carry the
+                # composed/manifold featurizer, whose first dims are intrinsic.
+                _rf_method = ss_meta.get("method", "pca")
+                _rf_k = ss_meta.get("k_features")
+                assert _rf_k is not None, (
+                    f"subspace metadata for {ss_sub} missing 'k_features'"
+                )
+                load_subspace_onto_target(
+                    interchange_target, subspace_out_dir, _rf_method, int(_rf_k)
+                )
+
+                def _rf_axis(ci: int) -> tuple[float, float]:
+                    lo = float(pca_features[:, ci].min())
+                    hi = float(pca_features[:, ci].max())
+                    pad = (hi - lo) * _rf_pad
+                    return lo - pad, hi + pad
+
+                _ranges = [_rf_axis(ci) for ci in _comps]
+                _axes = [torch.linspace(lo, hi, _rf_res) for (lo, hi) in _ranges]
+                _mesh = torch.meshgrid(*_axes, indexing="ij")
+                _grid = torch.stack(
+                    [m.reshape(-1) for m in _mesh], dim=-1
+                )  # (G, D); G = grid_res ** len(_comps)
+
+                _rf_dists = collect_grid_distributions(
+                    pipeline=pipeline,
+                    grid_points=_grid,
+                    interchange_target=interchange_target,
+                    filtered_samples=eval_samples,
+                    var_indices=var_indices,
+                    batch_size=batch_size,
+                    n_base_samples=_rf_np,
+                    average=False,
+                    full_vocab_softmax=_rf_fvs,
+                )  # (G, N, W)
+
+                # Steering-path overlays in the SAME [c0, c1] columns (no fwd pass).
+                _rf_geo: list[Tensor] = []
+                _rf_lin: list[Tensor] = []
+                _rf_pairs: list[tuple[int, int]] = []
+                for _si, _ei in pairs:
+                    if not centroid_mask[_si] or not centroid_mask[_ei]:
+                        continue
+                    _rf_pairs.append((int(_si), int(_ei)))
+                    _linp = _build_linear_path_kd(
+                        pca_centroids[_si], pca_centroids[_ei], num_steps
+                    )
+                    _rf_lin.append(_linp[:, _comps].detach().cpu().contiguous())
+                    if (
+                        manifold_obj is not None
+                        and feat_mean is not None
+                        and feat_std is not None
+                    ):
+                        _geop = _build_geodesic_path(
+                            spline_centroids[_si],
+                            spline_centroids[_ei],
+                            num_steps,
+                            manifold_obj,
+                        )
+                        with torch.no_grad():
+                            _dec = manifold_obj.decode(_geop.to(device), r=None).to(
+                                feat_mean.device
+                            )
+                            _dec = _dec * (feat_std + 1e-6) + feat_mean
+                        _rf_geo.append(_dec[:, _comps].detach().cpu().contiguous())
+
+                _rf_dir = os.path.join(out_dir, "receptive_field")
+                os.makedirs(_rf_dir, exist_ok=True)
+                _rf_payload = {
+                    "grid_points": _grid.float().contiguous(),
+                    "distributions": _rf_dists.float().contiguous(),
+                    "scatter_xy": pca_features[:, _comps].float().cpu().contiguous(),
+                    "centroid_xy": pca_centroids[:, _comps].float().cpu().contiguous(),
+                    "centroid_mask": centroid_mask.contiguous(),
+                }
+                if _rf_lin:
+                    _rf_payload["lin_paths_xy"] = (
+                        torch.stack(_rf_lin).float().contiguous()
+                    )
+                if _rf_geo:
+                    _rf_payload["geo_paths_xy"] = (
+                        torch.stack(_rf_geo).float().contiguous()
+                    )
+                _rf_save(
+                    _rf_payload, os.path.join(_rf_dir, "receptive_field.safetensors")
+                )
+
+                _rf_nsc = pca_features.shape[0]
+                _rf_scls = [
+                    int(task.intervention_value_index(ex)) for ex in _train_ds[:_rf_nsc]
+                ]
+                assert len(_rf_scls) == _rf_nsc, (
+                    f"scatter_classes ({len(_rf_scls)}) shorter than point cloud "
+                    f"({_rf_nsc}); train dataset has fewer rows than pca_features"
+                )
+                with open(os.path.join(_rf_dir, "receptive_field.json"), "w") as _rf_f:
+                    json.dump(
+                        {
+                            "grid_res": _rf_res,
+                            "pca_components": _comps,
+                            "axis_ranges": [list(r) for r in _ranges],
+                            "pairs": _rf_pairs,
+                            "class_labels": [str(v) for v in values],
+                            "scatter_classes": _rf_scls,
+                            "full_vocab_softmax": _rf_fvs,
+                            "n_prompts": _rf_np,
+                            "has_geo_paths": bool(_rf_geo),
+                            "has_lin_paths": bool(_rf_lin),
+                        },
+                        _rf_f,
+                        indent=2,
+                    )
+                logger.info(
+                    "Saved receptive_field artifact (%d-cell grid) to %s",
+                    _rf_res * _rf_res,
+                    _rf_dir,
+                )
+            except Exception as _rf_e:
+                logger.warning(
+                    "Receptive field collection failed: %s", _rf_e, exc_info=True
+                )
+            finally:
+                # Always restore the original featurizer — a mid-collection raise
+                # must not leak the bare PCA featurizer into the rest of the
+                # evaluate stage. Harmless no-op when the swap never happened.
+                for _u in interchange_target.flatten():
+                    _u.set_featurizer(featurizer)
 
         # Paired t-tests between path modes for the path-based criteria.
         # Compares per-pair scores under each path mode (same pair indices,
@@ -1163,7 +1392,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         mode_labels = [pm.label for pm in path_modes]
         if len(mode_labels) >= 2 and analysis.selected_pairs is None:
             import itertools as _it
-            from scipy import stats as _stats
+            from scipy import stats as _stats  # pyright: ignore[reportMissingTypeStubs]
 
             for metric_name, _metric_mod in path_based_metrics:
                 for suffix, stem in REDUCTION_STEMS.items():
@@ -1219,7 +1448,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                         )
 
         # Belief-space path visualization (MDS + Nystrom)
-        if "_belief_space_dists" in locals() and _belief_space_dists:
+        if _belief_space_dists:
             bm_dir = os.path.join(root, "output_manifold")
             nd_path = os.path.join(bm_dir, "per_example_output_dists.safetensors")
             pca_st_path = os.path.join(bm_dir, "hellinger_pca.safetensors")
@@ -1252,7 +1481,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                         pairs=pairs,
                         value_labels=[str(v) for v in values],
                         output_dir=belief_dir,
-                        path_colors=OmegaConf.to_container(
+                        path_colors=OmegaConf.to_container(  # pyright: ignore[reportArgumentType]  # OmegaConf.to_container returns Any; runtime DictConfig produces dict[str, str]
                             analysis.get("path_visualization", {}).get(
                                 "path_colors", {}
                             ),
@@ -1261,10 +1490,8 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                         or None,
                         variable_values=[str(v) for v in values],
                         colormap=task_cfg.get("colormap", "rainbow"),
-                        edges=_graph_edges if "_graph_edges" in locals() else None,
-                        edge_node_coords=_graph_edge_node_coords
-                        if "_graph_edge_node_coords" in locals()
-                        else None,
+                        edges=_graph_edges,
+                        edge_node_coords=_graph_edge_node_coords,
                         intervention_variable=task.intervention_variable,
                         train_dataset=_bm_train_ds,
                         belief_manifold=belief_manifold_eval,
@@ -1291,7 +1518,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                         PathTrace,
                     )
                     from causalab.analyses.activation_manifold.utils import (
-                        _compute_intrinsic_ranges,
+                        _compute_intrinsic_ranges,  # pyright: ignore[reportPrivateUsage]
                     )
 
                     n_steps_3d = analysis.num_steps_along_path
@@ -1323,6 +1550,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
 
                         # Geometric path (intrinsic -> decode -> PCA space)
                         if manifold_obj is not None:
+                            assert feat_mean is not None and feat_std is not None
                             geo_path = _build_geodesic_path(
                                 spline_centroids[si],
                                 spline_centroids[ei],
@@ -1433,6 +1661,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                             figure_fmt
                             and figure_fmt != "html"
                             and manifold_obj is not None
+                            and feat_mean is not None
+                            and feat_std is not None
+                            and manifold_ranges is not None
                         ):
                             from causalab.io.plots.pca_scatter import (
                                 plot_manifold_3d_static,
@@ -1443,8 +1674,8 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                                 if hasattr(pca_features, "cpu")
                                 else pca_features,
                                 manifold_obj=manifold_obj,
-                                mean=feat_mean.cpu() if feat_mean is not None else None,
-                                std=feat_std.cpu() if feat_std is not None else None,
+                                mean=feat_mean.cpu(),
+                                std=feat_std.cpu(),
                                 ranges=manifold_ranges,
                                 output_path=os.path.join(
                                     path_3d_dir, f"{sv}_{ev}.{figure_fmt}"
@@ -1516,10 +1747,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 if is_linear_baseline:
                     logger.info("Skipping %s for linear baseline", viz_name)
                     continue
-                if (
-                    "_geo_pair_grid_points" not in locals()
-                    or "_geo_pair_distributions" not in locals()
-                ):
+                if _geo_pair_grid_points is None or _geo_pair_distributions is None:
                     logger.info("Skipping dual_manifold: no geometric path data")
                     continue
                 bm_dir_dm = os.path.join(root, "output_manifold")
@@ -1533,12 +1761,12 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                     )
                     continue
                 try:
-                    from causalab.io.plots.dual_manifold import (
+                    from causalab.analyses.path_steering.dual_manifold import (
                         DualManifoldData,
                         save_dual_manifold_html,
                     )
                     from causalab.analyses.path_steering.path_visualization import (
-                        _is_2d_spatial,
+                        _is_2d_spatial,  # pyright: ignore[reportPrivateUsage]
                     )
                     from safetensors.torch import load_file as _sf_load_bel
 
@@ -1570,17 +1798,12 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                         ],
                         dtype=int,
                     )
-                    _lin_gp = (
-                        _lin_pair_grid_points
-                        if "_lin_pair_grid_points" in locals()
-                        else None
-                    )
-                    _lin_pd = (
-                        _lin_pair_distributions
-                        if "_lin_pair_distributions" in locals()
-                        else None
-                    )
-                    _subspace_feat = featurizer.stages[0].featurizer
+                    _lin_gp = _lin_pair_grid_points
+                    _lin_pd = _lin_pair_distributions
+                    _subspace_feat = getattr(featurizer, "stages", [None])[0]
+                    if _subspace_feat is not None:
+                        _subspace_feat = _subspace_feat.featurizer
+                    assert feat_mean is not None and feat_std is not None
                     data = DualManifoldData.from_evaluate_artifacts(
                         geo_grid_points=_geo_pair_grid_points,
                         geo_distributions=_geo_pair_distributions,
@@ -1597,17 +1820,16 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                         hellinger_pca=_hellinger_pca,
                         natural_dists=nd,
                         class_labels=[str(v) for v in values],
-                        output_token_values=task.output_token_values
-                        or task.intervention_values,
-                        edges=_graph_edges if "_graph_edges" in locals() else None,
+                        grid_values=task.intervention_values,
+                        edges=_graph_edges,
                         n_normal_steps=num_steps if oversteer_frac > 0 else None,
                         bel_class_assignments_true=_bel_classes_true,
                     )
                     _cmap = task_cfg.get("colormap", "rainbow")
                     dual_dir = os.path.join(out_dir, "vis")
                     os.makedirs(dual_dir, exist_ok=True)
-                    _otv = task.output_token_values or task.intervention_values
-                    _is_grid = _otv is not None and _is_2d_spatial(_otv)
+                    _otv = task.intervention_values
+                    _is_grid = bool(_otv) and _is_2d_spatial(_otv)
                     _cbd = task_cfg.get("color_by_dim", 1)
                     if _is_grid:
                         save_dual_manifold_html(
@@ -1642,6 +1864,85 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                     logger.warning(
                         "Dual manifold visualization failed: %s", e, exc_info=True
                     )
+            elif viz_name == "receptive_field":
+                _rfd = os.path.join(out_dir, "receptive_field")
+                _rf_st = os.path.join(_rfd, "receptive_field.safetensors")
+                _rf_js = os.path.join(_rfd, "receptive_field.json")
+                if not (os.path.exists(_rf_st) and os.path.exists(_rf_js)):
+                    logger.info(
+                        "Skipping receptive_field: no artifact "
+                        "(run without replot_only first)"
+                    )
+                    continue
+                try:
+                    from causalab.io.plots.receptive_field import (
+                        plot_receptive_field,
+                    )
+                    from causalab.io.plots.plot_3d_interactive import (
+                        _resolve_categorical_colors,  # pyright: ignore[reportPrivateUsage]
+                    )
+
+                    _rf = _load_file(_rf_st)
+                    with open(_rf_js) as _f:
+                        _rf_meta = json.load(_f)
+                    _mean_d = _rf["distributions"].mean(dim=1)  # (G, W)
+                    _rf_argmax = _mean_d.argmax(dim=-1).cpu().numpy()
+                    _rf_conf = _mean_d.max(dim=-1).values.cpu().numpy()
+                    _rf_labels = _rf_meta["class_labels"]
+                    _rf_colors = _resolve_categorical_colors(
+                        len(_rf_labels), task_cfg.get("colormap", "rainbow")
+                    )
+                    _geo = _rf.get("geo_paths_xy")
+                    _lin = _rf.get("lin_paths_xy")
+                    _rf_pairs_meta = _rf_meta.get("pairs", [])
+                    _rf_pair_labels = [
+                        f"{_rf_labels[si]} → {_rf_labels[ei]}"
+                        for si, ei in _rf_pairs_meta
+                    ]
+                    _rf_cfg = analysis.get("receptive_field", {})
+                    plot_receptive_field(
+                        grid_xy=_rf["grid_points"].cpu().numpy(),
+                        grid_argmax=_rf_argmax,
+                        grid_confidence=_rf_conf,
+                        grid_res=int(_rf_meta["grid_res"]),
+                        axis_ranges=_rf_meta["axis_ranges"],
+                        scatter_xy=_rf["scatter_xy"].cpu().numpy(),
+                        scatter_classes=np.array(
+                            _rf_meta["scatter_classes"], dtype=int
+                        ),
+                        centroid_xy=_rf["centroid_xy"].cpu().numpy(),
+                        centroid_mask=_rf["centroid_mask"].cpu().numpy().astype(bool),
+                        geo_paths_xy=(
+                            [p.cpu().numpy() for p in _geo]
+                            if _geo is not None
+                            else None
+                        ),
+                        lin_paths_xy=(
+                            [p.cpu().numpy() for p in _lin]
+                            if _lin is not None
+                            else None
+                        ),
+                        class_labels=_rf_labels,
+                        class_colors=_rf_colors,
+                        pca_components=_rf_meta["pca_components"],
+                        pair_labels=_rf_pair_labels,
+                        output_path=os.path.join(
+                            out_dir, "vis", "receptive_field.html"
+                        ),
+                        encode_confidence=bool(_rf_cfg.get("encode_confidence", True)),
+                        show_scatter=bool(_rf_cfg.get("show_scatter", True)),
+                        show_centroids=bool(_rf_cfg.get("show_centroids", True)),
+                        show_paths=bool(_rf_cfg.get("show_paths", True)),
+                        figure_format=figure_fmt,
+                    )
+                    logger.info(
+                        "Saved receptive_field viewer to %s",
+                        os.path.join(out_dir, "vis", "receptive_field.html"),
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Receptive field visualization failed: %s", e, exc_info=True
+                    )
             else:
                 logger.warning("Unknown visualization: %s", viz_name)
 
@@ -1664,7 +1965,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             "model": cfg.model.name,
             "task": cfg.task.name,
             "task_config": _task_config_for_metadata(
-                OmegaConf.to_container(cfg.task, resolve=True)
+                OmegaConf.to_container(cfg.task, resolve=True)  # pyright: ignore[reportArgumentType]  # OmegaConf.to_container returns Any; runtime DictConfig produces dict[str, Any]
             ),
             "criteria": criteria_results,
             "visualizations": list(viz_results.keys()),

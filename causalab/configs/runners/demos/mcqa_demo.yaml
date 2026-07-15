@@ -1,0 +1,14 @@
+# @package _global_
+defaults:
+- /base
+- /task: MCQA
+- /analysis/baseline
+- _self_
+- /model: llama32_1b_instruct
+  # - model: gpt2
+
+task:
+  target_variable: answer
+  n_train: 64
+  n_test: 16
+  enumerate_all: false

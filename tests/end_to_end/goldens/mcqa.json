@@ -1,0 +1,35 @@
+{
+  "deterministic": false,
+  "model": "chat-coherent",
+  "runner": "golden/mcqa",
+  "seed": 0,
+  "tolerance": {
+    "accuracy.accuracy": 0,
+    "accuracy.prob_accuracy": 0.0001,
+    "default": 1e-05
+  },
+  "values": {
+    "accuracy.accuracy": 1.0,
+    "accuracy.correct": 30,
+    "accuracy.prob_accuracy": 0.9999973356723786,
+    "accuracy.total": 30,
+    "baseline.per_class_output_dists.dists.first": 0.03846153989434242,
+    "baseline.per_class_output_dists.dists.last": 1.778999690615901e-11,
+    "baseline.per_class_output_dists.dists.mean": 0.013313609175384045,
+    "baseline.per_class_output_dists.dists.shape": [
+      26,
+      26
+    ],
+    "baseline.per_class_output_dists.dists.std": 0.018311355262994766,
+    "baseline.per_class_output_dists.sha256": "679be269a1274592448dbf4a4824c7cdcc215b92ef34406bd649d157116d915f",
+    "full_output_dists.first": 4.324692148329341e-18,
+    "full_output_dists.last": 2.0445284761695206e-24,
+    "full_output_dists.mean": 6.5817175709526055e-06,
+    "full_output_dists.sha256": "c359cc782e1e02aa079bfdca68a84d7b2487c67587c2da25fedbefa56fc0c4e4",
+    "full_output_dists.shape": [
+      30,
+      151936
+    ],
+    "full_output_dists.std": 0.002464818302541971
+  }
+}

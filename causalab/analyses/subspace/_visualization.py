@@ -23,7 +23,7 @@ def save_features_visualization(
     variable_values: list[str] | None = None,
     detailed_hover: bool = False,
     max_hover_chars: int = 50,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
     skip_3d: bool = False,
     explained_variance_ratio: list[float] | None = None,
 ) -> None:
@@ -58,7 +58,7 @@ def save_features_visualization(
         plot_features_2d(
             features=features,
             output_path=path_with_figure_format(
-                os.path.join(vis_dir, "features_2d.pdf"),
+                os.path.join(vis_dir, "features_2d"),
                 figure_format,
             ),
             train_dataset=train_dataset,
@@ -79,7 +79,7 @@ def save_features_visualization(
             plot_variance_histogram(
                 explained_variance_ratio,
                 save_path=path_with_figure_format(
-                    os.path.join(vis_dir, "features_variance.png"),
+                    os.path.join(vis_dir, "features_variance"),
                     figure_format,
                 ),
                 figure_format=figure_format,
@@ -94,7 +94,7 @@ def save_features_visualization(
         plot_features_3d_static(
             features=features,
             output_path=path_with_figure_format(
-                os.path.join(vis_dir, "features_3d.png"),
+                os.path.join(vis_dir, "features_3d"),
                 figure_format,
             ),
             train_dataset=train_dataset,

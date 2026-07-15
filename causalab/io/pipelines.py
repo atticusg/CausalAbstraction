@@ -34,8 +34,17 @@ def load_pipeline(
     device: str | None = None,
     dtype: str | None = None,
     eager_attn: bool | None = None,
+    use_chat_template: bool = False,
+    chat_answer_directive: str | None = None,
 ):
-    """Load an ``LMPipeline`` from explicit parameters."""
+    """Load an ``LMPipeline`` from explicit parameters.
+
+    ``use_chat_template`` wraps every prompt in the model's chat template
+    (required for instruct models, which are post-trained on the chat format and
+    otherwise restate the question instead of answering). ``chat_answer_directive``,
+    when set, is emitted as a system message nudging the model to reply with only
+    the bare answer so a 1-token completion contract still scores the answer.
+    """
     from causalab.neural.pipeline import LMPipeline, resolve_device
 
     # Use device_map="auto" for multi-GPU sharding when device is unspecified or "auto"
@@ -61,7 +70,13 @@ def load_pipeline(
     if eager_attn is False:
         model_kwargs["eager_attn"] = False
 
-    pipeline = LMPipeline(model_name, max_new_tokens=max_new_tokens, **model_kwargs)
+    pipeline = LMPipeline(
+        model_name,
+        max_new_tokens=max_new_tokens,
+        use_chat_template=use_chat_template,
+        chat_answer_directive=chat_answer_directive,
+        **model_kwargs,
+    )
 
     if task.validate is not None:
         task.validate(pipeline)
@@ -72,6 +87,7 @@ def load_pipeline(
 def load_lite_pipeline(
     model_name: str,
     max_new_tokens: int = 3,
+    use_chat_template: bool = False,
 ):
     """Load an ``LMPipeline`` with tokenizer + config only (no model weights).
 
@@ -79,11 +95,21 @@ def load_lite_pipeline(
     (e.g. to build :class:`InterchangeTarget` from cached features) but never
     run forward passes. Returns immediately for any model size; calling
     ``pipeline.generate`` or running the model will fail.
+
+    ``use_chat_template`` is threaded through even though no forward pass runs:
+    the token-position code paths these lite pipelines feed (InterchangeTarget
+    construction) tokenize prompts, so they must wrap consistently with the full
+    pipeline or intervention indices would be computed on the bare text.
     """
     from causalab.neural.pipeline import LMPipeline
 
     logger.info("Loading lite pipeline (tokenizer+config only): %s", model_name)
-    return LMPipeline(model_name, max_new_tokens=max_new_tokens, load_weights=False)
+    return LMPipeline(
+        model_name,
+        max_new_tokens=max_new_tokens,
+        load_weights=False,
+        use_chat_template=use_chat_template,
+    )
 
 
 # --------------------------------------------------------------------------- #

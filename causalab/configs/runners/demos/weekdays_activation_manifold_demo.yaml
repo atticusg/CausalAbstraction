@@ -16,5 +16,3 @@ activation_manifold:
   skip_decoding_eval: false
   layers: [28]
   token_positions: [last_token]
-  visualization:
-    figure_format: png

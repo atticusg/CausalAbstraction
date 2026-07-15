@@ -35,8 +35,8 @@ Usage:
 """
 
 import re
-from typing import Any, Callable, Dict, List, Union, cast
-from typing_extensions import LiteralString
+from collections import OrderedDict
+from typing import Any, Callable, Dict, List, Mapping, Union, cast
 
 import torch
 
@@ -44,9 +44,47 @@ from causalab.causal.trace import CausalTrace, Mechanism
 from causalab.neural.units import ComponentIndexer
 from causalab.neural.pipeline import LMPipeline
 
+
+class PromptTemplateMismatchError(ValueError):
+    """The example's ``raw_input`` disagrees with the template-filled prompt.
+
+    Raised by token-position resolution when the string it tokenizes to locate a
+    variable (this task's template filled with the example's variable values)
+    differs from the trace's own ``raw_input`` — the string the model actually
+    runs (see :meth:`LMPipeline._load`). The two are equal by construction for
+    any example produced by causalab's own sampler under this template, so a
+    mismatch means the dataset was built elsewhere (a foreign tokenizer/renderer,
+    a different template, or a hand-built example dict). Continuing would compute
+    token indices against a different string than the run prompt, silently
+    reading interventions at the wrong positions; we fail here instead.
+    """
+
+
 # --------------------------------------------------------------------------- #
 #  Token Position Utilities                                                   #
 # --------------------------------------------------------------------------- #
+
+
+def _load_for_indexing(
+    pipeline: LMPipeline, traces: List[CausalTrace], **load_kwargs: Any
+) -> Dict[str, Any]:
+    """Tokenize for token-position resolution, enforcing the unpadded-frame invariant.
+
+    Indexers return indices in each example's *unpadded* frame; the padded-batch shift
+    in ``units._apply_padding_shift`` depends on that. A non-None ``pipeline.max_length``
+    pads each per-example load up to ``max_length``, pushing indices out of the unpadded
+    frame and silently corrupting interventions. Refuse it loudly here.
+    """
+    if getattr(pipeline, "max_length", None) is not None:
+        raise ValueError(
+            "Token positions must be resolved with a pipeline whose max_length is "
+            f"None, but got max_length={pipeline.max_length!r}. A fixed max_length pads "
+            "each per-example tokenization, pushing token indices out of the unpadded "
+            "frame that interventions assume. Construct the LMPipeline with "
+            "max_length=None (the default) when it is used to build token positions; "
+            "max_length still works for generation-only pipelines."
+        )
+    return pipeline.load(traces, **load_kwargs)
 
 
 class TokenPosition(ComponentIndexer):
@@ -56,17 +94,19 @@ class TokenPosition(ComponentIndexer):
     ----------
     pipeline :
         The :class:`neural.pipeline.LMPipeline` supplying the tokenizer.
-    is_original : bool
-        Whether this indexer is for original inputs (True) or counterfactual inputs (False).
-        Default is True for backward compatibility.
+
+    Notes
+    -----
+    Whether a position resolves differently for original vs. counterfactual
+    inputs is decided per call, via the ``is_original`` keyword threaded through
+    :meth:`ComponentIndexer.index` to indexers that accept it (see
+    :func:`paired_token_position`). There is deliberately no ``is_original``
+    *constructor* flag: it routed nothing and only duplicated that name (#430).
     """
 
-    def __init__(
-        self, indexer, pipeline: LMPipeline, is_original: bool = True, **kwargs
-    ):
+    def __init__(self, indexer, pipeline: LMPipeline, **kwargs):
         super().__init__(indexer, **kwargs)
         self.pipeline = pipeline
-        self.is_original = is_original
 
     def highlight_selected_token(self, input: CausalTrace) -> str:
         """Return *prompt* with selected token(s) wrapped in ``**bold**``.
@@ -79,7 +119,7 @@ class TokenPosition(ComponentIndexer):
         Note that whitespace handling may be approximate for tokenizers
         that encode leading spaces as special glyphs (e.g. ``Ġ``).
         """
-        ids = self.pipeline.load([input])["input_ids"][0]
+        ids = _load_for_indexing(self.pipeline, [input])["input_ids"][0]
         highlight = self.index(input)
 
         pad_token_id = self.pipeline.tokenizer.pad_token_id
@@ -96,7 +136,7 @@ class TokenPosition(ComponentIndexer):
 # Convenience indexers
 def get_last_token_index(input: CausalTrace, pipeline: LMPipeline) -> List[int]:
     """Return a one-element list containing the *last* token index."""
-    ids = list(pipeline.load([input])["input_ids"][0])
+    ids = list(_load_for_indexing(pipeline, [input])["input_ids"][0])
     return [len(ids) - 1]
 
 
@@ -108,7 +148,7 @@ def get_all_tokens(
 
     # Create indexer function that returns all non-pad token indices
     def all_tokens_indexer(inp: CausalTrace) -> List[int]:
-        token_ids = pipeline.load([inp])["input_ids"][0]
+        token_ids = _load_for_indexing(pipeline, [inp])["input_ids"][0]
         if padding:
             return [i for i in range(len(token_ids))]
         return [i for i in range(len(token_ids)) if token_ids[i] != pad_token_id]
@@ -130,7 +170,7 @@ def get_list_of_each_token(
         )
     else:
         trace = input
-    ids = list(pipeline.load([trace])["input_ids"][0])
+    ids = list(_load_for_indexing(pipeline, [trace])["input_ids"][0])
     pad_token_id = pipeline.tokenizer.pad_token_id
 
     token_positions = []
@@ -201,6 +241,48 @@ def get_tokens_in_char_range(
     return idx.tolist()
 
 
+def rebase_char_range(
+    tokenized: Mapping[str, Any],
+    start_char: int,
+    end_char: int,
+    expected: str,
+    label: str,
+) -> tuple[int, int]:
+    """Shift a bare-text character range into chat-wrapped coordinates.
+
+    Char ranges (variable substitutions, substrings) are computed against the
+    *bare* task text, but under a chat template ``pipeline.load`` tokenizes the
+    *wrapped* prompt — so its ``offset_mapping`` indexes the wrapped string. When
+    chat wrapping is active ``load`` attaches ``content_char_offset`` (where the
+    bare content begins in the wrapped prompt) and the ``wrapped_text``; we add
+    that offset so the range lines up with the offsets, and assert the spanned
+    text survived verbatim.
+
+    The verbatim check converts a silent corruption into an actionable error:
+    some chat templates ``.strip()`` the content (Llama does), so a value that
+    *is* or *borders* whitespace loses characters and every intervention index
+    downstream would be off by the lost characters. Returns the original range
+    unchanged (a no-op) when chat templating is off.
+    """
+    offset = tokenized.get("content_char_offset", 0)
+    if not offset:
+        return start_char, end_char
+    wrapped_list = tokenized.get("wrapped_text")
+    if wrapped_list is not None:
+        wrapped = wrapped_list[0]
+        got = wrapped[start_char + offset : end_char + offset]
+        if got != expected:
+            raise ValueError(
+                f"Chat template altered {label} (expected {expected!r}): it does "
+                f"not appear verbatim at the expected position in the chat-wrapped "
+                f"prompt (found {got!r}). Templates that strip whitespace corrupt "
+                f"token positions for content that is or borders whitespace. Pad "
+                f"the value away from the template boundary, or run this analysis "
+                f"with chat_template disabled."
+            )
+    return start_char + offset, end_char + offset
+
+
 def get_substring_token_ids(
     text: str,
     substring: str,
@@ -226,6 +308,9 @@ def get_substring_token_ids(
         The pipeline containing the tokenizer to use.
     add_special_tokens : bool, optional
         Whether to add special tokens (BOS/EOS) during tokenization. Default is False.
+        No-op when the pipeline applies a chat template: the wrapped prompt already
+        embeds the specials, so ``LMPipeline.load`` forces ``add_special_tokens=False``
+        regardless of this argument (see the double-BOS note there).
     occurrence : int, optional
         Which occurrence of the substring to use (0-indexed). Supports negative indexing
         like Python lists (-1 for last, -2 for second-to-last, etc.). Default is 0 (first occurrence).
@@ -314,14 +399,22 @@ def get_substring_token_ids(
 
     # Use pipeline.load() with offset_mapping to get character→token mapping
     # This ensures we use the exact same tokenization as interventions
-    tokenized = pipeline.load(
-        [trace], add_special_tokens=add_special_tokens, return_offsets_mapping=True
+    tokenized = _load_for_indexing(
+        pipeline,
+        [trace],
+        add_special_tokens=add_special_tokens,
+        return_offsets_mapping=True,
     )
     offsets = tokenized["offset_mapping"][0]  # Get first sequence from batch
 
-    # Find which tokens overlap with the substring's character range
+    # Find which tokens overlap with the substring's character range. Under a
+    # chat template the offsets index the wrapped prompt, so rebase the bare
+    # char range by the chat prefix (and verify the template preserved it).
     substring_start = occurrences[occurrence]
     substring_end = substring_start + len(substring)
+    substring_start, substring_end = rebase_char_range(
+        tokenized, substring_start, substring_end, substring, f"substring {substring!r}"
+    )
 
     return get_tokens_in_char_range(offsets, substring_start, substring_end)
 
@@ -329,6 +422,46 @@ def get_substring_token_ids(
 # --------------------------------------------------------------------------- #
 #  Template System                                                            #
 # --------------------------------------------------------------------------- #
+
+
+def _first_difference(a: str, b: str) -> int:
+    """Char index of the first divergence (or ``min(len)`` if one is a prefix)."""
+    for i, (ca, cb) in enumerate(zip(a, b)):
+        if ca != cb:
+            return i
+    return min(len(a), len(b))
+
+
+def _assert_raw_input_matches(values: Any, full_text_str: str) -> None:
+    """Fail if the example's ``raw_input`` differs from the template fill.
+
+    ``values`` is the example being indexed (a :class:`CausalTrace` or a plain
+    dict). When it exposes a ``raw_input``, that string is what the model runs,
+    so it must equal ``full_text_str`` (this template filled with the example's
+    variables) for the computed token indices to be meaningful. If ``raw_input``
+    is absent or not yet computable, nothing was overridden and the template fill
+    is authoritative, so the check is skipped.
+    """
+    try:
+        raw_input = values["raw_input"]
+    except (KeyError, ValueError, TypeError):
+        return
+    if not isinstance(raw_input, str) or raw_input == full_text_str:
+        return
+    i = _first_difference(raw_input, full_text_str)
+    raise PromptTemplateMismatchError(
+        "Token positions are resolved by tokenizing this task's template filled "
+        "with the example's variables, but the example's own 'raw_input' (the "
+        f"prompt the model runs) differs starting at character {i}, so the "
+        "computed positions would not align with that prompt:\n"
+        f"  raw_input (run)        : {raw_input!r}\n"
+        f"  template-filled (posn) : {full_text_str!r}\n"
+        "The dataset was likely built outside causalab (a different "
+        "tokenizer/renderer, a different template, or a hand-built example dict). "
+        "Rebuild each example through the task's causal model — e.g. "
+        "causal_model.new_trace(input_variables) — so raw_input is rendered from "
+        "the template, before running interventions."
+    )
 
 
 class Template:
@@ -396,9 +529,31 @@ class Template:
                 result.append(str(values[content]))
         return "".join(result)
 
-    # Class-level cache for tokenization results
-    # Key: (template_str, full_text_str), Value: (offsets, variable_tokens)
-    _position_cache: Dict[tuple[int, LiteralString], Dict[str, List[int]]] = {}
+    # Class-level LRU cache for tokenization results.
+    #
+    # Key: ``(tokenizer.name_or_path, use_chat_template, full_text_str)``.
+    #   * ``name_or_path`` is the tokenizer's *stable, unique identity*, not
+    #     ``id()``. ``id()`` is recycled after GC, so a long-lived process that
+    #     frees and rebuilds pipelines (sweeps, session reuse) could get a cache
+    #     hit from a *different* tokenizer that landed at the same address —
+    #     silently returning another tokenizer's token indices. Keying on a
+    #     stable identity removes that aliasing. Distinct tokenizers are expected
+    #     to carry distinct ``name_or_path`` values; a missing/empty
+    #     ``name_or_path`` is not a usable identity and is rejected loudly at
+    #     lookup time (see ``get_variable_positions``) rather than silently
+    #     collapsing distinct tokenizers onto one cache key.
+    #   * The chat-template flag is part of the key because the same bare text
+    #     tokenizes to different token positions with vs. without the chat
+    #     wrapper — without it the two modes would collide on a cache hit and
+    #     silently return the wrong indices.
+    #
+    # Bounded via LRU eviction (``_POSITION_CACHE_MAXSIZE``): the least-recently
+    # -used entry is dropped once the bound is exceeded, so the class-level dict
+    # cannot grow for the whole process lifetime across sweeps.
+    _POSITION_CACHE_MAXSIZE: int = 4096
+    _position_cache: "OrderedDict[tuple[str, bool, str], Dict[str, List[int]]]" = (
+        OrderedDict()
+    )
 
     def get_variable_positions(
         self, values: Dict[str, Any], pipeline
@@ -419,7 +574,7 @@ class Template:
             Dictionary mapping variable names to lists of token indices
         """
         # Build the full text while tracking character positions
-        char_positions = {}  # var_name -> [(start_char, end_char), ...]
+        char_positions = {}  # var_name -> [(start_char, end_char, value_str), ...]
         current_pos = 0
         full_text = []
 
@@ -435,21 +590,58 @@ class Template:
                 start_char = current_pos
                 end_char = current_pos + len(value_str)
 
-                # Track this variable's character positions
-                # Support multiple occurrences - store as list of ranges
+                # Track this variable's character positions (and the substituted
+                # value, used to verify chat-template preservation when rebasing).
+                # Support multiple occurrences - store as list of ranges.
                 if content not in char_positions:
                     char_positions[content] = []
-                char_positions[content].append((start_char, end_char))
+                char_positions[content].append((start_char, end_char, value_str))
 
                 full_text.append(value_str)
                 current_pos = end_char
 
         full_text_str = "".join(full_text)
 
-        # Check cache first
-        cache_key: tuple[int, LiteralString] = (id(pipeline.tokenizer), full_text_str)
-        if cache_key in Template._position_cache:
-            return Template._position_cache[cache_key]
+        # Guardrail: ``full_text_str`` (this template filled with the example's
+        # variables) is what we tokenize below to locate variables, but the model
+        # actually runs the trace's ``raw_input``. They match by construction for
+        # causalab-sampled data; a pre-existing/externally-built example can carry
+        # a divergent ``raw_input`` that would make every index here land on the
+        # wrong token with no error. Validate before the cache lookup so cache
+        # hits are checked too.
+        _assert_raw_input_matches(values, full_text_str)
+
+        # Check cache first. Keyed on the tokenizer's *stable identity*
+        # (``name_or_path``, not ``id()``) plus the chat-template flag, so bare
+        # and chat-wrapped runs of the same text don't collide and a recycled
+        # object address can't serve a different tokenizer's indices (see
+        # _position_cache). ``name_or_path`` is the cache's notion of tokenizer
+        # identity and is expected to be unique per tokenizer; a missing/empty
+        # value (e.g. a programmatically-constructed tokenizer that never set it)
+        # is not a usable key and would silently collapse distinct tokenizers
+        # onto one entry, so fail loudly instead of caching under a bad key.
+        name_or_path = pipeline.tokenizer.name_or_path
+        if not name_or_path:
+            raise ValueError(
+                "Cannot resolve token positions: the tokenizer's "
+                f"`name_or_path` is {name_or_path!r}. The position cache uses "
+                "`name_or_path` as a unique tokenizer identity, and a "
+                "missing/empty value would alias distinct tokenizers onto one "
+                "cache entry and silently return the wrong token indices. Load "
+                "the tokenizer via `from_pretrained` (which populates "
+                "`name_or_path`) or set `tokenizer.name_or_path` to a unique, "
+                "stable identifier before running interventions."
+            )
+        cache_key: tuple[str, bool, str] = (
+            name_or_path,
+            pipeline.use_chat_template,
+            full_text_str,
+        )
+        cached = Template._position_cache.get(cache_key)
+        if cached is not None:
+            # Mark as most-recently-used for LRU eviction.
+            Template._position_cache.move_to_end(cache_key)
+            return cached
 
         # Convert text to CausalTrace
         trace = CausalTrace(
@@ -461,21 +653,29 @@ class Template:
 
         # Use pipeline.load() with offset_mapping to get character→token mapping
         # This ensures we use the exact same tokenization as interventions
-        tokenized = pipeline.load([trace], return_offsets_mapping=True)
+        tokenized = _load_for_indexing(pipeline, [trace], return_offsets_mapping=True)
         offsets = tokenized["offset_mapping"][0]  # Get first sequence from batch
 
-        # Map character positions to token indices using offsets
+        # Map character positions to token indices using offsets. Under a chat
+        # template the offsets index the wrapped prompt, so rebase each bare char
+        # range by the chat prefix (and verify the template preserved the value).
         variable_tokens = {}
         for var_name, char_ranges in char_positions.items():
             variable_tokens[var_name] = []
 
-            for start_char, end_char in char_ranges:
+            for start_char, end_char, value_str in char_ranges:
+                rebased_start, rebased_end = rebase_char_range(
+                    tokenized, start_char, end_char, value_str, f"variable {var_name!r}"
+                )
                 # Find which tokens overlap with this character range
-                tokens = get_tokens_in_char_range(offsets, start_char, end_char)
+                tokens = get_tokens_in_char_range(offsets, rebased_start, rebased_end)
                 variable_tokens[var_name].extend(tokens)
 
-        # Cache the result
+        # Cache the result, evicting the least-recently-used entries once the
+        # bound is exceeded so the class-level dict stays bounded across sweeps.
         Template._position_cache[cache_key] = variable_tokens
+        while len(Template._position_cache) > Template._POSITION_CACHE_MAXSIZE:
+            Template._position_cache.popitem(last=False)
 
         return variable_tokens
 
@@ -487,7 +687,7 @@ class Template:
 
 
 def build_token_position_factories(
-    specs: Dict[str, Union[Dict[str, Any], Callable]], template: str
+    specs: Mapping[str, Union[Dict[str, Any], Callable]], template: str
 ) -> Dict[str, Callable]:
     """
     Build token position factory functions from declarative specifications.
@@ -509,6 +709,36 @@ def build_token_position_factories(
         factories[name] = _build_factory(name, spec, template)
 
     return factories
+
+
+def build_token_positions(
+    specs: Mapping[str, Union[Dict[str, Any], Callable]],
+    template: str,
+    pipeline: LMPipeline,
+) -> Dict[str, TokenPosition]:
+    """Build declarative specs and materialize them into TokenPosition instances.
+
+    Thin wrapper over :func:`build_token_position_factories` that immediately calls
+    each factory with ``pipeline``. This is the shape every consumer needs: a task's
+    ``create_token_positions`` returns ``Dict[str, TokenPosition]``, and the runner
+    (``build_targets_for_grid``) / activations layer (``build_residual_stream_targets``)
+    read ``.id`` off each value.
+
+    Prefer this over calling :func:`build_token_position_factories` directly in a task
+    wrapper. Returning the un-materialized factories crashes the ``locate`` step with
+    ``AttributeError: 'function' object has no attribute 'id'`` (issue #179).
+
+    Args:
+        specs: Position name → declarative spec dict or dynamic spec generator, as
+            accepted by :func:`build_token_position_factories`.
+        template: The ``raw_input`` template string with ``{variable}`` placeholders.
+        pipeline: The pipeline the positions resolve against.
+
+    Returns:
+        Dict mapping position name → :class:`TokenPosition` instance.
+    """
+    factories = build_token_position_factories(specs, template)
+    return {name: factory(pipeline) for name, factory in factories.items()}
 
 
 def _build_factory(
@@ -581,6 +811,11 @@ def _build_index_factory(name: str, spec: Dict[str, Any], template: str) -> Call
         {"type": "index", "position": +1, "relative_to": {"variable": "x"}}  # After x
     """
     position = spec.get("position")
+    if position is None:
+        raise ValueError(
+            f"index-type token position spec {name!r} is missing required "
+            f"'position' field."
+        )
     scope = spec.get("scope")
     relative_to = spec.get("relative_to")
 
@@ -600,14 +835,20 @@ def _build_absolute_index_factory(name: str, position: int) -> Callable:
 
     def factory(pipeline):
         def indexer(input_sample: CausalTrace):
-            ids = pipeline.load([input_sample])["input_ids"][0]
+            ids = _load_for_indexing(pipeline, [input_sample])["input_ids"][0]
             total_tokens = len(ids)
 
-            # Handle negative indices
+            # Handle negative indices. Negative positions count from the end and
+            # need no rebasing — `position=-1` is the generation slot regardless
+            # of any chat prefix. Non-negative positions are content-relative, so
+            # under a chat template we skip past the prefix tokens (BOS, role
+            # markers, any system directive) — `position=0` means the first
+            # *content* token, not BOS. `_chat_prefix_token_count()` is 0 when no
+            # chat template is applied, so this is a no-op for bare prompts.
             if position < 0:
                 actual_position = total_tokens + position
             else:
-                actual_position = position
+                actual_position = position + pipeline._chat_prefix_token_count()
 
             if actual_position < 0 or actual_position >= total_tokens:
                 raise ValueError(
@@ -751,7 +992,7 @@ def _build_relative_index_factory(
                 target_pos = reference_pos + offset
 
             # Validate it's in bounds
-            ids = pipeline.load([input_sample])["input_ids"][0]
+            ids = _load_for_indexing(pipeline, [input_sample])["input_ids"][0]
             total_tokens = len(ids)
 
             if target_pos < 0 or target_pos >= total_tokens:

@@ -1,0 +1,35 @@
+{
+  "deterministic": false,
+  "model": "chat-coherent",
+  "runner": "golden/hex_color",
+  "seed": 0,
+  "tolerance": {
+    "accuracy.accuracy": 0,
+    "accuracy.prob_accuracy": 0.0001,
+    "default": 1e-05
+  },
+  "values": {
+    "accuracy.accuracy": 1.0,
+    "accuracy.correct": 30,
+    "accuracy.prob_accuracy": 0.9983557820320129,
+    "accuracy.total": 30,
+    "baseline.per_class_output_dists.dists.first": 3.8980022765144895e-08,
+    "baseline.per_class_output_dists.dists.last": 7.816257493686862e-06,
+    "baseline.per_class_output_dists.dists.mean": 2.749068528373755e-07,
+    "baseline.per_class_output_dists.dists.shape": [
+      6,
+      6
+    ],
+    "baseline.per_class_output_dists.dists.std": 1.3174716286812327e-06,
+    "baseline.per_class_output_dists.sha256": "78ac377014a108849c449c979654b3c7851bbe90d754cc384144baf4b8485170",
+    "full_output_dists.first": 1.4371991827867938e-17,
+    "full_output_dists.last": 2.3728890792608286e-20,
+    "full_output_dists.mean": 6.581718480447307e-06,
+    "full_output_dists.sha256": "c4a06ca6deb1ff842847b9320ee1b30e1cc9e6fffbd5d8031a5a0625ecac0712",
+    "full_output_dists.shape": [
+      30,
+      151936
+    ],
+    "full_output_dists.std": 0.002561381785199046
+  }
+}

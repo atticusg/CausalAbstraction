@@ -208,7 +208,7 @@ def plot_attention_head_feature_counts(
     n_features: NFeatures,
     title: Optional[str] = None,
     save_path: Optional[str] = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     """
     Plot a full grid heatmap of feature counts for attention heads.
@@ -269,7 +269,7 @@ def plot_residual_stream_feature_counts(
     title: Optional[str] = None,
     save_path: Optional[str] = None,
     score_label: str = "Acc",
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     """
     Plot a tokens x layers heatmap for residual stream with accuracy column.
@@ -327,7 +327,7 @@ def plot_mlp_feature_counts(
     n_features: NFeatures,
     title: Optional[str] = None,
     save_path: Optional[str] = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     """
     Plot a tokens x layers heatmap of feature counts for MLPs with accuracy column.
@@ -386,7 +386,7 @@ def plot_feature_counts(
     n_features: NFeatures,
     title: Optional[str] = None,
     save_path: Optional[str] = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     """
     Plot feature counts, auto-detecting component type and grid dimensions.

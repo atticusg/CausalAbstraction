@@ -1,0 +1,8 @@
+# @package cluster
+# Example per-site override. Copy to `cluster/<your-site>.yaml`, fill in the
+# values your scheduler requires, and select it with `fanout --cluster <your-site>`.
+# Leave a field null to omit its directive (cluster default applies).
+partition: gpu
+account: null
+qos: normal
+extra_sbatch: []

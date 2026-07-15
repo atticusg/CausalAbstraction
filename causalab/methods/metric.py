@@ -15,7 +15,7 @@ from causalab.causal.counterfactual_dataset import (
 from causalab.causal.causal_model import CausalModel
 from causalab.causal.trace import CausalTrace, Mechanism
 
-from causalab.neural.pipeline import LMPipeline
+from causalab.neural.pipeline import LMPipeline, ensure_position_ids
 from causalab.neural.units import InterchangeTarget
 from causalab.neural.activations.collect import collect_source_representations
 from torch import Tensor
@@ -56,10 +56,63 @@ def tokenize_variable_values(
         if single_tok_ids:
             all_concept_ids.append(single_tok_ids)
         else:
-            # No single-token variant: fall back to first variant's full sequence
+            # No single-token variant: fall back to first variant's full sequence.
+            # variants is non-empty (caller guarantees ≥1 variant per concept), so
+            # first_seq must have been assigned in the loop above.
+            assert first_seq is not None
             all_concept_ids.append(first_seq)
 
     return all_concept_ids
+
+
+def answer_token_forms(answer: str) -> list[str]:
+    """Candidate single-token string forms of an answer to probe.
+
+    Returns ``{space-prefixed, bare} × {as-is, lowercased}``, de-duplicated and
+    order-stable. This aligns the probability grader with the strip-tolerant
+    string grader: whether the task ships ``raw_output="blue"`` or ``" blue"``,
+    both the space-prefixed ``" blue"`` and bare ``blue`` tokens (and their
+    lowercase forms) are tried, so the grader captures the leading-space token
+    the model actually emits instead of silently scoring ~0.
+
+    **Order matters:** the space-prefixed forms come first. Set-building callers
+    (the string/prob graders) are order-insensitive, but :func:`single_token_id`
+    returns the *first* single-token form, and at a word boundary the model emits
+    the leading-space token (``" Mary"``, not the bare ``"Mary"`` — a different
+    GPT-2 BPE id for ~half of typical name vocabularies). Listing the emitted
+    form first makes that function read the vocab row the model actually scores.
+    """
+    stripped = answer.strip()
+    forms: list[str] = []
+    for prefix in (" ", ""):
+        for base in (stripped, stripped.lower()):
+            cand = prefix + base
+            if base and cand not in forms:
+                forms.append(cand)
+    return forms
+
+
+def single_token_id(pipeline: LMPipeline, answer: str) -> int:
+    """First single-token id among the spacing/case variants of ``answer``.
+
+    Mirrors ``compute_base_accuracy``'s grader: tries ``{" "+bare, bare}`` ×
+    ``{as-is, lower}`` (see :func:`answer_token_forms`). Because that helper now
+    lists the space-prefixed forms first, this returns the *emitted* token — the
+    one the model places probability on after a word boundary (``" Mary"``), not
+    the bare ``"Mary"``, a distinct GPT-2 BPE id for ~half of typical name
+    vocabularies. Reading the bare id would score the wrong vocab row in the
+    logit/prob/logit-diff metrics. Raises if no variant is single-token — the
+    logit metrics need exactly one token id to read.
+    """
+    tokenizer = pipeline.tokenizer
+    for form in answer_token_forms(answer):
+        ids = tokenizer.encode(form, add_special_tokens=False)
+        if len(ids) == 1:
+            return ids[0]
+    raise ValueError(
+        f"No single-token form of answer {answer!r} under this tokenizer; the "
+        f"logit metric needs single-token answers."
+    )
 
 
 def _normalize_var_indices(var_indices) -> list[list[int]]:
@@ -70,7 +123,7 @@ def _normalize_var_indices(var_indices) -> list[list[int]]:
     multiple variants like " Monday" and "Monday").
     """
     if isinstance(var_indices, torch.Tensor):
-        return [[idx.item()] for idx in var_indices]
+        return [[int(idx.item())] for idx in var_indices]
     if var_indices and isinstance(var_indices[0], int):
         return [[idx] for idx in var_indices]
     return var_indices
@@ -254,32 +307,53 @@ class InterchangeMetric:
     """Metric for scoring interchange interventions.
 
     fn receives (intervention_output, expected, original) -> float.
+
+    ``needs_scores`` signals that ``fn`` reads ``intervention_output["scores"]``
+    (raw logits) rather than only the decoded ``"string"``; callers use it to
+    decide whether to request ``output_scores`` from the intervention run.
     """
 
     fn: Callable[[Dict[str, Any], Dict[str, Any], Dict[str, Any]], float]
     needs_causal_expected: bool = True
     needs_original_output: bool = False
+    needs_scores: bool = False
     target_variables: Tuple[str, ...] | None = None
     label_variable: str = "raw_output"
 
 
-def string_equality_checker(intervention_output: Dict[str, Any], expected: Any) -> bool:
-    """Default checker: stripped string equality between intervention output and expected."""
-    output_str = intervention_output.get("string", "")
-    expected_str = (
-        expected.get("string", expected) if isinstance(expected, dict) else expected
-    )
-    return str(output_str).strip() == str(expected_str).strip()
+def as_label_checker(
+    checker: Callable[[Dict[str, Any], str], bool],
+) -> Callable[[Dict[str, Any], Any], bool]:
+    """Adapt a task checker to the interchange-metric checker signature.
+
+    A task's ``checker`` takes ``(neural_output, causal_output: str)``, but
+    intervention scoring (``make_causal_metric``, ``LM_loss_and_metric_fn``)
+    passes the causal *label*, which may arrive as a bare value or as a
+    ``{"string": ...}`` dict.  This normalizes the label to a string before
+    delegating, so ``task.checker`` becomes the single match authority for both
+    base accuracy and intervention scoring (#167) — replacing the previous
+    lenient-containment / string-equality defaults.
+    """
+
+    def _adapted(neural_output: Dict[str, Any], expected: Any) -> bool:
+        expected_value = (
+            expected.get("string", expected) if isinstance(expected, dict) else expected
+        )
+        return checker(neural_output, str(expected_value))
+
+    return _adapted
 
 
 def make_causal_metric(
-    checker: Callable[[Dict[str, Any], Any], float | bool] = string_equality_checker,
+    checker: Callable[[Dict[str, Any], Any], float | bool],
     target_variables: Tuple[str, ...] = ("raw_output",),
     label_variable: str = "raw_output",
 ) -> InterchangeMetric:
     """Create an InterchangeMetric that compares intervention outputs to causal model labels.
 
-    Bool checker results are coerced to 0.0/1.0.
+    ``checker`` is the match authority (a task's ``checker`` wrapped via
+    :func:`as_label_checker`, #167) — there is no strict-equality default. Bool
+    checker results are coerced to 0.0/1.0.
     """
 
     def causal_metric_fn(
@@ -401,6 +475,274 @@ def _logits_to_class_probs(
     return joint
 
 
+def make_distribution_shift_metric(
+    score_token_ids: list[int] | list[list[int]],
+    comparison_fn: Callable[[Tensor, Tensor], Tensor] = kl_divergence,
+    score_token_index: int = 0,
+) -> InterchangeMetric:
+    """Score how far the patched output drifts from the base (pre-intervention) output.
+
+    For each example, projects both the patched logits
+    (``intervention_output["scores"]``, indexed by ``example_idx``) and the base
+    logits (``original["scores"]``) onto the task's answer classes and returns
+    ``comparison_fn(base_probs, patched_probs)``.
+
+    A *larger* value means patching that cell moved the output more — i.e. the
+    variable is more strongly encoded there — so this metric is **not** negated:
+    ``run_interchange_scan``'s "best = highest score per layer" summary correctly
+    selects the most causal cell.  Requires ``original_outputs`` (see
+    ``compute_base_outputs``) and ``output_scores=True`` on the intervention run.
+    """
+    token_seqs = _normalize_var_indices(score_token_ids)
+    n_steps = max(len(seq) for seq in token_seqs)
+
+    def _probs_from_logits(logits_per_token: list[Tensor]) -> Tensor:
+        logits_per_step = [
+            logits_per_token[score_token_index + k].unsqueeze(0)
+            for k in range(n_steps)
+            if score_token_index + k < len(logits_per_token)
+        ]
+        return _logits_to_class_probs(logits_per_step, token_seqs)
+
+    # The base distribution is constant across all (cell × example) calls for a
+    # given example, but ``shift_fn`` is invoked once per cell. Memoize per base
+    # output (keyed by identity of its ``scores`` list, which the caller holds
+    # alive for the whole scan) so we project the base logits once, not n_cells×.
+    base_probs_cache: Dict[int, Tensor] = {}
+
+    def shift_fn(
+        intervention_output: Dict[str, Any],
+        expected: Dict[str, Any],
+        original: Dict[str, Any],
+    ) -> float:
+        scores = intervention_output.get("scores")
+        if scores is None:
+            raise ValueError(
+                "distribution-shift metric requires scores (pass output_scores=True)"
+            )
+        base_scores = original.get("scores")
+        if base_scores is None:
+            raise ValueError(
+                "distribution-shift metric requires base outputs "
+                "(pass original_outputs from compute_base_outputs)"
+            )
+        idx = intervention_output["example_idx"]
+        patched_probs = _probs_from_logits([s[idx] for s in scores])
+        base_key = id(base_scores)
+        base_probs = base_probs_cache.get(base_key)
+        if base_probs is None:
+            base_probs = _probs_from_logits(list(base_scores))
+            base_probs_cache[base_key] = base_probs
+        return comparison_fn(base_probs, patched_probs).item()
+
+    return InterchangeMetric(
+        fn=shift_fn,
+        needs_causal_expected=False,
+        needs_original_output=True,
+        needs_scores=True,
+    )
+
+
+def make_logit_metric(
+    pipeline: LMPipeline,
+    dataset: list[CounterfactualExample],
+    answer_of: Callable[[CounterfactualExample], str],
+    *,
+    relative_to_base: bool = True,
+    score_token_index: int = 0,
+) -> InterchangeMetric:
+    """Build a single-token logit / Δ-logit metric over ``dataset``.
+
+    The continuous counterpart to :func:`make_causal_metric`'s 0/1 string match:
+    instead of "did the answer change," it reads the raw logit of a fixed answer
+    token, so the score tracks *how much* an intervention moved the model — the
+    natural unit for self-repair, direct-effect, and ablation-impact work.
+
+    ``answer_of`` maps each example to the answer string whose logit to read (e.g.
+    CounterFact's object). Single-token ids are precomputed per example (via
+    :func:`single_token_id`) and looked up by ``example_idx`` at scoring time,
+    since ``InterchangeMetric.fn`` sees only ``(intervention_output, expected,
+    original)``.
+
+    Distinct from :func:`make_logit_diff_metric`, which scores the logit
+    *difference between two tokens* (correct vs. distractor) on a single run; this
+    scores *one* token, optionally relative to the base run.
+
+    With ``relative_to_base`` (default) the score is the *ablation impact*
+    ``base_logit − patched_logit`` — positive when the intervention pushes the
+    answer logit down (the self-repair / direct-effect sign convention). With it
+    ``False`` the score is the raw patched logit. Requires full-vocab
+    ``output_scores=True`` on the scan; ``relative_to_base`` additionally needs
+    ``original_outputs`` from :func:`compute_base_outputs`.
+    """
+    answer_ids = [single_token_id(pipeline, answer_of(ex)) for ex in dataset]
+
+    def fn(
+        intervention_output: Dict[str, Any],
+        _expected: Dict[str, Any],
+        original: Dict[str, Any],
+    ) -> float:
+        scores = intervention_output.get("scores")
+        if scores is None:
+            raise ValueError(
+                "logit metric needs full-vocab scores from the patched run "
+                "(output_scores=True)."
+            )
+        idx = intervention_output["example_idx"]
+        tok = answer_ids[idx]
+        patched = float(scores[score_token_index][idx][tok])
+        if not relative_to_base:
+            return patched
+        base_scores = original.get("scores")
+        if base_scores is None:
+            raise ValueError(
+                "logit metric with relative_to_base=True needs base outputs "
+                "(pass original_outputs from compute_base_outputs)."
+            )
+        base = float(base_scores[score_token_index][tok])  # (vocab,) per example
+        return base - patched
+
+    return InterchangeMetric(
+        fn=fn,
+        needs_causal_expected=False,
+        needs_original_output=relative_to_base,
+        needs_scores=True,
+    )
+
+
+def make_prob_metric(
+    pipeline: LMPipeline,
+    dataset: list[CounterfactualExample],
+    answer_of: Callable[[CounterfactualExample], str],
+    *,
+    relative_to_base: bool = True,
+    score_token_index: int = 0,
+) -> InterchangeMetric:
+    """Build a softmax-probability metric ``P(answer)`` over ``dataset``.
+
+    The probability counterpart to :func:`make_logit_metric`: it softmaxes the
+    full-vocab logits at ``score_token_index`` and reads the answer token's
+    probability, the readout ROME-style causal tracing reports (the recovered
+    *probability* of the correct continuation), rather than a raw logit.
+
+    ``answer_of`` maps each example to the answer string whose probability to
+    read; single-token ids are precomputed per example and looked up by
+    ``example_idx`` at scoring time.
+
+    With ``relative_to_base`` (default) the score is ``base_prob − patched_prob``
+    (positive when the intervention pushes the answer probability down); with it
+    ``False`` the score is the raw patched probability — the form causal tracing
+    uses, computing recovery against the corrupted floor itself. Requires
+    full-vocab ``output_scores=True``; ``relative_to_base`` additionally needs
+    ``original_outputs`` from :func:`compute_base_outputs`.
+    """
+    answer_ids = [single_token_id(pipeline, answer_of(ex)) for ex in dataset]
+
+    def _prob_of(logits: torch.Tensor, tok: int) -> float:
+        return float(torch.softmax(logits.float(), dim=-1)[tok])
+
+    def fn(
+        intervention_output: Dict[str, Any],
+        _expected: Dict[str, Any],
+        original: Dict[str, Any],
+    ) -> float:
+        scores = intervention_output.get("scores")
+        if scores is None:
+            raise ValueError(
+                "prob metric needs full-vocab scores from the patched run "
+                "(output_scores=True)."
+            )
+        idx = intervention_output["example_idx"]
+        tok = answer_ids[idx]
+        patched = _prob_of(scores[score_token_index][idx], tok)
+        if not relative_to_base:
+            return patched
+        base_scores = original.get("scores")
+        if base_scores is None:
+            raise ValueError(
+                "prob metric with relative_to_base=True needs base outputs "
+                "(pass original_outputs from compute_base_outputs)."
+            )
+        base = _prob_of(base_scores[score_token_index], tok)  # (vocab,) per example
+        return base - patched
+
+    return InterchangeMetric(
+        fn=fn,
+        needs_causal_expected=False,
+        needs_original_output=relative_to_base,
+        needs_scores=True,
+    )
+
+
+def make_logit_diff_metric(
+    pipeline: LMPipeline,
+    dataset: list[CounterfactualExample],
+    correct_of: Callable[[CounterfactualExample], str],
+    distractor_of: Callable[[CounterfactualExample], str],
+    *,
+    relative_to_base: bool = True,
+    score_token_index: int = 0,
+) -> InterchangeMetric:
+    """Build a single-run logit-*difference* metric over ``dataset``.
+
+    The two-token sibling of :func:`make_logit_metric`: instead of one answer
+    token's logit, it reads the *difference* between a correct and a distractor
+    token, ``logit[correct] − logit[distractor]`` — the canonical path-patching /
+    IOI readout, but equally usable for any contrastive ablation or interchange
+    scan.
+
+    ``correct_of`` / ``distractor_of`` map each example to its correct and
+    distractor answer strings (e.g. IOI ``IO`` and ``name_C``). Single-token ids
+    are precomputed per example (via :func:`single_token_id`) and looked up by
+    ``example_idx`` at scoring time, since ``InterchangeMetric.fn`` sees only
+    ``(intervention_output, expected, original)``.
+
+    With ``relative_to_base`` (default) the score is the *direct effect*
+    ``base_diff − patched_diff`` — how much of the clean logit difference flowed
+    through the patched path (positive when the sender pushes the output toward
+    the correct token). With it ``False`` the score is the raw patched logit
+    difference. Requires full-vocab ``output_scores=True`` on the scan;
+    ``relative_to_base`` additionally needs ``original_outputs`` from
+    :func:`compute_base_outputs`.
+    """
+    correct_ids = [single_token_id(pipeline, correct_of(ex)) for ex in dataset]
+    distractor_ids = [single_token_id(pipeline, distractor_of(ex)) for ex in dataset]
+
+    def fn(
+        intervention_output: Dict[str, Any],
+        _expected: Dict[str, Any],
+        original: Dict[str, Any],
+    ) -> float:
+        scores = intervention_output.get("scores")
+        if scores is None:
+            raise ValueError(
+                "logit-difference metric needs full-vocab scores from the patched "
+                "run (output_scores=True)."
+            )
+        idx = intervention_output["example_idx"]
+        c, d = correct_ids[idx], distractor_ids[idx]
+        patched = scores[score_token_index][idx]  # (vocab,)
+        patched_diff = float(patched[c] - patched[d])
+        if not relative_to_base:
+            return patched_diff
+        base_scores = original.get("scores")
+        if base_scores is None:
+            raise ValueError(
+                "logit-difference metric with relative_to_base=True needs base "
+                "outputs (pass original_outputs from compute_base_outputs)."
+            )
+        base = base_scores[score_token_index]  # (vocab,) per example
+        base_diff = float(base[c] - base[d])
+        return base_diff - patched_diff
+
+    return InterchangeMetric(
+        fn=fn,
+        needs_causal_expected=False,
+        needs_original_output=relative_to_base,
+        needs_scores=True,
+    )
+
+
 def compute_reference_distributions(
     dataset: list[CounterfactualExample],
     score_token_ids: list[int] | list[list[int]],
@@ -478,14 +820,32 @@ def compute_reference_distributions(
 def compute_base_accuracy(
     dataset: list[CounterfactualExample],
     pipeline: Any,
+    checker: Callable[[dict, str], bool],
     batch_size: int = 16,
+    answer_fn: Callable[[CounterfactualExample], str | list[str]] | None = None,
 ) -> dict:
     """Compute base model accuracy (no intervention) over a dataset.
 
-    Checks if the model's generated output matches ``raw_output`` from each
-    example.  Handles both single-answer (``str``) and multi-answer
-    (``list[str]``) raw_output (e.g. graph_walk where any valid neighbor
+    Checks if the model's generated output matches the example's expected
+    answer.  Handles both single-answer (``str``) and multi-answer
+    (``list[str]``) expectations (e.g. graph_walk where any valid neighbor
     counts as correct).
+
+    By default the expected answer is ``ex["input"]["raw_output"]``.  Pass
+    ``answer_fn`` to score against a different per-example string — used by
+    tasks with more than one scoring convention (e.g. MCQA scored against the
+    choice *value*/colour rather than the option *letter*).  The variant
+    logic below already tries both the bare and space-prefixed forms of
+    whatever string is returned, so an ``answer_fn`` returning ``" orange"``
+    captures the bare ``orange`` token the model actually emits.
+
+    ``checker`` (a task's ``checker({"string": generated}, expected) -> bool``,
+    i.e. ``task.checker``) is **required** and is the sole match authority — there
+    is no strict-equality fallback (#167).  It lets each task decide its own
+    semantics, e.g. entity_binding's ``startswith`` accepts the continuation
+    tokens a ``max_new_tokens > 1`` task emits after the answer
+    (``"bread\\n\\nAnn loves"`` for expected ``"bread"``), which strict equality
+    would reject.
 
     Also computes ``prob_accuracy``: the mean probability mass assigned to
     valid answer tokens (full-vocab softmax), which is more informative than
@@ -513,40 +873,41 @@ def compute_base_accuracy(
         scores = result.get("scores", [])
 
         # Full-vocab softmax for the first generated token
+        probs = None
         if single_token and scores:
             probs = F.softmax(scores[0].float(), dim=-1)  # (B, vocab_size)
 
         for bi, ex in enumerate(batch_examples):
-            generated = strings[bi].strip()
-            raw_output = ex["input"]["raw_output"]
-            if isinstance(raw_output, list):
-                hit = any(generated == ans.strip() for ans in raw_output)
-            else:
-                hit = generated == raw_output.strip()
+            generated = strings[bi]
+            expected = (
+                answer_fn(ex) if answer_fn is not None else ex["input"]["raw_output"]
+            )
+            answers = expected if isinstance(expected, list) else [expected]
+            # The task's checker is the sole match authority (no strict-equality
+            # fallback, #167) — e.g. entity_binding's ``startswith`` accepts the
+            # continuation tokens a ``max_new_tokens > 1`` task emits after the
+            # answer. A list expectation (e.g. graph_walk) counts if any matches.
+            hit = any(checker({"string": generated}, ans) for ans in answers)
             if hit:
                 correct += 1
             total += 1
 
             # P(valid answer): sum of probs for all valid answer token variants
             if single_token and scores:
-                answers = raw_output if isinstance(raw_output, list) else [raw_output]
                 all_token_ids = set()
                 for ans in answers:
-                    # Collect all single-token variants of this answer
-                    ans_str = ans
-                    variants = [ans_str]
-                    stripped = ans_str.strip()
-                    if stripped != ans_str:
-                        variants.append(stripped)
-                    if stripped.lower() != stripped:
-                        variants.append(stripped.lower())
-                        if ans_str.startswith(" "):
-                            variants.append(" " + stripped.lower())
-                    for var in variants:
+                    # Collect all single-token forms of this answer, trying both
+                    # spacings and cases so the prob grader matches the
+                    # strip-tolerant string grader regardless of whether
+                    # ``raw_output`` carries a leading space.
+                    for var in answer_token_forms(ans):
                         ids = tokenizer.encode(var, add_special_tokens=False)
                         if len(ids) == 1:
                             all_token_ids.add(ids[0])
                 if all_token_ids:
+                    assert (
+                        probs is not None
+                    )  # single_token and scores branch sets probs
                     prob_sum += probs[bi, list(all_token_ids)].sum().item()
 
     accuracy = correct / total if total > 0 else 0.0
@@ -560,6 +921,41 @@ def compute_base_accuracy(
         "total": total,
         "prob_accuracy": prob_accuracy,
     }
+
+
+def compute_base_outputs(
+    dataset: list[CounterfactualExample],
+    pipeline: Any,
+    batch_size: int = 16,
+) -> List[Dict[str, Any]]:
+    """Run the base (un-patched) model over a dataset, one output dict per example.
+
+    Returns a list aligned with ``dataset`` where each entry is
+    ``{"string": <generated text>, "scores": [logits_tok0 (V,), ...]}``.  This is
+    the shape ``score_intervention_outputs`` expects for ``original_outputs`` when
+    a metric has ``needs_original_output=True`` (e.g. the distribution-shift metric).
+    """
+    outputs: List[Dict[str, Any]] = []
+    n_batches = math.ceil(len(dataset) / batch_size)
+    for batch_idx in range(n_batches):
+        start = batch_idx * batch_size
+        end = min(start + batch_size, len(dataset))
+        batch_examples = dataset[start:end]
+        batch_inputs = [ex["input"] for ex in batch_examples]
+
+        result = pipeline.generate(batch_inputs)
+        strings = result["string"]
+        if isinstance(strings, str):
+            strings = [strings]
+        scores = result.get("scores", [])
+        for bi in range(len(batch_examples)):
+            outputs.append(
+                {
+                    "string": strings[bi],
+                    "scores": [scores[t][bi].cpu() for t in range(len(scores))],
+                }
+            )
+    return outputs
 
 
 def score_intervention_outputs(
@@ -695,13 +1091,24 @@ def LM_loss_and_metric_fn(
         use_chat_template=False,
     )
 
+    # Drop any load-time position_ids before concatenating: base is left-padded
+    # and the label is right-padded, so segment-local position_ids (present when
+    # the pipeline is built with position_ids=True) would make the label restart
+    # at 0 instead of continuing from the base. ensure_position_ids below re-derives
+    # them from the *concatenated* mask, where base's right-aligned real tokens and
+    # the label's left-aligned real tokens are contiguous — so cumsum numbers the
+    # whole real span continuously regardless of padding side.
+    batched_base.pop("position_ids", None)
+
     # Concatenate labels to base inputs for evaluation
     for k in batched_base:
         batched_base[k] = torch.cat([batched_base[k], batched_inv_label[k]], dim=-1)
 
-    # Run the intervenable model with interventions
+    # Run the intervenable model with interventions. This is a plain
+    # (non-generate) forward, so supply position_ids — otherwise a left-padded
+    # batch is mis-encoded on absolute-position models (see ensure_position_ids).
     _, counterfactual_logits = intervenable_model(
-        batched_base,
+        ensure_position_ids(batched_base),
         batched_counterfactuals,
         unit_locations=inv_locations,
         subspaces=feature_indices,

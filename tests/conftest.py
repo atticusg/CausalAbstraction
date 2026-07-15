@@ -1,4 +1,4 @@
-# tests/test_pyvene_core/conftest.py
+# tests/conftest.py
 
 import pytest
 import torch
@@ -10,6 +10,129 @@ from causalab.causal.trace import Mechanism, input_var
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.LM_units import ResidualStream
 from causalab.neural.token_positions import TokenPosition
+
+# Re-export so tests can do "from tests.conftest import assert_runner_completed".
+from tests.end_to_end._helpers.runner_completion import (  # noqa: F401
+    assert_runner_completed,
+)
+
+# Tier markers recognised by the warn-mode collection hook below. Mirrors the
+# tier taxonomy in docs/TESTS.md. Tests must declare exactly one of
+# {smoke, numerical_unit, golden, property, unit} explicitly. `golden` is the
+# sole GPU tier (value-pinned coherent-model runners); the rest are CPU. The
+# default tier (`unit`) is the most common; tag with
+# `pytestmark = pytest.mark.unit` at module scope.
+_TIER_MARKERS = frozenset({"smoke", "numerical_unit", "golden", "property", "unit"})
+
+
+# --- ``model: tiny-random`` smoke-only guardrail ----------------------------
+#
+# ``causalab/configs/model/tiny-random.yaml`` carries ``is_smoke_only: true``
+# and a fat-finger warning header. The hook below is the pytest-side runtime
+# half of that guardrail: it wraps :func:`causalab.io.configs.load_runner_config`
+# in :func:`pytest_configure` (i.e. *before* any test module imports the
+# function by name) so that any test which composes a cfg with
+# ``model.is_smoke_only`` set must also carry the ``smoke`` pytest marker.
+#
+# (``chat-coherent`` = Qwen3-4B-Instruct is the *trained* stub used by the
+# golden tier — it is NOT flagged ``is_smoke_only`` because its outputs are
+# meaningful, not random noise.)
+#
+# Why ``pytest_configure`` and not an autouse fixture? Test modules
+# typically do ``from causalab.io.configs import load_runner_config``,
+# which binds the function-name *at import time*. An autouse fixture that
+# rebinds the module attribute after import is a no-op for those callers.
+# Patching in ``pytest_configure`` runs before any test-module collection /
+# import, so subsequent ``from`` imports pick up the wrapped function.
+#
+# This is pytest-only — it does not protect against fat-fingering
+# ``model=tiny-random`` in a real Hydra CLI invocation. The yaml-header
+# banner plus the random-init weights producing visibly nonsense numbers
+# handle that path.
+
+_CURRENT_TEST_IS_SMOKE: list[bool] = [False]
+
+
+def pytest_configure(config):
+    """Install the ``is_smoke_only`` guardrail before any test imports."""
+    from causalab.io import configs as _configs_module
+
+    if getattr(_configs_module, "_load_runner_config_guardrail_installed", False):
+        return  # idempotent; already patched (e.g. nested pytest invocation)
+
+    real_loader = _configs_module.load_runner_config
+
+    def _guarded_loader(*args, **kwargs):
+        cfg = real_loader(*args, **kwargs)
+        model = getattr(cfg, "model", None)
+        if model is not None and bool(getattr(model, "is_smoke_only", False)):
+            if not _CURRENT_TEST_IS_SMOKE[0]:
+                raise AssertionError(
+                    f"Composed a model config flagged ``is_smoke_only: true`` "
+                    f"(model.id={getattr(model, 'id', '?')!r}) outside the "
+                    f"smoke tier. ``tiny-random`` weights are random-init and "
+                    f"produce nonsense numbers — pick a real model config "
+                    f"(e.g. ``chat-coherent``) or tag "
+                    f"this test with @pytest.mark.smoke."
+                )
+        return cfg
+
+    _configs_module.load_runner_config = _guarded_loader
+    _configs_module._load_runner_config_guardrail_installed = True
+
+
+def pytest_runtest_setup(item):
+    """Track whether the currently-running test is in the smoke tier."""
+    _CURRENT_TEST_IS_SMOKE[0] = "smoke" in {m.name for m in item.iter_markers()}
+
+
+def pytest_runtest_teardown(item, nextitem):
+    """Reset the smoke flag so off-test composition (e.g. fixture teardown
+    that happens to call ``load_runner_config``) defaults to non-smoke."""
+    del item, nextitem
+    _CURRENT_TEST_IS_SMOKE[0] = False
+
+
+def pytest_collection_modifyitems(config, items):
+    """Fail-mode tier-marker enforcement (Phase 7).
+
+    Collects every item lacking any of ``smoke / numerical / property /
+    unit`` markers and raises :class:`pytest.UsageError` if any are
+    found. The message lists the offending nodeids so the operator can
+    paste a ``pytestmark = pytest.mark.<tier>`` line into each module.
+
+    Phase 2 shipped this as a warn-mode hook; Phase 7 promotes it to
+    fail-mode alongside a backfill that tags every existing test file.
+    The xdist master-process gate stays — only the master process
+    decides whether the suite is well-formed; worker collections are
+    a strict subset of the master's so they'd surface the same untagged
+    set redundantly.
+    """
+    if getattr(config, "workerinput", None) is not None:
+        # xdist worker — let the master enforce.
+        return
+
+    untagged = [
+        item.nodeid
+        for item in items
+        if not _TIER_MARKERS.intersection(m.name for m in item.iter_markers())
+    ]
+    if not untagged:
+        return
+
+    # Truncate the offending list so a global drift doesn't dump
+    # thousands of lines into the terminal. The first ten and a count
+    # are enough to see what's going on.
+    preview = "\n  ".join(untagged[:10])
+    suffix = ""
+    if len(untagged) > 10:
+        suffix = f"\n  ... and {len(untagged) - 10} more"
+    raise pytest.UsageError(
+        f"{len(untagged)} tests lack a tier marker "
+        f"(smoke/numerical_unit/golden/property/unit). Tag them with "
+        f"`pytestmark = pytest.mark.<tier>` at module scope:\n"
+        f"  {preview}{suffix}"
+    )
 
 
 @pytest.fixture(scope="session")
@@ -60,6 +183,15 @@ def mcqa_causal_model():
         {"answer_pointer": list(range(NUM_CHOICES)), "answer": list(ALPHABET)}
     )
     values.update({"question": COLOR_OBJECTS})
+    values.update({"raw_input": None, "raw_output": None})
+
+    def _fill_prompt(t):
+        color, obj = t["question"]
+        lines = [f"Which color is the {obj}?"]
+        for i in range(NUM_CHOICES):
+            lines.append(f"{t[f'symbol{i}']}: {t[f'choice{i}']}")
+        lines.append("Answer:")
+        return "\n".join(lines)
 
     # Define mechanisms using new API
     mechanisms: dict[str, Mechanism] = {
@@ -76,6 +208,16 @@ def mcqa_causal_model():
         "answer": Mechanism(
             parents=["answer_pointer"] + [f"symbol{x}" for x in range(NUM_CHOICES)],
             compute=lambda t: " " + t[f"symbol{t['answer_pointer']}"],
+        ),
+        "raw_input": Mechanism(
+            parents=["question"]
+            + [f"symbol{x}" for x in range(NUM_CHOICES)]
+            + [f"choice{x}" for x in range(NUM_CHOICES)],
+            compute=_fill_prompt,
+        ),
+        "raw_output": Mechanism(
+            parents=["answer"],
+            compute=lambda t: t["answer"],
         ),
     }
 
@@ -217,158 +359,17 @@ def mcqa_counterfactual_datasets(mcqa_causal_model, seed_everything):
 
 @pytest.fixture(scope="function")
 def mock_tiny_lm():
+    """Return an :class:`LMPipeline` backed by the tiny-random Llama stub.
+
+    Tests on this fixture want a placeholder pipeline that exercises real
+    HF shapes / dtypes / tokenizer behaviour without the cost of loading a
+    production-sized model. The underlying model is cached in-process via
+    :func:`tests._helpers.tiny.tiny_random_model`, so repeated fixture
+    construction is effectively free after the first pytest session warm-up.
     """
-    Create a minimal mock implementation of a language model for testing.
+    from tests._helpers.tiny import TINY_RANDOM_MODEL_NAME
 
-    This returns a mock LMPipeline with simple generation capabilities that's
-    suitable for testing without requiring full model weights.
-    """
-
-    class MockTokenizer:
-        def __init__(self):
-            self.pad_token = "<pad>"
-            self.pad_token_id = 0
-            self.eos_token = "</s>"
-            self.eos_token_id = 1
-            self.padding_side = "right"
-
-        def __call__(
-            self,
-            texts,
-            padding=None,
-            max_length=None,
-            truncation=None,
-            return_tensors=None,
-            add_special_tokens=None,
-        ):
-            # Very simple tokenization - just use character codes
-            batch = []
-            for text in texts:
-                # Tokenize by character ordinals for simplicity
-                tokens = [ord(c) % 100 + 2 for c in text]  # +2 to avoid pad/eos IDs
-                batch.append(tokens)
-
-            # Apply padding if needed
-            if padding or max_length:
-                max_len = max_length if max_length else max(len(seq) for seq in batch)
-                batch = [
-                    seq + [self.pad_token_id] * (max_len - len(seq)) for seq in batch
-                ]
-
-            # Convert to tensors
-            input_ids = torch.tensor(batch, dtype=torch.long)
-            attention_mask = (input_ids != self.pad_token_id).long()
-
-            return {"input_ids": input_ids, "attention_mask": attention_mask}
-
-        def decode(self, token_ids, skip_special_tokens=False):
-            # Simple decoding - convert back to characters
-            if skip_special_tokens:
-                token_ids = [
-                    t
-                    for t in token_ids
-                    if t not in [self.pad_token_id, self.eos_token_id]
-                ]
-            return "".join(chr((t - 2) + 97) if t >= 2 else "_" for t in token_ids)
-
-        def batch_decode(self, sequences, skip_special_tokens=False):
-            return [self.decode(seq, skip_special_tokens) for seq in sequences]
-
-    class MockConfig:
-        def __init__(self):
-            self.name_or_path = "mock_model"
-            self.num_hidden_layers = 4
-            self.hidden_size = 32
-            self.n_head = 4
-
-    class MockModel:
-        def __init__(self):
-            self.config = MockConfig()
-            self.device = "cpu"
-            self.dtype = torch.float32
-
-        def to(self, device=None, dtype=None):
-            if device:
-                self.device = device
-            if dtype:
-                self.dtype = dtype
-            return self
-
-        def __call__(self, input_ids=None, attention_mask=None, **kwargs):
-            # Mock forward pass - return random logits and final hidden states
-            batch_size, seq_len = input_ids.shape
-            hidden_size = self.config.hidden_size
-
-            # Create mock hidden states and logits
-            hidden_states = torch.randn(
-                batch_size, seq_len, hidden_size, device=self.device, dtype=self.dtype
-            )
-            vocab_size = 100  # Small vocab for testing
-            logits = torch.randn(
-                batch_size, seq_len, vocab_size, device=self.device, dtype=self.dtype
-            )
-
-            return type(
-                "obj",
-                (object,),
-                {
-                    "hidden_states": hidden_states,
-                    "logits": logits,
-                    "last_hidden_state": hidden_states,
-                },
-            )
-
-        def generate(
-            self,
-            input_ids=None,
-            attention_mask=None,
-            max_new_tokens=None,
-            return_dict_in_generate=False,
-            output_scores=False,
-            **kwargs,
-        ):
-            batch_size = input_ids.shape[0]
-            input_ids.shape[1]
-
-            # Generate a simple continuation - just increment token IDs
-            new_tokens = torch.randint(
-                2, 99, (batch_size, max_new_tokens), device=self.device
-            )
-            sequences = torch.cat([input_ids, new_tokens], dim=1)
-
-            if return_dict_in_generate:
-                if output_scores:
-                    # Mock scores - random probabilities
-                    vocab_size = 100
-                    scores = [
-                        torch.randn(batch_size, vocab_size, device=self.device)
-                        for _ in range(max_new_tokens)
-                    ]
-                    return type(
-                        "GenerationOutput",
-                        (object,),
-                        {"sequences": sequences, "scores": scores},
-                    )
-                return type(
-                    "GenerationOutput",
-                    (object,),
-                    {"sequences": sequences, "scores": None},
-                )
-
-            return sequences
-
-    # Create the mock pipeline
-    mock_model = MockModel()
-    mock_tokenizer = MockTokenizer()
-
-    # Create a LMPipeline with the mock components
-    pipeline = LMPipeline(model_or_name="mock_model", max_new_tokens=3)
-
-    # Replace with our mocks
-    pipeline.model = mock_model
-    pipeline.tokenizer = mock_tokenizer
-
-    return pipeline
+    return LMPipeline(model_or_name=TINY_RANDOM_MODEL_NAME, max_new_tokens=3)
 
 
 @pytest.fixture(scope="function")

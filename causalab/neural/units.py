@@ -18,14 +18,77 @@ This file introduces:
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 from typing import Any, Callable, Iterator
+
+import torch
 
 from causalab.neural.featurizer import Featurizer
 
 # Version identifier for model unit serialization format
 MODEL_UNIT_VERSION = "2.0"
+
+
+def _indexer_accepts_is_original(indexer: Callable[..., Any]) -> bool:
+    """Whether ``indexer`` can be called with an ``is_original=...`` keyword.
+
+    Decided once from the signature — never by catching a ``TypeError`` at call
+    time. Catching the ``TypeError`` conflated "the indexer does not take the
+    flag" with "the indexer took the flag but a bug inside it raised", silently
+    re-running such an indexer *without* the flag; for a paired position that
+    returns base positions on a counterfactual read — a wrong-position
+    intervention instead of a crash (#430).
+
+    Returns ``True`` when the signature has a ``**kwargs`` catch-all, or a
+    parameter named ``is_original`` that is reachable by keyword
+    (``POSITIONAL_OR_KEYWORD`` or ``KEYWORD_ONLY``). A *positional-only*
+    ``is_original`` cannot be satisfied by the keyword call, so it counts as
+    unsupported. Callables whose signature is not introspectable (some C
+    builtins) are treated as unsupported.
+    """
+    try:
+        params = inspect.signature(indexer).parameters
+    except (TypeError, ValueError):
+        return False
+    for param in params.values():
+        if param.kind is inspect.Parameter.VAR_KEYWORD:
+            return True
+        if param.name == "is_original" and param.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            return True
+    return False
+
+
+# Sentinel for `index_component`'s `attention_mask` default. Lets us
+# distinguish "caller omitted the kwarg" (an error for batched-multi calls)
+# from "caller explicitly passed None" (intentional opt-out, leave indices
+# in each example's unpadded frame). See AtomicModelUnit.index_component.
+_ATTENTION_MASK_UNSET: Any = object()
+
+
+def _shift_row(
+    positions: list[int], shift: int, padded_len: int, ex_idx: int
+) -> list[int]:
+    """Add ``shift`` to every position, bounds-checked against ``padded_len``."""
+    shifted = [p + shift for p in positions]
+    oob = [p for p in shifted if p < 0 or p >= padded_len]
+    if oob:
+        raise ValueError(
+            f"Position {oob} is out of bounds for padded length {padded_len} "
+            f"(example {ex_idx}, per-row shift {shift}). Token-position indices "
+            "must fall within the sequence; an out-of-bounds index reaches "
+            "pyvene's gather/scatter as a CUDA assertion that poisons the "
+            "context. Common causes: a position computed for a differently-"
+            "shaped input (e.g. a base position reused on a shorter "
+            "counterfactual, #176), or — when `pipeline.max_length` is set — "
+            "an indexer returning positions already in the padded frame so the "
+            "shift pushes them past the end (use `pipeline.max_length=None`)."
+        )
+    return shifted
 
 
 class ComponentIndexer:
@@ -46,6 +109,11 @@ class ComponentIndexer:
         """
         self.indexer = indexer
         self.id = id
+        # Detected once, at construction, from the signature — see
+        # `_indexer_accepts_is_original`. Dispatch reads this flag instead of
+        # probing the indexer with a try/except, so a `TypeError` raised inside
+        # the indexer propagates as the real bug it is (#430).
+        self._accepts_is_original = _indexer_accepts_is_original(indexer)
 
     # ------------------------------------------------------------------ #
     def index(
@@ -68,17 +136,19 @@ class ComponentIndexer:
         return self._call_indexer(input, is_original)
 
     def _call_indexer(self, input: Any, is_original: bool | None) -> list[int]:
-        """Call the indexer function with is_original parameter only if it's not None."""
-        if is_original is not None:
-            try:
-                # Try calling with is_original parameter
-                return self.indexer(input, is_original=is_original)
-            except TypeError:
-                # Fallback for indexers that don't accept is_original
-                return self.indexer(input)
-        else:
-            # is_original is None, don't pass it
-            return self.indexer(input)
+        """Call the wrapped indexer, threading ``is_original`` iff it accepts it.
+
+        Whether the indexer accepts ``is_original`` was decided once at
+        construction from its signature (``self._accepts_is_original``); this
+        never catches a ``TypeError`` to decide. So a ``TypeError`` raised
+        *inside* an ``is_original``-accepting indexer propagates like any other
+        bug, instead of being swallowed and the indexer silently re-invoked
+        without the flag — which for a paired position would read base positions
+        on a counterfactual pass (#430).
+        """
+        if is_original is not None and self._accepts_is_original:
+            return self.indexer(input, is_original=is_original)
+        return self.indexer(input)
 
     # ------------------------------------------------------------------ #
     def __repr__(self) -> str:
@@ -405,10 +475,108 @@ class AtomicModelUnit:
         return self._indices_func.id
 
     def index_component(
-        self, input: Any, **kwargs: Any
+        self,
+        input: Any,
+        *,
+        batch: bool = False,
+        attention_mask: Any = _ATTENTION_MASK_UNSET,
+        **kwargs: Any,
     ) -> list[int] | list[list[int]] | list[list[list[int]]]:
-        """Return indices for *input* by delegating to wrapped function."""
-        return self._indices_func.index(input, **kwargs)
+        """Return indices for *input*, optionally shifted into the padded-batch frame.
+
+        Indexers compute positions in each example's *unpadded* tokenization
+        frame. When ``attention_mask`` is provided (the output of
+        ``pipeline.load(...)["attention_mask"]``), those positions are rewritten
+        into the padded-batch frame: ``argmax(attention_mask, dim=1)`` gives the
+        per-row offset (``0`` for right-padding, ``padded_len - unpadded_len``
+        for left-padding). Without this shift, downstream consumers that index
+        into the padded tensor (pyvene, ``_collect_activations_single_batch``)
+        land on the wrong absolute token for rows shorter than the batch max.
+
+        Required for batched-multi calls. ``batch=True`` with ``len(input) > 1``
+        means ``pipeline.load`` may pad shorter rows — the only configuration
+        where the unpadded/padded frame mismatch is harmful — so this method
+        raises ``ValueError`` if ``attention_mask`` is omitted in that case.
+        Pass ``attention_mask=None`` explicitly to opt out (e.g. when you
+        intentionally want indices in each example's unpadded frame, or for
+        offline / diagnostic usage that won't index into a padded tensor).
+        For ``batch=False`` or batches of one, the kwarg is genuinely optional
+        — there's no padding to correct for.
+
+        Assumes contiguous padding (a prefix of zeros for left-pad or a suffix
+        for right-pad). Interior zeros in ``attention_mask`` are not supported.
+        """
+        attention_mask = self._resolve_attention_mask(input, batch, attention_mask)
+        raw = self._indices_func.index(input, batch=batch, **kwargs)
+        if attention_mask is None:
+            return raw
+        return self._apply_padding_shift(raw, attention_mask, batch=batch)
+
+    def tensorized_index_groups(self, unit_indices: Any) -> list[Any]:
+        """Split a unit's per-batch index structure into the groups pyvene
+        stacks *separately* with ``torch.tensor`` in ``gather_neurons``.
+
+        A plain single-axis ``pos`` unit's whole structure is stacked by one
+        ``torch.tensor`` call, so it is a single group. Multi-axis units (e.g.
+        :class:`AttentionHead`, whose structure is ``[head_axis, position_axis]``
+        and which pyvene indexes as ``unit_locations_as_list[0]`` / ``[1]``)
+        override this to return one group per axis. The ragged-span guard checks
+        each group independently so the head and position axes — which
+        legitimately differ in width — are never compared against each other.
+        """
+        return [unit_indices]
+
+    @staticmethod
+    def _resolve_attention_mask(
+        input: Any, batch: bool, attention_mask: Any
+    ) -> torch.Tensor | None:
+        """Translate the sentinel default; raise if a batched-multi call omitted the mask.
+
+        See :meth:`index_component` for the contract.
+        """
+        if attention_mask is not _ATTENTION_MASK_UNSET:
+            return attention_mask
+        if batch and isinstance(input, (list, tuple)) and len(input) > 1:
+            raise ValueError(
+                "Batched `index_component` with multiple examples requires "
+                "`attention_mask` — pass `pipeline.load(...)['attention_mask']` "
+                "so unpadded-frame positions get shifted into the padded-batch "
+                "frame. If you intentionally want indices in each example's "
+                "unpadded frame (e.g. offline export or symbolic diagnostics), "
+                "pass `attention_mask=None` explicitly."
+            )
+        return None
+
+    def _apply_padding_shift(
+        self,
+        indices: Any,
+        attention_mask: torch.Tensor,
+        *,
+        batch: bool,
+    ) -> Any:
+        """Shift single-axis position indices into the padded-batch frame.
+
+        Subclasses with multi-axis returns (e.g. :class:`AttentionHead`,
+        which returns ``[head_axis, position_axis]``) override this to shift
+        only the position axis.
+
+        The bounds check in ``_shift_row`` runs even when no shift is needed
+        (no left-padding, e.g. a ``batch_size=1`` call): a position computed
+        for a differently-shaped input — such as a base position reused on a
+        shorter counterfactual (#176) — would otherwise pass straight through
+        to pyvene's gather and trip a CUDA scatter assertion that poisons the
+        context. Raising here turns that into a catchable ``ValueError``.
+        """
+        per_row_shift = torch.argmax(attention_mask.int(), dim=1).tolist()
+        padded_len = int(attention_mask.shape[1])
+
+        if not batch:
+            return _shift_row(indices, per_row_shift[0], padded_len, ex_idx=0)
+
+        return [
+            _shift_row(row, per_row_shift[i], padded_len, ex_idx=i)
+            for i, row in enumerate(indices)
+        ]
 
     def get_feature_indices(self) -> list[int] | None:
         return self.feature_indices
@@ -439,9 +607,14 @@ class AtomicModelUnit:
         return self._static_indices
 
     def create_intervention_config(
-        self, group_key: str | int, intervention_type: str
+        self, group_key: str | int, intervention_type: str, noise_seed: int = 0
     ) -> dict[str, Any]:
-        """Return PyVENE config dict for this unit + featurizer."""
+        """Return PyVENE config dict for this unit + featurizer.
+
+        ``noise_seed`` is used only for ``intervention_type == "noise"`` (it
+        selects the seeded additive-Gaussian intervention so a draw is
+        reproducible per (site, seed)); it is ignored for every other type.
+        """
         config: dict[str, Any] = {
             "component": self.component_type,
             "unit": self.unit,
@@ -461,6 +634,10 @@ class AtomicModelUnit:
         elif intervention_type == "interpolation":
             config["intervention_type"] = (
                 self.featurizer.get_interpolation_intervention()
+            )
+        elif intervention_type == "noise":
+            config["intervention_type"] = self.featurizer.get_noise_intervention(
+                seed=noise_seed
             )
         else:
             raise ValueError(f"Unknown intervention type '{intervention_type}'.")

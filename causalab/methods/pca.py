@@ -30,8 +30,8 @@ output_dir/
 Usage Example:
 ==============
 ```python
-from causalab.methods.targets import build_residual_stream_targets
-from causalab.methods.collect_PCA import collect_and_compute_PCA
+from causalab.neural.activations.targets import build_residual_stream_targets
+from causalab.methods.pca import collect_and_compute_PCA
 
 # Build targets
 targets = build_residual_stream_targets(
@@ -131,7 +131,7 @@ def compute_svd(
                 features = features / std_vals
 
         X = features.numpy().astype(np.float64)
-        U, S, Vt = np.linalg.svd(X, full_matrices=False)
+        U, S, Vt = np.linalg.svd(X, full_matrices=False)  # pyright: ignore[reportUnusedVariable]
 
         components = Vt[:n]
         explained_variance = (S[:n] ** 2) / (n_samples - 1)
@@ -284,6 +284,8 @@ def collect_and_compute_PCA(
         all_units,
         batch_size=batch_size,
     )
+    # collect_output_logits is False (default), so the return is dict[str, Tensor]
+    assert isinstance(all_features_dict, dict)
 
     # =========================================================================
     # Step 2: Compute per-unit SVD (for featurizer initialization)

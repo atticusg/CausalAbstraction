@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 import torch
 from omegaconf import DictConfig, OmegaConf
@@ -19,7 +19,7 @@ from causalab.runner.helpers import (
     generate_datasets,
     get_output_token_ids,
     resolve_intervention_metric,
-    _task_config_for_metadata,
+    _task_config_for_metadata,  # pyright: ignore[reportPrivateUsage]
 )
 from causalab.io.pipelines import load_pipeline
 from causalab.io.plots.plot_utils import resolve_task_colormap
@@ -29,17 +29,17 @@ from causalab.io.plots.figure_format import (
     resolve_figure_format_from_analysis,
 )
 
-from causalab.methods.interchange.tracing import run_residual_stream_tracing
+from causalab.analyses.locate.single_pair_trace import save_single_pair_trace
 from causalab.neural.token_positions import get_list_of_each_token
-from causalab.io.plots.string_heatmap import (
-    build_token_labels,
-    plot_single_pair_trace_heatmap,
-)
 
 logger = logging.getLogger(__name__)
 
 ANALYSIS_NAME = "locate"
 HANDLES_MULTI_VARIABLE = True
+
+# ``intervention_metric`` is read by direct attribute access (no safe default).
+# Validated up front by the runner (#264).
+REQUIRED_TASK_KEYS = ("intervention_metric",)
 
 
 def _resolve_target_variables(cfg: DictConfig) -> list[str | None]:
@@ -69,14 +69,18 @@ def _run_scan_for_variable(
     mode: str,
     batch_size: int,
     n_steer: int,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
     source_pipeline=None,
     dbm_cfg: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the task for one variable and run the configured scan."""
+    if target_variable is None:
+        raise ValueError("target_variable is required for _run_scan_for_variable")
     task, _task_cfg_raw = resolve_task(
         task_name=cfg.task.name,
-        task_config=OmegaConf.to_container(cfg.task, resolve=True),
+        task_config=cast(
+            dict[str, Any], OmegaConf.to_container(cfg.task, resolve=True)
+        ),
         target_variable=target_variable,
         seed=cfg.seed,
     )
@@ -101,6 +105,20 @@ def _run_scan_for_variable(
     n_classes = (
         len(task.intervention_values) if task.intervention_variable else _n_score_tokens
     )
+    if score_token_ids is None or n_classes is None:
+        raise ValueError(
+            "Could not derive score_token_ids / n_classes from the task. "
+            "Ensure the task declares output_tokens for its intervention_variable."
+        )
+    # tokenize_variable_values returns list[list[int]] at runtime; the Tensor
+    # branch in its declared union only applies to pre-tokenized inputs which
+    # this path never produces. Narrow at the boundary so downstream call
+    # sites that expect a list-like type are sound without an unchecked cast.
+    if not isinstance(score_token_ids, list):
+        raise TypeError(
+            f"Expected list[list[int]] from get_output_token_ids, got "
+            f"{type(score_token_ids).__name__}"
+        )
 
     if method == "interchange":
         from causalab.analyses.locate import run_interchange_scan
@@ -119,6 +137,7 @@ def _run_scan_for_variable(
             out_dir=var_out_dir,
             position_names=position_names,
             comparison_fn=comparison_fn,
+            intervention_metric=cfg.task.intervention_metric,
             experiment_root=cfg.experiment_root,
             colormap=resolve_task_colormap(cfg.task, None),
             figure_format=figure_format,
@@ -150,7 +169,7 @@ def _save_variable_results(
     layers: list[int],
     variable_label: str,
     colormap: str | None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> dict[str, Any]:
     """Persist per-variable results: JSON scores, heatmap figure."""
     scores_per_cell = result.get("scores_per_cell", {})
@@ -187,7 +206,7 @@ def _save_variable_results(
                 token_position_ids=token_position_ids,
                 title=f"Locate: {variable_label}",
                 save_path=path_with_figure_format(
-                    os.path.join(var_out_dir, "heatmap.pdf"),
+                    os.path.join(var_out_dir, "heatmap"),
                     figure_format,
                 ),
                 figure_format=figure_format,
@@ -211,7 +230,7 @@ def _run_single_pair_trace(
     pipeline,
     layers: list[int],
     out_dir: str,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
     source_pipeline=None,
 ) -> None:
     """Run a single-pair residual stream trace and save the artifact.
@@ -221,9 +240,13 @@ def _run_single_pair_trace(
     as ``single_pair_trace.json`` alongside a frequency-colored heatmap.
     """
     target_variable = _resolve_target_variables(cfg)[0]
+    if target_variable is None:
+        raise ValueError("task.target_variable is required for _run_single_pair_trace")
     task, _ = resolve_task(
         task_name=cfg.task.name,
-        task_config=OmegaConf.to_container(cfg.task, resolve=True),
+        task_config=cast(
+            dict[str, Any], OmegaConf.to_container(cfg.task, resolve=True)
+        ),
         target_variable=target_variable,
         seed=cfg.seed,
     )
@@ -243,45 +266,15 @@ def _run_single_pair_trace(
     # Per-token positions for pedagogical granularity
     token_positions = get_list_of_each_token(prompt, pipeline)
 
-    result = run_residual_stream_tracing(
+    save_single_pair_trace(
         pipeline=pipeline,
         prompt=prompt,
         counterfactual_prompt=cf_prompt,
         token_positions=token_positions,
         layers=layers,
-        verbose=False,
-        source_pipeline=source_pipeline,
-    )
-
-    # Build self-contained JSON (no pipeline needed to plot later)
-    token_labels = build_token_labels(pipeline, prompt, token_positions)
-    token_position_ids = [tp.id for tp in token_positions]
-
-    cells: dict[str, dict[str, str]] = {}
-    for (layer, pos_id), res in result["intervention_results"].items():
-        key = f"{layer}|{pos_id}"
-        output_str = res["string"][0].strip() if res.get("string") else ""
-        cells[key] = {"output": output_str}
-
-    trace_data = {
-        "prompt": prompt,
-        "counterfactual_prompt": cf_prompt,
-        "layers": layers,
-        "token_position_ids": token_position_ids,
-        "token_labels": token_labels,
-        "cells": cells,
-    }
-
-    trace_path = os.path.join(out_dir, "single_pair_trace.json")
-    with open(trace_path, "w") as f:
-        json.dump(trace_data, f, indent=2)
-    logger.info("Single-pair trace saved to %s", trace_path)
-
-    plot_single_pair_trace_heatmap(
-        trace_data=trace_data,
-        title="Single-Pair Trace",
-        save_path=os.path.join(out_dir, "single_pair_trace_heatmap"),
+        out_dir=out_dir,
         figure_format=figure_format,
+        source_pipeline=source_pipeline,
     )
 
 
@@ -298,9 +291,6 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     """
     analysis = cfg[ANALYSIS_NAME]
     figure_fmt = resolve_figure_format_from_analysis(analysis)
-    string_metric, comparison_fn = resolve_intervention_metric(
-        cfg.task.intervention_metric
-    )
 
     out_dir = analysis._output_dir
     os.makedirs(out_dir, exist_ok=True)
@@ -313,7 +303,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         # target_variable since we discard the loaded task immediately.
         _probe, _ = resolve_task(
             task_name=cfg.task.name,
-            task_config=OmegaConf.to_container(cfg.task, resolve=True),
+            task_config=cast(
+                dict[str, Any], OmegaConf.to_container(cfg.task, resolve=True)
+            ),
             target_variable="__probe__",
             seed=cfg.seed,
         )
@@ -328,12 +320,36 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         )
 
     # Load the (target) pipeline once and reuse across variables.
+    _first_target = target_variables[0]
+    if _first_target is None:
+        raise ValueError(
+            "target_variables[0] is None; cannot load the placeholder task."
+        )
     placeholder_task, _ = resolve_task(
         task_name=cfg.task.name,
-        task_config=OmegaConf.to_container(cfg.task, resolve=True),
-        target_variable=target_variables[0],
+        task_config=cast(
+            dict[str, Any], OmegaConf.to_container(cfg.task, resolve=True)
+        ),
+        target_variable=_first_target,
         seed=cfg.seed,
     )
+
+    # ``string_metric`` feeds dbm_binary; ``comparison_fn`` feeds centroid mode.
+    # Pairwise mode resolves its own InterchangeMetric inside run_interchange_scan.
+    # The string match is the task's own checker (#167); resolve the pair only
+    # when a consumer (dbm_binary / centroid) needs it. Done after the task is
+    # loaded so ``placeholder_task.checker`` is available.
+    needs_string_comparison_metric = (
+        analysis.method == "dbm_binary" or analysis.get("mode") == "centroid"
+    )
+    string_metric, comparison_fn = (
+        resolve_intervention_metric(
+            cfg.task.intervention_metric, checker=placeholder_task.checker
+        )
+        if needs_string_comparison_metric
+        else (None, None)
+    )
+
     pipeline = load_pipeline(
         model_name=cfg.model.name,
         task=placeholder_task,
@@ -341,6 +357,8 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         device=cfg.model.device,
         dtype=cfg.model.get("dtype"),
         eager_attn=cfg.model.get("eager_attn"),
+        use_chat_template=cfg.model.get("chat_template", False),
+        chat_answer_directive=cfg.model.get("chat_answer_directive"),
     )
 
     # Optionally load a source pipeline for cross-model patching.
@@ -360,6 +378,8 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             device=cfg.model.device,
             dtype=cfg.model.get("dtype"),
             eager_attn=cfg.model.get("eager_attn"),
+            use_chat_template=cfg.model.get("chat_template", False),
+            chat_answer_directive=cfg.model.get("chat_answer_directive"),
         )
 
     logger.info("Locate scan over variables: %s", target_variables)
@@ -372,7 +392,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
 
     all_results: dict[str, Any] = {}
     for target_variable in target_variables:
-        label = target_variable
+        if target_variable is None:
+            raise ValueError("target_variable is None inside iteration; expected str")
+        label: str = target_variable
         var_out_dir = os.path.join(out_dir, label)
         os.makedirs(var_out_dir, exist_ok=True)
 
@@ -392,7 +414,12 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             n_steer=analysis.n_steer,
             figure_format=figure_fmt,
             source_pipeline=source_pipeline,
-            dbm_cfg=OmegaConf.to_container(analysis.dbm, resolve=True)
+            # OmegaConf.to_container returns a union; for a DictConfig source it's
+            # a dict, which is Mapping[str, Any]-compatible.
+            dbm_cfg=cast(
+                Mapping[str, Any],
+                OmegaConf.to_container(analysis.dbm, resolve=True),
+            )
             if analysis.get("dbm") is not None
             else None,
         )
@@ -440,7 +467,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         "source_model": source_model_name,
         "task": cfg.task.name,
         "task_config": _task_config_for_metadata(
-            OmegaConf.to_container(cfg.task, resolve=True)
+            cast(dict[str, Any], OmegaConf.to_container(cfg.task, resolve=True))
         ),
         "layers": layers,
         "token_positions": (

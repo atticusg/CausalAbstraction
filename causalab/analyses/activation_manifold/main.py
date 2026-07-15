@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import time as _time
-from typing import Any
+from typing import Any, cast
 
 import torch
 from omegaconf import DictConfig, OmegaConf
@@ -18,7 +18,7 @@ from causalab.runner.helpers import (
     resolve_intervention_metric,
     build_targets_for_layers,
     build_targets_for_grid,
-    _task_config_for_metadata,
+    _task_config_for_metadata,  # pyright: ignore[reportPrivateUsage]
 )
 from causalab.io.pipelines import (
     load_pipeline,
@@ -28,10 +28,18 @@ from causalab.io.pipelines import (
 )
 from causalab.io.artifacts import load_tensor_results, load_tensors_with_meta
 from causalab.io.plots.figure_format import resolve_figure_format_from_analysis
+from causalab.methods.output_tokens import form_group_values
 
 logger = logging.getLogger(__name__)
 
 ANALYSIS_NAME = "activation_manifold"
+
+# task.* keys this analysis reads with no safe default: ``intervention_metric``
+# (direct attribute access) and ``colormap`` (the ``${task.colormap}``
+# interpolation baked into activation_manifold.yaml). The runner validates these
+# up front so a factory task missing them fails fast listing every gap, instead
+# of crashing one key at a time deep in the run (#264).
+REQUIRED_TASK_KEYS = ("colormap", "intervention_metric")
 
 
 def _resolve_grid_cell(
@@ -63,6 +71,23 @@ def _resolve_grid_cell(
     return layer, token_position
 
 
+def _manifold_subdir(analysis: DictConfig) -> str:
+    """Resolve the method subdir for the output path, honoring a CLI override.
+
+    Reads the Hydra-resolved ``analysis._subdir`` (default
+    ``${.method}_s${.smoothness}``) rather than rebuilding
+    ``f"{method}_s{smoothness}"`` directly, so a CLI override of
+    ``activation_manifold._subdir=...`` actually changes the write path
+    (#171, sub-issue C5). The ``_shuf{seed}`` suffix is appended when
+    ``embedding_shuffle_seed`` is set, matching prior behavior.
+    """
+    m_sub = str(analysis._subdir)
+    shuffle_seed = analysis.get("embedding_shuffle_seed", None)
+    if shuffle_seed is not None:
+        m_sub += f"_shuf{shuffle_seed}"
+    return m_sub
+
+
 def main(cfg: DictConfig) -> dict[str, Any]:
     """Run the activation_manifold analysis: fit a manifold in the subspace."""
     from safetensors.torch import load_file
@@ -73,9 +98,6 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     from causalab.methods.metric import compute_reference_distributions
 
     analysis = cfg[ANALYSIS_NAME]
-    string_metric, comparison_fn = resolve_intervention_metric(
-        cfg.task.intervention_metric
-    )
     root = cfg.experiment_root
 
     # Discover subspace dirs
@@ -91,15 +113,22 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             )
 
     # Load task + model (once for all subspace dirs)
-    task, task_cfg_raw = resolve_task(
+    task, task_cfg_raw = resolve_task(  # pyright: ignore[reportUnusedVariable]
         task_name=cfg.task.name,
-        task_config=OmegaConf.to_container(cfg.task, resolve=True),
+        task_config=cast(
+            dict[str, Any], OmegaConf.to_container(cfg.task, resolve=True)
+        ),
         target_variable=cfg.task.get("target_variable"),
         seed=cfg.seed,
     )
+    # Only ``comparison_fn`` (the distribution metric) is used here; the string
+    # metric (the task's checker, #167) is resolved for signature parity.
+    _string_metric, comparison_fn = resolve_intervention_metric(
+        cfg.task.intervention_metric, checker=task.checker
+    )
 
     _t = _time.time()
-    train_dataset, test_dataset = generate_datasets(
+    train_dataset, test_dataset = generate_datasets(  # pyright: ignore[reportUnusedVariable]
         task,
         n_train=cfg.task.n_train,
         n_test=cfg.task.n_test,
@@ -119,6 +148,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         pipeline = load_lite_pipeline(
             model_name=cfg.model.name,
             max_new_tokens=cfg.task.max_new_tokens,
+            use_chat_template=cfg.model.get("chat_template", False),
         )
         logger.info("Lite pipeline loading: %.1fs", _time.time() - _t)
     else:
@@ -129,6 +159,8 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             device=cfg.model.device,
             dtype=cfg.model.get("dtype"),
             eager_attn=cfg.model.get("eager_attn"),
+            use_chat_template=cfg.model.get("chat_template", False),
+            chat_answer_directive=cfg.model.get("chat_answer_directive"),
         )
         logger.info("Model loading: %.1fs", _time.time() - _t)
 
@@ -150,7 +182,11 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         logger.info("=== Manifold for subspace %s ===", ss_sub)
 
         ss_meta = load_subspace_metadata(root, ss_sub, target_variable=tv)
-        k_features = ss_meta.get("k_features")
+        k_features_raw = ss_meta.get("k_features")
+        if k_features_raw is None:
+            logger.warning("Skipping %s: missing k_features in metadata", ss_sub)
+            continue
+        k_features = int(k_features_raw)
         ss_method = ss_meta.get("method", "pca")
         ss_mode = ss_meta.get("mode", "single")
 
@@ -183,10 +219,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 continue
 
         # Output directory — include cell info for grid subspaces
-        m_sub = f"{analysis.method}_s{analysis.smoothness}"
-        shuffle_seed = analysis.get("embedding_shuffle_seed", None)
-        if shuffle_seed is not None:
-            m_sub += f"_shuf{shuffle_seed}"
+        m_sub = _manifold_subdir(analysis)
         if token_position is not None:
             out_dir = os.path.join(
                 root,
@@ -203,7 +236,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
 
         # Build interchange target
         if token_position is not None:
-            targets, positions = build_targets_for_grid(
+            targets, positions = build_targets_for_grid(  # pyright: ignore[reportUnusedVariable]
                 pipeline,
                 task,
                 [layer],
@@ -271,13 +304,19 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 )
             # Fallback: collect features through loaded featurizer (DAS grid case)
             from causalab.neural.activations.collect import collect_features
+            from torch import Tensor
 
             unit = target.flatten()[0]
-            features_dict = collect_features(
-                dataset=train_dataset,
-                pipeline=pipeline,
-                model_units=[unit],
-                batch_size=analysis.batch_size,
+            # collect_output_logits=False (default) returns dict[str, Tensor];
+            # cast tells pyright we're in that branch of the union.
+            features_dict = cast(
+                dict[str, Tensor],
+                collect_features(
+                    dataset=train_dataset,
+                    pipeline=pipeline,
+                    model_units=[unit],
+                    batch_size=analysis.batch_size,
+                ),
             )
             features = features_dict[unit.id].detach()
             logger.info(
@@ -316,9 +355,16 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                     ref_dists = ref_dists / row_sums.unsqueeze(-1).clamp(min=1e-10)
             else:
                 _t = _time.time()
+                if n_classes is None:
+                    raise ValueError(
+                        "n_classes is None when computing ref_dists — "
+                        "task lacks intervention_variable and output_tokens."
+                    )
                 ref_dists = compute_reference_distributions(
                     dataset=train_dataset,
-                    score_token_ids=score_token_ids,
+                    # score_token_ids may be a Tensor from get_output_token_ids;
+                    # compute_reference_distributions accepts list-typed ids.
+                    score_token_ids=cast(list[int], score_token_ids),
                     n_classes=n_classes,
                     example_to_class=task.intervention_value_index,
                     pipeline=pipeline,
@@ -344,7 +390,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             periodic_info=task.causal_model.periods,
             embeddings=task.causal_model.embeddings,
             n_grid=analysis.n_grid,
-            score_token_ids=score_token_ids,
+            # get_output_token_ids may return a Tensor; ManifoldFittingConfig
+            # accepts list-typed ids. Cast for the runtime-known list path.
+            score_token_ids=cast("list[int] | list[list[int]] | None", score_token_ids),
             batch_size=analysis.batch_size,
             ref_dists=ref_dists,
             n_classes=n_classes,
@@ -354,8 +402,18 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             colormap=analysis.get("colormap", None),
             embedding_shuffle_seed=analysis.get("embedding_shuffle_seed", None),
             score_variable_values=(
-                {task.intervention_variable: task.output_token_values}
-                if task.output_token_values
+                # The deduplicated value list per distinct output-form group —
+                # what the removed ``output_token_values`` used to hold (#291).
+                {
+                    task.intervention_variable: form_group_values(
+                        task.causal_model.output_tokens[task.intervention_variable]
+                    )
+                }
+                if (
+                    task.intervention_variable
+                    and task.causal_model.output_tokens
+                    and task.causal_model.output_tokens.get(task.intervention_variable)
+                )
                 else None
             ),
             figure_format=figure_fmt,
@@ -375,11 +433,11 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             "model": cfg.model.name,
             "task": cfg.task.name,
             "task_config": _task_config_for_metadata(
-                OmegaConf.to_container(cfg.task, resolve=True)
+                cast(dict[str, Any], OmegaConf.to_container(cfg.task, resolve=True))
             ),
             "n_train": cfg.task.n_train,
             "seed": cfg.seed,
-            "embedding_shuffle_seed": shuffle_seed,
+            "embedding_shuffle_seed": analysis.get("embedding_shuffle_seed", None),
         }
         if "reconstruction_kl" in pipeline_result:
             manifold_meta["reconstruction_kl"] = pipeline_result["reconstruction_kl"]

@@ -1,0 +1,34 @@
+# @package _global_
+defaults:
+  - /base
+  - /task: MCQA
+  - /model: llama32_1b_instruct
+  - /analysis/subspace
+  - _self_
+task:
+  enumerate_all: true  # use all possible MCQA inputs
+  target_variable: answer
+
+subspace:
+  method: boundless
+  k_features: 64
+  batch_size: 32
+  boundless:
+    training_epoch: 20
+    lr: 0.001
+    regularization_coefficient: 0.1
+  # Three component sweeps — each writes to subspace/boundless_k64/{name}/answer/.
+  modes:
+    - name: residual_stream
+      component_type: residual_stream
+      layers: [0, 4, 8, 12, 15]
+      token_positions: ["correct_symbol", "last_token"]
+    - name: attention_head
+      component_type: attention_head
+      layers: [0, 4, 8, 12, 15]
+      heads: null            # null = all heads in each layer
+      token_position: last_token
+    - name: mlp
+      component_type: mlp
+      layers: [0, 4, 8, 12, 15]
+      token_positions: ["correct_symbol", "last_token"]

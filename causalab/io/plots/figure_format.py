@@ -10,7 +10,7 @@ FigureFormat = Literal["png", "pdf"]
 ALLOWED_FIGURE_FORMATS: frozenset[str] = frozenset({"png", "pdf"})
 
 
-def normalize_figure_format(value: str | None, *, default: str = "pdf") -> str:
+def normalize_figure_format(value: str | None, *, default: str = "png") -> str:
     """Return ``png`` or ``pdf``; validate input."""
     raw = default if value is None else str(value)
     fmt = raw.lower().lstrip(".")
@@ -23,7 +23,7 @@ def normalize_figure_format(value: str | None, *, default: str = "pdf") -> str:
 
 def path_with_figure_format(path: str, figure_format: str | None) -> str:
     """Set or replace the file extension on ``path`` using ``figure_format``."""
-    fmt = normalize_figure_format(figure_format, default="pdf")
+    fmt = normalize_figure_format(figure_format, default="png")
     root, _ext = os.path.splitext(path)
     return f"{root}.{fmt}"
 
@@ -34,8 +34,8 @@ def resolve_figure_format_from_analysis(analysis) -> str:
     if hasattr(analysis, "get"):
         vis = analysis.get("visualization")
     if not vis:
-        return normalize_figure_format(None, default="pdf")
+        return normalize_figure_format(None, default="png")
     raw = (
-        vis.get("figure_format", "pdf") if hasattr(vis, "get") else vis["figure_format"]
+        vis.get("figure_format", "png") if hasattr(vis, "get") else vis["figure_format"]
     )
-    return normalize_figure_format(raw, default="pdf")
+    return normalize_figure_format(raw, default="png")

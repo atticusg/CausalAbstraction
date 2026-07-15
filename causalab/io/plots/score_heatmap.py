@@ -21,7 +21,11 @@ def plot_attention_head_heatmap(
     heads: List[int],
     title: Optional[str] = None,
     save_path: Optional[str] = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
+    cmap: str = "viridis",
+    vmin: float = 0.0,
+    vmax: float = 1.0,
+    cbar_label: str = "Score",
 ) -> None:
     """
     Plot heatmap of attention head intervention scores.
@@ -33,6 +37,10 @@ def plot_attention_head_heatmap(
         title: Optional custom title.
         save_path: Optional path to save figure.
         figure_format: ``png`` or ``pdf`` for static output.
+        cmap: Colormap (default ``viridis``); pass a diverging map for signed values.
+        vmin: Colormap lower bound (default 0.0).
+        vmax: Colormap upper bound (default 1.0).
+        cbar_label: Colorbar label (default ``"Score"``).
     """
     # Build score matrix with NaN for missing values
     score_matrix = np.full((len(heads), len(layers)), np.nan)
@@ -54,17 +62,22 @@ def plot_attention_head_heatmap(
     if title is None:
         title = "Attention Head Intervention Accuracy"
 
-    # Create the heatmap using existing visualization function
+    # Create the heatmap using existing visualization function.
+    # NB: create_heatmap takes `xlabel`/`ylabel` (not `x_label`/`y_label`) and
+    # has no `cbar_label`/`use_custom_bounds` params — passing those forwards
+    # them into imshow(**kwargs) and raises. Mirror plot_residual_stream_heatmap.
     create_heatmap(
         score_matrix=score_matrix,
         x_labels=x_labels,
         y_labels=y_labels,
         title=title,
         save_path=save_path,
-        x_label="Head",
-        y_label="Layer",
-        use_custom_bounds=False,  # Use 0-1 bounds for accuracy
-        cbar_label="Accuracy (%)",
+        xlabel="Head",
+        ylabel="Layer",
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        cbar_label=cbar_label,
         figsize=(max(12, len(heads) * 0.6), max(6, len(layers) * 0.8)),
         figure_format=figure_format,
     )
@@ -76,7 +89,11 @@ def plot_residual_stream_heatmap(
     token_position_ids: List[Any],
     title: Optional[str] = None,
     save_path: Optional[str] = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
+    cmap: str = "viridis",
+    vmin: float = 0.0,
+    vmax: float = 1.0,
+    cbar_label: str = "Score",
 ) -> None:
     """
     Plot heatmap of residual stream intervention scores.
@@ -88,6 +105,10 @@ def plot_residual_stream_heatmap(
         title: Optional custom title.
         save_path: Optional path to save figure.
         figure_format: ``png`` or ``pdf`` for static output.
+        cmap: Colormap (default ``viridis``); pass a diverging map for signed values.
+        vmin: Colormap lower bound (default 0.0).
+        vmax: Colormap upper bound (default 1.0).
+        cbar_label: Colorbar label (default ``"Score"``).
     """
     # Build score matrix with NaN for missing values
     # Rows = layers (reversed), Columns = positions
@@ -120,6 +141,10 @@ def plot_residual_stream_heatmap(
         save_path=save_path,
         xlabel="Position",
         ylabel="Layer",
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        cbar_label=cbar_label,
         figsize=(max(10, len(token_position_ids) * 1.5), max(6, len(layers) * 0.5)),
         figure_format=figure_format,
     )
@@ -129,7 +154,7 @@ def plot_variable_localization_heatmap(
     scores_by_variable: Dict[str, Dict[str, float]],
     title: str = "Variable Localization Heatmap",
     save_path: Optional[str] = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     """
     Plot a layer x variable heatmap from locate results.
@@ -175,7 +200,7 @@ def plot_score_heatmap(
     interchange_targets: Dict[tuple[Any, ...], InterchangeTarget],
     title: str,
     save_path: str,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     """
     Plot score heatmap, auto-detecting component type from targets.

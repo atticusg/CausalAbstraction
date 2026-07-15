@@ -14,7 +14,7 @@ import logging
 import os
 import random
 from collections import Counter
-from typing import Any
+from typing import Any, cast
 
 import torch
 from omegaconf import DictConfig, OmegaConf
@@ -34,7 +34,7 @@ from causalab.methods.attention_pattern_analysis import (
     compute_average_attention_by_token_type,
     get_attention_patterns,
 )
-from causalab.runner.helpers import _task_config_for_metadata, resolve_task
+from causalab.runner.helpers import _task_config_for_metadata, resolve_task  # pyright: ignore[reportPrivateUsage]
 from causalab.tasks.loader import load_task_counterfactuals
 
 logger = logging.getLogger(__name__)
@@ -75,7 +75,9 @@ def _generate_correct_examples(
             pred = pipeline.generate([example])
             pred_str = pipeline.dump(pred["sequences"]).strip()
             expected = str(example["raw_output"]).strip()
-            if expected in pred_str or pred_str in expected:
+            # Use the task's own checker (#167) as the match authority, instead
+            # of a hardcoded bidirectional-containment heuristic.
+            if task.checker({"string": pred_str}, expected):
                 correct.append(example)
     finally:
         random.setstate(rng_state)
@@ -109,7 +111,7 @@ def _resolve_layer_head_pairs(
     """Build the (layer, head) pairs to scan from config."""
     layers = list(range(num_layers)) if cfg_layers is None else list(cfg_layers)
     heads = list(range(num_heads)) if cfg_heads is None else list(cfg_heads)
-    return [(l, h) for l in layers for h in heads]
+    return [(layer, h) for layer in layers for h in heads]
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +135,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     # --- Resolve task and load pipeline ---
     task, _ = resolve_task(
         task_name=cfg.task.name,
-        task_config=OmegaConf.to_container(cfg.task, resolve=True),
+        task_config=cast(
+            dict[str, Any], OmegaConf.to_container(cfg.task, resolve=True)
+        ),
         target_variable=cfg.task.get("target_variable"),
         seed=cfg.seed,
     )
@@ -144,6 +148,8 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         device=cfg.model.device,
         dtype=cfg.model.get("dtype"),
         eager_attn=cfg.model.get("eager_attn"),
+        use_chat_template=cfg.model.get("chat_template", False),
+        chat_answer_directive=cfg.model.get("chat_answer_directive"),
     )
 
     # --- Generate correct examples ---
@@ -208,7 +214,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             pipeline=pipeline,
             layer=layer,
             head=head,
-            prompts=examples,
+            # get_attention_patterns is typed List[CausalTrace] but accepts
+            # dict-like CausalTrace items (see its docstring).
+            prompts=examples,  # pyright: ignore[reportArgumentType]
             token_positions=None,
         )
         first_example_cache[(layer, head)] = results[0]
@@ -309,9 +317,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
 
     # --- Per-layer head comparison grids ---
     if analysis.visualization.head_comparison_grid:
-        scanned_layers = sorted(set(l for l, _ in pairs))
+        scanned_layers = sorted({lyr for lyr, _ in pairs})
         for layer in scanned_layers:
-            layer_heads = [h for l, h in pairs if l == layer]
+            layer_heads = [h for lyr, h in pairs if lyr == layer]
             if len(layer_heads) < 2:
                 continue
             grid_results = [first_example_cache[(layer, h)] for h in layer_heads]
@@ -348,10 +356,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         "model": cfg.model.name,
         "task": cfg.task.name,
         "task_config": _task_config_for_metadata(
-            OmegaConf.to_container(cfg.task, resolve=True)
+            cast(dict[str, Any], OmegaConf.to_container(cfg.task, resolve=True))
         ),
         "n_examples": len(examples),
-        "pairs_scanned": [[l, h] for l, h in pairs],
+        "pairs_scanned": [[lyr, h] for lyr, h in pairs],
         "source_token_types": (
             list(analysis.source_token_types) if analysis.source_token_types else None
         ),

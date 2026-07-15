@@ -1,0 +1,28 @@
+# @package _global_
+defaults:
+- /base
+- /task: MCQA
+- /model: llama32_1b_instruct
+- /analysis/activation_manifold
+- /analysis/path_steering
+- _self_
+task:
+  enumerate_all: true
+  target_variable: answer_position
+
+activation_manifold:
+  method: spline
+  subspace: pca_k32
+  smoothness: 0.0
+  layers: [10]
+  token_positions: [last_token]
+path_steering:
+  path_modes:
+  - geometric
+  - linear_subspace      # linear in PCA space; use "linear" if raw_features.safetensors exists
+  num_steps_along_path: 15
+  n_eval_samples: 50
+  n_prompts: 5
+  subspace: pca_k32
+  activation_manifold:         # auto-discover from artifacts/MCQA/llama32_1b_instruct/activation_manifold/
+  eval_criteria: []            # set to [coherence, distance_from_behavior_manifold] to compute distortion metrics

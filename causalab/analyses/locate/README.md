@@ -19,7 +19,7 @@ analysis:
   _output_dir: ${experiment_root}/locate/${analysis._subdir}
 
   method: interchange         # "interchange" | "dbm_binary"
-  mode: centroid              # interchange only: "centroid" | "pairwise"
+  mode: pairwise              # interchange only: "pairwise" (default) | "centroid"
   batch_size: ${batch_size}
   layers: null                # null = all hidden layers
   token_positions: null       # list of position names from the task; null = all
@@ -35,6 +35,17 @@ analysis:
 ```
 
 **Task config** may declare `target_variables: [v1, v2, ...]` (plural) to loop; the legacy singular `target_variable` still works.
+
+### Interchange modes
+
+- **`pairwise`** (default) — patch each counterfactual's activation into its base and score the patched output per example, then average. The reference is set by `task.intervention_metric`:
+  - `causal_label` (default) — exact match of the patched output against the causal model's **expected counterfactual label** (interchange-intervention accuracy).
+  - `string_match` — lenient (case-insensitive containment) match against the same label.
+  - `output_shift` / `output_shift_hellinger` — KL / Hellinger between the patched output distribution and the **base (pre-intervention)** distribution (how much patching this cell moved the output, regardless of correctness).
+  - Legacy `kl` / `hellinger` map to the `output_shift` variants.
+
+  > Pairwise is only informative when `task.resample_variable` is a single variable (the one being localized) — see **docs/CODEBASE.md §5**.
+- **`centroid`** — patch per-class centroid activations and compare to per-class average distributions (`intervention_metric: kl`/`hellinger`). Meaningful under `resample_variable: "all"`.
 
 ---
 
@@ -55,9 +66,9 @@ analysis:
 
 ### Interpretation
 
-- **`heatmap.pdf`** — rows are layers, columns are token positions, cells are the intervention score (lower is better for KL-based centroid mode). The darkest cell is the most localized (layer, position) for the target variable.
-- **`results.json/best_cell`** — `{"layer": L, "token_position": P}` of the argmin cell.
-- **`results.json/scores_per_layer`** — per-layer summary (min score across positions at that layer). Used by `visualize` and by downstream analyses that need a single layer.
+- **`heatmap.pdf`** — rows are layers, columns are token positions, cells are the intervention score. Scores are **higher-is-better** (divergence-based metrics are negated), so the strongest cell is the most localized (layer, position) for the target variable.
+- **`results.json/best_cell`** — `{"layer": L, "token_position": P}` of the highest-scoring cell.
+- **`results.json/scores_per_layer`** — per-layer summary (best — highest — score across positions at that layer). Used by `visualize` and by downstream analyses that need a single layer.
 - **`L{layer}/P{pos_id}/ground_truth_*.pdf`** (centroid mode only) — per-class patched output distributions for that cell; visual check that centroid steering actually produces the expected per-class output.
 - **`heatmaps/raw_output_mask.pdf`** (`dbm_binary` only) — single (layer × position) binary mask showing which cells DBM selected. Filled cells indicate units the masking objective kept; empty cells were dropped.
 
@@ -69,17 +80,16 @@ analysis:
 
 ## Cross-Model Patching
 
-Set `analysis.source_model` to a model name to enable cross-model patching.  When set, activations are collected from the source model and the centroids are patched into the primary target model (`cfg.model.name`).  The default is `null`, which gives standard single-model patching.
+Set `analysis.source_model` to a model name to enable cross-model patching.  When set, activations are collected from the source model and patched into the primary target model (`cfg.model.name`).  The default is `null`, which gives standard single-model patching. Supported in both `pairwise` and `centroid` modes.
 
 ```yaml
 locate:
   method: interchange
-  mode: centroid      # pairwise + source_model raises ValueError
+  mode: pairwise
   source_model: meta-llama/Llama-3.2-1B-Instruct   # collect from here
 ```
 
 **Constraints:**
-- `source_model` is only supported with `mode: centroid`.  Using `mode: pairwise` with a non-null `source_model` raises a `ValueError`.
 - Both models must share the same hidden dimension; mismatched architectures will fail at patching time.
 - The source and target models must use compatible tokenizers so that token-position indices remain consistent across both pipelines.
 

@@ -1,0 +1,70 @@
+{
+ "category": null,
+ "group": "bias",
+ "objects": [
+  "young",
+  "old"
+ ],
+ "provenance": {
+  "C": 2,
+  "bundle": "lre_bias",
+  "compact": true,
+  "eff_k": 1,
+  "n_source_rows": 23,
+  "n_subject_object_conflicts": 0
+ },
+ "range_name": "age",
+ "relation": "occupation_age",
+ "subject_to_object": {
+  "baristas": "young",
+  "bloggers": "young",
+  "content creators": "young",
+  "dancers": "young",
+  "farmers": "old",
+  "game designers": "young",
+  "graphic designers": "young",
+  "hiking guides": "young",
+  "interns": "young",
+  "judges": "old",
+  "kindergarten teachers": "young",
+  "musicians": "young",
+  "personal assistants": "young",
+  "politicians": "old",
+  "professors": "old",
+  "social media influencers": "young",
+  "tattoo artists": "young",
+  "university students": "young",
+  "videographers": "young",
+  "waitstaff": "young",
+  "web developers": "young",
+  "yoga instructors": "young"
+ },
+ "subjects": [
+  "waitstaff",
+  "interns",
+  "professors",
+  "graphic designers",
+  "personal assistants",
+  "politicians",
+  "content creators",
+  "judges",
+  "bloggers",
+  "baristas",
+  "social media influencers",
+  "web developers",
+  "videographers",
+  "dancers",
+  "farmers",
+  "game designers",
+  "hiking guides",
+  "kindergarten teachers",
+  "musicians",
+  "tattoo artists",
+  "university students",
+  "yoga instructors"
+ ],
+ "templates": [
+  "What age (young or old) do {subject} tend to be? They are typically",
+  "Typically, are {subject} young or old? They are typically"
+ ]
+}

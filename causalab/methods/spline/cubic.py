@@ -42,6 +42,15 @@ class CubicSpline1D(nn.Module):
             ``period > x_max - x_min``. Must be ``None`` for natural mode.
     """
 
+    # Class-level annotations for register_buffer attributes; pyright
+    # cannot otherwise infer Tensor types for buffers.
+    control_points: Tensor
+    values: Tensor
+    x_sorted: Tensor
+    h: Tensor
+    gamma: Tensor
+    y_hat: Tensor
+
     def __init__(
         self,
         control_points: Tensor,
@@ -101,6 +110,7 @@ class CubicSpline1D(nn.Module):
             )
 
         if bc == "periodic":
+            assert self.period is not None  # bc='periodic' validated to require period
             span = (x_sorted[-1] - x_sorted[0]).item()
             if self.period <= span:
                 raise ValueError(
@@ -184,7 +194,7 @@ class CubicSpline1D(nn.Module):
                 Q[j, j] = inv_h[j]
                 Q[j + 1, j] = -(inv_h[j] + inv_h[j + 1])
                 Q[j + 2, j] = inv_h[j + 1]
-            A = R + lam * (Q.T @ Q)
+            A = R + lam * (Q.T @ Q)  # pyright: ignore[reportConstantRedefinition]
 
         gamma_int = torch.linalg.solve(A, Qt_y)  # (m, ambient)
 
@@ -216,7 +226,6 @@ class CubicSpline1D(nn.Module):
         """
         n = y.shape[0]
         device, dtype = y.device, y.dtype
-        ambient = y.shape[1]
         inv_h = 1.0 / h  # (n,)
 
         # h_prev[i] = h[(i-1) mod n], h_next[i] = h[i]
@@ -254,14 +263,14 @@ class CubicSpline1D(nn.Module):
                 Q[(j - 1) % n, j] += inv_h[(j - 1) % n]
                 Q[j, j] += -(inv_h[(j - 1) % n] + inv_h[j])
                 Q[(j + 1) % n, j] += inv_h[j]
-            A = R + lam * (Q.T @ Q)
+            A = R + lam * (Q.T @ Q)  # pyright: ignore[reportConstantRedefinition]
 
         # The cyclic system is rank n-1 (constants are in the null space of
         # the second-difference operator). Solve in least-squares sense; for
         # interpolation that recovers the unique zero-mean γ.
         try:
             gamma = torch.linalg.solve(A, Qt_y)
-        except torch._C._LinAlgError:
+        except torch._C._LinAlgError:  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # torch exposes _LinAlgError at runtime but stubs omit it
             gamma = torch.linalg.lstsq(A, Qt_y).solution
 
         if lam == 0.0:
@@ -357,10 +366,10 @@ class CubicSpline1D(nn.Module):
 
     def _evaluate_periodic(self, u_flat: Tensor) -> Tensor:
         x = self.x_sorted
-        h = self.h
         gamma = self.gamma
         y_hat = self.y_hat
         n = x.shape[0]
+        assert self.period is not None  # bc='periodic' constructor enforces this
         period = self.period
         x0 = x[0]
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from causalab.causal.causal_model import CausalModel
 from causalab.neural.units import InterchangeTarget
@@ -77,6 +77,8 @@ def find_boundless_subspace(
         os.path.join(output_dir or ".", "logs") if output_dir else "logs"
     )
 
+    if metric is None:
+        raise ValueError("`metric` is required for find_boundless_subspace")
     result = train_interventions(
         causal_model=causal_model,
         interchange_targets={("single",): target},
@@ -85,7 +87,8 @@ def find_boundless_subspace(
         pipeline=pipeline,
         target_variable_group=("raw_output",),
         metric=metric,
-        config=mask_config,
+        # ExperimentConfig (TypedDict) is structurally compatible with dict[str, Any]
+        config=cast(dict[str, Any], mask_config),
     )
 
     # Note: we do not call save_train_results here because the base Featurizer used

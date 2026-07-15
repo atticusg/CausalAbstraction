@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+  - /base
+  - /task: MCQA
+  - /model: llama32_1b_instruct
+  - /analysis/locate
+  - _self_
+
+task:
+  enumerate_all: true
+  target_variables: [answer_position, answer]   # iterate both — one heatmap per variable
+
+locate:
+  method: interchange
+  mode: centroid                                 # variable-agnostic; pairs naturally with resample_variable: all
+  layers: null                                   # null = scan all hidden layers
+  n_steer: 32
+  visualization:
+    single_pair_trace: false

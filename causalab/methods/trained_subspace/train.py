@@ -162,9 +162,10 @@ def train_interventions(
         total=len(interchange_targets),
     )
 
-    loss_fn = lambda p, m, b, t, sp, sim: LM_loss_and_metric_fn(
-        p, m, b, t, metric, source_pipeline=sp, source_intervenable_model=sim
-    )
+    def loss_fn(p, m, b, t, sp, sim):
+        return LM_loss_and_metric_fn(
+            p, m, b, t, metric, source_pipeline=sp, source_intervenable_model=sim
+        )
 
     for key, target in pbar:
         # Train this target (inner progress bar handled by training loop)

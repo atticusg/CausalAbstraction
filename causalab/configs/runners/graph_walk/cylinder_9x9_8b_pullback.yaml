@@ -1,0 +1,48 @@
+# @package _global_
+defaults:
+- /base
+- /task: graph_walk_cylinder_9x9
+- /model: llama31_8b
+# - /analysis/baseline
+# - /analysis/subspace
+# - /analysis/activation_manifold
+# - /analysis/output_manifold
+# - /analysis/path_steering
+- /analysis/pullback
+- _self_
+
+task:
+  target_variable: node_coordinates
+
+locate:
+  layers: [28]
+  batch_size: 8
+
+subspace:
+  layers: [28]
+  k_features: 64
+  batch_size: 8
+  token_positions: [last]
+
+activation_manifold:
+  layers: [28]
+  intrinsic_mode: parameter
+  intrinsic_dim: 2
+  batch_size: 8
+  token_positions: [last]
+
+output_manifold:
+  intrinsic_mode: parameter
+  intrinsic_dim: 2
+  batch_size: 8
+
+pullback:
+  batch_size: 4
+  n_prompts: 3
+  belief_path:
+    n_steps: 10
+  embedding_optim:
+    n_steps: 10
+    init: linear
+    trajectory_param: tps
+    norm_reg_weight: 1.0e-3

@@ -8,46 +8,11 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from causalab.causal.causal_model import CausalModel
+from causalab.causal.causal_model import CausalModel, build_output_tokens
 from causalab.causal.trace import CausalTrace, Mechanism, input_var
+from causalab.tasks.random_words import get_random_words
 
 from .config import NaturalDomainConfig
-
-
-_RANDOM_WORD_POOL: list[str] = [
-    "apple",
-    "stone",
-    "blade",
-    "crown",
-    "pearl",
-    "flame",
-    "river",
-    "storm",
-    "chair",
-    "glass",
-    "cloud",
-    "dream",
-    "tiger",
-    "maple",
-    "frost",
-    "piano",
-    "lemon",
-    "coral",
-    "steel",
-    "patch",
-    "torch",
-    "wheat",
-    "brick",
-    "lodge",
-]
-
-
-def get_random_words(n: int) -> list[str]:
-    if n > len(_RANDOM_WORD_POOL):
-        raise ValueError(
-            f"Requested {n} random words but pool only has {len(_RANDOM_WORD_POOL)}"
-        )
-    return _RANDOM_WORD_POOL[:n]
 
 
 # ---------------------------------------------------------------------------
@@ -102,10 +67,12 @@ def create_causal_model(config: NaturalDomainConfig) -> CausalModel:
 
     # When number_groups is configured with >1 bin, result becomes a tuple
     # (entity_result, group_index) so centroid computation gets 2D structure.
-    has_groups = config.number_groups and len(config.number_groups) > 1
+    has_groups = bool(config.number_groups) and len(config.number_groups or []) > 1
+    number_to_group: dict[str, int] = {}
     if has_groups:
+        # Narrow the Optional via assert — has_groups already implies non-None.
+        assert config.number_groups is not None
         bins = config.number_groups
-        number_to_group: dict[str, int] = {}
         for n in numbers:
             n_int = number_to_int[n]
             for i, (lo, hi) in enumerate(bins):
@@ -216,22 +183,30 @@ def create_causal_model(config: NaturalDomainConfig) -> CausalModel:
         if config.number_is_cyclic:
             periods["number"] = config.modulus
 
-    # Compute output token values for 2D variants
-    otv: dict[str, list] | None = None
-    has_groups = config.number_groups and len(config.number_groups) > 1
+    # Declare the answer's surface forms per result value (#296). The answer is
+    # the result entity, emitted as ``output_prefix + entity``; the case-sensitive
+    # ``[" entity", "entity"]`` forms cover both BPE spacings (the grader's
+    # lowercase tolerance lives in the probability path, not the declaration).
+    # 1D: keyed by the entity. 2D (number_groups): keyed by the (entity, group)
+    # tuple — all groups of one entity share its forms, so form-groups collapse
+    # the N_entities × N_groups tuples back to N_entities score tokens. That
+    # shared-form-group dedup replaces the former output_token_values override.
     if has_groups:
-        result_entities = (
-            config.result_entities
-            if config.result_entities is not None
-            else config.entities
-        )
-        otv = {"result": list(result_entities)}
+        output_tokens = {
+            "result": {
+                (re, g): build_output_tokens([re])[re]
+                for re in result_entities
+                for g in range(n_groups)
+            }
+        }
+    else:
+        output_tokens = {"result": build_output_tokens(result_values)}
 
     # For non-cyclic domains with a custom compute_result, some (entity, number)
     # pairs may produce results outside the configured result_entities (e.g.
     # alphabet "letter+N" overflowing past Z). Filter those out at the input
     # level so dataset enumeration respects the boundary.
-    input_filter = None
+    input_filter: Callable[[Any], bool] | None = None
     if (
         not config.cyclic
         and config.compute_result is not None
@@ -239,8 +214,10 @@ def create_causal_model(config: NaturalDomainConfig) -> CausalModel:
     ):
         valid_results = set(result_values)
 
-        def input_filter(trace, _compute=compute_result, _valid=valid_results):
+        def _input_filter(trace, _compute=compute_result, _valid=valid_results):
             return _compute(trace) in _valid
+
+        input_filter = _input_filter
 
     model = CausalModel(
         mechanisms,
@@ -248,7 +225,7 @@ def create_causal_model(config: NaturalDomainConfig) -> CausalModel:
         id=f"natural_domains_arithmetic_{config.domain_type}",
         embeddings=embeddings,
         periods=periods,
-        output_token_values=otv,
+        output_tokens=output_tokens,
         input_filter=input_filter,
     )
     model._nda_config = config  # type: ignore[attr-defined]
@@ -335,6 +312,9 @@ def create_random_causal_model(config: NaturalDomainConfig) -> CausalModel:
         values,
         id=f"natural_domains_arithmetic_{config.domain_type}_random",
         embeddings=embeddings,
+        # Random baseline is always 1D (no number_groups): one form group per
+        # random entity, matching the migrated real model (#296).
+        output_tokens={"result": build_output_tokens(list(random_entities))},
     )
     model._nda_config = config  # type: ignore[attr-defined]
     return model
@@ -405,54 +385,3 @@ def GET_TEMPLATE(model: CausalModel) -> str | list[str]:
     """Return the prompt template(s) from the stored config."""
     config: NaturalDomainConfig = model._nda_config  # type: ignore[attr-defined]
     return config.template
-
-
-def GET_RESULT_TOKEN_PATTERN(model: CausalModel):
-    """Build result_token_pattern from config.
-
-    Returns a function that maps a concept value to a list of tokenizable
-    string variants (e.g., [" Monday", "Monday", " monday"]) so that
-    downstream scoring can sum probability mass across all variants.
-    """
-    config: NaturalDomainConfig = model._nda_config  # type: ignore[attr-defined]
-    prefix = config.output_prefix
-    has_groups = config.number_groups and len(config.number_groups) > 1
-
-    def _variants(v) -> list[str]:
-        s = str(v[0] if isinstance(v, (tuple, list)) and has_groups else v)
-        canonical = prefix + s
-        candidates = [canonical]
-        # Add common variants: with/without space, lowercase
-        if canonical.startswith(" "):
-            candidates.append(s)  # no space
-            candidates.append(" " + s.lower())  # space + lowercase
-        else:
-            candidates.append(" " + s)  # add space
-        if s.lower() != s:
-            candidates.append(s.lower())  # no space + lowercase
-        # Deduplicate while preserving order
-        seen = set()
-        return [c for c in candidates if not (c in seen or seen.add(c))]
-
-    return _variants
-
-
-def GET_OUTPUT_TOKEN_VALUES(model: CausalModel) -> dict[str, list] | None:
-    """Return deduplicated score-level variable values for 2D variants.
-
-    For grouped (2D) tasks, the causal variable_values has N_entities * N_groups
-    tuples, but only N_entities unique output tokens. This returns the unique
-    entity values so scoring collects one probability per unique token.
-
-    Returns None for 1D tasks (no deduplication needed).
-    """
-    config: NaturalDomainConfig = model._nda_config  # type: ignore[attr-defined]
-    has_groups = config.number_groups and len(config.number_groups) > 1
-    if not has_groups:
-        return None
-    result_entities = (
-        config.result_entities
-        if config.result_entities is not None
-        else config.entities
-    )
-    return {"result": list(result_entities)}

@@ -14,7 +14,7 @@ enumerate_all: true
 balanced: false
 # "all" = counterfactual resamples every input variable (task's generator).
 # A variable name (e.g. "entity") = CF differs from original only in that one
-# variable. Required for locate pairwise mode. See ARCHITECTURE.md §5.
+# variable. Required for locate pairwise mode. See docs/CODEBASE.md §5.
 resample_variable: all
 distance_function: hellinger
 isometry:

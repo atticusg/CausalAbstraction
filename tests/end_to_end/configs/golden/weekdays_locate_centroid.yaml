@@ -1,0 +1,34 @@
+# @package _global_
+# Golden-tier locate runner for weekdays in CENTROID mode — chat-coherent
+# (Qwen3-4B-Instruct-2507).
+#
+# Twin of weekdays_locate.yaml (the default/pairwise locate golden) that pins
+# `locate.mode: centroid` so the centroid scoring path stays covered after PR
+# #206 flipped the locate default to pairwise. Centroid scores each (layer,
+# position) cell against per-class average distributions, so it emits the
+# `locate/interchange/result/.../patched_dists` + `.../features` artifacts that
+# pairwise does not. Needs `/analysis/baseline` (ref dists) plus the task's
+# `intervention_values` + `intervention_metric: kl` (both supplied by
+# natural_domains_arithmetic_weekdays). Same chat-coherent / n_train 49 /
+# batch_size 8 golden scale as the pairwise twin.
+defaults:
+- /base
+- /task: natural_domains_arithmetic_weekdays
+- /model: chat-coherent
+- /analysis/baseline   # centroid needs baseline ref_dists (+ accuracy)
+- /analysis/locate
+- _self_
+
+task:
+  target_variable: result
+  n_train: 49
+  n_test: 2
+
+baseline:
+  batch_size: 8
+
+locate:
+  mode: centroid
+  layers: [0, 1]
+  n_steer: 2
+  batch_size: 8

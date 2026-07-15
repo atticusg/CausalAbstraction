@@ -1,0 +1,16 @@
+# @package _global_
+defaults:
+- /base
+- /task: MCQA
+- /model: llama32_1b_instruct
+- /analysis/baseline
+- _self_
+task:
+  target_variable: answer
+  n_train: 64
+  n_test: 16
+  enumerate_all: false
+
+baseline:
+  visualization:
+    figure_format: png

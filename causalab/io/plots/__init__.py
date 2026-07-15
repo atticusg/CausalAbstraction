@@ -51,6 +51,10 @@ from .pca_scatter import (
     plot_pca_scatter,
     plot_features_2d,
 )
+from .receptive_field import (
+    build_receptive_field_figure,
+    plot_receptive_field,
+)
 from .mds import mds_embed
 from .distance_plots import plot_distance_scatter, plot_dual_mds
 from .figure_format import (
@@ -59,6 +63,19 @@ from .figure_format import (
     normalize_figure_format,
     path_with_figure_format,
     resolve_figure_format_from_analysis,
+)
+from .causal_graph import (
+    DEFAULT_COLORS,
+    build_forward_pass_app,
+    build_interchange_app,
+    build_setting_figure,
+    build_structure_app,
+    build_structure_figure,
+    display_forward_pass,
+    display_interchange,
+    display_structure,
+    print_setting,
+    print_structure,
 )
 
 __all__ = [
@@ -102,6 +119,9 @@ __all__ = [
     # PCA scatter plots
     "plot_pca_scatter",
     "plot_features_2d",
+    # Receptive-field decision map
+    "build_receptive_field_figure",
+    "plot_receptive_field",
     # MDS and distance plots
     "mds_embed",
     "plot_distance_scatter",
@@ -112,4 +132,16 @@ __all__ = [
     "normalize_figure_format",
     "path_with_figure_format",
     "resolve_figure_format_from_analysis",
+    # Causal graph visualization (Dash + matplotlib)
+    "DEFAULT_COLORS",
+    "build_forward_pass_app",
+    "build_interchange_app",
+    "build_setting_figure",
+    "build_structure_app",
+    "build_structure_figure",
+    "display_forward_pass",
+    "display_interchange",
+    "display_structure",
+    "print_setting",
+    "print_structure",
 ]

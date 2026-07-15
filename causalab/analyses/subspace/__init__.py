@@ -8,6 +8,12 @@ scores suitable for heatmap visualization.
 """
 
 from causalab.analyses.subspace.pca import find_pca_subspace
+from causalab.analyses.subspace.fixed import (
+    find_fixed_subspace,
+    resolve_fixed_rotation,
+    score_fixed_subspace,
+    orient_rotation,
+)
 from causalab.analyses.subspace.das import find_das_subspace
 from causalab.analyses.subspace.dbm import find_dbm_subspace
 from causalab.analyses.subspace.boundless import find_boundless_subspace
@@ -21,6 +27,10 @@ from causalab.analyses.subspace.grid import (
 
 __all__ = [
     "find_pca_subspace",
+    "find_fixed_subspace",
+    "resolve_fixed_rotation",
+    "score_fixed_subspace",
+    "orient_rotation",
     "find_das_subspace",
     "find_dbm_subspace",
     "find_boundless_subspace",

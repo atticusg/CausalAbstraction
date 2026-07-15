@@ -1,23 +1,20 @@
 """Baseline analysis: unintervened model accuracy, per-class reference distributions,
-counterfactual-dataset sanity checks, and task rendering samples.
+and task rendering samples.
 
 This is the generic first step to run on any task. It answers:
   1. Can the model solve this task at all?
   2. Where is the model confused across classes?
-  3. Do the task's counterfactual generators actually distinguish the intervention
-     variable from other variables? (Sanity check on experiment design.)
-  4. What does a rendered example look like? (Sanity check on task formatting.)
+  3. What does a rendered example look like? (Sanity check on task formatting.)
 
 No Hellinger / simplex geometry here — that lives in `output_manifold`.
 """
 
 from __future__ import annotations
 
-import inspect
 import logging
 import math
 import os
-from typing import Any
+from typing import Any, cast
 
 import torch
 import torch.nn.functional as F
@@ -30,11 +27,13 @@ from causalab.analyses.path_steering.path_visualization import (
     plot_ground_truth_heatmaps,
 )
 from causalab.methods.metric import (
+    _normalize_var_indices,  # pyright: ignore[reportPrivateUsage]
+    answer_token_forms,
     compute_base_accuracy,
     compute_reference_distributions,
 )
 from causalab.runner.helpers import (
-    _task_config_for_metadata,
+    _task_config_for_metadata,  # pyright: ignore[reportPrivateUsage]
     generate_datasets,
     get_output_token_ids,
     resolve_task,
@@ -45,86 +44,10 @@ from causalab.io.artifacts import (
     save_json_results,
     save_tensor_results,
 )
-from causalab.tasks.loader import load_task_counterfactuals
 
 logger = logging.getLogger(__name__)
 
 ANALYSIS_NAME = "baseline"
-
-
-def _collect_counterfactual_sanity(task, n_samples: int = 64) -> dict[str, Any]:
-    """For every zero-arg counterfactual generator on the task, check that the
-    generated dataset can distinguish the intervention variable from the other
-    declared variables (i.e., counterfactuals deconfound the target).
-
-    Returns a dict mapping generator name → {distinguishes, proportion, count}.
-    """
-    try:
-        cf_module = load_task_counterfactuals(task.name)
-    except ImportError:
-        logger.info(
-            "Task %r has no counterfactuals module; skipping sanity check.", task.name
-        )
-        return {}
-
-    target = task.intervention_variable
-    if target is None:
-        logger.info(
-            "Task has no intervention_variable; skipping counterfactual sanity."
-        )
-        return {}
-
-    other_vars = [
-        v
-        for v in task.causal_model.mechanisms
-        if v not in {"raw_input", "raw_output", target}
-        and v not in task.causal_model.inputs
-    ]
-
-    results: dict[str, Any] = {}
-    for name, fn in inspect.getmembers(cf_module, inspect.isfunction):
-        if name.startswith("_"):
-            continue
-        try:
-            sig = inspect.signature(fn)
-            required = [
-                p
-                for p in sig.parameters.values()
-                if p.default is inspect.Parameter.empty
-                and p.kind in (p.POSITIONAL_OR_KEYWORD, p.POSITIONAL_ONLY)
-            ]
-            if required:
-                continue
-        except (TypeError, ValueError):
-            continue
-
-        try:
-            dataset = [fn() for _ in range(n_samples)]
-            if not dataset or "counterfactual_inputs" not in dataset[0]:
-                continue
-        except Exception as e:
-            logger.debug("Skipping generator %s: %s", name, e)
-            continue
-
-        verdict = task.causal_model.can_distinguish_with_dataset(
-            dataset, [target], other_vars or None
-        )
-        results[name] = {
-            "distinguishes_target_from_others": bool(verdict["proportion"] > 0.99),
-            "proportion": float(verdict["proportion"]),
-            "count": int(verdict["count"]),
-            "n_samples": n_samples,
-        }
-        logger.info(
-            "Counterfactual %s: distinguishes %s from %s → %.2f (%d/%d)",
-            name,
-            target,
-            other_vars,
-            verdict["proportion"],
-            verdict["count"],
-            n_samples,
-        )
-    return results
 
 
 def _render_dataset(dataset: list) -> list[dict[str, str]]:
@@ -136,6 +59,104 @@ def _render_dataset(dataset: list) -> list[dict[str, str]]:
         }
         for ex in dataset
     ]
+
+
+def _answer_class_index(
+    ex: dict, score_token_groups: list[list[int]], tokenizer
+) -> int | None:
+    """Column index of an example's correct answer within the score-token space.
+
+    The confusion / ground-truth rows should reflect the class the model is
+    *supposed to emit* (its ``raw_output``), not the localization target
+    variable — the two differ whenever a non-output variable (e.g. query
+    polarity) also drives the answer (#259).
+
+    The answer is resolved through the *same* token-id groups the confusion
+    columns are built from (the ``output_tokens`` resolver, via
+    ``get_output_token_ids``), tokenizing ``raw_output`` with
+    ``answer_token_forms`` — the strip/case-tolerant probability-grader forms.
+    Matching on token ids rather than a bare ``str.index`` keeps
+    this on the #167 token contract and is robust to formatting gaps between
+    ``raw_output`` and the score labels (e.g. ``"5"``/``"five"``,
+    ``" orange"``/``"orange"``), which a string compare would silently miss.
+    The boolean ``task.checker`` is the authority for scalar base accuracy, not
+    for this token-probability path, so it is deliberately not used here (and
+    its ``startswith`` variants would over-match across columns).
+
+    Assumes single-token scoring: a multi-step ``raw_output`` list is reduced to
+    its first step, matching the last-position read in
+    ``compute_reference_distributions``'s precomputed-logits path. The polarity
+    tasks this guards are all single-token, so the two coincide.
+
+    Returns ``None`` when the answer tokenizes to nothing in the score space
+    (then the caller keeps the target-variable grouping).
+    """
+    raw_out = ex["input"]["raw_output"]
+    if isinstance(raw_out, list):  # multi-step tasks emit a per-step list
+        raw_out = raw_out[0] if raw_out else ""
+    answer_ids: set[int] = set()
+    for form in answer_token_forms(str(raw_out)):
+        ids = tokenizer.encode(form, add_special_tokens=False)
+        if len(ids) == 1:
+            answer_ids.add(ids[0])
+    if not answer_ids:
+        return None
+    for cls_idx, group in enumerate(score_token_groups):
+        if answer_ids.intersection(group):
+            return cls_idx
+    return None
+
+
+def _answer_rows_differ_from_target(
+    dataset: list, task: Any, score_token_groups: list[list[int]], tokenizer
+) -> tuple[bool, list[int] | None]:
+    """Detect mixed-polarity contamination of the target-variable rows (#259).
+
+    Returns ``(contaminated, answer_classes)``. ``contaminated`` is True only
+    when some ``intervention_value_index`` group maps to more than one answer
+    class — the signature of an answer that depends on a variable *other* than
+    the localization target, so averaging each target row washes the diagonal
+    to ~chance (e.g. ``magnitude_order`` {A,B} under mixed min/max polarity).
+    ``answer_classes`` is the per-example answer-class index (reused by the
+    caller to regroup without a second pass), or ``None`` when any answer is
+    unresolvable in the score space (then the caller cannot relabel rows and
+    keeps the target grouping).
+    """
+    answer_classes: list[int] = []
+    for ex in dataset:
+        ac = _answer_class_index(ex, score_token_groups, tokenizer)
+        if ac is None:
+            return False, None
+        answer_classes.append(ac)
+    groups: dict[int, set[int]] = {}
+    for ex, ac in zip(dataset, answer_classes):
+        groups.setdefault(task.intervention_value_index(ex), set()).add(ac)
+    contaminated = any(len(classes) > 1 for classes in groups.values())
+    return contaminated, answer_classes
+
+
+def _top_logits_example(
+    raw_out: Any, prediction: str, top_tokens: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Build one ``top_logits.json`` example record.
+
+    ``raw_out`` is the task's ground-truth label (a single token, or a per-step
+    list for multi-step generation tasks); ``prediction`` is the model's decoded
+    top-1 token (i.e. ``top_tokens[0]["token"]``). The label is stored as
+    ``expected_output`` — explicitly *not* ``prediction`` — so the record can't
+    be misread as the model's output. ``correct`` compares the prediction to the
+    label (a list label is reduced to its first step, since the model emits one
+    token here).
+    """
+    raw_out_str = (
+        str(raw_out[0]) if isinstance(raw_out, list) and raw_out else str(raw_out or "")
+    )
+    return {
+        "expected_output": raw_out,
+        "prediction": prediction,
+        "top_tokens": top_tokens,
+        "correct": prediction.strip() == raw_out_str.strip(),
+    }
 
 
 def main(cfg: DictConfig) -> dict[str, Any]:
@@ -150,17 +171,14 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     os.makedirs(out_dir, exist_ok=True)
 
     # --- Load task ---
-    task, task_cfg_raw = resolve_task(
+    task, task_cfg_raw = resolve_task(  # pyright: ignore[reportUnusedVariable]
         task_name=cfg.task.name,
-        task_config=OmegaConf.to_container(cfg.task, resolve=True),
+        task_config=cast(
+            dict[str, Any], OmegaConf.to_container(cfg.task, resolve=True)
+        ),
         target_variable=cfg.task.get("target_variable"),
         seed=cfg.seed,
     )
-
-    # --- Counterfactual sanity (no model needed) ---
-    cf_sanity = _collect_counterfactual_sanity(task)
-    if cf_sanity:
-        save_json_results(cf_sanity, out_dir, "counterfactual_sanity.json")
 
     # --- Load dataset ---
     train_dataset, test_dataset = generate_datasets(
@@ -196,6 +214,8 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         device=cfg.model.device,
         dtype=cfg.model.get("dtype"),
         eager_attn=cfg.model.get("eager_attn"),
+        use_chat_template=cfg.model.get("chat_template", False),
+        chat_answer_directive=cfg.model.get("chat_answer_directive"),
     )
     score_token_ids, n_score_tokens = get_output_token_ids(task, pipeline)
     n_classes = (
@@ -207,6 +227,14 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         dataset=train_dataset,
         pipeline=pipeline,
         batch_size=analysis.batch_size,
+        # ``score_answer`` is set only when the task's config selects a
+        # non-default scoring convention (e.g. MCQA ``score_by: value``);
+        # otherwise None → score against ``raw_output`` as before.
+        answer_fn=task.score_answer,
+        # ``checker`` is the task's own match fn (every task ships one; e.g.
+        # entity_binding's ``startswith``), the sole match authority so
+        # ``max_new_tokens > 1`` continuations score correctly.
+        checker=task.checker,
     )
     save_json_results(base_acc, out_dir, "accuracy.json")
     logger.info("Base accuracy: %.1f%%", base_acc["accuracy"] * 100)
@@ -243,15 +271,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         tokenizer = pipeline.tokenizer
         top_logits_examples = []
         for i, ex in enumerate(train_dataset):
+            # ``raw_output`` is the task's ground-truth label; for multi-step
+            # generation tasks (e.g. graph_walk) it is a per-step list.
             raw_out = ex["input"]["raw_output"]
-            # For multi-step generation tasks (e.g. graph_walk) raw_output is a
-            # list of per-step tokens; the model only emits one token here, so
-            # compare against the first expected step.
-            raw_out_str = (
-                str(raw_out[0])
-                if isinstance(raw_out, list) and raw_out
-                else str(raw_out or "")
-            )
             generated = tokenizer.decode(top_ids[i, 0].item())
             top_tokens = [
                 {
@@ -262,11 +284,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 for j in range(top_k)
             ]
             top_logits_examples.append(
-                {
-                    "raw_output": raw_out,
-                    "top_tokens": top_tokens,
-                    "correct": generated.strip() == raw_out_str.strip(),
-                }
+                _top_logits_example(raw_out, generated, top_tokens)
             )
         save_json_results(
             {"top_k": top_k, "examples": top_logits_examples},
@@ -279,13 +297,23 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             len(top_logits_examples),
         )
 
+        if n_classes is None:
+            raise ValueError(
+                "n_classes is None — task lacks intervention_variable and "
+                "output_tokens."
+            )
         # Full-vocab softmax averages per class — consumed by locate, activation_manifold.
         ref_dists = compute_reference_distributions(
             dataset=train_dataset,
-            score_token_ids=score_token_ids,
+            # score_token_ids may be a Tensor; flatten/cast for the runtime
+            # list-of-ids contract.
+            score_token_ids=cast(list[int], score_token_ids),
             n_classes=n_classes,
             example_to_class=task.intervention_value_index,
-            output_logits=output_logits,
+            # output_logits is list[list[Tensor]] per multi-step generation;
+            # compute_reference_distributions accepts the list-of-list shape
+            # for multi-step tasks even though the type annotation is narrower.
+            output_logits=cast("list[torch.Tensor]", output_logits),
             score_token_index=0,
             full_vocab_softmax=True,
         )
@@ -301,8 +329,13 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             # probabilities from the full-vocab softmax using example-specific
             # token IDs, then average per true class. The trailing column
             # accumulates residual mass on task-unrelated tokens.
-            class_prob_accum = torch.zeros(n_classes, n_classes + 1)
-            class_totals = torch.zeros(n_classes)
+            # n_classes is non-None here (validated above in the same branch).
+            # No answer-space relabel here (#259): these rows are
+            # ``answer_position``, which *is* the model's answer, so there is no
+            # target-vs-answer indirection to correct.
+            _nc: int = n_classes
+            class_prob_accum = torch.zeros(_nc, _nc + 1)
+            class_totals = torch.zeros(_nc)
             for i, ex in enumerate(train_dataset):
                 true_cls = task.intervention_value_index(ex)
                 class_totals[true_cls] += 1
@@ -335,7 +368,8 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                     row_labels=class_labels,
                     col_labels=class_labels,
                     output_dir=out_dir,
-                    filename=f"confusion_heatmap.{figure_fmt}",
+                    filename="confusion_heatmap",
+                    figure_format=figure_fmt,
                     title="Confusion (no intervention)",
                     xlabel="Predicted class",
                 )
@@ -343,33 +377,101 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 logger.warning("Confusion heatmap failed: %s", e)
         else:
             # Fixed score tokens: use token-probability distributions.
-            score_labels = (
-                [str(v) for v in task.output_token_values]
-                if task.output_token_values
-                else [str(v) for v in task.intervention_values]
+            # One label per score column. When the task declares ``output_tokens``
+            # for the intervention variable, the columns are its distinct
+            # form-groups (the score space may be the deduped union of answer
+            # forms — e.g. entity_binding's 12 entity tokens — which the
+            # intervention variable's own 2 positional values do not name), so
+            # derive the labels from those groups (#296). Otherwise label by the
+            # intervention values themselves.
+            _ot = task.causal_model.output_tokens
+            _var = task.intervention_variable
+            if _ot and _var and _ot.get(_var):
+                from causalab.methods.output_tokens import form_group_labels
+
+                score_labels = form_group_labels(_ot[_var])
+            else:
+                score_labels = [str(v) for v in task.intervention_values]
+
+            # Rows default to the localization target (``intervention_values``).
+            # But the model emits ``raw_output`` (the answer), which can differ
+            # from the target variable when another variable (e.g. query
+            # polarity) also drives the answer — then a single target row mixes
+            # answers and averages to ~chance even at high accuracy (#259).
+            # Detect that and, when present, plot the confusion / ground-truth
+            # against the answer space so the diagonal reflects accuracy. The
+            # saved ``per_class_output_dists`` artifact above is left grouped by
+            # target class — its consumers (locate, activation_manifold) expect
+            # per-target-class distributions.
+            # Resolve answers through the same token-id groups the columns are
+            # built from (``score_token_ids`` via the ``output_tokens`` resolver).
+            score_token_groups = _normalize_var_indices(score_token_ids)
+            contaminated, answer_classes = _answer_rows_differ_from_target(
+                train_dataset, task, score_token_groups, tokenizer
             )
+            if contaminated:
+                assert answer_classes is not None  # contamination ⇒ all resolved
+                logger.warning(
+                    "baseline confusion: the model's answer (raw_output) differs "
+                    "from the target variable %r for some examples (e.g. mixed "
+                    "polarity) — plotting the confusion / ground-truth against the "
+                    "answer space {%s} rather than the target classes, so the "
+                    "diagonal reflects accuracy (#259).",
+                    task.intervention_variable,
+                    ", ".join(score_labels),
+                )
+
+                # Reuse the answer classes already computed by the detector
+                # (keyed by example identity, since ``compute_reference_distributions``
+                # iterates this same list) rather than re-deriving them.
+                answer_class_by_ex = {
+                    id(ex): ac for ex, ac in zip(train_dataset, answer_classes)
+                }
+                plot_dists = compute_reference_distributions(
+                    dataset=train_dataset,
+                    score_token_ids=cast(list[int], score_token_ids),
+                    n_classes=len(score_labels),
+                    example_to_class=lambda ex: answer_class_by_ex[id(ex)],
+                    output_logits=cast("list[torch.Tensor]", output_logits),
+                    score_token_index=0,
+                    full_vocab_softmax=True,
+                )
+                row_values: list = list(score_labels)
+                row_labels = list(score_labels)
+                gt_title = "Ground truth (no intervention, answer space)"
+                cf_title = "Confusion (no intervention, answer space)"
+                cf_xlabel = "Predicted answer"
+            else:
+                plot_dists = ref_dists
+                row_values = task.intervention_values
+                row_labels = [str(v) for v in task.intervention_values]
+                gt_title = "Ground truth (no intervention)"
+                cf_title = "Confusion (no intervention)"
+                cf_xlabel = "Predicted class"
+
             try:
                 plot_ground_truth_heatmaps(
-                    dists=ref_dists,
-                    variable_values=task.intervention_values,
+                    dists=plot_dists,
+                    variable_values=row_values,
                     output_dir=out_dir,
                     score_labels=score_labels,
                     colormap=task_colormap,
                     full_vocab_softmax=True,
-                    title_prefix="Ground truth (no intervention)",
+                    title_prefix=gt_title,
                     figure_format=figure_fmt,
                 )
             except Exception as e:
                 logger.warning("Ground truth path plot failed: %s", e)
             try:
                 plot_matrix_heatmap(
-                    ref_dists,
-                    row_labels=[str(v) for v in task.intervention_values],
+                    plot_dists,
+                    row_labels=row_labels,
                     col_labels=score_labels,
                     output_dir=out_dir,
-                    filename=f"confusion_heatmap.{figure_fmt}",
-                    title="Confusion (no intervention)",
-                    xlabel="Predicted class",
+                    filename="confusion_heatmap",
+                    figure_format=figure_fmt,
+                    title=cf_title,
+                    xlabel=cf_xlabel,
                 )
             except Exception as e:
                 logger.warning("Confusion heatmap failed: %s", e)
@@ -380,7 +482,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         "model": cfg.model.name,
         "task": cfg.task.name,
         "task_config": _task_config_for_metadata(
-            OmegaConf.to_container(cfg.task, resolve=True)
+            cast(dict[str, Any], OmegaConf.to_container(cfg.task, resolve=True))
         ),
         "n_train": cfg.task.n_train,
         "n_test": cfg.task.n_test,

@@ -1,0 +1,147 @@
+{
+  "samples": [
+    {
+      "counterfactual_inputs": [
+        {
+          "IO": "Brittany",
+          "name_A": "Stephen",
+          "name_B": "Brittany",
+          "name_C": "Stephen",
+          "object": "snack",
+          "place": "garden",
+          "raw_input": "After Stephen and Brittany went to the garden, Stephen gave a snack to",
+          "raw_output": " Brittany",
+          "template": "After {name_A} and {name_B} went to the {place}, {name_C} gave a {object} to"
+        }
+      ],
+      "input": {
+        "IO": "Stephen",
+        "name_A": "Stephen",
+        "name_B": "Brittany",
+        "name_C": "Brittany",
+        "object": "snack",
+        "place": "garden",
+        "raw_input": "After Stephen and Brittany went to the garden, Brittany gave a snack to",
+        "raw_output": " Stephen",
+        "template": "After {name_A} and {name_B} went to the {place}, {name_C} gave a {object} to"
+      },
+      "seed": 0
+    },
+    {
+      "counterfactual_inputs": [
+        {
+          "IO": "Katherine",
+          "name_A": "Katherine",
+          "name_B": "Aaron",
+          "name_C": "Aaron",
+          "object": "computer",
+          "place": "restaurant",
+          "raw_input": "After Katherine and Aaron went to the restaurant, Aaron gave a computer to",
+          "raw_output": " Katherine",
+          "template": "After {name_A} and {name_B} went to the {place}, {name_C} gave a {object} to"
+        }
+      ],
+      "input": {
+        "IO": "Aaron",
+        "name_A": "Katherine",
+        "name_B": "Aaron",
+        "name_C": "Katherine",
+        "object": "computer",
+        "place": "restaurant",
+        "raw_input": "After Katherine and Aaron went to the restaurant, Katherine gave a computer to",
+        "raw_output": " Aaron",
+        "template": "After {name_A} and {name_B} went to the {place}, {name_C} gave a {object} to"
+      },
+      "seed": 1
+    },
+    {
+      "counterfactual_inputs": [
+        {
+          "IO": "Erica",
+          "name_A": "Erica",
+          "name_B": "Heather",
+          "name_C": "Heather",
+          "object": "bone",
+          "place": "store",
+          "raw_input": "After Erica and Heather went to the store, Heather gave a bone to",
+          "raw_output": " Erica",
+          "template": "After {name_A} and {name_B} went to the {place}, {name_C} gave a {object} to"
+        }
+      ],
+      "input": {
+        "IO": "Heather",
+        "name_A": "Erica",
+        "name_B": "Heather",
+        "name_C": "Erica",
+        "object": "bone",
+        "place": "store",
+        "raw_input": "After Erica and Heather went to the store, Erica gave a bone to",
+        "raw_output": " Heather",
+        "template": "After {name_A} and {name_B} went to the {place}, {name_C} gave a {object} to"
+      },
+      "seed": 2
+    },
+    {
+      "counterfactual_inputs": [
+        {
+          "IO": "Paul",
+          "name_A": "Paul",
+          "name_B": "Amanda",
+          "name_C": "Amanda",
+          "object": "bone",
+          "place": "office",
+          "raw_input": "After Paul and Amanda went to the office, Amanda gave a bone to",
+          "raw_output": " Paul",
+          "template": "After {name_A} and {name_B} went to the {place}, {name_C} gave a {object} to"
+        }
+      ],
+      "input": {
+        "IO": "Amanda",
+        "name_A": "Paul",
+        "name_B": "Amanda",
+        "name_C": "Paul",
+        "object": "bone",
+        "place": "office",
+        "raw_input": "After Paul and Amanda went to the office, Paul gave a bone to",
+        "raw_output": " Amanda",
+        "template": "After {name_A} and {name_B} went to the {place}, {name_C} gave a {object} to"
+      },
+      "seed": 3
+    },
+    {
+      "counterfactual_inputs": [
+        {
+          "IO": "Ashley",
+          "name_A": "Nicole",
+          "name_B": "Ashley",
+          "name_C": "Nicole",
+          "object": "computer",
+          "place": "hospital",
+          "raw_input": "After Nicole and Ashley went to the hospital, Nicole gave a computer to",
+          "raw_output": " Ashley",
+          "template": "After {name_A} and {name_B} went to the {place}, {name_C} gave a {object} to"
+        }
+      ],
+      "input": {
+        "IO": "Nicole",
+        "name_A": "Nicole",
+        "name_B": "Ashley",
+        "name_C": "Ashley",
+        "object": "computer",
+        "place": "hospital",
+        "raw_input": "After Nicole and Ashley went to the hospital, Ashley gave a computer to",
+        "raw_output": " Nicole",
+        "template": "After {name_A} and {name_B} went to the {place}, {name_C} gave a {object} to"
+      },
+      "seed": 4
+    }
+  ],
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "task": "IOI"
+}

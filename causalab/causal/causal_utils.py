@@ -5,7 +5,6 @@ from __future__ import annotations
 from causalab.causal.counterfactual_dataset import CounterfactualExample
 from typing import TYPE_CHECKING, Any, List, Dict, Callable, Mapping, Sequence
 import copy
-import itertools
 import logging
 import random
 import numpy as np
@@ -18,7 +17,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# currently unused but not dead code - usage to come
 def can_distinguish_with_dataset(
     dataset,
     causal_model1,
@@ -35,16 +33,25 @@ def can_distinguish_with_dataset(
     - Interchange interventions with target_variables2 on causal_model2 (if provided)
     - The forward pass output of causal_model1 (if causal_model2 is None)
 
+    Each example's traces are re-instantiated under the relevant model
+    (``model.new_trace(...)``) before intervening, so the interchange always uses
+    that model's own mechanisms — regardless of which model originally produced the
+    dataset's traces. Interventions are run via ``run_interchange``, which supports
+    the ``"original_var<-counterfactual_var"`` cross-variable syntax (useful when the
+    two models name their variables differently).
+
     Parameters:
     -----------
     dataset : Dataset
         Dataset containing "input" and "counterfactual_inputs" fields.
     causal_model1 : CausalModel
-        The first causal model to run interchange interventions on.
+        The first causal model to run interchange interventions on, using
+        target_variables1.
     target_variables1 : list
         List of variable names to use for interchange in the first model.
     causal_model2 : CausalModel, optional
-        The second causal model to compare against (default is None).
+        The second causal model to run interchange interventions on, using
+        target_variables2 (default is None).
     target_variables2 : list, optional
         List of variable names to use for interchange in the second model.
         Only used if causal_model2 is provided (default is None).
@@ -56,28 +63,33 @@ def can_distinguish_with_dataset(
             - "proportion": The proportion of examples where outputs differ
             - "count": The number of examples where outputs differ
     """
+
     count = 0
     for example in dataset:
         input_data = example["input"]
         counterfactual_inputs = example["counterfactual_inputs"]
         assert len(counterfactual_inputs) == 1
-
-        # Perform interchange intervention: copy base trace and intervene with counterfactual values
         cf_trace = counterfactual_inputs[0]
-        setting1 = input_data.copy()
-        for var in target_variables1:
-            setting1.intervene(var, cf_trace[var])
+
+        # Interchange intervention with target_variables1 on causal_model1.
+        base1 = rederive_trace(causal_model1, input_data)
+        cf1 = rederive_trace(causal_model1, cf_trace)
+        setting1 = causal_model1.run_interchange(
+            base1, {var: cf1 for var in target_variables1}
+        )
 
         if causal_model2 is not None and target_variables2 is not None:
-            # Perform interchange intervention on second set of variables
-            setting2 = input_data.copy()
-            for var in target_variables2:
-                setting2.intervene(var, cf_trace[var])
+            # Interchange intervention with target_variables2 on causal_model2.
+            base2 = rederive_trace(causal_model2, input_data)
+            cf2 = rederive_trace(causal_model2, cf_trace)
+            setting2 = causal_model2.run_interchange(
+                base2, {var: cf2 for var in target_variables2}
+            )
             if setting1["raw_output"] != setting2["raw_output"]:
                 count += 1
         else:
-            # Compare against baseline (input_data is already a trace)
-            if setting1["raw_output"] != input_data["raw_output"]:
+            # Compare against causal_model1's unintervened baseline.
+            if setting1["raw_output"] != base1["raw_output"]:
                 count += 1
 
     proportion = count / len(dataset)
@@ -86,6 +98,145 @@ def can_distinguish_with_dataset(
     )
     logger.debug(f"Proportion of distinguishable examples: {proportion:.2f}")
     return {"proportion": proportion, "count": count}
+
+
+def rederive_trace(model: "CausalModel", trace):
+    """Port a trace into ``model`` so ``run_interchange`` uses its mechanisms.
+
+    Re-instantiates ``trace`` under ``model`` from the model's own input
+    variables, so an interchange always runs against ``model``'s mechanisms
+    regardless of which model originally produced the trace.
+    """
+    try:
+        inputs = {v: trace[v] for v in model.inputs}
+    except KeyError as exc:
+        raise KeyError(
+            f"Cannot re-derive trace for {type(model).__name__}: the source "
+            f"trace is missing input variable {exc}. Every model.inputs key must "
+            f"be present in the source trace."
+        ) from exc
+    return model.new_trace(inputs)
+
+
+def intervened_output_vector(
+    model: "CausalModel",
+    target_variables: list[str],
+    dataset: Sequence[Mapping[str, Any]],
+    output_variable: str = "raw_output",
+) -> list:
+    """Per-example intervened ``output_variable`` for one hypothesis.
+
+    For each example, re-derive the base and (single) counterfactual under
+    ``model``, interchange ``target_variables`` from the counterfactual into the
+    base, and read ``output_variable``. This is the vector form of the comparison
+    that :func:`can_distinguish_with_dataset` reduces to a single rate — caching
+    one vector per hypothesis lets every pairwise rate be read off the vectors
+    without re-running interchange per pair.
+    """
+    out = []
+    for example in dataset:
+        base = rederive_trace(model, example["input"])
+        counterfactual_inputs = example["counterfactual_inputs"]
+        assert len(counterfactual_inputs) == 1, (
+            "each example must carry exactly one counterfactual input"
+        )
+        cf = rederive_trace(model, counterfactual_inputs[0])
+        out.append(
+            model.run_interchange(base, {var: cf for var in target_variables})[
+                output_variable
+            ]
+        )
+    return out
+
+
+def _output_disagreement_rate(a: list, b: list) -> float:
+    """Fraction of positions where two intervened-output vectors differ."""
+    return sum(1 for x, y in zip(a, b) if x != y) / len(a) if a else 0.0
+
+
+def distinguishability_report(
+    models_by_name: Mapping[str, "CausalModel"],
+    hypotheses: Mapping[str, tuple[str, list[str]]],
+    targets: Sequence[str],
+    datasets: Mapping[str, Sequence[Mapping[str, Any]]],
+    random_pairs: Sequence[Mapping[str, Any]],
+    output_variable: str = "raw_output",
+) -> dict:
+    """Characterise how counterfactual datasets relate a set of causal-model
+    hypotheses, at the causal-model level (CPU only).
+
+    A hypothesis is a ``(model name, target-variable subset)`` pair; its
+    "intervened output" on a pair is what :func:`intervened_output_vector`
+    computes. Two outputs are produced:
+
+    1. **Target-centric baselines** per design dataset: for each focal ``target``,
+       the rate at which every alternative hypothesis's intervened output differs
+       from the target's (plus ``vs_null`` / ``vs_all`` if the ``"null"`` /
+       ``"all"`` reference hypotheses are present in ``hypotheses``). These are
+       interpretive baselines, not pass/fail gates.
+    2. **Always-confounded groups** from one large ``random_pairs`` run:
+       hypotheses whose intervened-output vectors are identical across every
+       sampled pair are grouped as confounded everywhere (empirical at finite N).
+
+    Parameters
+    ----------
+    models_by_name:
+        Maps each model name referenced by ``hypotheses`` to its ``CausalModel``.
+    hypotheses:
+        Maps hypothesis name -> ``(model name, [target variables])``. Include the
+        ``"null"`` (empty targets) and ``"all"`` (full mediating slice) reference
+        hypotheses if you want the ``vs_null`` / ``vs_all`` columns populated.
+    targets:
+        Focal hypothesis names; every other hypothesis is scored against each.
+    datasets:
+        Maps design-dataset name -> list of counterfactual examples.
+    random_pairs:
+        One large random counterfactual dataset for the always-confounded run.
+
+    Returns a JSON-able dict ``{"datasets": {...}, "always_confounded": [...],
+    "singletons": [...]}``. Performs no disk I/O.
+    """
+
+    def _label_vectors(data):
+        return {
+            name: intervened_output_vector(
+                models_by_name[model_name], target_vars, data, output_variable
+            )
+            for name, (model_name, target_vars) in hypotheses.items()
+        }
+
+    report: dict = {"datasets": {}}
+    for ds_name, data in datasets.items():
+        labels = _label_vectors(data)
+        per_target = {}
+        for tgt in targets:
+            alts = {
+                a: _output_disagreement_rate(labels[tgt], labels[a])
+                for a in hypotheses
+                if a != tgt
+            }
+            per_target[tgt] = {
+                "vs_null": alts.get("null"),
+                "vs_all": alts.get("all"),
+                "alternatives": alts,
+            }
+        report["datasets"][ds_name] = {"size": len(data), "per_target": per_target}
+
+    # Group hypotheses whose intervened-output vectors are identical across the
+    # whole random run: no sampled pair deconfounds them (confounded everywhere,
+    # not a fixable per-dataset confound).
+    big_labels = _label_vectors(random_pairs)
+    groups: list[list[str]] = []
+    for name in hypotheses:
+        for grp in groups:
+            if big_labels[name] == big_labels[grp[0]]:
+                grp.append(name)
+                break
+        else:
+            groups.append([name])
+    report["always_confounded"] = [g for g in groups if len(g) > 1]
+    report["singletons"] = [g[0] for g in groups if len(g) == 1]
+    return report
 
 
 def compute_interchange_scores(
@@ -408,38 +559,6 @@ def label_data_with_variables(
     return labeled_data, label_to_setting
 
 
-def generate_equiv_classes(model: "CausalModel") -> dict[str, dict[Any, list[Any]]]:
-    """
-    Generate equivalence classes for each variable.
-
-    This function computes, for each non-input variable, the sets of parent values
-    that produce each possible value of the variable.
-
-    Parameters:
-    -----------
-    model : CausalModel
-        The causal model to compute equivalence classes for.
-
-    Returns:
-    --------
-    dict
-        A dictionary mapping variables to their equivalence classes.
-    """
-    equiv_classes: dict[str, dict[Any, list[Any]]] = {}
-    for var in model.variables:
-        if var in model.inputs:
-            continue
-        equiv_classes[var] = {val: [] for val in model.values[var]}
-        for parent_values in itertools.product(
-            *[model.values[par] for par in model.parents[var]]
-        ):
-            value = model.mechanisms[var](*parent_values)
-            equiv_classes[var][value].append(
-                {par: parent_values[i] for i, par in enumerate(model.parents[var])}
-            )
-    return equiv_classes
-
-
 def find_live_paths(
     model: "CausalModel", intervention: dict[str, Any]
 ) -> dict[int, list[list[str]]]:
@@ -488,58 +607,6 @@ def find_live_paths(
         step += 1
     del paths[1]
     return paths
-
-
-def sample_input_tree_balanced(
-    model: "CausalModel",
-    equiv_classes: dict[str, dict[Any, list[Any]]],
-    output_var: str | None = None,
-    output_var_value: Any | None = None,
-) -> dict[str, Any]:
-    """
-    Sample an input that leads to a specific output value using a balanced tree approach.
-
-    Parameters:
-    -----------
-    model : CausalModel
-        The causal model to sample from.
-    equiv_classes : dict
-        Pre-computed equivalence classes (from generate_equiv_classes).
-    output_var : str, optional
-        The output variable to target (default is the first output variable).
-    output_var_value : any, optional
-        The desired value for the output variable (default is a random choice).
-
-    Returns:
-    --------
-    dict
-        A dictionary mapping input variables to their sampled values.
-    """
-    assert output_var is not None or len(model.outputs) == 1
-
-    if output_var is None:
-        output_var = model.outputs[0]
-    if output_var_value is None:
-        output_var_value = random.choice(model.values[output_var])
-
-    def create_input(
-        var: str, value: Any, input_dict: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        if input_dict is None:
-            input_dict = {}
-        parent_values = random.choice(equiv_classes[var][value])
-        for parent in parent_values:
-            if parent in model.inputs:
-                input_dict[parent] = parent_values[parent]
-            else:
-                create_input(parent, parent_values[parent], input_dict)
-        return input_dict
-
-    input_setting = create_input(output_var, output_var_value)
-    for input_var in model.inputs:
-        if input_var not in input_setting:
-            input_setting[input_var] = random.choice(model.values[input_var])
-    return input_setting
 
 
 def get_path_maxlen_filter(

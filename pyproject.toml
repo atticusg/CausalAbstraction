@@ -26,13 +26,15 @@ dependencies = [
     "dash",
     "dash-cytoscape",
     "jupyter-dash",
-    "claude-agent-sdk>=0.1.9",
     "rich",
     "nnsight>=0.5.9",
     "ipykernel>=7.0.1",
     "umap-learn>=0.5.0",
     "hydra-core>=1.3.0",
     "pot>=0.9.0",
+    "openai>=1.50.0",
+    "datasets>=2.20.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [tool.uv.sources]
@@ -40,17 +42,19 @@ pyvene = { git = "https://github.com/stanfordnlp/pyvene.git", branch = "main" }
 
 [tool.pytest.ini_options]
 markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "gpu: marks tests as requiring GPU",
+    "smoke: tiny-config end-to-end runner smoke tests; <5 min total wall, no numerical assertions beyond artifact existence",
+    "numerical_unit: pinned-value CPU tests on fixed seeds (losses, metrics, sample outputs)",
+    "golden: value-pinned end-to-end runner goldens on the coherent model; the sole GPU tier (CI selects -m golden)",
+    "property: invariances/equivariances and determinism",
+    "unit: default tier — pure-function tests, parsers, small utilities",
 ]
 testpaths = ["tests"]
-norecursedirs = ["causalab/agents/refs", ".venv", "__pycache__"]
+norecursedirs = [".venv", "__pycache__"]
 
 [tool.coverage.run]
 omit = [
     "tests/*",
     "demos/*",
-    "causalab/tasks/*",
     ".venv/*",
 ]
 
@@ -75,37 +79,48 @@ build-backend = "uv_build"
 dev = [
     "pytest>=8.4.2",
     "pytest-cov>=7.0.0",
+    "pytest-xdist>=3.6.0",
     "ruff",
     "pre-commit>=4.4.0",
     "basedpyright",
     "scikit-learn-stubs",
     "pandas-stubs",
     "ipdb>=0.13.13",
+    "hypothesis>=6.0",
 ]
 
 [tool.ruff]
 # target-version inferred from project.requires-python
 exclude = [
-    "agents/refs/**",
     "**/__pycache__",
     "**/.venv",
     ".venv",
-    # Jinja templates rendered by setup-* skills — not valid Python on disk
-    ".claude/skills/setup-methods/templates",
-    ".claude/skills/setup-analyses/templates",
+    # Exclude all tasks except MCQA
+    "causalab/tasks/entity_binding",
+    "causalab/tasks/IOI",
+    # Research-run output dir (generated at runtime, gitignored) — not shipped code
+    "agent_logs",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Notebooks frequently interleave imports with setup/markdown cells (E402)
+# and use single-letter math conventions like `l` for layer/loss (E741).
+"*.ipynb" = ["E402", "E741"]
 
 [tool.basedpyright]
 pythonVersion = "3.10"
 typeCheckingMode = "strict"
 exclude = [
-    "agents/refs/**",
     "**/__pycache__",
     "**/.venv",
     ".venv",
-    # Jinja templates rendered by setup-* skills — not valid Python on disk
-    ".claude/skills/setup-methods/templates",
-    ".claude/skills/setup-analyses/templates",
+    # Exclude all tasks except MCQA
+    "causalab/tasks/entity_binding",
+    "causalab/tasks/IOI",
+    # Research-run output dir (generated at runtime, gitignored) — not shipped code
+    "agent_logs",
+    # Tutorial notebooks — exploratory teaching code, not API surface
+    "demos",
 ]
 # Disable cascading inference rules to avoid untyped code propagating errors
 reportUnknownVariableType = "none"
@@ -113,3 +128,6 @@ reportUnknownMemberType = "none"
 reportUnknownArgumentType = "none"
 reportUnknownParameterType = "none"
 reportUnknownLambdaType = "none"
+# Mechanical annotation gaps — don't gate CI on these; correctness rules below stay strict
+reportMissingParameterType = "none"
+reportMissingTypeArgument = "none"

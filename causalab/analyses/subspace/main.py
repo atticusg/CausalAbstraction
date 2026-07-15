@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, cast
 
 import torch
 from omegaconf import DictConfig, OmegaConf
@@ -23,7 +23,7 @@ from causalab.runner.helpers import (
     generate_datasets,
     build_targets_for_grid,
     resolve_intervention_metric,
-    _task_config_for_metadata,
+    _task_config_for_metadata,  # pyright: ignore[reportPrivateUsage]
 )
 from causalab.io.pipelines import load_pipeline, load_locate_result
 from causalab.io.plots.figure_format import (
@@ -181,7 +181,7 @@ def _save_feature_count_heatmap(
     avg_score = train_result.get("avg_test_score", 0.0)
 
     save_path = path_with_figure_format(
-        os.path.join(output_dir, "heatmaps", "feature_counts.pdf"),
+        os.path.join(output_dir, "heatmaps", "feature_counts"),
         figure_format,
     )
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -202,6 +202,11 @@ logger = logging.getLogger(__name__)
 
 ANALYSIS_NAME = "subspace"
 
+# task.* keys read with no safe default: ``intervention_metric`` (direct
+# attribute access) and ``colormap`` (the ``${task.colormap}`` interpolation in
+# subspace.yaml). Validated up front by the runner (#264).
+REQUIRED_TASK_KEYS = ("colormap", "intervention_metric")
+
 
 # --------------------------------------------------------------------------- #
 # Grid-mode helpers                                                           #
@@ -214,13 +219,14 @@ def _save_grid_results(
     token_position_ids: list,
     output_dir: str,
     title: str,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
     train_scores: dict[tuple, float] | None = None,
 ) -> dict[str, Any]:
     """Save grid results.json and heatmaps.  Returns the results dict."""
     from causalab.io.plots.score_heatmap import plot_residual_stream_heatmap
 
-    best_key = max(scores, key=scores.get) if scores else None
+    # max() overloads can't infer dict.get's key-fn signature here; use lambda
+    best_key = max(scores, key=lambda k: scores[k]) if scores else None
 
     results_data: dict[str, Any] = {
         "best_cell": (
@@ -246,7 +252,7 @@ def _save_grid_results(
             token_position_ids=token_position_ids,
             title=f"{title} (test)" if train_scores else title,
             save_path=path_with_figure_format(
-                os.path.join(heatmaps_dir, "test.pdf"),
+                os.path.join(heatmaps_dir, "test"),
                 figure_format,
             ),
             figure_format=figure_format,
@@ -262,7 +268,7 @@ def _save_grid_results(
                 token_position_ids=token_position_ids,
                 title=f"{title} (train)",
                 save_path=path_with_figure_format(
-                    os.path.join(heatmaps_dir, "train.pdf"),
+                    os.path.join(heatmaps_dir, "train"),
                     figure_format,
                 ),
                 figure_format=figure_format,
@@ -425,7 +431,7 @@ def _run_grid(
         token_position=token_position,
         heads=list(heads) if heads is not None else None,
     )
-    token_position_ids = axes_meta.get("token_position_ids", [])
+    token_position_ids: list[Any] = list(axes_meta.get("token_position_ids", []) or [])
 
     log_dir = os.path.join(out_dir, "logs")
 
@@ -600,7 +606,7 @@ def _run_grid(
         "model": cfg.model.name,
         "task": cfg.task.name,
         "task_config": _task_config_for_metadata(
-            OmegaConf.to_container(cfg.task, resolve=True)
+            cast(dict[str, Any], OmegaConf.to_container(cfg.task, resolve=True))
         ),
         "n_train": cfg.task.n_train,
         "seed": seed,
@@ -624,7 +630,7 @@ def _run_grid(
     return result
 
 
-def _run_best_cell_detail(
+def _run_best_cell_detail(  # pyright: ignore[reportUnusedFunction]
     cfg: DictConfig,
     method: str,
     target,
@@ -730,33 +736,49 @@ def _run_single_cell(
     dbm_lr: float = 0.001,
     dbm_regularization_coefficient: float = 0.1,
     dbm_tie_masks: bool = False,
+    fixed_cfg: Any = None,
     position_names_override: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run subspace analysis on a single (layer, token_position) cell."""
     from causalab.analyses.subspace import (
         find_pca_subspace,
+        find_fixed_subspace,
         find_das_subspace,
         find_dbm_subspace,
         find_boundless_subspace,
+        resolve_fixed_rotation,
+        score_fixed_subspace,
+        orient_rotation,
     )
 
     position_names = list(token_positions) if token_positions else None
     if position_names_override is not None:
         position_names = position_names_override
     if position_names is None:
-        raise ValueError(
-            "token_positions must be specified for single-cell subspace analysis. "
-            "Set token_positions: [<name>] in the runner config, or leave layers "
-            "unset to auto-resolve both layer and token_position from locate/ results."
-        )
+        # No explicit position: resolve from the task rather than assuming a
+        # hard-coded name (e.g. the old `last_token` default, which many tasks
+        # do not define — they expose `last`). A single declared position is
+        # unambiguous (the common case); multiple positions are ambiguous for a
+        # single cell, so list them and ask the caller to pick one.
+        available = list(task.create_token_positions(pipeline))
+        if len(available) == 1:
+            position_names = available
+        else:
+            raise ValueError(
+                f"token_positions is unset and task {task.name!r} declares "
+                f"{len(available)} token positions {sorted(available)}; a single "
+                "cell needs exactly one. Set subspace.token_positions: [<name>] to "
+                "pick one, or leave subspace.layers unset to auto-resolve "
+                "(layer, token_position) from locate/ results."
+            )
     targets, _tp_list = build_targets_for_grid(pipeline, task, [layer], position_names)
-    token_pos = _tp_list[0]
     target = next(iter(targets.values()))
 
     result: dict[str, Any] = {
         "method": method,
         "k_features": k_features,
         "layer": layer,
+        "token_position": _tp_list[0].id,
     }
 
     embeddings = task.causal_model.embeddings or None
@@ -852,6 +874,70 @@ def _run_single_cell(
             metric=intervention_metric,
         )
         result.update({"boundless_result": sub["boundless_result"]})
+    elif method == "fixed":
+        rotation, provenance = resolve_fixed_rotation(fixed_cfg, out_dir=out_dir)
+        # Auto-transpose / validate orientation against the model's d_model so a
+        # (k, d_model) artifact resolves the same as a (d_model, k) one (#255).
+        # k_features (config) disambiguates a square rotation (its orientation is
+        # ambiguous even with d_model known).
+        rotation = orient_rotation(
+            rotation,
+            d_model=int(pipeline.model.config.hidden_size),
+            k_features_hint=k_features,
+        )
+        if int(rotation.shape[1]) != k_features:
+            raise ValueError(
+                f"subspace.k_features={k_features} does not match the given "
+                f"rotation's k={int(rotation.shape[1])}. Set k_features to the "
+                "rotation's column count."
+            )
+        sub = find_fixed_subspace(
+            target,
+            train_dataset,
+            pipeline,
+            rotation,
+            batch_size,
+            out_dir,
+            intervention_variable=intervention_variable,
+            embeddings=embeddings,
+            colormap=colormap,
+            vis_dims=vis_dims,
+            variable_values=variable_values,
+            detailed_hover=detailed_hover,
+            max_hover_chars=max_hover_chars,
+            figure_format=figure_format,
+            k_features_hint=k_features,
+        )
+        result.update(
+            {
+                "features_shape": list(sub["features"].shape),
+                "fixed_provenance": provenance,
+            }
+        )
+        # Optionally score the threaded subspace's interchange-IIA / mediation at
+        # this pinned cell (subspace.fixed.score). find_fixed_subspace already set
+        # the frozen featurizer on `target`, so the scan is RESTRICTED to the given
+        # rotation; score_fixed_subspace rebuilds a featurizer-free control for
+        # the full-cell IIA. Retires the session-local fixed_subspace_mediation (#262).
+        if fixed_cfg is not None and bool(fixed_cfg.get("score", False)):
+            score_dataset = test_dataset if test_dataset else train_dataset
+            scores = score_fixed_subspace(
+                target=target,
+                cell_key=next(iter(targets)),
+                layer=layer,
+                position_name=position_names[0],
+                pipeline=pipeline,
+                task=task,
+                dataset=score_dataset,
+                batch_size=batch_size,
+                intervention_metric=cfg.task.intervention_metric,
+            )
+            result.update(scores)
+            # extract_values pins float leaves of files named exactly
+            # ``results.json`` (tests/end_to_end/_helpers/golden.py:318), so the
+            # IIA scores must land there to be value-gated by the golden.
+            with open(os.path.join(out_dir, "results.json"), "w") as f:
+                json.dump(scores, f, indent=2)
     else:
         raise ValueError(f"Unknown subspace method: {method}")
 
@@ -881,6 +967,16 @@ def _dispatch_grid_or_single(
     method = analysis.method
     k_features = analysis.k_features
     batch_size = analysis.batch_size
+    fixed_cfg = analysis.get("fixed", {})
+    if method == "fixed":
+        _fixed_layers = analysis.get("layers", None)
+        if not _fixed_layers or len(list(_fixed_layers)) != 1:
+            raise ValueError(
+                "method: fixed requires a single explicit layer "
+                "(subspace.layers: [L]) — a given rotation is tied to one "
+                "(layer, token_position). Grid scan and locate-auto resolution "
+                "are not supported for fixed subspaces."
+            )
     seed = cfg.seed
     figure_fmt = resolve_figure_format_from_analysis(analysis)
 
@@ -918,7 +1014,7 @@ def _dispatch_grid_or_single(
         layers_cfg = list(range(pipeline.model.config.num_hidden_layers))
 
     if layers_cfg is not None:
-        layers = [int(l) for l in layers_cfg]
+        layers = [int(lyr) for lyr in layers_cfg]
         if len(layers) == 1:
             # Single-cell mode
             layer = layers[0]
@@ -946,25 +1042,37 @@ def _dispatch_grid_or_single(
                 dbm_lr=dbm_lr,
                 dbm_regularization_coefficient=dbm_regularization_coefficient,
                 dbm_tie_masks=dbm_tie_masks,
+                fixed_cfg=fixed_cfg,
             )
 
-            # Save metadata for single-cell mode
+            # Save metadata for single-cell mode. For method=fixed the on-disk
+            # artifact is a PCA-style rotation matrix, so record method="pca"
+            # (artifact-type semantics) — this is what load_subspace_onto_target
+            # branches on, so downstream consumers need no fixed-specific code.
+            # The fixed origin is preserved under discovery/fixed_source.
+            # _run_single_cell resolves the position (explicit name, the task's
+            # sole position, or an override), so record the resolved id rather
+            # than the raw config, which is null under the default.
             _tp_names = list(analysis.get("token_positions") or [])
             metadata = {
                 "analysis": "subspace",
                 "mode": "single",
-                "method": method,
+                "method": "pca" if method == "fixed" else method,
                 "k_features": k_features,
                 "layer": layer,
-                "token_position": str(_tp_names[0]) if _tp_names else None,
+                "token_position": result.get("token_position")
+                or (str(_tp_names[0]) if _tp_names else None),
                 "model": cfg.model.name,
                 "task": cfg.task.name,
                 "task_config": _task_config_for_metadata(
-                    OmegaConf.to_container(cfg.task, resolve=True)
+                    cast(dict[str, Any], OmegaConf.to_container(cfg.task, resolve=True))
                 ),
                 "n_train": cfg.task.n_train,
                 "seed": seed,
             }
+            if method == "fixed":
+                metadata["discovery"] = "fixed"
+                metadata["fixed_source"] = result.get("fixed_provenance")
             with open(os.path.join(out_dir, "metadata.json"), "w") as f:
                 json.dump(metadata, f, indent=2)
 
@@ -1016,6 +1124,11 @@ def _dispatch_grid_or_single(
                 "locate/ results do not contain best_cell.token_position. "
                 "Please set subspace.token_positions explicitly."
             )
+        if layer is None:
+            raise ValueError(
+                "locate/ results do not contain best_cell.layer or best_layer. "
+                "Please set subspace.layers explicitly."
+            )
         logger.info(
             "Auto-resolved layer=%d, token_position=%s from locate/ results",
             layer,
@@ -1060,7 +1173,7 @@ def _dispatch_grid_or_single(
             "model": cfg.model.name,
             "task": cfg.task.name,
             "task_config": _task_config_for_metadata(
-                OmegaConf.to_container(cfg.task, resolve=True)
+                cast(dict[str, Any], OmegaConf.to_container(cfg.task, resolve=True))
             ),
             "n_train": cfg.task.n_train,
             "seed": seed,
@@ -1074,6 +1187,29 @@ def _dispatch_grid_or_single(
     return result
 
 
+def _mode_out_dir(
+    base_out_dir: str, mode_analysis: DictConfig, mode_name: str, tv: str | None
+) -> str:
+    """Per-mode output dir that re-resolves ``_subdir`` from the mode's overrides.
+
+    ``base_out_dir`` bakes in the analysis-level ``_subdir`` (resolved once,
+    e.g. ``pca_k64``). A mode that overrides a ``_subdir``-feeding field such as
+    ``k_features`` would otherwise collide with sibling modes under that same
+    dir — both ``modes: [{k_features: 16}, {k_features: 64}]`` entries landed in
+    ``subspace/pca_k64/`` and the k=16 result was overwritten (#171, sub-issue
+    C6). Recompute the leaf subdir from the merged per-mode config instead.
+
+    When a mode does not change ``_subdir`` (e.g. the component-mode ``name:``
+    pattern), ``mode_analysis._subdir == basename(base_out_dir)``, so this
+    returns ``base_out_dir/mode_name[/tv]`` — identical to the prior behavior.
+    """
+    subspace_root = os.path.dirname(base_out_dir)
+    out_dir = os.path.join(subspace_root, str(mode_analysis._subdir), mode_name)
+    if tv:
+        out_dir = os.path.join(out_dir, tv)
+    return out_dir
+
+
 def main(cfg: DictConfig) -> dict[str, Any]:
     """Run the subspace analysis: find a k-dimensional subspace for the causal variable.
 
@@ -1082,10 +1218,6 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     analysis config and writes its artifacts to a per-mode subdirectory.
     """
     analysis = cfg[ANALYSIS_NAME]
-    string_metric, _comparison_fn = resolve_intervention_metric(
-        cfg.task.intervention_metric
-    )
-    intervention_metric = string_metric
 
     base_out_dir = analysis._output_dir
     tv = cfg.task.get("target_variable")
@@ -1094,10 +1226,19 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     # Shared loads (task, datasets, pipeline) — happen once across modes.
     task, _task_cfg_raw = resolve_task(
         task_name=cfg.task.name,
-        task_config=OmegaConf.to_container(cfg.task, resolve=True),
+        task_config=cast(
+            dict[str, Any], OmegaConf.to_container(cfg.task, resolve=True)
+        ),
         target_variable=cfg.task.get("target_variable"),
         seed=cfg.seed,
     )
+    # The intervention-success metric is the task's own checker (#167) — no
+    # lenient-containment default. ``_comparison_fn`` (distribution) is unused
+    # here; subspace methods score via ``intervention_metric``.
+    string_metric, _comparison_fn = resolve_intervention_metric(
+        cfg.task.intervention_metric, checker=task.checker
+    )
+    intervention_metric = string_metric
     train_dataset, test_dataset = generate_datasets(
         task,
         n_train=cfg.task.n_train,
@@ -1113,6 +1254,8 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         device=cfg.model.device,
         dtype=cfg.model.get("dtype"),
         eager_attn=cfg.model.get("eager_attn"),
+        use_chat_template=cfg.model.get("chat_template", False),
+        chat_answer_directive=cfg.model.get("chat_answer_directive"),
     )
 
     try:
@@ -1120,26 +1263,31 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         if modes:
             results_by_mode: dict[str, Any] = {}
             for mode in modes:
-                mode_dict = (
+                mode_dict = cast(
+                    dict[str, Any],
                     OmegaConf.to_container(mode, resolve=True)
                     if isinstance(mode, DictConfig)
-                    else dict(mode)
+                    else dict(mode),
                 )
                 mode_name = (
                     mode_dict.get("name") or mode_dict.get("component_type") or "mode"
                 )
                 # Per-mode analysis cfg = analysis defaults + mode overrides.
-                mode_analysis = OmegaConf.merge(
-                    analysis,
-                    OmegaConf.create(
-                        {k: v for k, v in mode_dict.items() if k != "name"}
+                # OmegaConf.merge returns ListConfig | DictConfig; merging two
+                # DictConfigs always yields a DictConfig here.
+                mode_analysis = cast(
+                    DictConfig,
+                    OmegaConf.merge(
+                        analysis,
+                        OmegaConf.create(
+                            {k: v for k, v in mode_dict.items() if k != "name"}
+                        ),
                     ),
                 )
-                # Per-mode output dir lives under the analysis _output_dir,
-                # then mode_name, then target_variable.
-                mode_out_dir = os.path.join(base_out_dir, mode_name)
-                if tv:
-                    mode_out_dir = os.path.join(mode_out_dir, tv)
+                # Per-mode output dir: re-resolve _subdir from the mode's
+                # overrides so modes differing by k/method don't collide, then
+                # mode_name, then target_variable.
+                mode_out_dir = _mode_out_dir(base_out_dir, mode_analysis, mode_name, tv)
                 os.makedirs(mode_out_dir, exist_ok=True)
                 logger.info(
                     "=== subspace mode: %s (component_type=%s) ===",

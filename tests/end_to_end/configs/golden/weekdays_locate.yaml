@@ -1,0 +1,33 @@
+# @package _global_
+# Golden-tier locate runner for weekdays — chat-coherent (Qwen3-4B-Instruct-2507).
+#
+# Promoted from configs/smoke/weekdays_locate.yaml: tiny-random → chat-coherent,
+# n_train 2 → 49 (fires the task's enumerate_all branch — train == test == the
+# full 7×7 weekday input space, deterministic, no sampling), batch_size 2 → 8.
+# The smoke twin stays for CPU coverage; this golden pins runner values via the
+# harness's extract_values() instead of asserting artifact existence, so no
+# `expected_artifacts:` block. Covers onboarding nb 02 (residual-stream tracing)
+# and nb 03 (localization with patching). See docs/TESTS.md "Smoke vs golden split".
+#
+# Pins locate in the DEFAULT mode (pairwise, since PR #206); the centroid path is
+# guarded by the weekdays_locate_centroid.yaml twin.
+defaults:
+- /base
+- /task: natural_domains_arithmetic_weekdays
+- /model: chat-coherent
+- /analysis/baseline   # locate looks up baseline accuracy + ref dists if cached
+- /analysis/locate
+- _self_
+
+task:
+  target_variable: result
+  n_train: 49
+  n_test: 2
+
+baseline:
+  batch_size: 8
+
+locate:
+  layers: [0, 1]
+  n_steer: 2
+  batch_size: 8

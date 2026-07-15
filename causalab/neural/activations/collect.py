@@ -10,7 +10,7 @@ including dimensionality reduction techniques like SVD/PCA.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch import Tensor
@@ -26,7 +26,7 @@ from causalab.neural.activations.intervenable_model import (
     prepare_intervenable_model,
     delete_intervenable_model,
 )
-from causalab.neural.pipeline import Pipeline
+from causalab.neural.pipeline import Pipeline, ensure_position_ids
 from causalab.neural.units import AtomicModelUnit, InterchangeTarget
 
 logger = logging.getLogger(__name__)
@@ -61,8 +61,12 @@ def _collect_activations_single_batch(
     # Create location map - for collection, source and base indices are the same
     location_map = {"sources->base": (indices, indices)}
 
-    # Run collection pass - pyvene returns ((base_outputs, collected_activations), cf_outputs)
-    result = intervenable_model(loaded_inputs, unit_locations=location_map)
+    # Supply position_ids for this plain (non-generate) forward; without them a
+    # left-padded batch is mis-encoded on absolute-position models. See
+    # ensure_position_ids.
+    result = intervenable_model(
+        ensure_position_ids(loaded_inputs), unit_locations=location_map
+    )
     activations = result[0][1]
 
     if return_model_output:
@@ -76,7 +80,7 @@ def collect_features(
     model_units: list[AtomicModelUnit],
     batch_size: int = 32,
     collect_output_logits: bool = False,
-) -> dict[str, Tensor] | tuple[dict[str, Tensor], Tensor]:
+) -> dict[str, Tensor] | tuple[dict[str, Tensor], list[Tensor]]:
     """
     Collect internal neural network activations (features) at specified model locations.
 
@@ -109,69 +113,100 @@ def collect_features(
         ...     dataset, pipeline, model_units, collect_output_logits=True
         ... )
     """
+    # Raise on duplicate unit IDs: `data` below is keyed by `model_unit.id` so
+    # duplicates would silently merge (the per-batch loop indexes by position
+    # in `model_units`, leaving the merged dict entry with only the last
+    # unit's activations). Downstream consumers — `methods/pca.py`,
+    # `methods/spline/train.py`, `analyses/subspace/das.py` — all assume the
+    # returned dict has one entry per unit.
+    seen_ids: set[str] = set()
+    for u in model_units:
+        if u.id in seen_ids:
+            raise ValueError(
+                f"Duplicate model_unit.id={u.id!r} in model_units; ids must be unique"
+            )
+        seen_ids.add(u.id)
+
     # Initialize model with "collect" intervention type (extracts activations without modifying them)
     # prepare_intervenable_model auto-wraps flat lists into InterchangeTarget
     intervenable_model = prepare_intervenable_model(
         pipeline, model_units, intervention_type="collect"
     )
 
+    # Pin eval mode + no_grad: collection is a forward-only operation. Without
+    # these, autograd builds a graph and dropout / batchnorm-like layers stay
+    # in train mode, leaking gradients and randomness into the cached
+    # activations (which then get consumed by every featurizer / interchange
+    # learner downstream as if they were deterministic).
+    pipeline.model.eval()
+
     # Initialize container for collected features: one list per model unit
-    # Use model unit IDs as keys to handle duplicates gracefully
     data: dict[str, list[Tensor]] = {model_unit.id: [] for model_unit in model_units}
     output_logits_list: list[Tensor] = []
 
     # Process dataset in batches with progress tracking
-    for start in tqdm(
-        range(0, len(dataset), batch_size),
-        desc="Processing batches",
-        leave=False,
-    ):
-        batch = dataset[start : start + batch_size]
-        # Get inputs from batch
-        batched_inputs = [example["input"] for example in batch]
+    with torch.no_grad():
+        for start in tqdm(
+            range(0, len(dataset), batch_size),
+            desc="Processing batches",
+            leave=False,
+        ):
+            batch = dataset[start : start + batch_size]
+            # Get inputs from batch
+            batched_inputs = [example["input"] for example in batch]
 
-        # Compute indices for each model unit
-        indices = [
-            model_unit.index_component(batched_inputs, batch=True, is_original=True)
-            for model_unit in model_units
-        ]
+            # Load inputs first so the padded `attention_mask` is available for
+            # shifting unpadded position indices into the padded-batch frame.
+            loaded_inputs = pipeline.load(batched_inputs)
 
-        # Load inputs through pipeline
-        loaded_inputs = pipeline.load(batched_inputs)
+            # Compute indices for each model unit
+            indices = [
+                model_unit.index_component(
+                    batched_inputs,
+                    batch=True,
+                    is_original=True,
+                    attention_mask=loaded_inputs["attention_mask"],
+                )
+                for model_unit in model_units
+            ]
 
-        # Use shared helper to collect activations
-        result = _collect_activations_single_batch(
-            intervenable_model,
-            loaded_inputs,
-            indices,
-            return_model_output=collect_output_logits,
-        )
-
-        if collect_output_logits:
-            activations, model_output = result
-            # Store full logits per example (seq lengths may vary across batches)
-            batch_logits = model_output.logits.detach().cpu()
-            for j in range(batch_logits.shape[0]):
-                output_logits_list.append(batch_logits[j])
-            del model_output
-        else:
-            activations = result
-
-        # Process activations: pyvene 0.1.8+ returns one tensor per unit
-        if len(activations) != len(model_units):
-            raise ValueError(
-                f"Unexpected activations format. Got {len(activations)} tensors "
-                f"but expected {len(model_units)} (one per model unit)"
+            # Use shared helper to collect activations
+            result = _collect_activations_single_batch(
+                intervenable_model,
+                loaded_inputs,
+                indices,
+                return_model_output=collect_output_logits,
             )
 
-        for activation_idx, model_unit in enumerate(model_units):
-            unit_activations = activations[activation_idx]
-            hidden_size = unit_activations.shape[-1]
-            reshaped_activations = unit_activations.reshape(-1, hidden_size)
-            data[model_unit.id].extend(reshaped_activations.cpu())
+            if collect_output_logits:
+                # When return_model_output=True, result is tuple[list[Tensor], Any]
+                assert isinstance(result, tuple)
+                activations, model_output = result
+                # Store full logits per example (seq lengths may vary across batches)
+                batch_logits = model_output.logits.detach().cpu()
+                for j in range(batch_logits.shape[0]):
+                    output_logits_list.append(batch_logits[j])
+                del model_output
+            else:
+                # return_model_output=False path returns list[Tensor].
+                assert isinstance(result, list)
+                activations = result
 
-        del loaded_inputs
-        del activations
+            # Process activations: pyvene 0.1.8+ returns one tensor per unit
+            if len(activations) != len(model_units):
+                raise ValueError(
+                    f"Unexpected activations format. Got {len(activations)} tensors "
+                    f"but expected {len(model_units)} (one per model unit)"
+                )
+
+            for activation_idx, model_unit in enumerate(model_units):
+                unit_activations = activations[activation_idx]
+                hidden_size = unit_activations.shape[-1]
+                reshaped_activations = unit_activations.reshape(-1, hidden_size)
+                data[model_unit.id].extend(reshaped_activations.cpu())
+
+            del loaded_inputs
+            del activations
 
     # Clean up intervenable model
     delete_intervenable_model(intervenable_model)
@@ -218,8 +253,15 @@ def collect_source_representations(
         source_pipeline.load(list(cf_group)) for cf_group in cf_inputs_raw
     ]
     source_cf_indices = [
-        model_unit.index_component(list(cf_group), batch=True, is_original=False)
-        for group, cf_group in zip(interchange_target, cf_inputs_raw)
+        model_unit.index_component(
+            list(cf_group),
+            batch=True,
+            is_original=False,
+            attention_mask=batched_cf_for_source[group_idx]["attention_mask"],
+        )
+        for group_idx, (group, cf_group) in enumerate(
+            zip(interchange_target, cf_inputs_raw)
+        )
         for model_unit in group
     ]
     return collect_batch_representations(
@@ -302,9 +344,11 @@ def collect_batch_representations(
         unit_idx += num_units_in_group
 
         # Collect activations using shared helper
+        # return_model_output defaults to False here, so result is list[Tensor].
         activations = _collect_activations_single_batch(
             intervenable_model, cf_input, group_indices
         )
+        assert isinstance(activations, list)
 
         # Extend our list with activations for this group's units
         all_activations.extend(activations)
@@ -339,11 +383,16 @@ def collect_class_centroids(
         valid_mask is (n_classes,) boolean indicating which classes had samples.
     """
     units = interchange_target.flatten()
-    features_dict = collect_features(
-        dataset=filtered_samples,
-        pipeline=pipeline,
-        model_units=units,
-        batch_size=32,
+    # filtered_samples is list[dict]; CounterfactualExample is a TypedDict with
+    # the same runtime shape, so the cast is safe.
+    features_dict = cast(
+        "dict[str, Tensor]",
+        collect_features(
+            dataset=cast("list[CounterfactualExample]", filtered_samples),
+            pipeline=pipeline,
+            model_units=units,
+            batch_size=32,
+        ),
     )
     features = features_dict[units[0].id].detach().float()
 

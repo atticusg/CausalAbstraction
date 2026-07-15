@@ -5,11 +5,20 @@ that ``causalab.neural.featurizer.Featurizer.from_dict`` can dispatch to them
 via ``Featurizer.__subclasses__()``.
 """
 
-from causalab.methods.trained_subspace.subspace import SubspaceFeaturizer  # noqa: F401
-from causalab.methods.standardize import StandardizeFeaturizer  # noqa: F401
-from causalab.methods.spline.featurizer import (  # noqa: F401
+from causalab.methods.trained_subspace.subspace import SubspaceFeaturizer
+from causalab.methods.standardize import StandardizeFeaturizer
+from causalab.methods.spline.featurizer import (
     ManifoldFeaturizer,
     ManifoldProjectFeaturizer,
 )
-from causalab.methods.sae import SAEFeaturizer  # noqa: F401
-from causalab.methods.umap import UMAPFeaturizer  # noqa: F401
+from causalab.methods.sae import SAEFeaturizer
+from causalab.methods.umap import UMAPFeaturizer
+
+__all__ = [
+    "SubspaceFeaturizer",
+    "StandardizeFeaturizer",
+    "ManifoldFeaturizer",
+    "ManifoldProjectFeaturizer",
+    "SAEFeaturizer",
+    "UMAPFeaturizer",
+]

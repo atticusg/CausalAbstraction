@@ -16,7 +16,66 @@ from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Pipeline", "LMPipeline", "resolve_device"]
+__all__ = [
+    "Pipeline",
+    "LMPipeline",
+    "resolve_device",
+    "left_pad_position_ids",
+    "ensure_position_ids",
+]
+
+
+# ---------------------------------------------------------------------------
+# Position ids — single source of truth for the left-pad convention
+# ---------------------------------------------------------------------------
+
+
+def left_pad_position_ids(attention_mask: Tensor) -> Tensor:
+    """``position_ids`` for a (possibly padded) ``attention_mask``.
+
+    Uses HF's convention — ``cumsum(mask) - 1`` over the real tokens, with pad
+    slots pinned to 1 — so each real token is numbered from 0 regardless of how
+    many pad tokens precede it. Reduces to ``arange`` on an unpadded mask.
+    """
+    position_ids = attention_mask.long().cumsum(-1) - 1
+    return position_ids.masked_fill(attention_mask == 0, 1)
+
+
+def ensure_position_ids(inputs: dict[str, Tensor]) -> dict[str, Tensor]:
+    """Return ``inputs`` carrying ``position_ids`` for a plain (non-generate) forward.
+
+    A plain forward with no ``position_ids`` lets the model default to
+    ``arange(seq_len)``, which under the pipeline's default left padding starts
+    numbering at the PAD tokens — corrupting every activation in a padded row for
+    models with **absolute / learned** position embeddings (GPT-2, GPT-Neo, OPT).
+    Rotary models are immune (RoPE is relative; a uniform left-pad shift cancels),
+    so this is a no-op for them.
+
+    For plain (non-generate) forwards, call this directly. The two generate paths
+    handle it as follows (see ``LMPipeline.intervenable_generate``):
+
+    * **Multi-step** ``generate`` / ``intervenable_generate`` number their own
+      per-step ``position_ids``; feeding them a prompt-shaped ``position_ids`` is
+      wrong across decode steps — measured to shift GPT-2 multi-step logits by ~0.26
+      — so they are left alone. This is also why ``load`` does not emit
+      ``position_ids`` by default (its output feeds both paths).
+    * **Single-step** ``intervenable_generate`` (``max_new_tokens == 1`` — the
+      path-patching case) has only the prompt prefill forward, so a prompt-shaped
+      ``position_ids`` is exactly correct; ``intervenable_generate`` applies this to
+      its base (and, always, to its source-collection forwards) internally. Callers
+      of that path need not wrap inputs themselves.
+
+    No-op if ``position_ids`` is already present (e.g. the pipeline was built with
+    ``position_ids=True``) or if there is no ``attention_mask`` to derive from.
+    Returns a new dict; the input is not mutated.
+    """
+    if "position_ids" in inputs or "attention_mask" not in inputs:
+        return inputs
+    return {
+        **inputs,
+        "position_ids": left_pad_position_ids(inputs["attention_mask"]),
+    }
+
 
 # ---------------------------------------------------------------------------
 # Compat patches
@@ -40,14 +99,16 @@ def _patch_extra_special_tokens() -> None:
 
     from transformers import tokenization_utils_base as _tub
 
-    _orig = _tub.PreTrainedTokenizerBase._set_model_specific_special_tokens
+    _orig = _tub.PreTrainedTokenizerBase._set_model_specific_special_tokens  # pyright: ignore[reportPrivateUsage]
 
     def _safe_set_model_specific_special_tokens(self, special_tokens):
         if isinstance(special_tokens, list):
             special_tokens = {}
-        return _orig(self, special_tokens)
+        # Monkey-patch shim; the underlying API accepts either list or dict at
+        # runtime even though the stub narrows to list[str].
+        return _orig(self, special_tokens)  # pyright: ignore[reportArgumentType]
 
-    _tub.PreTrainedTokenizerBase._set_model_specific_special_tokens = (
+    _tub.PreTrainedTokenizerBase._set_model_specific_special_tokens = (  # pyright: ignore[reportPrivateUsage]
         _safe_set_model_specific_special_tokens
     )
 
@@ -150,6 +211,13 @@ class Pipeline(ABC):
 class LMPipeline(Pipeline):
     """Pipeline for autoregressive HuggingFace causal‑LMs."""
 
+    # Content-independent sentinel used to locate where user content begins in
+    # the chat-wrapped prompt. ``wrapped.find(content)`` is unsafe because task
+    # text can collide with role markers (e.g. content ``"INST"`` vs the
+    # ``[INST]`` marker); the record-separator glyphs (U+241E) never appear in
+    # task text or chat templates, so the sentinel resolves unambiguously.
+    _CHAT_CONTENT_SENTINEL = "␞CAUSALAB_CONTENT␞"
+
     def __init__(
         self,
         model_or_name: str | PreTrainedModel,
@@ -159,6 +227,7 @@ class LMPipeline(Pipeline):
         logit_labels: bool = False,
         position_ids: bool = False,
         use_chat_template: bool = False,
+        chat_answer_directive: str | None = None,
         padding_side: str | None = "left",
         load_weights: bool = True,
         **kwargs: Any,
@@ -168,9 +237,15 @@ class LMPipeline(Pipeline):
         self.logit_labels = logit_labels
         self.position_ids = position_ids
         self.use_chat_template = use_chat_template
+        self.chat_answer_directive = chat_answer_directive
         self.padding_side = padding_side
         self.load_weights = load_weights
         self._init_extra_kwargs = kwargs
+        # Lazily-computed chat-prefix metadata (see _chat_prefix_* helpers).
+        # Cached per instance: the prefix is fixed once tokenizer + directive
+        # are bound, so the wrap-and-tokenize cost is paid at most once each.
+        self._chat_prefix_char_offset_cache: int | None = None
+        self._chat_prefix_token_count_cache: int | None = None
         super().__init__(model_or_name)
 
     # ------------------------------------------------------------------
@@ -251,6 +326,67 @@ class LMPipeline(Pipeline):
             self.tokenizer.padding_side = self.padding_side
 
     # ------------------------------------------------------------------
+    # Chat-template prefix metadata
+    # ------------------------------------------------------------------
+
+    def _chat_messages(self, content: str) -> list[dict[str, str]]:
+        """Build the message list ``load`` wraps in chat mode.
+
+        Emits an optional ``chat_answer_directive`` as a **system** message so
+        it lands entirely inside the chat *prefix* (it never perturbs task-content
+        char offsets), followed by the task text as the single user turn.
+        """
+        messages: list[dict[str, str]] = []
+        if self.chat_answer_directive:
+            messages.append({"role": "system", "content": self.chat_answer_directive})
+        messages.append({"role": "user", "content": content})
+        return messages
+
+    def _chat_prefix_char_offset(self) -> int:
+        """Character offset where user content begins in the chat-wrapped prompt.
+
+        Wraps a content-independent sentinel through the same message structure
+        :meth:`load` uses (so any system directive is accounted for) and returns
+        ``wrapped.find(SENTINEL)``. Returns ``0`` when chat templating is off.
+        Cached per instance.
+        """
+        if not self.use_chat_template:
+            return 0
+        offset = self._chat_prefix_char_offset_cache
+        if offset is None:
+            wrapped = self.tokenizer.apply_chat_template(
+                self._chat_messages(self._CHAT_CONTENT_SENTINEL),
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            offset = wrapped.find(self._CHAT_CONTENT_SENTINEL)
+            self._chat_prefix_char_offset_cache = offset
+        return offset
+
+    def _chat_prefix_token_count(self) -> int:
+        """Number of tokens before user content in the chat-wrapped prompt.
+
+        Needed to rebase **non-negative** absolute token indices so ``position=0``
+        means the first *content* token rather than BOS. Computed by tokenizing
+        the prefix slice with ``add_special_tokens=False`` (chat wrapping already
+        embeds the specials — see :meth:`load`). Returns ``0`` when chat templating
+        is off. Cached per instance.
+        """
+        if not self.use_chat_template:
+            return 0
+        count = self._chat_prefix_token_count_cache
+        if count is None:
+            wrapped = self.tokenizer.apply_chat_template(
+                self._chat_messages(self._CHAT_CONTENT_SENTINEL),
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            prefix = wrapped[: self._chat_prefix_char_offset()]
+            count = len(self.tokenizer(prefix, add_special_tokens=False)["input_ids"])
+            self._chat_prefix_token_count_cache = count
+        return count
+
+    # ------------------------------------------------------------------
     # Encoding
     # ------------------------------------------------------------------
 
@@ -270,17 +406,22 @@ class LMPipeline(Pipeline):
 
         raw_input = [item["raw_input"] for item in input]
 
-        # Apply chat template if requested
+        # Apply chat template if requested. The wrapped string already embeds
+        # the model's special tokens (BOS, role markers), so we tokenize it with
+        # ``add_special_tokens=False`` below to avoid prepending a *second* BOS
+        # (double-BOS bug) — that also keeps generation and offset math correct.
+        wrapped_input: list[str] | None = None
         if use_chat_template:
-            processed_input = []
-            for text in raw_input:
-                # Convert to messages format and apply chat template
-                messages = [{"role": "user", "content": text}]
-                formatted = self.tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
+            wrapped_input = [
+                self.tokenizer.apply_chat_template(
+                    self._chat_messages(text),
+                    tokenize=False,
+                    add_generation_prompt=True,
                 )
-                processed_input.append(formatted)
-            raw_input = processed_input
+                for text in raw_input
+            ]
+            raw_input = wrapped_input
+            add_special_tokens = False
 
         if max_length is None and not no_padding:
             max_length = self.max_length
@@ -289,6 +430,12 @@ class LMPipeline(Pipeline):
             prev_padding_side = self.tokenizer.padding_side
             self.tokenizer.padding_side = padding_side
 
+        # LMPipeline only wraps AutoModelForCausalLM (see import above), so the
+        # downstream model never consumes ``token_type_ids``. Disabling it keeps
+        # ``enc`` to the keys the rest of this method handles (input_ids,
+        # attention_mask, optional offset_mapping, optional position_ids) and
+        # avoids passing unexpected kwargs to model.forward. Encoder models
+        # (BERT/RoBERTa) are out of scope for this pipeline class.
         enc = self.tokenizer(
             raw_input,
             padding=False if no_padding else ("max_length" if max_length else True),
@@ -297,11 +444,19 @@ class LMPipeline(Pipeline):
             return_tensors="pt",
             add_special_tokens=add_special_tokens,
             return_offsets_mapping=return_offsets_mapping,
+            return_token_type_ids=False,
         )
         if self.position_ids:
-            enc["position_ids"] = self.model.prepare_inputs_for_generation(
-                input_ids=enc["input_ids"], attention_mask=enc["attention_mask"]
-            )["position_ids"]
+            # Opt-in, NOT the default — deliberately. This dict feeds both plain
+            # forwards (which need position_ids under left padding) and multi-step
+            # generate (which numbers its own per-step position_ids). Emitting a
+            # prompt-shaped position_ids unconditionally would regress multi-step
+            # decoding on absolute-position models (measured ~0.26 logit shift on
+            # GPT-2), so we leave it off here; plain-forward sites opt in via
+            # ensure_position_ids, and single-step intervenable_generate applies it
+            # internally. Same left-pad convention either way; set in place so enc
+            # stays a BatchEncoding.
+            enc["position_ids"] = left_pad_position_ids(enc["attention_mask"])
         # Pop offset_mapping if present - it's a list of tuples, not a tensor
         offset_mapping = enc.pop("offset_mapping", None)
 
@@ -311,6 +466,16 @@ class LMPipeline(Pipeline):
         # Add back offset_mapping if it was present
         if offset_mapping is not None:
             enc["offset_mapping"] = offset_mapping
+            # Under a chat template the offsets index into the *wrapped* string,
+            # so token-position resolution needs to know where the bare task
+            # content starts. Attach the (scalar) content char offset plus the
+            # wrapped strings so callers can rebase bare char ranges and verify
+            # the template preserved the content verbatim. These are scalars /
+            # lists (not tensors): attach *after* the .to(device) loop and ignore
+            # them in any tensor-only consumer (existing callers already do).
+            if use_chat_template:
+                enc["content_char_offset"] = self._chat_prefix_char_offset()
+                enc["wrapped_text"] = wrapped_input
 
         if padding_side is not None:
             self.tokenizer.padding_side = prev_padding_side
@@ -357,6 +522,36 @@ class LMPipeline(Pipeline):
     # Generation
     # ------------------------------------------------------------------
 
+    def _generated_tokens(self, sequences: Tensor, prompt_len: int) -> Tensor:
+        """Slice the model-produced tokens out of a ``[prompt | generated]`` sequence.
+
+        ``model.generate`` returns the prompt followed by the generated tokens, so
+        the generated region is ``sequences[:, prompt_len:]``. Slicing the *last*
+        ``max_new_tokens`` tokens instead (the previous behaviour) is correct only
+        when generation consumes the full budget — on an early EOS stop the window
+        reaches back into the prompt and leaks trailing prompt tokens into the
+        decoded string. Under a chat template those trailing tokens are the
+        ``assistant`` role header (plain text, not stripped by
+        ``skip_special_tokens``), which corrupts multi-token outputs; at
+        ``max_new_tokens == 1`` the bug is masked because exactly one token is
+        always emitted.
+
+        The slice is right-padded back to a fixed ``max_new_tokens`` width with
+        ``pad_token_id`` (= EOS, dropped on decode) so the returned tensor keeps a
+        stable shape contract for downstream consumers that concatenate sequences
+        across batches.
+        """
+        gen = sequences[:, prompt_len:]
+        deficit = self.max_new_tokens - gen.shape[1]
+        if deficit > 0:
+            pad_block = gen.new_full(
+                (gen.shape[0], deficit), self.tokenizer.pad_token_id
+            )
+            gen = torch.cat([gen, pad_block], dim=1)
+        elif deficit < 0:
+            gen = gen[:, : self.max_new_tokens]
+        return gen
+
     def generate(
         self,
         input: list[CausalTrace],
@@ -375,7 +570,8 @@ class LMPipeline(Pipeline):
         with torch.no_grad():
             out = self.model.generate(**inputs, **defaults)
         scores = [s.detach().cpu() for s in (out.scores or [])]
-        seq = out.sequences[:, -self.max_new_tokens :].detach().cpu()
+        prompt_len = inputs["input_ids"].shape[1]
+        seq = self._generated_tokens(out.sequences, prompt_len).detach().cpu()
         del inputs, out
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -428,6 +624,24 @@ class LMPipeline(Pipeline):
             use_cache=True,
         )
         defaults.update(gen_kwargs)
+        # Left-pad position_ids for absolute-position models (GPT-2 et al.); no-op on
+        # RoPE or when position_ids is already present. pyvene runs each source as a
+        # plain collection forward (`self.model(**source)`) and the base as the
+        # generate prefill (`self.model.generate(**base)`) — neither carries
+        # position_ids otherwise, so a left-padded row is numbered from the pad tokens
+        # and every activation in it is corrupted.
+        #   * Sources are plain forwards: always safe to fix.
+        #   * Base is the prefill. For single-step decoding (max_new_tokens == 1 — the
+        #     path-patching case) the prefill is the ONLY forward, so a prompt-shaped
+        #     position_ids is exactly correct. For multi-step we must NOT pin it (it
+        #     can't extend across decode steps — measured ~0.26 GPT-2 logit drift), so
+        #     leave multi-step base alone and let generate number its own steps.
+        if sources is not None:
+            sources = [
+                ensure_position_ids(s) if s is not None else None for s in sources
+            ]
+        if defaults["max_new_tokens"] == 1:
+            base = ensure_position_ids(base)
         with torch.no_grad():
             # pyvene type stubs are incomplete - source_representations accepts list or dict
             out = intervenable_model.generate(
@@ -437,8 +651,12 @@ class LMPipeline(Pipeline):
                 **defaults,  # type: ignore[reportArgumentType]
             )  # type: ignore[reportOptionalMemberAccess]
 
-        # Return dictionary like HuggingFace models
-        sequences = out[-1].sequences[:, -self.max_new_tokens :].detach().cpu()
+        # Return dictionary like HuggingFace models. Slice the generated tokens
+        # from the prompt end (not the last max_new_tokens) so an early EOS stop
+        # doesn't leak trailing prompt tokens into the decoded string — see
+        # _generated_tokens.
+        prompt_len = base["input_ids"].shape[1]
+        sequences = self._generated_tokens(out[-1].sequences, prompt_len).detach().cpu()
         result = {"sequences": sequences}
 
         if gen_kwargs.get("output_scores", True):

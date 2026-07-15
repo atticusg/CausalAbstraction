@@ -17,14 +17,30 @@ from causalab.runner.helpers import (
     generate_datasets,
     get_output_token_ids,
 )
-from causalab.io.artifacts import save_tensor_results
+from causalab.io.artifacts import save_tensors_with_meta, load_tensor_results
+from causalab.io.centroids import coerce_param_to_float
 from causalab.io.sklearn_pca import save_pca, load_pca
 from causalab.io.pipelines import load_pipeline
+from causalab.analyses.output_manifold.belief_cache import (
+    BELIEF_DISTS_STEM,
+    archive_belief_artifacts,
+    belief_cache_status,
+    build_belief_identity,
+    utc_now_iso,
+)
+from causalab.io.plots.figure_format import (
+    path_with_figure_format,
+    resolve_figure_format_from_analysis,
+)
 from causalab.io.plots.plot_utils import resolve_task_colormap
 
 logger = logging.getLogger(__name__)
 
 ANALYSIS_NAME = "output_manifold"
+
+# ``colormap`` is resolved through the ``${task.colormap}`` interpolation in
+# output_manifold.yaml. Validated up front by the runner (#264).
+REQUIRED_TASK_KEYS = ("colormap",)
 
 
 def _build_centroid_alignment(task):
@@ -47,7 +63,9 @@ def _build_centroid_alignment(task):
     def _embed(v):
         if embed_fn is not None:
             return list(embed_fn(v))
-        return [float(x) for x in v] if isinstance(v, (tuple, list)) else [float(v)]
+        if isinstance(v, (tuple, list)):
+            return [coerce_param_to_float(iv, x) for x in v]
+        return [coerce_param_to_float(iv, v)]
 
     coords_per_class = np.array(
         [_embed(v) for v in task.intervention_values],
@@ -75,7 +93,31 @@ def _build_centroid_alignment(task):
     return sort_perm, edges
 
 
-def _build_belief_artifacts(cfg: DictConfig, out_root: str, batch_size: int) -> None:
+def _fit_and_save_hellinger_pca(per_example_dists: torch.Tensor, out_root: str):
+    """Fit the 3-component Hellinger PCA from belief dists and persist it.
+
+    Operates on the √-transformed distributions (the Hellinger embedding). This is
+    cheap and CPU-only relative to the model forward pass that produces
+    ``per_example_dists``, so it can be refit on its own when the dists cache is
+    valid but only the PCA artifact is missing — avoiding a needless full
+    (GPU) recollection.
+    """
+    from sklearn.decomposition import PCA
+
+    sqrt_dists = torch.sqrt(per_example_dists.clamp(min=0))
+    hellinger_pca = PCA(n_components=3)
+    hellinger_pca.fit(sqrt_dists.numpy())
+    save_pca(hellinger_pca, out_root, "hellinger_pca")
+    logger.info(
+        "Fit Hellinger PCA: %.1f%% var",
+        hellinger_pca.explained_variance_ratio_.sum() * 100,
+    )
+    return hellinger_pca
+
+
+def _build_belief_artifacts(
+    cfg: DictConfig, out_root: str, batch_size: int, figure_format: str = "png"
+) -> None:
     """Collect per-example output distributions and fit Hellinger PCA.
 
     Produces (idempotent — skipped if already present):
@@ -84,15 +126,15 @@ def _build_belief_artifacts(cfg: DictConfig, out_root: str, batch_size: int) -> 
       - {out_root}/hellinger_pca_3d.html
     """
     import math
-    from sklearn.decomposition import PCA
     from causalab.methods.metric import class_probabilities
     from causalab.io.plots.plot_3d_interactive import plot_3d
 
-    nat_path = os.path.join(out_root, "per_example_output_dists.safetensors")
     pca_st_path = os.path.join(out_root, "hellinger_pca.safetensors")
     pca_meta_path = os.path.join(out_root, "hellinger_pca.meta.json")
     viz_3d_path = os.path.join(out_root, "hellinger_pca_3d.html")
-    viz_2d_path = os.path.join(out_root, "hellinger_pca_2d.pdf")
+    viz_2d_path = path_with_figure_format(
+        os.path.join(out_root, "hellinger_pca_2d"), figure_format
+    )
 
     task, _ = resolve_task(
         task_name=cfg.task.name,
@@ -101,32 +143,12 @@ def _build_belief_artifacts(cfg: DictConfig, out_root: str, batch_size: int) -> 
         seed=cfg.seed,
     )
     expected_dim = len(task.intervention_values) + 1  # +1 for 'other' bin
+    identity = build_belief_identity(cfg, task)
 
-    data_present = False
-    if (
-        os.path.exists(nat_path)
-        and os.path.exists(pca_st_path)
-        and os.path.exists(pca_meta_path)
-    ):
-        from causalab.io.artifacts import load_tensor_results
-
-        saved = load_tensor_results(out_root, "per_example_output_dists.safetensors")[
-            "dists"
-        ]
-        if saved.shape[-1] == expected_dim:
-            logger.info("Belief artifacts already present; skipping collection.")
-            data_present = True
-        else:
-            logger.warning(
-                "Stale belief artifacts: saved last-dim=%d, expected=%d (W+1). "
-                "Re-collecting against current task config.",
-                saved.shape[-1],
-                expected_dim,
-            )
-            os.remove(nat_path)
-            os.remove(pca_st_path)
-            os.remove(pca_meta_path)
-
+    # Generate the (deterministic, model-free) train_dataset up front so the cache
+    # decision can validate the ROW count — not just the class dim. A debug pass
+    # (small n_train) and a full pass sharing one experiment_root must not reuse
+    # each other's belief cache (GH #220).
     train_dataset, _ = generate_datasets(
         task,
         n_train=cfg.task.n_train,
@@ -136,20 +158,42 @@ def _build_belief_artifacts(cfg: DictConfig, out_root: str, batch_size: int) -> 
         enumerate_all=cfg.task.enumerate_all,
         resample_variable=cfg.task.get("resample_variable", "all"),
     )
+    expected_rows = len(train_dataset)
 
-    if data_present:
-        # Reload data to drive the visualization step.
-        from causalab.io.artifacts import load_tensor_results
+    # Obtain the belief dists + Hellinger PCA via the cheapest valid path:
+    #   reuse + PCA present → reload both (no model pass, no fit)
+    #   reuse + PCA missing → reload dists, refit only the (cheap, CPU) PCA
+    #   not reusable        → archive the displaced run (never overwrite), recollect
+    # The middle branch matters: the dists are the expensive, GPU-collected
+    # artifact, so a missing PCA must not trigger a full recollection (GH #220).
+    reuse, reason = belief_cache_status(out_root, identity, expected_rows, expected_dim)
+    pca_ready = os.path.exists(pca_st_path) and os.path.exists(pca_meta_path)
 
+    if reuse and pca_ready:
+        logger.info("Belief artifacts validated (%s); skipping collection.", reason)
         per_example_dists = load_tensor_results(
-            out_root,
-            "per_example_output_dists.safetensors",
+            out_root, f"{BELIEF_DISTS_STEM}.safetensors"
         )["dists"]
-        hellinger_pca = load_pca(out_root, "hellinger_pca")
-        sqrt_dists = torch.sqrt(per_example_dists.clamp(min=0))
-        hellinger_coords = hellinger_pca.transform(sqrt_dists.numpy())
+        pipeline = None
+    elif reuse:
+        logger.info(
+            "Belief dists valid (%s) but Hellinger PCA missing; refitting PCA "
+            "only (no model pass).",
+            reason,
+        )
+        per_example_dists = load_tensor_results(
+            out_root, f"{BELIEF_DISTS_STEM}.safetensors"
+        )["dists"]
+        _fit_and_save_hellinger_pca(per_example_dists, out_root)
         pipeline = None
     else:
+        archived = archive_belief_artifacts(out_root)
+        if archived:
+            logger.warning(
+                "Belief cache not reusable (%s); archived prior artifacts to %s.",
+                reason,
+                archived,
+            )
         pipeline = load_pipeline(
             model_name=cfg.model.name,
             task=task,
@@ -157,6 +201,8 @@ def _build_belief_artifacts(cfg: DictConfig, out_root: str, batch_size: int) -> 
             device=cfg.model.device,
             dtype=cfg.model.get("dtype"),
             eager_attn=cfg.model.get("eager_attn"),
+            use_chat_template=cfg.model.get("chat_template", False),
+            chat_answer_directive=cfg.model.get("chat_answer_directive"),
         )
         score_token_ids, _ = get_output_token_ids(task, pipeline)
         if score_token_ids is None or not task.intervention_values:
@@ -186,21 +232,13 @@ def _build_belief_artifacts(cfg: DictConfig, out_root: str, batch_size: int) -> 
             min=0.0
         )
         per_example_dists = torch.cat([per_example_probs_fvs, other_mass], dim=-1)
-        save_tensor_results(
+        save_tensors_with_meta(
             {"dists": per_example_dists},
+            {"identity": identity, "created_at": utc_now_iso()},
             out_root,
-            "per_example_output_dists.safetensors",
+            BELIEF_DISTS_STEM,
         )
-
-        # Fit Hellinger PCA
-        sqrt_dists = torch.sqrt(per_example_dists.clamp(min=0))
-        hellinger_pca = PCA(n_components=3)
-        hellinger_coords = hellinger_pca.fit_transform(sqrt_dists.numpy())
-        save_pca(hellinger_pca, out_root, "hellinger_pca")
-        logger.info(
-            "Fit Hellinger PCA: %.1f%% var",
-            hellinger_pca.explained_variance_ratio_.sum() * 100,
-        )
+        _fit_and_save_hellinger_pca(per_example_dists, out_root)
 
     # 3D interactive + 2D static scatter of Hellinger PCA coordinates.
     # Always retried if the output files are missing — separately gated from
@@ -276,7 +314,12 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     os.makedirs(out_dir, exist_ok=True)
 
     # Ensure Hellinger artifacts exist (collected here, not in baseline)
-    _build_belief_artifacts(cfg, bm_root, batch_size=analysis.batch_size)
+    _build_belief_artifacts(
+        cfg,
+        bm_root,
+        batch_size=analysis.batch_size,
+        figure_format=resolve_figure_format_from_analysis(analysis),
+    )
 
     # Load task (for intervention_values, causal_model, embeddings)
     task, _task_cfg_raw = resolve_task(
@@ -369,58 +412,63 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         raise ValueError(f"Unknown intrinsic_mode: {intrinsic_mode!r}")
 
     belief_spline = result["manifold"]
-    centroid_hellinger = result["centroid_hellinger"]
 
     # ── 3D Visualization (Hellinger PCA space) ──
     vis_dir = os.path.join(out_dir, "visualization")
     os.makedirs(vis_dir, exist_ok=True)
 
-    if hellinger_pca is not None:
-        iv = task.intervention_variable or "class"
-        variable_values = [str(v) for v in task.intervention_values]
-
-        # Identity standardization (belief space has no standardization).
-        # Pass per-example PROBABILITIES with feature_kind='hellinger': plot_3d
-        # √-transforms internally for the PCA fit / display and uses √(mean(p))
-        # per class as centroids — drift-free.
-        D = natural_dists.shape[1]
-        mean = torch.zeros(D)
-        std = torch.ones(D)
-        # Data-driven mesh range (99.7% quantile of encoded √p) instead of
-        # control-points + 5% margin — avoids spike-end artefacts where the
-        # TPS spline extrapolates beyond its training extent.
-        from causalab.analyses.activation_manifold.utils import (
-            _compute_intrinsic_ranges as _data_intrinsic_ranges,
-        )
-
-        sqrt_nat_for_ranges = torch.sqrt(natural_dists.clamp(min=0)).float()
-        ranges = _data_intrinsic_ranges(
-            sqrt_nat_for_ranges,
-            belief_spline,
-            mean,
-            std,
-        )
-        _, edges = _build_centroid_alignment(task)
-
-        plot_3d(
-            features=natural_dists.float(),
-            output_path=os.path.join(vis_dir, "output_manifold_3d.html"),
-            title="Output Manifold (Hellinger space)",
-            train_dataset=_bm_train_ds[: natural_dists.shape[0]],
-            intervention_variable=iv,
-            embeddings=task.causal_model.embeddings,
-            colormap=analysis.get("colormap", None),
-            manifold_obj=belief_spline,
-            mean=mean,
-            std=std,
-            ranges=ranges,
-            variable_values=variable_values,
-            edges=edges,
-            feature_kind="hellinger",
-        )
-        logger.info("Saved 3D output manifold visualization.")
-    else:
+    if hellinger_pca is None:
         logger.warning("Skipping visualization: no hellinger_pca available.")
+    else:
+        # Viz is best-effort: a categorical target without an embedding (or any
+        # other plotting failure) must not abort the run after the belief TPS is
+        # already fitted. Mirrors subspace / activation_manifold viz handling.
+        try:
+            iv = task.intervention_variable or "class"
+            variable_values = [str(v) for v in task.intervention_values]
+
+            # Identity standardization (belief space has no standardization).
+            # Pass per-example PROBABILITIES with feature_kind='hellinger':
+            # plot_3d √-transforms internally for the PCA fit / display and uses
+            # √(mean(p)) per class as centroids — drift-free.
+            D = natural_dists.shape[1]
+            mean = torch.zeros(D)
+            std = torch.ones(D)
+            # Data-driven mesh range (99.7% quantile of encoded √p) instead of
+            # control-points + 5% margin — avoids spike-end artefacts where the
+            # TPS spline extrapolates beyond its training extent.
+            from causalab.analyses.activation_manifold.utils import (
+                _compute_intrinsic_ranges as _data_intrinsic_ranges,
+            )
+
+            sqrt_nat_for_ranges = torch.sqrt(natural_dists.clamp(min=0)).float()
+            ranges = _data_intrinsic_ranges(
+                sqrt_nat_for_ranges,
+                belief_spline,
+                mean,
+                std,
+            )
+            _, edges = _build_centroid_alignment(task)
+
+            plot_3d(
+                features=natural_dists.float(),
+                output_path=os.path.join(vis_dir, "output_manifold_3d.html"),
+                title="Output Manifold (Hellinger space)",
+                train_dataset=_bm_train_ds[: natural_dists.shape[0]],
+                intervention_variable=iv,
+                embeddings=task.causal_model.embeddings,
+                colormap=analysis.get("colormap", None),
+                manifold_obj=belief_spline,
+                mean=mean,
+                std=std,
+                ranges=ranges,
+                variable_values=variable_values,
+                edges=edges,
+                feature_kind="hellinger",
+            )
+            logger.info("Saved 3D output manifold visualization.")
+        except Exception as e:
+            logger.warning("Output manifold visualization failed: %s", e, exc_info=True)
 
     # ── Analysis metadata ──
     metadata = {

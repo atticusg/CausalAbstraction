@@ -1,0 +1,60 @@
+# @package _global_
+# Golden-tier path_steering runner for weekdays — chat-coherent (Qwen3-4B-Instruct-2507).
+#
+# Promoted from configs/smoke/weekdays_path_steering.yaml: tiny-random → chat-coherent
+# (the smoke twin already runs n_train 49 / batch_size 8, so the model swap is the
+# only change). Exercises the full locate → subspace → activation_manifold →
+# path_steering chain end to end, covering onboarding nb 10 (steering interventions).
+# The smoke twin stays for CPU coverage; this golden pins values via extract_values()
+# (no `expected_artifacts:` block). See docs/TESTS.md "Smoke vs golden split".
+defaults:
+- /base
+- /task: natural_domains_arithmetic_weekdays
+- /model: chat-coherent
+- /analysis/baseline
+- /analysis/locate
+- /analysis/subspace
+- /analysis/activation_manifold
+- /analysis/path_steering
+- _self_
+
+task:
+  target_variable: result
+  n_train: 49
+  n_test: 2
+
+baseline:
+  batch_size: 8
+
+locate:
+  layers: [1]
+  n_steer: 4
+  batch_size: 8
+
+subspace:
+  k_features: 8
+  layers: [1]
+  token_positions: [last_token]   # explicit single-cell position (#257)
+  batch_size: 8
+
+activation_manifold:
+  layers: [1]
+  batch_size: 8
+  intrinsic_dim: 1
+  n_grid: 5
+
+path_steering:
+  # Drop distance_from_behavior_manifold: requires output_manifold (not in
+  # this chain). Drop coherence: needs more eval samples than this budget.
+  eval_criteria:
+    - isometry
+  # Bound work: 7 centroids → up to 21 pairs; cap to keep the runner fast.
+  max_pairs: 4
+  n_extra_pairs: 0
+  n_prompts: 2
+  n_eval_samples: 4
+  batch_size: 8
+  num_steps_along_path: 5
+  isometry:
+    n_arc_steps: 8
+    n_interior_per_pair: 0

@@ -1,0 +1,60 @@
+# @package _global_
+# Smoke-tier path_steering runner for weekdays.
+#
+# Smoke configs pin `/model: tiny-random` and assert only that the runner
+# completes and writes its declared `expected_artifacts`. See docs/TESTS.md
+# "Smoke vs golden split".
+defaults:
+- /base
+- /task: natural_domains_arithmetic_weekdays
+- /model: tiny-random
+- /analysis/baseline
+- /analysis/locate
+- /analysis/subspace
+- /analysis/activation_manifold
+- /analysis/path_steering
+- _self_
+
+task:
+  target_variable: result
+  n_train: 49
+  n_test: 2
+
+baseline:
+  batch_size: 8
+
+locate:
+  layers: [1]
+  n_steer: 4
+  batch_size: 8
+
+subspace:
+  k_features: 8
+  layers: [1]
+  token_positions: [last_token]   # explicit single-cell position (#257)
+  batch_size: 8
+
+activation_manifold:
+  layers: [1]
+  batch_size: 8
+  intrinsic_dim: 1
+  n_grid: 5
+
+path_steering:
+  # Drop distance_from_behavior_manifold: requires output_manifold (not in
+  # this chain). Drop coherence: needs more eval samples than smoke budgets.
+  eval_criteria:
+    - isometry
+  # Bound work: 7 centroids → up to 21 pairs; cap to keep smoke fast.
+  max_pairs: 4
+  n_extra_pairs: 0
+  n_prompts: 2
+  n_eval_samples: 4
+  batch_size: 8
+  num_steps_along_path: 5
+  isometry:
+    n_arc_steps: 8
+    n_interior_per_pair: 0
+
+expected_artifacts:
+- path_steering/pca_k8/L1_last_token/spline_s0.0/result/results_summary.csv

@@ -15,7 +15,7 @@ ignore_first_token: true   # exclude attention sink from heatmaps
 max_tokens_display: 40     # max tokens shown on comparison grid axes
 
 visualization:
-  figure_format: pdf
+  figure_format: ${figure_format}
   per_head_heatmaps: true      # save per-(layer,head) attention heatmap for first example
   average_heatmaps: true       # save averaged attention heatmap (same-length examples only)
   statistics_charts: true      # save per-(layer,head) statistics bar chart

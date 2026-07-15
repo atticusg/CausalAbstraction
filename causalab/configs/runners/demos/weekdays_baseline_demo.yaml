@@ -8,7 +8,3 @@ defaults:
 task:
   enumerate_all: true # Enumerate all examples in the training set, test = train
   target_variable: result
-
-baseline:
-  visualization:
-    figure_format: png

@@ -1,0 +1,42 @@
+# @package _global_
+defaults:
+- /base
+- /task: natural_domains_arithmetic_alphabet
+- /model: llama31_70b
+# - /analysis/baseline
+# - /analysis/subspace
+# - /analysis/activation_manifold
+# - /analysis/output_manifold
+# - /analysis/path_steering
+- /analysis/pullback
+- _self_
+
+# Pin to the original number_range=6 setup (preset is now 4) so we can reuse
+# the existing 70b upstream artifacts (subspace, output_manifold, etc.) instead
+# of re-running the whole pipeline. Overrides survive __post_init__ thanks to
+# the explicit-skip set in NaturalDomainConfig.
+task:
+  target_variable: result
+  n_train: 1000
+  n_test: 1000
+  number_range: 6
+  result_entities: [G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z]
+
+locate:
+  layers: [77]
+
+subspace:
+  layers: [77]
+
+activation_manifold:
+  layers: [77]
+  intrinsic_mode: parameter
+
+output_manifold:
+  intrinsic_mode: parameter
+
+pullback:
+  embedding_optim:
+    init: linear
+    trajectory_param: tps
+    norm_reg_weight: 5.0e-4

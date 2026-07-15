@@ -28,7 +28,7 @@ def plot_attention_heatmap(
     show_colorbar: bool = True,
     xlabel: str = "Key Position (attending to)",
     ylabel: str = "Query Position (attending from)",
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     """
     Plot attention pattern as a heatmap.
@@ -106,7 +106,7 @@ def plot_attention_comparison(
     figsize: Optional[tuple[float, float]] = None,
     cmap: str = "Blues",
     ncols: int = 2,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     """
     Plot multiple attention patterns side by side for comparison.
@@ -195,7 +195,7 @@ def plot_attention_statistics(
     title: str = "Attention Pattern Statistics",
     save_path: Optional[str] = None,
     figsize: tuple[float, float] = (10, 6),
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     """
     Plot attention pattern statistics as a bar chart.
@@ -264,7 +264,7 @@ def plot_layer_head_attention_grid(
     max_tokens: Optional[int] = 40,
     figsize: Optional[tuple[float, float]] = None,
     cmap: str = "Blues",
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     """
     Plot attention patterns organized by layer and head.
@@ -316,7 +316,7 @@ def plot_token_type_attention_heatmap(
     cmap: str = "Blues",
     xlabel: str = "Target Token Type (TO)",
     ylabel: str = "Source Token Type (FROM)",
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     """Plot a source-type x target-type attention matrix as a heatmap.
 

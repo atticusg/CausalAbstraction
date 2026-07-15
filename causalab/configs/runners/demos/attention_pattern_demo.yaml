@@ -1,0 +1,24 @@
+# @package _global_
+defaults:
+  - /base
+  - /task: MCQA
+  - /model: llama32_1b_instruct
+  - /analysis/attention_pattern
+  - _self_
+task:
+  target_variable: answer_position
+
+attention_pattern:
+  layers: [14]           # scan just layer 14 for a quick demo
+  heads: null            # null = all heads in that layer (32 heads)
+  n_examples: 8
+  max_attempts: 100
+  source_token_types: ["last_token"]
+  target_token_types: ["correct_symbol", "symbol0", "symbol1"]
+  ignore_first_token: true
+  visualization:
+    per_head_heatmaps: true
+    average_heatmaps: true
+    statistics_charts: true
+    token_type_heatmaps: true
+    head_comparison_grid: true

@@ -5,7 +5,7 @@ from __future__ import annotations
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_positions import (
     TokenPosition,
-    build_token_position_factories,
+    build_token_positions,
 )
 
 
@@ -35,5 +35,4 @@ def create_token_positions(
         "last": {"type": "index", "position": -1},
     }
 
-    factories = build_token_position_factories(specs, template)
-    return {name: factory(pipeline) for name, factory in factories.items()}
+    return build_token_positions(specs, template, pipeline)

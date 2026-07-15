@@ -2,7 +2,7 @@
 
 Produces:
 1. path_vis_3d.html — Interactive 3D: manifold mesh + geodesic + linear paths
-2. path_vis_distributions.pdf — P(token) vs alpha, linear vs geodesic, mean ± std
+2. path_vis_distributions_<suffix> (png/pdf, per figure_format) — P(token) vs alpha, linear vs geodesic, mean ± std
 """
 
 from __future__ import annotations
@@ -18,15 +18,14 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from causalab.methods.metric import tokenize_variable_values
 from causalab.methods.steer.collect import collect_grid_distributions
-from causalab.analyses.activation_manifold.utils import _get_manifold_device
+from causalab.analyses.activation_manifold.utils import _get_manifold_device  # pyright: ignore[reportPrivateUsage]
 from causalab.io.plots.plot_3d_interactive import (
     PathTrace,
     plot_3d,
 )
 from causalab.io.plots.figure_format import normalize_figure_format
-from causalab.methods.spline.builders import (
+from causalab.io.centroids import (
     compute_centroids,
     extract_parameters_from_dataset,
 )
@@ -718,7 +717,7 @@ def _render_single_mode_distributions(
     logger.info("Saved %s distribution plot: %s", label, output_path)
 
 
-def _plot_grid_flow(
+def _plot_grid_flow(  # pyright: ignore[reportUnusedFunction]
     geodesic_probs: Tensor,
     linear_probs: Tensor,
     variable_values: list,
@@ -951,6 +950,7 @@ def plot_ground_truth_path(
     )
 
     if use_grid:
+        assert variable_values is not None
         n_rows, n_cols, row_labels, col_labels, class_to_rc = _build_grid_layout(
             variable_values,
         )
@@ -993,7 +993,7 @@ def plot_ground_truth_heatmaps(
     colormap: str = "seismic",
     full_vocab_softmax: bool = False,
     title_prefix: str | None = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
     filename_prefix: str = "ground_truth",
 ) -> list[str]:
     """Auto-generate heatmaps for each coordinate dimension.
@@ -1017,7 +1017,7 @@ def plot_ground_truth_heatmaps(
     Returns:
         List of output file paths.
     """
-    fmt = normalize_figure_format(figure_format, default="pdf")
+    fmt = normalize_figure_format(figure_format)
     os.makedirs(output_dir, exist_ok=True)
 
     # Build numeric node coordinates from variable values.
@@ -1167,7 +1167,7 @@ def visualize_paths(
     colormaps: str | list[str] = "tab10",
     path_colors: dict[str, str] | None = None,
     full_vocab_softmax: bool = False,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> dict[str, str]:
     """Generate path visualizations for each path mode.
 
@@ -1201,7 +1201,7 @@ def visualize_paths(
     from causalab.neural.activations.collect import collect_class_centroids
 
     os.makedirs(output_dir, exist_ok=True)
-    _fig_fmt = normalize_figure_format(figure_format, default="pdf")
+    _fig_fmt = normalize_figure_format(figure_format)
 
     if path_modes is None:
         # Caller didn't pass path_modes — shouldn't happen with proper orchestration,
@@ -1215,14 +1215,25 @@ def visualize_paths(
         task.causal_model, "embeddings", None
     )
 
-    # For 2D variables, use deduplicated output tokens for probability collection
-    score_values = task.output_token_values
-    token_values = score_values if score_values is not None else variable_values
+    # Score-token ids for the variable's distinct output forms (the dedup that
+    # mattered for 2D variables falls out of shared form groups); width W of the
+    # collected distributions.
+    from causalab.runner.helpers import get_output_token_ids
 
-    var_indices = tokenize_variable_values(
-        pipeline.tokenizer,
-        token_values,
-        task.result_token_pattern,
+    var_indices, _ = get_output_token_ids(task, pipeline)
+    if var_indices is None:
+        raise ValueError(
+            f"Task {task.name!r} declares no output_tokens for its intervention "
+            f"variable; path-distribution collection needs score-token ids."
+        )
+    # The per-column values (one per distinct form group), aligned with the
+    # deduplicated ``var_indices`` above — the line-plot path labels by these.
+    from causalab.methods.output_tokens import form_group_values
+
+    _ot = task.causal_model.output_tokens
+    _var = task.intervention_variable
+    score_values = (
+        form_group_values(_ot[_var]) if (_ot and _var and _ot.get(_var)) else None
     )
 
     # Normalize colormaps to a list
@@ -1238,7 +1249,7 @@ def visualize_paths(
     path_suffix = f"{_sanitize(start_value)}_to_{_sanitize(end_value)}"
 
     eval_samples = filtered_samples[:n_prompts]
-    expected_W = len(token_values)
+    expected_W = len(var_indices)
 
     # Default path colors
     default_colors = {
@@ -1260,7 +1271,7 @@ def visualize_paths(
         mean = components["mean"]
         std = components["std"]
         from causalab.analyses.activation_manifold.utils import (
-            _compute_intrinsic_ranges,
+            _compute_intrinsic_ranges,  # pyright: ignore[reportPrivateUsage]
         )
 
         ranges = _compute_intrinsic_ranges(features, manifold_obj, mean, std)
@@ -1276,9 +1287,11 @@ def visualize_paths(
 
         # Check cache
         cached_probs = None
+        cached: dict | None = None
         if os.path.exists(cache_path):
             logger.info("Loading cached %s data from %s", label, cache_path)
             cached = torch.load(cache_path, map_location="cpu")
+            assert cached is not None
             if (
                 cached.get("probs") is not None
                 and cached["probs"].shape[-1] == expected_W
@@ -1286,6 +1299,7 @@ def visualize_paths(
                 cached_probs = cached["probs"]
 
         if cached_probs is not None:
+            assert cached is not None
             path_results[label] = {
                 "probs": cached_probs,
                 "path": cached.get("grid_points"),
@@ -1299,7 +1313,8 @@ def visualize_paths(
                 logger.warning("Skipping %s — no manifold available", label)
                 continue
 
-            value_to_intrinsic, centroid_features, control_points, _ = (
+            assert mean is not None and std is not None
+            value_to_intrinsic, centroid_features, control_points, _ = (  # pyright: ignore[reportUnusedVariable]
                 _get_centroid_intrinsic_coords(
                     features,
                     train_dataset,
@@ -1568,10 +1583,10 @@ def plot_saved_pair_distributions(
     score_labels: list[str] | None = None,
     colormap: str = "rainbow",
     full_vocab_softmax: bool = True,
-    output_token_values: list | None = None,
+    grid_values: list | None = None,
     per_pair_snap_indices: list[np.ndarray] | None = None,
     color_by_dim: int = 0,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
     colored_concepts_in_legend: list[str] | None = None,
     figsize: tuple[float, float] | list[float] | None = None,
     font_scale: float = 1.0,
@@ -1590,7 +1605,7 @@ def plot_saved_pair_distributions(
         score_labels: Labels for output token columns. Defaults to value_labels.
         colormap: Matplotlib colormap for lines.
         full_vocab_softmax: Whether to show "other" line.
-        output_token_values: Raw output token values. If these are 2D numeric
+        grid_values: Raw output token values. If these are 2D numeric
             tuples (e.g., grid coordinates), uses grid flow visualization.
         per_pair_snap_indices: Pre-computed snapshot indices per pair (for
             consistent snapshots across path modes). If None, uses uniform spacing.
@@ -1605,12 +1620,15 @@ def plot_saved_pair_distributions(
     from causalab.io.plots.plot_utils import FigureGenerator
 
     os.makedirs(output_dir, exist_ok=True)
-    _fmt = normalize_figure_format(figure_format, default="pdf")
+    _fmt = normalize_figure_format(figure_format)
 
-    use_grid = output_token_values is not None and _is_2d_spatial(output_token_values)
-    _figsize = tuple(figsize) if figsize is not None else None
+    use_grid = grid_values is not None and _is_2d_spatial(grid_values)
+    _figsize: tuple[float, float] | None = (
+        (float(figsize[0]), float(figsize[1])) if figsize is not None else None
+    )
 
     if use_grid:
+        assert grid_values is not None
         for pi, (si, ei) in enumerate(pairs):
             probs = pair_distributions[pi]  # (num_steps, n_prompts, W)
             snap_idx = (
@@ -1618,7 +1636,7 @@ def plot_saved_pair_distributions(
             )
             _render_single_mode_grid_flow(
                 probs=probs,
-                variable_values=output_token_values,
+                variable_values=grid_values,
                 start_value=value_labels[si],
                 end_value=value_labels[ei],
                 output_path=os.path.join(
@@ -1709,7 +1727,8 @@ def plot_paths_in_belief_space(
     edges: list[tuple[int, int]] | None = None,
     edge_node_coords: dict[int, dict[str, float]] | None = None,
     intervention_variable: str | None = None,
-    train_dataset: list = None,  # required: row-aligned with natural_dists, supplies TRUE class labels
+    train_dataset: list
+    | None = None,  # required: row-aligned with natural_dists, supplies TRUE class labels
     belief_manifold: Any = None,
 ) -> None:
     """Overlay steering paths on the belief-manifold √p embedding (3D).
@@ -1722,7 +1741,7 @@ def plot_paths_in_belief_space(
     no longer used — projection is done by ``plot_3d``.
     """
     from causalab.io.plots.plot_3d_interactive import plot_3d, PathTrace
-    from causalab.analyses.activation_manifold.utils import _compute_intrinsic_ranges
+    from causalab.analyses.activation_manifold.utils import _compute_intrinsic_ranges  # pyright: ignore[reportPrivateUsage]
 
     if path_colors is None:
         path_colors = {"geometric": "black", "linear": "darkgray"}

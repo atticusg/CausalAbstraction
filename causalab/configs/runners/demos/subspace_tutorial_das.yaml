@@ -1,0 +1,18 @@
+# @package _global_
+defaults:
+- /base
+- /task: MCQA
+- /model: llama32_1b_instruct
+- /analysis/subspace
+- _self_
+task:
+  enumerate_all: true  # use all possible MCQA inputs (small task — exhaustive is fast)
+  target_variables: [answer_position]
+subspace:
+  method: das
+  k_features: 16
+  layers: [0, 5, 10, 15]    # scan 4 layers; set null to auto-resolve from locate/
+  token_positions: [last_token]   # explicit grid positions (was the [last_token] default; #257)
+  das:
+    training_epoch: 4
+    lr: 0.001

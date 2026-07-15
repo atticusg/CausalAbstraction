@@ -1,0 +1,40 @@
+# @package _global_
+defaults:
+- /base
+- /task: natural_domains_arithmetic_integer
+- /model: llama31_8b
+- /analysis/subspace
+- /analysis/output_manifold
+- /analysis/activation_manifold
+- /analysis/path_steering
+- _self_
+task:
+  target_variable: result
+
+subspace:
+  layers: [28]
+  token_positions: [last_token]
+  k_features: 32
+output_manifold:
+  smoothness: 1e-3
+  max_control_points: 10
+activation_manifold:
+  intrinsic_mode: parameter
+  smoothness: 1e-2
+  max_control_points: "all"
+  subspace: pca_k32
+  layers: [28]
+  token_positions: [last_token]
+path_steering:
+  selected_pairs:
+    - ["3", "8"]
+    - ["6", "14"]
+    - ["10", "18"]
+    - ["13", "22"]
+    - ["16", "25"]
+  num_steps_along_path: 20
+  visualizations:
+  - path_visualization
+  - dual_manifold
+  oversteer:
+    frac: 0.5

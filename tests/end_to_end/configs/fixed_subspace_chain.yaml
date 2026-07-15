@@ -1,0 +1,62 @@
+# @package _global_
+# Regression chain for `subspace method: fixed` (#218) — tiny-random / CPU.
+#
+# Threads a GIVEN rotation through subspace(method:fixed) → activation_manifold →
+# path_steering, exercising the linear AND geometric path modes. The fixed
+# rotation is generated and injected by tests/end_to_end/test_fixed_subspace.py
+# via `subspace.fixed.artifact=<tmp>/rotation.safetensors`; this file leaves it
+# null on purpose.
+#
+# NOT a smoke/ or golden/ config: it lives directly under configs/ so
+# `enumerate_e2e_configs` does not auto-collect it (it can't run without the
+# test injecting the rotation path). Composed by the bespoke test via
+# `load_e2e_runner_config("fixed_subspace_chain")`.
+defaults:
+- /base
+- /task: natural_domains_arithmetic_weekdays
+- /model: tiny-random
+- /analysis/baseline
+- /analysis/subspace
+- /analysis/activation_manifold
+- /analysis/path_steering
+- _self_
+
+task:
+  target_variable: result
+  n_train: 49
+  n_test: 2
+
+baseline:
+  batch_size: 8
+
+subspace:
+  method: fixed
+  k_features: 8        # must equal the injected rotation's k
+  layers: [1]          # fixed rotation is tied to one (layer, token_position)
+  token_positions: [last_token]   # explicit single-cell position (#257)
+  batch_size: 8
+  fixed:
+    artifact: null     # injected by the test (tmp rotation.safetensors)
+
+activation_manifold:
+  layers: [1]
+  batch_size: 8
+  intrinsic_dim: 1
+  n_grid: 5
+
+path_steering:
+  # Both path modes so the test can assert linear is NOT skipped.
+  path_modes:
+    - geometric
+    - linear
+  eval_criteria:
+    - isometry
+  max_pairs: 4
+  n_extra_pairs: 0
+  n_prompts: 2
+  n_eval_samples: 4
+  batch_size: 8
+  num_steps_along_path: 5
+  isometry:
+    n_arc_steps: 8
+    n_interior_per_pair: 0

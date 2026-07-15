@@ -2,13 +2,140 @@
 
 import logging
 import random
-from typing import Any
+import warnings
+from typing import Any, Callable
 import copy
 
 from causalab.causal.counterfactual_dataset import CounterfactualExample
 from causalab.causal.trace import CausalTrace, Mechanism
 
 logger = logging.getLogger(__name__)
+
+
+def build_output_tokens(values: list, prefix: str = " ") -> dict[Any, list[str]]:
+    """Build the ``{value: [forms]}`` map for one variable's ``output_tokens``.
+
+    For each value, emits the space-prefixed ``f"{prefix}{v}"`` and the bare
+    ``str(v)`` form (deduplicated, order-stable) — the typical BPE leading-space
+    token plus its bare counterpart. This is the mechanical case; tasks with
+    synonyms or a non-default surface form should build the map explicitly.
+
+    Case is left alone: declared values define distinct class columns, and
+    folding case here could merge them.
+    """
+    out: dict[Any, list[str]] = {}
+    for v in values:
+        forms: list[str] = []
+        for cand in (f"{prefix}{v}", str(v)):
+            if cand and cand not in forms:
+                forms.append(cand)
+        out[v] = forms
+    return out
+
+
+# Canonical set of allowed per-variable string-match modes. Single source of
+# truth: ``_validate_match_modes`` (here) and ``derive_checker`` (the documented
+# string-match authority in ``methods/output_tokens.py``) both consume this, so a
+# future mode (e.g. ``"contains"``) is added once and cannot drift between the two
+# (#296). It lives in this lower layer because ``methods`` may import from
+# ``causal`` — never the reverse.
+MATCH_MODES = ("exact", "prefix")
+
+
+def _validate_output_tokens(output_tokens: dict[str, dict[Any, list[str]]]) -> None:
+    """Fail loud on a malformed ``output_tokens`` map.
+
+    Guards against the silently-wrong-shape footgun salvaged from #258: a
+    malformed map used to score against the wrong tokens with no error. The
+    declaration is the single source of truth for matching, so a malformed map
+    must raise at construction, not surface as a mis-score deep in scoring.
+    """
+    if not isinstance(output_tokens, dict):
+        raise TypeError(
+            f"output_tokens must be a dict keyed by variable "
+            f"(e.g. {{'weekday': {{'Monday': [' Monday', 'Monday']}}}}), "
+            f"got {type(output_tokens).__name__}."
+        )
+    for var, var_map in output_tokens.items():
+        if not isinstance(var_map, dict):
+            raise TypeError(
+                f"output_tokens[{var!r}] must be a {{value: [forms]}} dict, "
+                f"got {type(var_map).__name__}."
+            )
+        for value, forms in var_map.items():
+            if not isinstance(forms, list) or not all(
+                isinstance(f, str) for f in forms
+            ):
+                raise TypeError(
+                    f"output_tokens[{var!r}][{value!r}] must be a list[str] of "
+                    f"surface forms, got {forms!r}."
+                )
+            if not forms:
+                raise ValueError(
+                    f"output_tokens[{var!r}][{value!r}] declares no forms; "
+                    f"every value needs at least one surface form."
+                )
+            if not all(f.strip() for f in forms):
+                raise ValueError(
+                    f"output_tokens[{var!r}][{value!r}] has an empty/whitespace-only "
+                    f"form {forms!r}; a blank form matches nothing (exact) and "
+                    f"tokenizes to no ids."
+                )
+
+
+def _validate_match_modes(match_modes: dict[str, str]) -> None:
+    """Fail loud on an unknown per-variable match mode."""
+    for var, mode in match_modes.items():
+        if mode not in MATCH_MODES:
+            raise ValueError(
+                f"match_modes[{var!r}] must be one of {MATCH_MODES}, got {mode!r}."
+            )
+
+
+def derive_checker(
+    var_map: dict[Any, list[str]], match_mode: str = "exact"
+) -> Callable[[dict, str], bool]:
+    """Build the string checker from a variable's declared forms.
+
+    Returns ``checker(neural_output, causal_output) -> bool`` (the task-checker
+    signature, #167): the generated string matches iff it equals (``exact``) or
+    starts with (``prefix``) any declared form of the expected value. Forms are
+    compared stripped — leading-space forms exist for BPE tokenization, not for
+    string matching — so the mechanical ``[" v", v]`` map collapses to the value
+    while task-declared synonyms stay distinct alternatives.
+
+    ``causal_output`` is the expected value's string. When it names a declared
+    value, that value's forms are used; otherwise it is matched literally (the
+    strip-tolerant fallback that keeps the checker sound when an output token
+    differs from ``str(value)`` — e.g. graph_walk's coordinate-tuple keys vs. a
+    concept-string answer, or MCQA's ``answer_position`` digits vs. a letter).
+
+    This is the "string match authority" (#167). It lives in ``causal/`` — the
+    base layer — so the lower ``tasks/`` loader can derive a checker from a
+    model's declaration without importing upward into ``methods/`` (#296 PR
+    review). The probability-path resolvers (``form_groups`` /
+    ``resolve_score_token_ids`` / ``form_group_labels``) stay in
+    :mod:`causalab.methods.output_tokens` since they need a tokenizer.
+    """
+    if match_mode not in MATCH_MODES:
+        raise ValueError(
+            f"match_mode must be one of {MATCH_MODES}, got {match_mode!r}."
+        )
+    by_str: dict[str, list[str]] = {
+        str(value).strip(): forms for value, forms in var_map.items()
+    }
+
+    def _checker(neural_output: dict, causal_output: str) -> bool:
+        actual = neural_output["string"].strip()
+        key = str(causal_output).strip()
+        forms = by_str.get(key)
+        targets = [f.strip() for f in forms] if forms is not None else [key]
+        targets = [t for t in targets if t]
+        if match_mode == "prefix":
+            return any(actual.startswith(t) for t in targets)
+        return any(actual == t for t in targets)
+
+    return _checker
 
 
 class CausalModel:
@@ -39,7 +166,8 @@ class CausalModel:
         id: str = "null",
         embeddings: dict[str, Any] | None = None,
         periods: dict[str, float] | None = None,
-        output_token_values: dict[str, list] | None = None,
+        output_tokens: dict[str, dict[Any, list[str]]] | None = None,
+        match_modes: dict[str, str] | None = None,
         input_filter: Any = None,
     ) -> None:
         """
@@ -59,9 +187,23 @@ class CausalModel:
             Per-variable coordinate embedding functions.
         periods : dict, optional
             Per-variable periods for cyclic variables (e.g. {"day": 7}).
-        output_token_values : dict, optional
-            Per-variable deduplicated output token values, for variables
-            where multiple causal values map to the same output token.
+        output_tokens : dict, optional
+            The explicit per-value token forms for a variable:
+            ``{variable: {value: [surface form, ...]}}`` (e.g.
+            ``{"weekday": {"Monday": [" Monday", "Monday"]}}``). This is the
+            single declaration of "which token(s) distinguish each value" —
+            the resolver in ``causalab.methods.output_tokens`` derives the
+            score-token ids (probability path) and :func:`derive_checker` the
+            string ``checker`` from it, with dedup emerging from values that
+            share a form group. Build the mechanical ``[" v", v]`` map with
+            :func:`build_output_tokens`.
+        match_modes : dict, optional
+            Per-variable string-match policy for the derived checker:
+            ``{variable: "exact" | "prefix"}``. ``"prefix"`` accepts any output
+            that *starts with* a declared form (the continuation tokens a
+            ``max_new_tokens > 1`` task emits after the answer); omitted /
+            ``"exact"`` requires an exact stripped match. Only consulted when
+            ``output_tokens`` declares the variable.
         input_filter : callable, optional
             A predicate ``f(trace) -> bool`` applied after the input variables
             are set. Used to drop boundary-violating combinations (e.g. an
@@ -74,7 +216,12 @@ class CausalModel:
         self.id = id
         self.embeddings: dict[str, Any] = embeddings or {}
         self.periods: dict[str, float] = periods or {}
-        self.output_token_values: dict[str, list] | None = output_token_values
+        if output_tokens is not None:
+            _validate_output_tokens(output_tokens)
+        if match_modes is not None:
+            _validate_match_modes(match_modes)
+        self.output_tokens: dict[str, dict[Any, list[str]]] | None = output_tokens
+        self.match_modes: dict[str, str] | None = match_modes
         self.input_filter = input_filter
         # Derive variables from mechanisms
         self.variables = list(self.mechanisms.keys())
@@ -421,36 +568,33 @@ class CausalModel:
         """
         Check if the model can distinguish between two sets of target variables
         using interchange interventions on counterfactual examples.
-        """
-        count = 0
-        for example in examples:
-            trace: CausalTrace = example["input"]
-            counterfactual_traces: list[CausalTrace] = example["counterfactual_inputs"]
-            assert len(counterfactual_traces) == 1
 
-            cf_trace = counterfactual_traces[0]
+        .. deprecated::
+            Use the standalone
+            :func:`causalab.causal.causal_utils.can_distinguish_with_dataset`
+            instead. It supports comparing two *different* causal models
+            (``target_variables2`` runs on ``causal_model2``); pass this model as
+            both ``causal_model1`` and ``causal_model2`` to reproduce this method::
 
-            # Perform interchange using run_interchange (supports A<-B syntax)
-            setting1 = self.run_interchange(
-                trace, {var: cf_trace for var in target_variables1}
-            )
-
-            if target_variables2 is not None:
-                setting2 = self.run_interchange(
-                    trace, {var: cf_trace for var in target_variables2}
+                from causalab.causal.causal_utils import can_distinguish_with_dataset
+                can_distinguish_with_dataset(
+                    examples, model, target_variables1,
+                    causal_model2=model, target_variables2=target_variables2,
                 )
-                if setting1["raw_output"] != setting2["raw_output"]:
-                    count += 1
-            else:
-                # Baseline is just the input trace (no counterfactual intervention)
-                if setting1["raw_output"] != trace["raw_output"]:
-                    count += 1
-
-        proportion = count / len(examples)
-
-        logger.debug(
-            f"Can distinguish between {target_variables1} and {target_variables2}: {count} out of {len(examples)} examples"
+        """
+        warnings.warn(
+            "CausalModel.can_distinguish_with_dataset is deprecated; use "
+            "causalab.causal.causal_utils.can_distinguish_with_dataset instead "
+            "(pass this model as both causal_model1 and causal_model2).",
+            DeprecationWarning,
+            stacklevel=2,
         )
-        logger.debug(f"Proportion of distinguishable examples: {proportion:.2f}")
+        from causalab.causal.causal_utils import can_distinguish_with_dataset
 
-        return {"proportion": proportion, "count": count}
+        return can_distinguish_with_dataset(
+            examples,
+            self,
+            target_variables1,
+            causal_model2=self if target_variables2 is not None else None,
+            target_variables2=target_variables2,
+        )

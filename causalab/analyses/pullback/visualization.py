@@ -29,7 +29,7 @@ def plot_belief_paths(
     concept_names: list[str],
     output_dir: str,
     colormap: str = "rainbow",
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     """Plot belief trajectories for each path mode using the same plotting
     pipeline as the evaluate analysis (with error bars when per-sample data exists).
@@ -75,7 +75,6 @@ def plot_belief_paths(
             if not available:
                 return
             eff_key = avg_key
-            has_samples = False
 
         pair_dists_list = []
         for p in pairs:
@@ -206,7 +205,6 @@ def plot_belief_paths_hellinger_pca(
     nat = natural_dists.double()
     nat = nat / nat.sum(dim=-1, keepdim=True).clamp(min=1e-10)
     raw_nat = nat.float()
-    n_classes = len(concept_names)
     iv = intervention_variable or "class"
     if train_dataset is None:
         raise ValueError(

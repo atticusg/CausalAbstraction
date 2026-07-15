@@ -31,7 +31,7 @@ def run_post_steps(
     post_configs: list,
     target_variables: list[str],
     experiment_root: str,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> dict[str, Any]:
     """Run post-pipeline visualization steps.
 
@@ -69,7 +69,7 @@ def run_post_steps(
 
 
 @_register("variable_localization_heatmap")
-def _run_variable_localization_heatmap(
+def _run_variable_localization_heatmap(  # pyright: ignore[reportUnusedFunction]
     viz_cfg,
     target_variables: list[str],
     experiment_root: str,

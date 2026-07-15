@@ -368,7 +368,7 @@ def plot_features_2d(
     colormap: str | None = None,
     variable_values: Optional[List[str]] = None,
     distance_matrix: Optional[Tensor] = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
     pre_computed_centroids_2d: NDArray | None = None,
     # 'raw' (default): features are taken as-is. 'hellinger': features are
     # per-example PROBABILITIES (n, W+1); the function √-transforms them
@@ -402,10 +402,10 @@ def plot_features_2d(
         figure_format: ``png`` or ``pdf`` for static output.
     """
     from causalab.io.plots.plot_3d_interactive import (
-        _extract_param_values,
-        _fit_mds,
+        _extract_param_values,  # pyright: ignore[reportPrivateUsage]
+        _fit_mds,  # pyright: ignore[reportPrivateUsage]
     )
-    from causalab.methods.spline.builders import compute_centroids
+    from causalab.io.centroids import compute_centroids
 
     import logging
 
@@ -444,14 +444,14 @@ def plot_features_2d(
     if use_mds:
         dm_np = (
             distance_matrix.numpy()
-            if isinstance(distance_matrix, Tensor)
+            if isinstance(distance_matrix, Tensor)  # pyright: ignore[reportUnnecessaryIsInstance]  # runtime arg may be array-like; isinstance narrows for safety
             else np.asarray(distance_matrix)
         )
         features_2d = _fit_mds(dm_np, n_components=2)
         projector_fn = None
     else:
         from causalab.io.plots.plot_3d_interactive import (
-            _fit_projector,
+            _fit_projector,  # pyright: ignore[reportPrivateUsage]
         )
 
         features_2d, projector_fn = _fit_projector(features, n_components=2)
@@ -465,6 +465,9 @@ def plot_features_2d(
     param_tensors = {k: torch.tensor(v) for k, v in param_dict.items()}
     features_2d_t = torch.from_numpy(features_2d).float()
     if hellinger_mode and not use_mds:
+        assert raw_probs is not None and projector_fn is not None, (
+            "hellinger_mode without MDS requires raw_probs and projector_fn to be set"
+        )
         raw_cpu = raw_probs[:n_features].detach().cpu().float()
         control_points, mean_p, metadata = compute_centroids(raw_cpu, param_tensors)
         sqrt_mean_p = torch.sqrt(mean_p.clamp(min=0.0)).numpy()
@@ -653,10 +656,10 @@ def plot_features_3d_static(
         figure_format: ``png`` or ``pdf`` for static output.
     """
     from causalab.io.plots.plot_3d_interactive import (
-        _extract_param_values,
-        _fit_projector,
+        _extract_param_values,  # pyright: ignore[reportPrivateUsage]
+        _fit_projector,  # pyright: ignore[reportPrivateUsage]
     )
-    from causalab.methods.spline.builders import compute_centroids
+    from causalab.io.centroids import compute_centroids
 
     import logging
 
@@ -799,10 +802,10 @@ def plot_manifold_3d_static(
     import logging
     import torch
     from causalab.io.plots.plot_3d_interactive import (
-        _extract_param_values,
-        _fit_projector,
+        _extract_param_values,  # pyright: ignore[reportPrivateUsage]
+        _fit_projector,  # pyright: ignore[reportPrivateUsage]
     )
-    from causalab.methods.spline.builders import compute_centroids
+    from causalab.io.centroids import compute_centroids
 
     logger = logging.getLogger(__name__)
 
@@ -887,7 +890,7 @@ def plot_manifold_3d_static(
         ax.scatter(
             features_3d[:, 0],
             features_3d[:, 1],
-            features_3d[:, 2],
+            features_3d[:, 2],  # pyright: ignore[reportArgumentType]  # Axes3D.scatter accepts zs as ndarray; stub overload only typed for 2D Axes
             s=10,
             alpha=0.25,
             color="steelblue",

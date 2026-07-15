@@ -51,49 +51,51 @@ def run_interchange_scan(
     train_dataset: list,
     test_dataset: list,
     mode: str,
-    score_token_ids: list[int],
+    score_token_ids: list[int] | list[list[int]],
     n_classes: int,
     batch_size: int,
     n_steer: int,
     out_dir: str,
     position_names: list[str] | None = None,
     comparison_fn: Callable | None = None,
+    intervention_metric: str = "causal_label",
     experiment_root: str | None = None,
     colormap: str | None = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
     source_pipeline=None,
 ) -> dict[str, Any]:
     """Run interchange score scan over a (layer × token_position) grid.
 
     Args:
+        intervention_metric: For ``mode='pairwise'``, the name passed to
+            ``resolve_interchange_metric`` to build the ``InterchangeMetric``
+            (default ``"causal_label"`` — score the patched output against the
+            causal model's expected counterfactual label).
         source_pipeline: If provided, activations are collected from this
             pipeline and patched into ``pipeline`` (cross-model patching).
             ``None`` (default) uses standard single-model patching.
-            Cross-model + pairwise mode is not supported and raises
-            ``ValueError``.
 
     Returns:
         Dict with ``scores_per_cell`` (keys ``(layer, pos_id)``), summary
-        ``scores_per_layer`` (min over positions per layer), ``base_accuracy``,
-        and ``token_position_ids``.
+        ``scores_per_layer`` (best — highest — score over positions per layer),
+        ``base_accuracy``, and ``token_position_ids``.
     """
-    if source_pipeline is not None and mode == "pairwise":
-        raise ValueError(
-            "Cross-model patching (source_pipeline != None) is not supported "
-            "with mode='pairwise'. Use mode='centroid' instead."
-        )
     from causalab.methods.interchange import (
         run_centroid_layer_scan,
-        run_pairwise_layer_scan,
+        run_layer_scan,
     )
     from causalab.methods.metric import (
         compute_base_accuracy,
+        compute_base_outputs,
         compute_reference_distributions,
     )
-    from causalab.runner.helpers import build_targets_for_grid
+    from causalab.runner.helpers import (
+        build_targets_for_grid,
+        resolve_interchange_metric,
+    )
 
-    if score_token_ids is None:
-        raise ValueError("Task must provide score_token_ids for interchange locate")
+    # score_token_ids is typed as list[int] | list[list[int]] (non-None);
+    # upstream callers must validate non-None before this point.
 
     base_accuracy = float("nan")
     ref_dists_fvs = None
@@ -105,6 +107,9 @@ def run_interchange_scan(
             dataset=test_dataset,
             pipeline=pipeline,
             batch_size=batch_size,
+            # Score the pre-flight gate with the task's own match semantics so a
+            # ``max_new_tokens > 1`` task isn't artifactually gated to 0%.
+            checker=task.checker,
         )
         base_accuracy = base_acc["accuracy"]
 
@@ -143,17 +148,31 @@ def run_interchange_scan(
 
     all_patched_dists: dict[tuple, torch.Tensor] = {}
     if mode == "pairwise":
-        raw_scores = run_pairwise_layer_scan(
+        metric = resolve_interchange_metric(
+            intervention_metric, score_token_ids=score_token_ids, checker=task.checker
+        )
+        original_outputs = (
+            compute_base_outputs(test_dataset, pipeline, batch_size)
+            if metric.needs_original_output
+            else None
+        )
+        raw_scores = run_layer_scan(
             interchange_targets=targets,
             dataset=test_dataset,
             pipeline=pipeline,
             batch_size=batch_size,
-            score_token_ids=score_token_ids,
-            score_token_index=0,
-            output_dir=out_dir,
-            comparison_fn=comparison_fn,
+            metric=metric,
+            output_scores=metric.needs_scores,
+            causal_model=task.causal_model,
+            original_outputs=original_outputs,
+            source_pipeline=source_pipeline,
         )
     elif mode == "centroid":
+        if ref_dists is None:
+            raise ValueError(
+                "ref_dists was not initialized for centroid mode — this should "
+                "have been computed above."
+            )
         result = run_centroid_layer_scan(
             interchange_targets=targets,
             dataset=train_dataset,
@@ -170,6 +189,8 @@ def run_interchange_scan(
             return_patched_dists=True,
             source_pipeline=source_pipeline,
         )
+        # return_patched_dists=True branch returns a 2-tuple; pyright sees the union.
+        assert isinstance(result, tuple)
         raw_scores, all_patched_dists = result
     else:
         raise ValueError(f"Unknown mode: {mode}")
@@ -189,11 +210,14 @@ def run_interchange_scan(
         )
 
         variable_values = task.intervention_values
-        score_labels = (
-            [str(v) for v in task.output_token_values]
-            if task.output_token_values
-            else None
-        )
+        _ot = task.causal_model.output_tokens
+        _var = task.intervention_variable
+        if _ot and _var and _ot.get(_var):
+            from causalab.methods.output_tokens import form_group_labels
+
+            score_labels = form_group_labels(_ot[_var])
+        else:
+            score_labels = None
 
         for key, patched in all_patched_dists.items():
             layer, pos_id = key

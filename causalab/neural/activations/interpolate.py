@@ -87,27 +87,30 @@ def batched_interpolation_intervention(
     Returns:
         dict: Dictionary with 'sequences' and optionally 'scores' keys.
     """
-    batched_base, batched_counterfactuals, inv_locations, feature_indices = (
-        prepare_intervenable_inputs(pipeline, examples, interchange_target)
-    )
+    try:
+        batched_base, batched_counterfactuals, inv_locations, feature_indices = (
+            prepare_intervenable_inputs(pipeline, examples, interchange_target)
+        )
 
-    set_interventions_interpolation(intervenable_model, fn, **params)
+        set_interventions_interpolation(intervenable_model, fn, **params)
 
-    gen_kwargs = {"output_scores": output_scores}
-    output = pipeline.intervenable_generate(
-        intervenable_model,
-        batched_base,
-        batched_counterfactuals,
-        inv_locations,
-        feature_indices,
-        **gen_kwargs,
-    )
+        gen_kwargs = {"output_scores": output_scores}
+        output = pipeline.intervenable_generate(
+            intervenable_model,
+            batched_base,
+            batched_counterfactuals,
+            inv_locations,
+            feature_indices,
+            **gen_kwargs,
+        )
 
-    for batched in [batched_base] + batched_counterfactuals:
-        for k, v in batched.items():
-            batched[k] = v.cpu()
+        for batched in [batched_base] + batched_counterfactuals:
+            for k, v in batched.items():
+                batched[k] = v.cpu()
 
-    return output
+        return output
+    finally:
+        delete_intervenable_model(intervenable_model)
 
 
 def run_interpolation_interventions(

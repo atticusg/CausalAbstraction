@@ -1,0 +1,18 @@
+# @package _global_
+defaults:
+- /base
+- /task: MCQA
+- /model: llama32_1b_instruct
+- /analysis/subspace
+- _self_
+task:
+  target_variable: answer_position
+  n_train: 512
+  n_test: 50
+  enumerate_all: true
+
+subspace:
+  method: pca
+  k_features: 32
+  layers: [0, 5, 10, 15]
+  token_positions: [last_token]   # explicit grid positions (was the [last_token] default; #257)

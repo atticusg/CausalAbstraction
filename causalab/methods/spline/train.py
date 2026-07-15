@@ -30,10 +30,12 @@ import torch
 from torch import Tensor
 
 from causalab.causal.counterfactual_dataset import CounterfactualExample
+from causalab.io.centroids import (
+    compute_centroids,
+    extract_parameters_from_dataset,
+)
 from causalab.methods.spline import SplineManifold
 from causalab.methods.spline.builders import (
-    extract_parameters_from_dataset,
-    compute_centroids,
     detect_periodic_dims,
     remap_periodic_to_angle,
     build_spline_manifold,
@@ -115,7 +117,7 @@ def _save_checkpoint(
     Writes ``<output_dir>/ckpt_final.{safetensors,meta.json}`` via the shared
     spline-checkpoint helper in :mod:`causalab.methods.spline.belief_fit`.
     """
-    from causalab.methods.spline.belief_fit import _save_spline_checkpoint
+    from causalab.methods.spline.belief_fit import _save_spline_checkpoint  # pyright: ignore[reportPrivateUsage]
 
     os.makedirs(output_dir, exist_ok=True)
     config_dict = {
@@ -342,6 +344,8 @@ def train_spline_manifold(
             model_units=[unit],
             batch_size=config.batch_size,
         )
+        # collect_output_logits is False (default), so the return is dict[str, Tensor]
+        assert isinstance(features_dict, dict)
         features = features_dict[unit.id].detach().float()
         logger.info(f"Collected features: {features.shape}")
     else:
@@ -358,7 +362,7 @@ def train_spline_manifold(
         logger.info("Extracting parameters from dataset...")
 
     excluded_vars = None
-    if intervention_variable is not None and causal_model is not None:
+    if intervention_variable is not None:
         excluded_vars = {
             v for v in causal_model.variables if v != intervention_variable
         }

@@ -1,0 +1,16 @@
+# @package cluster
+# Per-site SLURM resource defaults for `causalab/runner/fanout.py`.
+#
+# All null by default: an unset value means the directive is OMITTED entirely so
+# the cluster's own default applies (org policy — never pass an empty
+# `--partition`). Override per site by selecting a `cluster/<site>.yaml` (via
+# `fanout --cluster <site>`), by CLI flag (`--partition/--account/--qos`), or by
+# env var (`CAUSALAB_SLURM_PARTITION` / `_ACCOUNT` / `_QOS`). Resolution order,
+# highest first: env > CLI flag > cluster/<site>.yaml > this file.
+partition: null
+account: null
+qos: null
+
+# Escape hatch: raw sbatch directives appended verbatim, e.g.
+#   extra_sbatch: ["--constraint=h100", "--exclusive"]
+extra_sbatch: []

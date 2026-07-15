@@ -134,10 +134,10 @@ class FigureGenerator:
             extracted = False
             if avenir_ttcs:
                 try:
-                    from fontTools.ttLib import TTCollection
+                    from fontTools.ttLib import TTCollection  # pyright: ignore[reportMissingTypeStubs]
 
                     ttc = TTCollection(avenir_ttcs[0])
-                    for i, face in enumerate(ttc):
+                    for i, face in enumerate(ttc):  # pyright: ignore[reportUnusedVariable]
                         family = face["name"].getDebugName(1) or ""
                         subfamily = face["name"].getDebugName(2) or ""
                         is_light = "Light" in family or "Light" in subfamily
@@ -249,7 +249,7 @@ class FigureGenerator:
 
     def _get_z_floor(self, fig):
         """Get the z_min across all Scatter3d traces in the figure."""
-        import plotly.graph_objects as go
+        import plotly.graph_objects as go  # pyright: ignore[reportMissingTypeStubs]
 
         z_vals = []
         for trace in fig.data:
@@ -266,7 +266,7 @@ class FigureGenerator:
                 Otherwise shadows all Scatter3d traces currently in fig.
             z_floor: Fixed floor z value. If None, computed from ALL traces.
         """
-        import plotly.graph_objects as go
+        import plotly.graph_objects as go  # pyright: ignore[reportMissingTypeStubs]
 
         if z_floor is None:
             z_floor = self._get_z_floor(fig)
@@ -279,13 +279,13 @@ class FigureGenerator:
                 continue
             if not isinstance(trace, go.Scatter3d):
                 continue
-            if trace.z is None or len(trace.z) == 0:
+            if trace.z is None or len(trace.z) == 0:  # pyright: ignore[reportArgumentType]  # plotly Scatter3d.z is a tuple/array Sized container; stubs widen type
                 continue
             traces_to_shadow.append(trace)
 
         shadow_traces = []
         for trace in traces_to_shadow:
-            z_proj = [z_floor] * len(trace.z)
+            z_proj = [z_floor] * len(trace.z)  # pyright: ignore[reportArgumentType]  # filtered above by `trace.z is not None`
 
             if trace.mode and "lines" in trace.mode:
                 shadow_traces.append(
@@ -305,11 +305,11 @@ class FigureGenerator:
                 )
             if trace.mode and "markers" in trace.mode:
                 m = trace.marker or {}
-                symbol = m.symbol if m.symbol is not None else "circle"
+                symbol = m.symbol if m.symbol is not None else "circle"  # pyright: ignore[reportAttributeAccessIssue]  # plotly Marker dynamic attribute typed as unknown
                 # Only shadow non-circle markers (centroids, etc.)
                 if symbol == "circle":
                     continue
-                size = m.size if m.size is not None else 2
+                size = m.size if m.size is not None else 2  # pyright: ignore[reportAttributeAccessIssue]  # plotly Marker dynamic attribute typed as unknown
                 shadow_traces.append(
                     go.Scatter3d(
                         x=trace.x,
@@ -338,7 +338,7 @@ class FigureGenerator:
         Both have marker borders removed. The glow trace inherits color/symbol
         but is larger and more transparent, creating a soft halo.
         """
-        import plotly.graph_objects as go
+        import plotly.graph_objects as go  # pyright: ignore[reportMissingTypeStubs]
 
         if not isinstance(trace, go.Scatter3d):
             return [trace]
@@ -347,27 +347,27 @@ class FigureGenerator:
 
         # Read marker properties (Plotly Marker object, not a dict)
         m = trace.marker
-        inner_size = m.size if m.size is not None else 3
-        color = m.color if m.color is not None else "steelblue"
+        inner_size = m.size if m.size is not None else 3  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # plotly Marker dynamic attribute typed as unknown
+        color = m.color if m.color is not None else "steelblue"  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # plotly Marker dynamic attribute typed as unknown
 
         # Remove border on the inner trace
-        trace.marker.line = dict(width=0)
+        trace.marker.line = dict(width=0)  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # plotly Marker dynamic attribute typed as unknown
 
         # Build glow trace: larger, transparent, no border, no legend/hover
         glow_marker = dict(
             size=inner_size * glow_scale,
             color=color,
-            symbol=m.symbol if m.symbol is not None else "circle",
+            symbol=m.symbol if m.symbol is not None else "circle",  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # plotly Marker dynamic attribute typed as unknown
             opacity=glow_alpha,
             line=dict(width=0),
         )
         # Pass through colorscale for continuous-color markers
-        if m.colorscale is not None:
-            glow_marker["colorscale"] = m.colorscale
-        if m.cmin is not None:
-            glow_marker["cmin"] = m.cmin
-        if m.cmax is not None:
-            glow_marker["cmax"] = m.cmax
+        if m.colorscale is not None:  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # plotly Marker dynamic attribute typed as unknown
+            glow_marker["colorscale"] = m.colorscale  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # plotly Marker dynamic attribute typed as unknown
+        if m.cmin is not None:  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # plotly Marker dynamic attribute typed as unknown
+            glow_marker["cmin"] = m.cmin  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # plotly Marker dynamic attribute typed as unknown
+        if m.cmax is not None:  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # plotly Marker dynamic attribute typed as unknown
+            glow_marker["cmax"] = m.cmax  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # plotly Marker dynamic attribute typed as unknown
 
         glow = go.Scatter3d(
             x=trace.x,
@@ -392,7 +392,7 @@ class FigureGenerator:
         """
         suffix = os.path.splitext(filepath)[1].lower()
         if format is None:
-            format = "png" if suffix == ".png" else "pdf"
+            format = "pdf" if suffix == ".pdf" else "png"
         if dpi is None:
             dpi = 200 if format == "png" else 1000
         for ax in fig.get_axes():

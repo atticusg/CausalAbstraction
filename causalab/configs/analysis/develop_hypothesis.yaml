@@ -1,0 +1,9 @@
+# @package develop_hypothesis
+_name_: develop_hypothesis
+_subdir: n${.n}
+_output_dir: ${experiment_root}/develop_hypothesis/${._subdir}
+
+hypotheses_dir: ???        # dir holding the session's models.py + counterfactuals.py
+n: 300                     # examples per design dataset (target-centric baselines)
+random_n: 100000           # pairs for the large always-confounded run
+confound_threshold: 0.2    # alternatives below this vs a target are flagged (display only)

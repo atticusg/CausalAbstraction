@@ -17,6 +17,15 @@ _VALID_SPLINE_METHODS = ("auto", "tps", "cubic")
 
 
 class SplineManifold(nn.Module):
+    # Class-level annotations for register_buffer attributes; pyright
+    # cannot otherwise infer Tensor types for buffers.
+    control_points: Tensor
+    target_points: Tensor
+    _cp_min: Tensor
+    _cp_range: Tensor
+    _sphere_base: Tensor
+    centroids: Tensor
+
     def __init__(
         self,
         control_points: Tensor,
@@ -337,7 +346,7 @@ class SplineManifold(nn.Module):
             u = u - delta
 
             # Wrap periodic dims
-            for pd, per in zip(self._periodic_dims, self._periods):
+            for pd, per in zip(self._periodic_dims, self._periods):  # pyright: ignore[reportUnusedVariable]
                 u[:, pd] = u[:, pd] % per
 
             if delta.norm(dim=-1).max() < tol:
@@ -431,9 +440,17 @@ class SplineManifold(nn.Module):
         return self.decode(x)
 
     def state_dict_to_save(self) -> dict[str, Any]:
+        # ``.contiguous()`` is load-bearing: ``control_points`` is registered
+        # as-is by the spline subclasses (no copy at construction), so a
+        # non-contiguous input — e.g. a column slice ``centroid_pca[:, :d]``
+        # from ``belief_fit.fit_belief_tps_pca`` — propagates straight into
+        # the buffer and trips safetensors at save time. Surfaces only when
+        # the caller's default device is CPU (sklearn → torch.from_numpy →
+        # slice keeps the non-contiguous view), so e2e smoke under
+        # ``torch.set_default_device("cpu")`` is what catches it.
         return {
-            "control_points": self.control_points.cpu(),
-            "centroids": self.centroids.cpu(),
+            "control_points": self.control_points.contiguous().cpu(),
+            "centroids": self.centroids.contiguous().cpu(),
             "intrinsic_dim": self._intrinsic_dim,
             "ambient_dim": self._ambient_dim,
             "smoothness": self.smoothness,

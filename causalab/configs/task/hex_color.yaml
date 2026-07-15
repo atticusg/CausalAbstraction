@@ -1,0 +1,15 @@
+name: hex_color
+intervention_metric: string_match
+max_new_tokens: 1
+# `color` is a hue-circle variable, so a cyclic colormap reads more naturally
+# than viridis. colormap2 / distance_function are kept for forward-compat with
+# manifold/geometry analyses (which interpolate ${task.colormap2} and read
+# ${task.distance_function}); no analysis mounted here requires them.
+colormap: hsv
+colormap2: null
+distance_function: hellinger
+n_train: 140
+n_test: 60
+enumerate_all: false
+balanced: false
+resample_variable: all

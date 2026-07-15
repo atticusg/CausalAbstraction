@@ -63,19 +63,21 @@ class SubspaceFeaturizer(Featurizer):
         )
 
         if shape is not None:
-            rotate = pv.models.layers.LowRankRotateLayer(*shape, init_orth=True)
+            rotate = pv.models.layers.LowRankRotateLayer(*shape, init_orth=True)  # pyright: ignore[reportAttributeAccessIssue]  # pyvene lacks stubs for models.layers
         else:
-            shape = rotation_subspace.shape
-            rotate = pv.models.layers.LowRankRotateLayer(*shape, init_orth=False)
+            assert rotation_subspace is not None  # validated by assert at top
+            shape = cast("tuple[int, int]", tuple(rotation_subspace.shape))
+            rotate = pv.models.layers.LowRankRotateLayer(*shape, init_orth=False)  # pyright: ignore[reportAttributeAccessIssue]  # pyvene lacks stubs for models.layers
             rotate.weight.data.copy_(rotation_subspace)
 
         rotate = torch.nn.utils.parametrizations.orthogonal(rotate)
         rotate.requires_grad_(trainable)
 
+        weight = cast(Tensor, rotate.weight)
         super().__init__(
             SubspaceFeaturizerModule(rotate),
             SubspaceInverseFeaturizerModule(rotate),
-            n_features=rotate.weight.shape[1],
+            n_features=int(weight.shape[1]),
             id=id,
             **kwargs,
         )
