@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from causalab.causal.causal_model import CausalModel
 from causalab.neural.units import InterchangeTarget
@@ -35,7 +35,7 @@ def find_dbm_subspace(
     output_dir: str = "",
     metric: Callable | None = None,
     dbm_config: dict | None = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> dict[str, Any]:
     """Train DBM masks to identify which features (or units) encode the variable.
 
@@ -62,7 +62,10 @@ def find_dbm_subspace(
         - ``n_features_by_unit``: Number of selected feature dimensions per unit.
     """
     from causalab.methods.trained_subspace.train import train_interventions
-    from causalab.configs.train_config import merge_with_defaults
+    from causalab.configs.train_config import (
+        merge_with_defaults,
+        PartialExperimentConfig,
+    )
     from causalab.io.plots.feature_masks import plot_feature_counts
 
     os.makedirs(output_dir or ".", exist_ok=True)
@@ -70,20 +73,26 @@ def find_dbm_subspace(
     dbm_config = dict(dbm_config) if dbm_config else {}
     tie_masks = bool(dbm_config.pop("tie_masks", False))
 
+    # Cast: dict literal conforms to PartialExperimentConfig TypedDict at runtime.
     mask_config = merge_with_defaults(
-        {
-            "intervention_type": "mask",
-            "DAS": {"n_features": k_features},
-            "featurizer_kwargs": {"tie_masks": tie_masks},
-            "train_batch_size": batch_size,
-            "evaluation_batch_size": batch_size,
-            **dbm_config,
-        }
+        cast(
+            PartialExperimentConfig,
+            {
+                "intervention_type": "mask",
+                "DAS": {"n_features": k_features},
+                "featurizer_kwargs": {"tie_masks": tie_masks},
+                "train_batch_size": batch_size,
+                "evaluation_batch_size": batch_size,
+                **dbm_config,
+            },
+        )
     )
     mask_config["log_dir"] = (
         os.path.join(output_dir or ".", "logs") if output_dir else "logs"
     )
 
+    if metric is None:
+        raise ValueError("`metric` is required for find_dbm_subspace")
     result = train_interventions(
         causal_model=causal_model,
         interchange_targets={("single",): target},
@@ -92,7 +101,8 @@ def find_dbm_subspace(
         pipeline=pipeline,
         target_variable_group=("raw_output",),
         metric=metric,
-        config=mask_config,
+        # ExperimentConfig (TypedDict) is structurally compatible with dict[str, Any]
+        config=cast(dict[str, Any], mask_config),
     )
 
     single_result = result["results_by_key"][("single",)]

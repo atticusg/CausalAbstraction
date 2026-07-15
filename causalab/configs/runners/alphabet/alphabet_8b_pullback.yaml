@@ -1,0 +1,33 @@
+# @package _global_
+defaults:
+- /base
+- /task: natural_domains_arithmetic_alphabet
+- /model: llama31_8b
+- /analysis/pullback
+- _self_
+
+task:
+  target_variable: result
+  n_train: 1000
+  n_test: 1000
+  number_range: 2
+  result_entities: [C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z]
+
+locate:
+  layers: [28]
+
+subspace:
+  layers: [28]
+
+activation_manifold:
+  layers: [28]
+  intrinsic_mode: parameter
+
+output_manifold:
+  intrinsic_mode: parameter
+
+pullback:
+  embedding_optim:
+    init: linear
+    trajectory_param: tps
+    norm_reg_weight: 5.0e-4

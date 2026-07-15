@@ -1,4 +1,13 @@
 repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v5.0.0
+  hooks:
+    # Block any committed file > 50 MB. --enforce-all so CI (which runs
+    # `pre-commit run --all-files`) also catches large files that slip in
+    # via merges or branches, not just locally-staged adds.
+    - id: check-added-large-files
+      args: [--maxkb=51200, --enforce-all]
+
 - repo: https://github.com/astral-sh/ruff-pre-commit
   # Ruff version.
   rev: v0.14.5
@@ -12,12 +21,3 @@ repos:
     # Run the formatter.
     - id: ruff-format
       types_or: [ python, pyi ]
-
-- repo: local
-  hooks:
-    - id: basedpyright
-      name: basedpyright
-      entry: uv run basedpyright
-      language: system
-      types: [ python ]
-      pass_filenames: false

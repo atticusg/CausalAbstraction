@@ -1,0 +1,85 @@
+"""Unit tests for the shared figure-format helpers.
+
+Pins the codebase default to PNG and verifies PDF stays opt-in (GH #163):
+the format is determined by config/argument, never baked into a hardcoded
+extension, and an absent/empty config resolves to ``png``.
+"""
+
+import pytest
+from omegaconf import OmegaConf
+
+from causalab.io.plots.figure_format import (
+    ALLOWED_FIGURE_FORMATS,
+    normalize_figure_format,
+    path_with_figure_format,
+    resolve_figure_format_from_analysis,
+)
+
+pytestmark = pytest.mark.unit
+
+
+class TestNormalizeFigureFormat:
+    def test_default_is_png(self):
+        """No value supplied → png (the #163 default flip)."""
+        assert normalize_figure_format(None) == "png"
+
+    def test_pdf_opt_in_preserved(self):
+        assert normalize_figure_format("pdf") == "pdf"
+
+    def test_case_and_dot_normalized(self):
+        assert normalize_figure_format("PNG") == "png"
+        assert normalize_figure_format(".PDF") == "pdf"
+
+    def test_explicit_default_override(self):
+        assert normalize_figure_format(None, default="pdf") == "pdf"
+
+    def test_invalid_format_raises(self):
+        with pytest.raises(ValueError):
+            normalize_figure_format("svg")
+
+    def test_allowed_set(self):
+        assert ALLOWED_FIGURE_FORMATS == frozenset({"png", "pdf"})
+
+
+class TestPathWithFigureFormat:
+    def test_extensionless_base_gets_png_default(self):
+        """A bare basename + no format → png; format is never implicit in code."""
+        assert path_with_figure_format("dir/heatmap", None) == "dir/heatmap.png"
+
+    def test_pdf_literal_is_replaced_with_png_default(self):
+        """A stale ``.pdf`` literal in code no longer leaks PDF output."""
+        assert path_with_figure_format("dir/heatmap.pdf", None) == "dir/heatmap.png"
+
+    def test_pdf_opt_in_replaces_any_extension(self):
+        assert path_with_figure_format("dir/heatmap.png", "pdf") == "dir/heatmap.pdf"
+        assert path_with_figure_format("dir/heatmap", "pdf") == "dir/heatmap.pdf"
+
+    def test_png_explicit(self):
+        assert path_with_figure_format("dir/heatmap.pdf", "png") == "dir/heatmap.png"
+
+
+class TestResolveFromAnalysis:
+    def test_missing_visualization_block_defaults_png(self):
+        cfg = OmegaConf.create({"method": "pca"})
+        assert resolve_figure_format_from_analysis(cfg) == "png"
+
+    def test_empty_visualization_block_defaults_png(self):
+        cfg = OmegaConf.create({"visualization": {}})
+        assert resolve_figure_format_from_analysis(cfg) == "png"
+
+    def test_explicit_png(self):
+        cfg = OmegaConf.create({"visualization": {"figure_format": "png"}})
+        assert resolve_figure_format_from_analysis(cfg) == "png"
+
+    def test_explicit_pdf_opt_in(self):
+        cfg = OmegaConf.create({"visualization": {"figure_format": "pdf"}})
+        assert resolve_figure_format_from_analysis(cfg) == "pdf"
+
+    def test_plain_dict_supported(self):
+        assert resolve_figure_format_from_analysis({}) == "png"
+        assert (
+            resolve_figure_format_from_analysis(
+                {"visualization": {"figure_format": "pdf"}}
+            )
+            == "pdf"
+        )

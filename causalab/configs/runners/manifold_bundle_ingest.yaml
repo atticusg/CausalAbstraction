@@ -1,0 +1,14 @@
+# @package _global_
+# Task-less, model-less runner for the manifold-SAE bundle-ingestion analysis.
+# Pass the community + bundle as overrides and an output root:
+#   scripts/run_exp.sh --experiment-root <root> manifold_bundle_ingest \
+#       manifold_bundle_ingest.bundle=<bundle_dir> manifold_bundle_ingest.community_id=<id>
+defaults:
+- /base
+- /analysis/manifold_bundle_ingest
+- _self_
+
+# `base.yaml` derives experiment_root from task.name/model.id, which this
+# task-less/model-less runner has neither of; pin a concrete default so a run
+# without --experiment-root still resolves. --experiment-root overrides it.
+experiment_root: artifacts/manifold_bundle_ingest

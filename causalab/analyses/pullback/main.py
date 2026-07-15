@@ -360,17 +360,23 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         device=cfg.model.device,
         dtype=cfg.model.get("dtype"),
         eager_attn=cfg.model.get("eager_attn"),
+        use_chat_template=cfg.model.get("chat_template", False),
+        chat_answer_directive=cfg.model.get("chat_answer_directive"),
     )
-    model = pipeline.model
     tokenizer = pipeline.tokenizer
 
     # var_indices is only consumed by collect_grid_distributions in the compute branch.
     var_indices: Any = None
     if not replot_only:
+        # One score-token group per concept value, from the variable's declared
+        # ``output_tokens`` forms (aligned with the concept pairs below).
+        _var_map = (task.causal_model.output_tokens or {}).get(
+            task.intervention_variable or "", {}
+        )
         concept_token_ids = tokenize_variable_values(
             tokenizer,
             concept_values,
-            task.result_token_pattern,
+            lambda v: _var_map[v],
         )
         if isinstance(concept_token_ids, torch.Tensor) and concept_token_ids.dim() == 1:
             var_indices = concept_token_ids
@@ -617,9 +623,6 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             from causalab.methods.pullback.optimization import (
                 run_pair_optimization,
             )
-            from causalab.analyses.activation_manifold.utils import (
-                _compute_intrinsic_ranges,
-            )
             from causalab.analyses.path_steering.path_mode import (
                 _build_geodesic_path,
                 _build_linear_path_kd,
@@ -631,13 +634,6 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 """Append (1 - sum) bin so concept probs form a proper simplex."""
                 other = (1.0 - distributions.sum(dim=-1, keepdim=True)).clamp(min=0.0)
                 return torch.cat([distributions, other], dim=-1)
-
-            manifold_ranges = _compute_intrinsic_ranges(
-                training_features,
-                manifold_obj,
-                manifold_mean,
-                manifold_std,
-            )
 
             n_classes = len(concept_names)
             intrinsic_centroids = {

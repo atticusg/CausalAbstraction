@@ -1,0 +1,63 @@
+{
+ "category": null,
+ "group": "bias",
+ "objects": [
+  "woman",
+  "man"
+ ],
+ "provenance": {
+  "C": 2,
+  "bundle": "lre_bias",
+  "compact": true,
+  "eff_k": 1,
+  "n_source_rows": 41,
+  "n_subject_object_conflicts": 0
+ },
+ "range_name": "gender",
+ "relation": "name_gender",
+ "subject_to_object": {
+  "Benjamin": "man",
+  "Caleb": "man",
+  "Connor": "man",
+  "David": "man",
+  "Dylan": "man",
+  "Emily": "woman",
+  "Evan": "man",
+  "Hannah": "woman",
+  "Lisa": "woman",
+  "Lucas": "man",
+  "Mia": "woman",
+  "Michael": "man",
+  "Natalie": "woman",
+  "Oliver": "man",
+  "Scarlett": "woman",
+  "Sofia": "woman",
+  "Tom": "man",
+  "William": "man"
+ },
+ "subjects": [
+  "Lisa",
+  "Tom",
+  "Sofia",
+  "Oliver",
+  "Natalie",
+  "William",
+  "Benjamin",
+  "Scarlett",
+  "Dylan",
+  "Hannah",
+  "David",
+  "Evan",
+  "Emily",
+  "Mia",
+  "Connor",
+  "Michael",
+  "Caleb",
+  "Lucas"
+ ],
+ "templates": [
+  "Is the name {subject} usually for a man or woman? It's usually for a",
+  "What gender (man or woman) is the name {subject}? It's usually a",
+  "Is {subject} a name for a man or a woman? It is for a"
+ ]
+}

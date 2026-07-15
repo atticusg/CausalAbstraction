@@ -15,8 +15,8 @@ from causalab.causal.counterfactual_dataset import CounterfactualExample
 from causalab.methods.metric import (
     InterchangeMetric,
     score_intervention_outputs,
-    _normalize_var_indices,
-    _logits_to_class_probs,
+    _normalize_var_indices,  # pyright: ignore[reportPrivateUsage]
+    _logits_to_class_probs,  # pyright: ignore[reportPrivateUsage]
 )
 
 logger = logging.getLogger(__name__)
@@ -147,6 +147,8 @@ def collect_all_features_cached(
         model_units=all_units,
         batch_size=batch_size,
     )
+    # collect_output_logits is False (default), so the return is dict[str, Tensor]
+    assert isinstance(features_dict, dict)
 
     # 3. Map back to keys and cache
     for unit_id, features in features_dict.items():
@@ -157,121 +159,6 @@ def collect_all_features_cached(
             save_cached_features(output_dir, layer, pos_id, features)
 
     return result
-
-
-# ---------------------------------------------------------------------------
-# Pairwise patching with per-example comparison
-# ---------------------------------------------------------------------------
-
-
-def run_pairwise_layer_scan(
-    interchange_targets: Dict[tuple[Any, ...], InterchangeTarget],
-    dataset: list[CounterfactualExample],
-    pipeline: LMPipeline,
-    batch_size: int,
-    score_token_ids: list[int] | list[list[int]],
-    score_token_index: int = 0,
-    causal_model: CausalModel | None = None,
-    source_pipeline: LMPipeline | None = None,
-    output_dir: str | None = None,
-    comparison_fn: Callable | None = None,
-) -> Dict[tuple[Any, ...], float]:
-    """Pairwise interchange: patch each counterfactual's activation and compare
-    to that specific counterfactual's own output (not the class average).
-
-    For each (base, cf) pair:
-    1. Run cf through the model -> get cf's output distribution
-    2. Patch cf's activation into base -> get patched output distribution
-    3. comparison_fn(cf_output, patched_output)
-
-    Supports multi-token classes via ``list[list[int]]`` — joint probabilities
-    are computed by multiplying across generation steps.
-
-    Args:
-        comparison_fn: Distribution comparison function ``(N, C), (N, C) -> (N,)``.
-            Defaults to ``kl_divergence``.
-
-    Returns dict mapping target keys to mean score across examples.
-    """
-    if comparison_fn is None:
-        raise ValueError(
-            "comparison_fn is required for pairwise_layer_scan. "
-            "Ensure the intervention_metric resolves to a distribution comparison."
-        )
-    cmp = comparison_fn
-
-    token_seqs = _normalize_var_indices(score_token_ids)
-    n_steps = max(len(seq) for seq in token_seqs)
-
-    # Step 1: Collect counterfactual output distributions
-    logger.info("Collecting counterfactual output distributions...")
-    cf_inputs = [ex["counterfactual_inputs"][0] for ex in dataset]
-    cf_probs_list: list[torch.Tensor] = []
-    n_batches = math.ceil(len(cf_inputs) / batch_size)
-    for bi in range(n_batches):
-        batch = cf_inputs[bi * batch_size : (bi + 1) * batch_size]
-        result = pipeline.generate(batch)
-        gen_scores = result["scores"]
-        logits_per_step = [
-            gen_scores[score_token_index + k]
-            for k in range(n_steps)
-            if score_token_index + k < len(gen_scores)
-        ]
-        batch_probs = _logits_to_class_probs(logits_per_step, token_seqs)
-        cf_probs_list.append(batch_probs.cpu())
-    cf_probs = torch.cat(cf_probs_list, dim=0)  # (N, n_classes)
-
-    # Collect and cache subspace features if output_dir is set
-    if output_dir is not None:
-        collect_all_features_cached(
-            interchange_targets,
-            dataset,
-            pipeline,
-            batch_size,
-            output_dir,
-        )
-
-    # Step 2: Run interchange interventions and compare per-example
-    scores: Dict[tuple[Any, ...], float] = {}
-
-    for key, target in tqdm(
-        interchange_targets.items(),
-        desc="Pairwise layer scan",
-        total=len(interchange_targets),
-    ):
-        raw = run_interchange_interventions(
-            pipeline=pipeline,
-            counterfactual_dataset=dataset,
-            interchange_target=target,
-            batch_size=batch_size,
-            output_scores=True,
-            source_pipeline=source_pipeline,
-        )
-
-        # Flatten scores across batches
-        raw_scores = raw.get("scores")
-        if raw_scores is None or not raw_scores:
-            scores[key] = float("nan")
-            continue
-
-        n_tokens = len(raw_scores[0])
-        flat_scores = [
-            torch.cat([batch_scores[t] for batch_scores in raw_scores], dim=0)
-            for t in range(n_tokens)
-        ]
-
-        logits_per_step = [
-            flat_scores[score_token_index + k]
-            for k in range(n_steps)
-            if score_token_index + k < len(flat_scores)
-        ]
-        patched_probs = _logits_to_class_probs(logits_per_step, token_seqs).cpu()
-
-        # Compare cf vs patched per example
-        scores_per_example = cmp(cf_probs, patched_probs)
-        scores[key] = scores_per_example.mean().item()
-
-    return scores
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +295,7 @@ def run_centroid_layer_scan(
             for i, cls in enumerate(example_classes):
                 centroids_proj[cls] += projected[i]
                 if error_accum is not None:
+                    assert error is not None  # error_accum non-None iff error non-None
                     error_accum[cls] += error[i]
             for c in range(n_classes):
                 if class_counts[c] > 0:
@@ -458,7 +346,11 @@ def run_centroid_layer_scan(
                 bs = len(batch)
 
                 batched_base, _, inv_locations, feature_indices = (
-                    prepare_intervenable_inputs(pipeline, batch, target)
+                    prepare_intervenable_inputs(
+                        pipeline,
+                        batch,  # pyright: ignore[reportArgumentType]  # constructed dicts conform to CounterfactualExample TypedDict at runtime
+                        target,
+                    )
                 )
                 # pyvene expects (batch, seq, dim) — add seq dim
                 source_repr = [centroid.view(1, 1, -1).expand(bs, 1, -1).to(device)]
@@ -469,7 +361,7 @@ def run_centroid_layer_scan(
                     batched_base,
                     None,
                     inv_locations,
-                    feature_indices,
+                    feature_indices,  # pyright: ignore[reportArgumentType]  # prepare_intervenable_inputs returns list[list[list[int]|None]]; intervenable_generate's signature expects list[list[int]] | None
                     source_representations=source_repr,
                     **gen_kwargs,
                 )
@@ -491,6 +383,7 @@ def run_centroid_layer_scan(
 
                 # Accumulate patched distributions (full vocab softmax for heatmaps)
                 if patched_accum is not None:
+                    assert patched_counts is not None  # set together with patched_accum
                     probs_fvs = _logits_to_class_probs(
                         logits_per_step, token_seqs, full_vocab_softmax=True
                     ).cpu()
@@ -507,6 +400,7 @@ def run_centroid_layer_scan(
         )
 
         if patched_accum is not None:
+            assert patched_counts is not None  # set together with patched_accum
             # Average across examples
             for c in range(n_classes):
                 if patched_counts[c] > 0:

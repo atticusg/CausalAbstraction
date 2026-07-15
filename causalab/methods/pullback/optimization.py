@@ -23,6 +23,7 @@ from causalab.methods.distances import (
 from causalab.methods.steer.collect import collect_grid_distributions
 from causalab.neural.activations.interchange_mode import prepare_intervenable_inputs
 from causalab.neural.activations.interpolate import set_interventions_interpolation
+from causalab.neural.pipeline import ensure_position_ids
 
 logger = logging.getLogger(__name__)
 
@@ -508,9 +509,10 @@ def _knn_graph_init_embedding(
         return_predecessors=True,
     )
 
-    _linear_fallback = lambda: torch.stack(
-        [(1 - a) * f_start_k + a * f_end_k for a in interior_t.to(dev)]
-    )
+    def _linear_fallback() -> torch.Tensor:
+        return torch.stack(
+            [(1 - a) * f_start_k + a * f_end_k for a in interior_t.to(dev)]
+        )
 
     if np.isinf(dists_sp[idx_end]):
         logger.warning(
@@ -719,6 +721,10 @@ def _compute_trajectory_loss(
     total = torch.tensor(0.0, device=device, requires_grad=True)
     per_step = []
 
+    # Plain (non-generate) forwards below: supply position_ids once so a left-padded
+    # batch is not mis-encoded on absolute-position models (see ensure_position_ids).
+    batched_base = ensure_position_ids(batched_base)
+
     for t_idx in range(n_interior):
         target_point = v_interior[t_idx]  # (k_eff,) — carries gradient
 
@@ -729,13 +735,15 @@ def _compute_trajectory_loss(
             _target=target_point,
             **_kw,
         ):
-            B = f_base.shape[0]
             k_full = f_base.shape[-1]
             k_eff = _target.shape[-1]
-            opt = _target.unsqueeze(0).expand(B, -1)
+            # keep_last_dim feature interventions hand featurized tensors as
+            # (batch[, num_pos], k); broadcast the (gradient-carrying) target over
+            # all leading dims and index/concat on the last dim, not a fixed dim 1.
+            opt = _target.expand(*f_base.shape[:-1], k_eff)
             if k_eff < k_full:
                 # Hold dropped dims at each sample's base values.
-                return torch.cat([opt, f_base[:, k_eff:]], dim=-1)
+                return torch.cat([opt, f_base[..., k_eff:]], dim=-1)
             return opt
 
         set_interventions_interpolation(intervenable_model, replace_fn)

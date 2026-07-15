@@ -15,6 +15,32 @@ import os
 import sys
 
 
+def resolve_gpus_time(
+    cfg, *, gpus_default: int | None = None, time_default: str | None = None
+) -> tuple[int, str]:
+    """Read ``(gpus, walltime)`` from a composed runner config.
+
+    The one place that knows the config paths (``model.slurm.gpus`` /
+    ``slurm.time``), so the ``run_exp.sh --slurm`` path (via this module) and the
+    fan-out orchestrator (``causalab.runner.fanout``) cannot drift. With no
+    default a missing key raises — a SLURM runner that omits its resources should
+    fail loudly. Fan-out passes defaults so its ``--gpus`` / ``--time`` overrides
+    and fallbacks apply instead (and a ``slurm`` block without ``gpus`` no longer
+    ``KeyError``s).
+    """
+    model = cfg.get("model")
+    slurm = model.get("slurm") if model else None
+    gpus = slurm.get("gpus") if slurm else None
+    if gpus is None:
+        gpus = gpus_default
+    if gpus is None:
+        raise KeyError("model.slurm.gpus is not set in the runner config")
+    time = cfg.get("slurm", {}).get("time", time_default)
+    if time is None:
+        raise KeyError("slurm.time is not set in the runner config")
+    return int(gpus), str(time)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("runner", help="Runner config name, e.g. age/age_8b_k64")
@@ -67,8 +93,7 @@ def main() -> None:
     with initialize_config_dir(config_dir=primary, version_base=None):
         cfg = compose(config_name=args.runner, overrides=overrides)
 
-    gpus = cfg.model.slurm.gpus
-    time = cfg.slurm.time
+    gpus, time = resolve_gpus_time(cfg)
     job_name = "causalab_" + os.path.basename(args.runner)
     print(f"{gpus} {time} {job_name}")
 

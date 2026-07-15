@@ -15,5 +15,3 @@ pullback:
   embedding_optim:
     n_steps: 15
     name: lbfgs
-  visualization:
-    figure_format: png

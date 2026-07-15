@@ -1,0 +1,56 @@
+# @package _global_
+# Golden-tier path-patching with a RECEIVER SET: one sender patched into several
+# name-mover query heads simultaneously (the IOI Fig. 4 case), pinned as a value
+# golden on GPT-2 small.
+#
+# The sibling goldens pin the one-pass `receiver=output` head sweep
+# (`ioi_path_patching`) and the two-pass *single* internal receiver
+# (`ioi_path_patching_residual`). This one pins the *receiver-set* two-pass — PASS 1
+# collects all receivers' path-restricted values v* under one sender+restorer
+# interchange, PASS 2 re-injects them together — which is patched simultaneously,
+# NOT summed over single receivers (the metric is nonlinear and the receivers
+# interact downstream). Without this golden a refactor could silently break the
+# set wiring (order alignment, one-group-per-receiver, the deepest-receiver union
+# restorer set) and only the random-weight CPU tests would notice.
+#
+# Receiver set: the name-mover queries {9.6, 9.9, 10.0} read at the last token
+# (END) — the IOI Fig. 4 readout. Sweeping all heads as senders against this set
+# lights up the S-inhibition heads (7.x / 8.x) that drive the name movers' queries,
+# giving sign-checkable structure (they score large; random heads sit near zero).
+# Restorers are built against the deepest member (layer 10), isolating the direct
+# sender->{name-mover query} edge for every member at once.
+#
+# Sender grid: layers null = all; the analysis drops senders at/after the deepest
+# receiver's read point (head_query_input at layer 10 reads the residual entering
+# attention 10, so layers 0..9 reach it), leaving a 0..9 x 12 grid (logged).
+#
+# extract_values() pins every finite float leaf of
+# path_patching/<corruption>_<rel>/head_query_input_set_L9H6_L9H9_L10H0/results.json
+# — the per-(layer, head) effect_grid plus the top_k cell effects. GPU bootstrap
+# pins deterministic:false. tolerance.default = 1e-3 (not the 1e-5 global default),
+# matching the sibling two-pass golden: most cells sit at the IOI noise floor where
+# an absolute 1e-5 pins run-to-run noise, while the structural S-inhibition cells
+# (|effect| up to ~1) move by >>1e-3 if the set wiring regresses.
+# See docs/TESTS.md "Golden JSON contract" and docs/PATH_PATCHING.md (two-pass + §9).
+defaults:
+- /base
+- /task: IOI
+- /model: gpt2
+- /analysis/path_patching
+- _self_
+
+task:
+  n_test: 64
+
+path_patching:
+  layers: null            # all layers; analysis keeps the senders upstream of the set
+  heads: null             # all heads
+  receiver:
+    kind: head_query_input
+    heads: [[9, 6], [9, 9], [10, 0]]   # name-mover queries @ END (IOI Fig. 4)
+  restore: [attention]    # paper §3.1 direct effect (MLPs/LayerNorm recompute)
+  corruption: abc         # all three names -> distinct randoms (paper §3.1)
+  correct_variable: IO
+  distractor_variable: name_C
+  relative_to_base: true
+  batch_size: 16

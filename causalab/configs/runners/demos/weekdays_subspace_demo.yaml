@@ -14,5 +14,3 @@ subspace:
   layers: [28]
   k_features: 32
   token_positions: [last_token]
-  visualization:
-    figure_format: png

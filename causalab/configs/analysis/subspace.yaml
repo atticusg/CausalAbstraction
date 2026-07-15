@@ -3,8 +3,8 @@ _name_: subspace
 _subdir: ${.method}_k${.k_features}
 _output_dir: ${experiment_root}/subspace/${._subdir}
 
-method: pca                  # pca | das | dbm | boundless
-k_features: 64
+method: pca                  # pca | das | dbm | boundless | fixed
+k_features: 64               # for method: fixed, must equal the given rotation's k
 batch_size: 32
 
 # Component to operate on. Used by all methods; the grid axes depend on type.
@@ -14,19 +14,21 @@ batch_size: 32
 component_type: residual_stream
 
 layers: null                 # list[int] or null. null = auto-resolve from locate/. Single item = single-cell mode.
-token_positions: [last_token]   # list of position names; null = all positions from task. Used by residual_stream and mlp.
+token_positions: null           # list of position names, or null. null = all task positions (single-cell uses the task's sole position). Used by residual_stream and mlp.
 heads: null                  # list[int] or null. null = all heads. Used by attention_head only.
 token_position: null         # single position name. Used by attention_head only.
 
 # Optional multi-mode sweep. When set, the analysis iterates each entry,
 # merging it onto the analysis-level defaults and writing artifacts under
-# {_output_dir}/{mode.name or mode.component_type}/.
+# subspace/{mode._subdir}/{mode.name or mode.component_type}/. _subdir is
+# re-resolved per mode, so entries differing by a _subdir-feeding field
+# (k_features, method) land in distinct dirs instead of overwriting each other.
 # Each entry is a dict that overrides any analysis field (e.g.
 # component_type, layers, k_features, ...). Leave null for single-mode runs.
 modes: null
 
 visualization:
-  figure_format: pdf
+  figure_format: ${figure_format}
   colormap: ${task.colormap}  # inherited from task config
   vis_dims: null  # which PC dims to plot, e.g. [0,1,2] or [1,3,5]. null = first 3
   detailed_hover: false  # show all causal variables + raw_input in hover labels
@@ -44,3 +46,19 @@ boundless:
   lr: 0.001
   regularization_coefficient: 0.1
   # tie_masks is always False for boundless (enforced in code, not configurable)
+
+# method: fixed — thread a GIVEN (precomputed) rotation through the manifold
+# pipeline instead of fitting one. Provide exactly one input. Requires a single
+# explicit layer (layers: [L]) and a single token_position; set k_features to
+# the rotation's column count. Output lands at subspace/fixed_k${k_features}/.
+fixed:
+  artifact: null        # path to a rotation .safetensors (tensor key: rotation_matrix), shape (d_model, k)
+  source: null          # one of: {sae_checkpoint, clusters_path, cluster_id, orthonormalize}  # vanilla SAE cluster
+                        #         {block_sae_checkpoint, block_id}                             # block/Grassmannian SAE block
+  feature_ids: null     # explicit SAE feature ids (list[int]); requires fixed.sae_checkpoint
+  sae_checkpoint: null  # SAE .pt for the feature_ids path
+  orthonormalize: true  # QR-orthonormalize stacked decoder directions (feature_ids path)
+  score: false          # score the threaded subspace's causal mediation at the pinned
+                        # cell (subspace_score, full_cell_score control, score_ratio ->
+                        # results.json) in the task's intervention_metric, via the same
+                        # run_layer_scan path locate uses

@@ -1,0 +1,34 @@
+# @package _global_
+# Golden-tier ablation runner for weekdays — attention heads, zero-ablation,
+# chat-coherent (Qwen3-4B-Instruct-2507).
+#
+# Promoted from configs/smoke/weekdays_ablation_heads.yaml: tiny-random →
+# chat-coherent, n_train 2 → 49 (fires the task's enumerate_all branch —
+# train == test == the full 7×7 weekday input space, deterministic, no
+# sampling), batch_size 2 → 8. Pins base_accuracy + the per-cell drop_grid +
+# the top_k drops + the joint-combo drop via the harness's extract_values()
+# (every float leaf of results.json), so no `expected_artifacts:` block — the
+# smoke twin keeps that CPU-side. Exercises the all-token span (length-bucketing)
+# and a joint combo on a model that actually solves the task, so the drops are
+# behavioural rather than noise. See docs/TESTS.md "Smoke vs golden split".
+defaults:
+- /base
+- /task: natural_domains_arithmetic_weekdays
+- /model: chat-coherent
+- /analysis/ablation
+- _self_
+
+task:
+  target_variable: result
+  n_train: 49
+  n_test: 2
+
+ablation:
+  component_type: attention_head
+  mode: zero
+  span: all
+  layers: [0, 1]
+  heads: [0, 1]
+  batch_size: 8
+  combos:
+  - [[0, 0], [1, 1]]

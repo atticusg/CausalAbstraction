@@ -22,7 +22,7 @@ def _get_manifold_device(manifold: Any) -> torch.device:
     return torch.device("cpu")
 
 
-def _compute_intrinsic_ranges(
+def _compute_intrinsic_ranges(  # pyright: ignore[reportUnusedFunction]
     features: Tensor,
     manifold: Any,
     mean: Tensor,

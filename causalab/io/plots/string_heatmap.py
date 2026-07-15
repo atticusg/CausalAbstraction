@@ -26,7 +26,7 @@ def _render_string_heatmap(
     layers: List[int],
     title: Optional[str] = None,
     save_path: Optional[str] = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
     show_scores: bool = True,
     color_by_frequency: bool = False,
     correct_answer: Optional[str] = None,
@@ -253,7 +253,7 @@ def plot_residual_stream_intervention_heatmap(
     save_path: Optional[str] = None,
     show_scores: bool = True,
     color_by_frequency: bool = False,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     """
     Create heatmap showing output tokens after interventions at each (layer, position).
@@ -326,7 +326,7 @@ def plot_single_pair_trace_heatmap(
     trace_data: Dict[str, Any],
     title: Optional[str] = None,
     save_path: Optional[str] = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
     color_by_frequency: bool = True,
 ) -> None:
     """Render a single-pair trace heatmap from pre-serialized trace data.

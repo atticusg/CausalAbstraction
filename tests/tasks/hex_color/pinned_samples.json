@@ -1,0 +1,97 @@
+{
+  "samples": [
+    {
+      "counterfactual_inputs": [
+        {
+          "color": "blue",
+          "hex": "#090CBB",
+          "raw_input": "Question: Which color name best describes the hex code #090CBB? Choose one of: red, orange, yellow, green, blue, purple.\nAnswer:",
+          "raw_output": " blue"
+        }
+      ],
+      "input": {
+        "color": "green",
+        "hex": "#14AA06",
+        "raw_input": "Question: Which color name best describes the hex code #14AA06? Choose one of: red, orange, yellow, green, blue, purple.\nAnswer:",
+        "raw_output": " green"
+      },
+      "seed": 0
+    },
+    {
+      "counterfactual_inputs": [
+        {
+          "color": "purple",
+          "hex": "#B413D2",
+          "raw_input": "Question: Which color name best describes the hex code #B413D2? Choose one of: red, orange, yellow, green, blue, purple.\nAnswer:",
+          "raw_output": " purple"
+        }
+      ],
+      "input": {
+        "color": "orange",
+        "hex": "#BA6D0F",
+        "raw_input": "Question: Which color name best describes the hex code #BA6D0F? Choose one of: red, orange, yellow, green, blue, purple.\nAnswer:",
+        "raw_output": " orange"
+      },
+      "seed": 1
+    },
+    {
+      "counterfactual_inputs": [
+        {
+          "color": "orange",
+          "hex": "#EC982B",
+          "raw_input": "Question: Which color name best describes the hex code #EC982B? Choose one of: red, orange, yellow, green, blue, purple.\nAnswer:",
+          "raw_output": " orange"
+        }
+      ],
+      "input": {
+        "color": "red",
+        "hex": "#EC221F",
+        "raw_input": "Question: Which color name best describes the hex code #EC221F? Choose one of: red, orange, yellow, green, blue, purple.\nAnswer:",
+        "raw_output": " red"
+      },
+      "seed": 2
+    },
+    {
+      "counterfactual_inputs": [
+        {
+          "color": "purple",
+          "hex": "#AD13CC",
+          "raw_input": "Question: Which color name best describes the hex code #AD13CC? Choose one of: red, orange, yellow, green, blue, purple.\nAnswer:",
+          "raw_output": " purple"
+        }
+      ],
+      "input": {
+        "color": "yellow",
+        "hex": "#DCE01E",
+        "raw_input": "Question: Which color name best describes the hex code #DCE01E? Choose one of: red, orange, yellow, green, blue, purple.\nAnswer:",
+        "raw_output": " yellow"
+      },
+      "seed": 3
+    },
+    {
+      "counterfactual_inputs": [
+        {
+          "color": "green",
+          "hex": "#13D109",
+          "raw_input": "Question: Which color name best describes the hex code #13D109? Choose one of: red, orange, yellow, green, blue, purple.\nAnswer:",
+          "raw_output": " green"
+        }
+      ],
+      "input": {
+        "color": "yellow",
+        "hex": "#FFFA03",
+        "raw_input": "Question: Which color name best describes the hex code #FFFA03? Choose one of: red, orange, yellow, green, blue, purple.\nAnswer:",
+        "raw_output": " yellow"
+      },
+      "seed": 4
+    }
+  ],
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "task": "hex_color"
+}

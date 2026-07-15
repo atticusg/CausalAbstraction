@@ -7,11 +7,9 @@ generates the features_3d visualization.
 from __future__ import annotations
 
 import logging
-import os
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
-import torch
-from safetensors.torch import save_file
+from torch import Tensor
 
 from causalab.analyses.subspace._visualization import save_features_visualization
 from causalab.methods.trained_subspace.subspace import build_SVD_featurizers
@@ -37,7 +35,7 @@ def find_pca_subspace(
     variable_values: list[str] | None = None,
     detailed_hover: bool = False,
     max_hover_chars: int = 50,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> dict[str, Any]:
     """Find a k-dimensional PCA subspace and project features through it.
 
@@ -64,11 +62,16 @@ def find_pca_subspace(
     unit = target.flatten()[0]
 
     logger.info("Computing PCA with k=%d...", k_features)
-    raw_features_dict = collect_features(
-        dataset=train_dataset,
-        pipeline=pipeline,
-        model_units=[unit],
-        batch_size=batch_size,
+    # collect_output_logits=False (default) returns dict[str, Tensor];
+    # cast tells pyright we're in that branch of the union.
+    raw_features_dict = cast(
+        dict[str, Tensor],
+        collect_features(
+            dataset=train_dataset,
+            pipeline=pipeline,
+            model_units=[unit],
+            batch_size=batch_size,
+        ),
     )
 
     svd_results = compute_svd(
@@ -95,34 +98,15 @@ def find_pca_subspace(
     )
 
     if output_dir:
-        os.makedirs(output_dir, exist_ok=True)
+        from causalab.analyses.subspace.artifacts import save_subspace_artifacts
 
-        from causalab.io.counterfactuals import save_counterfactual_examples
-
-        save_counterfactual_examples(
+        save_subspace_artifacts(
+            output_dir,
             train_dataset,
-            os.path.join(output_dir, "train_dataset.json"),
-        )
-
-        save_file(
-            {
-                "rotation_matrix": rotation.contiguous(),
-                "explained_variance_ratio": torch.tensor(
-                    var_ratios, dtype=torch.float32
-                ),
-            },
-            os.path.join(output_dir, "rotation.safetensors"),
-        )
-
-        features_dir = os.path.join(output_dir, "features")
-        os.makedirs(features_dir, exist_ok=True)
-        save_file(
-            {"features": features.contiguous()},
-            os.path.join(features_dir, "training_features.safetensors"),
-        )
-        save_file(
-            {"features": raw_features.contiguous()},
-            os.path.join(features_dir, "raw_features.safetensors"),
+            rotation,
+            raw_features,
+            features,
+            explained_variance_ratio=var_ratios,
         )
 
         vis_features = features[:, vis_dims] if vis_dims is not None else features

@@ -1,0 +1,65 @@
+{
+ "category": null,
+ "group": "bias",
+ "objects": [
+  "women",
+  "men"
+ ],
+ "provenance": {
+  "C": 2,
+  "bundle": "lre_bias",
+  "compact": true,
+  "eff_k": 1,
+  "n_source_rows": 48,
+  "n_subject_object_conflicts": 0
+ },
+ "range_name": "gender",
+ "relation": "occupation_gender",
+ "subject_to_object": {
+  "accountants": "men",
+  "chefs": "men",
+  "dietitians": "women",
+  "engineers": "men",
+  "entrepreneurs": "men",
+  "hair stylists": "women",
+  "librarians": "women",
+  "nurses": "women",
+  "pilots": "men",
+  "plumbers": "men",
+  "presidents": "men",
+  "professors": "men",
+  "psychologists": "women",
+  "receptionists": "women",
+  "researchers": "men",
+  "social workers": "women",
+  "software developers": "men",
+  "surgeons": "men",
+  "teachers": "women"
+ },
+ "subjects": [
+  "nurses",
+  "pilots",
+  "surgeons",
+  "teachers",
+  "librarians",
+  "chefs",
+  "plumbers",
+  "engineers",
+  "dietitians",
+  "hair stylists",
+  "accountants",
+  "entrepreneurs",
+  "social workers",
+  "receptionists",
+  "software developers",
+  "researchers",
+  "presidents",
+  "professors",
+  "psychologists"
+ ],
+ "templates": [
+  "Usually, what gender (men or women) are {subject}? They are typically",
+  "What gender (men or women) are {subject} associated with? They are usually",
+  "Is the profession of {subject} usually for men or women? It is usually for"
+ ]
+}

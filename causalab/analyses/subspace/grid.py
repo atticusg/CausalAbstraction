@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from causalab.causal.causal_model import CausalModel
 from causalab.neural.pipeline import LMPipeline
@@ -43,17 +43,25 @@ def run_das_grid(
         - ``train_result``: raw result from ``train_interventions``
     """
     from causalab.methods.trained_subspace.train import train_interventions
-    from causalab.configs.train_config import merge_with_defaults
+    from causalab.configs.train_config import (
+        merge_with_defaults,
+        PartialExperimentConfig,
+    )
 
     loss_config = loss_config or {}
+    # Dict literal built from runtime values; cast tells pyright it conforms
+    # to PartialExperimentConfig (TypedDict keys match defaults).
     das_config = merge_with_defaults(
-        {
-            "intervention_type": "interchange",
-            "DAS": {"n_features": k_features},
-            "train_batch_size": batch_size,
-            "evaluation_batch_size": batch_size,
-            **loss_config,
-        }
+        cast(
+            PartialExperimentConfig,
+            {
+                "intervention_type": "interchange",
+                "DAS": {"n_features": k_features},
+                "train_batch_size": batch_size,
+                "evaluation_batch_size": batch_size,
+                **loss_config,
+            },
+        )
     )
     das_config["log_dir"] = log_dir or "logs"
     if log_dir:
@@ -67,7 +75,9 @@ def run_das_grid(
         pipeline=pipeline,
         target_variable_group=target_variable_group,
         metric=metric,
-        config=das_config,
+        # train_interventions takes dict[str, Any]; ExperimentConfig is a TypedDict
+        # that's structurally compatible at runtime.
+        config=cast(dict[str, Any], das_config),
     )
 
     train_scores = {
@@ -112,6 +122,7 @@ def run_pca_grid(
     """
     from causalab.neural.activations.collect import collect_features
     from causalab.methods.pca import compute_svd
+    from torch import Tensor
 
     scores: dict[tuple, float] = {}
     svd_results_by_cell: dict[tuple, dict] = {}
@@ -119,11 +130,16 @@ def run_pca_grid(
 
     for key, target in targets.items():
         unit = target.flatten()[0]
-        raw = collect_features(
-            dataset=train_dataset,
-            pipeline=pipeline,
-            model_units=[unit],
-            batch_size=batch_size,
+        # collect_output_logits=False (default) returns dict[str, Tensor];
+        # cast tells pyright we're in that branch of the union.
+        raw = cast(
+            dict[str, Tensor],
+            collect_features(
+                dataset=train_dataset,
+                pipeline=pipeline,
+                model_units=[unit],
+                batch_size=batch_size,
+            ),
         )
         svd = compute_svd(raw, n_components=k_features, preprocess="center")
         var_ratios = svd[unit.id]["explained_variance_ratio"]
@@ -139,7 +155,8 @@ def run_pca_grid(
 
     logger.info(
         "PCA grid complete. Best cell=%s (%.3f)",
-        max(scores, key=scores.get),
+        # max() overloads can't infer dict.get's key-fn signature here; use lambda
+        max(scores, key=lambda k: scores[k]),
         max(scores.values()),
     )
     return {
@@ -174,19 +191,26 @@ def run_dbm_grid(
         - ``train_result``: raw result from ``train_interventions``
     """
     from causalab.methods.trained_subspace.train import train_interventions
-    from causalab.configs.train_config import merge_with_defaults
+    from causalab.configs.train_config import (
+        merge_with_defaults,
+        PartialExperimentConfig,
+    )
 
     dbm_config = dbm_config or {}
     tie_masks = bool(dbm_config.pop("tie_masks", False))
+    # Cast: dict literal conforms to PartialExperimentConfig TypedDict at runtime.
     mask_config = merge_with_defaults(
-        {
-            "intervention_type": "mask",
-            "DAS": {"n_features": k_features},
-            "featurizer_kwargs": {"tie_masks": tie_masks},
-            "train_batch_size": batch_size,
-            "evaluation_batch_size": batch_size,
-            **dbm_config,
-        }
+        cast(
+            PartialExperimentConfig,
+            {
+                "intervention_type": "mask",
+                "DAS": {"n_features": k_features},
+                "featurizer_kwargs": {"tie_masks": tie_masks},
+                "train_batch_size": batch_size,
+                "evaluation_batch_size": batch_size,
+                **dbm_config,
+            },
+        )
     )
     mask_config["log_dir"] = log_dir or "logs"
     if log_dir:
@@ -200,7 +224,8 @@ def run_dbm_grid(
         pipeline=pipeline,
         target_variable_group=target_variable_group,
         metric=metric,
-        config=mask_config,
+        # ExperimentConfig (TypedDict) is structurally compatible with dict[str, Any]
+        config=cast(dict[str, Any], mask_config),
     )
 
     train_scores = {
@@ -269,20 +294,27 @@ def run_boundless_grid(
         - ``train_result``: Raw result dict from ``train_interventions``.
     """
     from causalab.methods.trained_subspace.train import train_interventions
-    from causalab.configs.train_config import merge_with_defaults
+    from causalab.configs.train_config import (
+        merge_with_defaults,
+        PartialExperimentConfig,
+    )
 
     boundless_config = boundless_config or {}
+    # Cast: dict literal conforms to PartialExperimentConfig TypedDict at runtime.
     mask_config = merge_with_defaults(
-        {
-            "intervention_type": "mask",
-            "DAS": {"n_features": k_features},
-            "featurizer_kwargs": {
-                "tie_masks": False
-            },  # Boundless DAS: per-dimension masks
-            "train_batch_size": batch_size,
-            "evaluation_batch_size": batch_size,
-            **boundless_config,
-        }
+        cast(
+            PartialExperimentConfig,
+            {
+                "intervention_type": "mask",
+                "DAS": {"n_features": k_features},
+                "featurizer_kwargs": {
+                    "tie_masks": False
+                },  # Boundless DAS: per-dimension masks
+                "train_batch_size": batch_size,
+                "evaluation_batch_size": batch_size,
+                **boundless_config,
+            },
+        )
     )
     mask_config["log_dir"] = log_dir or "logs"
     if log_dir:
@@ -296,7 +328,8 @@ def run_boundless_grid(
         pipeline=pipeline,
         target_variable_group=target_variable_group,
         metric=metric,
-        config=mask_config,
+        # ExperimentConfig (TypedDict) is structurally compatible with dict[str, Any]
+        config=cast(dict[str, Any], mask_config),
     )
 
     train_scores = {

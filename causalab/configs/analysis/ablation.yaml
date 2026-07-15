@@ -1,0 +1,25 @@
+# @package ablation
+_name_: ablation
+_subdir: ${.component_type}_${.mode}
+# The analysis appends a sanitized `span` token to the output dir (e.g.
+# .../ablation/attention_head_zero_all) so runs differing only in `span` don't
+# collide; `span` can be a list, which has no clean Hydra-interpolation form, so
+# it is folded in by main.py rather than via ${._subdir}.
+_output_dir: ${experiment_root}/ablation/${._subdir}
+
+component_type: attention_head   # attention_head | attention_output | mlp | residual
+mode: zero                       # zero | mean
+span: all                        # "all" (every token) or a list of task
+                                 # token-position names, e.g. [last_token]
+layers: null                     # list[int] or null = all layers
+heads: null                      # list[int] or null = all heads (attention_head only)
+batch_size: 16
+top_k: 20
+combos: null                     # explicit joint-ablation sets:
+                                 #   attention_head:        [[[L,H],[L,H]], ...]
+                                 #   attention_output/mlp/residual: [[L,L], ...]
+complement_keep: null            # list[int] of layers to KEEP; ablate every other
+                                 # grid layer jointly (sufficiency). null = skip.
+
+visualization:
+  figure_format: ${figure_format}   # png or pdf — invariant 6

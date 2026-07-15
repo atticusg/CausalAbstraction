@@ -1,0 +1,36 @@
+# =============================================================================
+# WARNING: This config exists ONLY for the smoke tier under
+# tests/end_to_end/. Loading it under any other entry point produces
+# nonsense numbers — the weights are RANDOM-INIT, not trained.
+# =============================================================================
+#
+# Wraps `hf-internal-testing/tiny-random-LlamaForCausalLM` — HuggingFace's
+# random-init tiny Llama (2 hidden layers, hidden_size=16, vocab=32000).
+# Speaks the real Llama protocol so all model-shape contracts hold; loads
+# in <1s so the smoke tier stays under its <5min wall budget.
+#
+# For golden numerical tests use `model: chat-coherent` instead — that one
+# wraps Qwen3-4B-Instruct-2507 (real trained weights), which is what the
+# locked golden values are pinned against.
+#
+# Smoke configs MUST declare `/model: tiny-random`. Analyses that need a
+# coherent model (e.g. output_manifold, pullback — random-init logits
+# collapse per-class belief centroids and the spline solver legitimately
+# rejects the duplicate control points) cannot be smoke-tested; they live
+# under `tests/end_to_end/configs/golden/` on `chat-coherent` as full
+# goldens. See docs/TESTS.md "Smoke vs golden split".
+#
+# This config references a public HF model name directly (NOT test code) to
+# avoid pulling test helpers into a Hydra-resolved config.
+#
+# Guardrail: ``tests/conftest.py`` registers a session-start check that
+# refuses to honor ``model: tiny-random`` outside the smoke tier —
+# fat-fingering ``model=tiny-random`` in a real run will fail fast with a
+# clear error message rather than silently producing garbage outputs.
+id: tiny-random
+is_smoke_only: true  # consumed by the conftest guardrail; do not remove
+name: hf-internal-testing/tiny-random-LlamaForCausalLM
+device: cpu
+dtype: float32
+slurm:
+  gpus: 0

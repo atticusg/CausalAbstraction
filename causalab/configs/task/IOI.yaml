@@ -1,0 +1,9 @@
+name: IOI
+intervention_metric: string_match
+max_new_tokens: 1
+colormap: viridis
+n_train: 64
+n_test: 16
+enumerate_all: false
+balanced: false
+resample_variable: all

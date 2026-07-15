@@ -98,7 +98,7 @@ embedding_optim:
 
 # ── Visualization ──
 visualization:
-  figure_format: pdf
+  figure_format: ${figure_format}
   belief_trajectories: true      # per-pair belief trajectory Plotly plot
   embedding_diagnostics: true    # per-pair embedding conformal diagnostics
   embedding_3d: true             # 3D manifold trajectory plot

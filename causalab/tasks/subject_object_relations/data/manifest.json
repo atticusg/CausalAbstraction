@@ -1,0 +1,357 @@
+{
+  "n_relations": 35,
+  "note": "Model-agnostic relation content extracted from the LRE-relation DAS bundle; all Llama-3.1-8B token/position fields dropped. filtered.jsonl is the authoritative ingest source.",
+  "relations": {
+    "adj_antonym": {
+      "C": 70,
+      "category": "linguistic",
+      "compact": true,
+      "eff_k": 16,
+      "group": "injective",
+      "n_objects": 70,
+      "n_subjects": 71,
+      "n_templates": 2
+    },
+    "adj_comparative": {
+      "C": 53,
+      "category": "linguistic",
+      "compact": true,
+      "eff_k": 16,
+      "group": "injective",
+      "n_objects": 54,
+      "n_subjects": 54,
+      "n_templates": 2
+    },
+    "adj_superlative": {
+      "C": 70,
+      "category": "linguistic",
+      "compact": true,
+      "eff_k": 32,
+      "group": "injective",
+      "n_objects": 71,
+      "n_subjects": 71,
+      "n_templates": 2
+    },
+    "characteristic_gender": {
+      "C": 2,
+      "category": null,
+      "compact": true,
+      "eff_k": 1,
+      "group": "bias",
+      "n_objects": 2,
+      "n_subjects": 26,
+      "n_templates": 3
+    },
+    "city_in_country": {
+      "C": 19,
+      "category": "factual",
+      "compact": false,
+      "eff_k": 16,
+      "group": "injective",
+      "n_objects": 20,
+      "n_subjects": 25,
+      "n_templates": 2
+    },
+    "company_hq": {
+      "C": 122,
+      "category": "factual",
+      "compact": false,
+      "eff_k": 128,
+      "group": "categorical",
+      "n_objects": 122,
+      "n_subjects": 511,
+      "n_templates": 2
+    },
+    "country_capital_city": {
+      "C": 23,
+      "category": "factual",
+      "compact": false,
+      "eff_k": 16,
+      "group": "injective",
+      "n_objects": 23,
+      "n_subjects": 23,
+      "n_templates": 2
+    },
+    "country_language": {
+      "C": 9,
+      "category": "factual",
+      "compact": false,
+      "eff_k": 8,
+      "group": "injective",
+      "n_objects": 9,
+      "n_subjects": 19,
+      "n_templates": 3
+    },
+    "country_largest_city": {
+      "C": 23,
+      "category": "factual",
+      "compact": false,
+      "eff_k": 16,
+      "group": "injective",
+      "n_objects": 23,
+      "n_subjects": 23,
+      "n_templates": 2
+    },
+    "degree_gender": {
+      "C": 2,
+      "category": null,
+      "compact": true,
+      "eff_k": 1,
+      "group": "bias",
+      "n_objects": 2,
+      "n_subjects": 30,
+      "n_templates": 2
+    },
+    "food_from_country": {
+      "C": 23,
+      "category": "factual",
+      "compact": false,
+      "eff_k": 16,
+      "group": "injective",
+      "n_objects": 23,
+      "n_subjects": 26,
+      "n_templates": 2
+    },
+    "landmark_in_country": {
+      "C": 85,
+      "category": "factual",
+      "compact": false,
+      "eff_k": 64,
+      "group": "categorical",
+      "n_objects": 86,
+      "n_subjects": 718,
+      "n_templates": 2
+    },
+    "landmark_on_continent": {
+      "C": 4,
+      "category": "few_class_categorical",
+      "compact": false,
+      "eff_k": 16,
+      "group": "categorical",
+      "n_objects": 4,
+      "n_subjects": 196,
+      "n_templates": 1
+    },
+    "name_birthplace": {
+      "C": 8,
+      "category": null,
+      "compact": true,
+      "eff_k": 4,
+      "group": "bias",
+      "n_objects": 8,
+      "n_subjects": 28,
+      "n_templates": 2
+    },
+    "name_gender": {
+      "C": 2,
+      "category": null,
+      "compact": true,
+      "eff_k": 1,
+      "group": "bias",
+      "n_objects": 2,
+      "n_subjects": 18,
+      "n_templates": 3
+    },
+    "name_religion": {
+      "C": 4,
+      "category": null,
+      "compact": true,
+      "eff_k": 2,
+      "group": "bias",
+      "n_objects": 4,
+      "n_subjects": 15,
+      "n_templates": 1
+    },
+    "object_superclass": {
+      "C": 9,
+      "category": "commonsense",
+      "compact": true,
+      "eff_k": 4,
+      "group": "categorical",
+      "n_objects": 9,
+      "n_subjects": 60,
+      "n_templates": 2
+    },
+    "occupation_age": {
+      "C": 2,
+      "category": null,
+      "compact": true,
+      "eff_k": 1,
+      "group": "bias",
+      "n_objects": 2,
+      "n_subjects": 22,
+      "n_templates": 2
+    },
+    "occupation_gender": {
+      "C": 2,
+      "category": null,
+      "compact": true,
+      "eff_k": 1,
+      "group": "bias",
+      "n_objects": 2,
+      "n_subjects": 19,
+      "n_templates": 3
+    },
+    "person_band_lead_singer": {
+      "C": 18,
+      "category": "factual",
+      "compact": false,
+      "eff_k": 16,
+      "group": "injective",
+      "n_objects": 20,
+      "n_subjects": 20,
+      "n_templates": 2
+    },
+    "person_native_language": {
+      "C": 24,
+      "category": null,
+      "compact": true,
+      "eff_k": 8,
+      "group": "bias",
+      "n_objects": 29,
+      "n_subjects": 811,
+      "n_templates": 2
+    },
+    "person_occupation": {
+      "C": 19,
+      "category": "factual",
+      "compact": false,
+      "eff_k": 16,
+      "group": "categorical",
+      "n_objects": 19,
+      "n_subjects": 157,
+      "n_templates": 2
+    },
+    "person_plays_instrument": {
+      "C": 5,
+      "category": "factual",
+      "compact": false,
+      "eff_k": 4,
+      "group": "categorical",
+      "n_objects": 5,
+      "n_subjects": 371,
+      "n_templates": 2
+    },
+    "person_plays_position_in_sport": {
+      "C": 12,
+      "category": "factual",
+      "compact": true,
+      "eff_k": 4,
+      "group": "categorical",
+      "n_objects": 12,
+      "n_subjects": 640,
+      "n_templates": 2
+    },
+    "person_plays_pro_sport": {
+      "C": 5,
+      "category": "factual",
+      "compact": false,
+      "eff_k": 4,
+      "group": "categorical",
+      "n_objects": 5,
+      "n_subjects": 289,
+      "n_templates": 3
+    },
+    "pokemon_evolutions": {
+      "C": 37,
+      "category": "factual",
+      "compact": true,
+      "eff_k": 16,
+      "group": "injective",
+      "n_objects": 40,
+      "n_subjects": 40,
+      "n_templates": 2
+    },
+    "product_by_company": {
+      "C": 26,
+      "category": "factual",
+      "compact": true,
+      "eff_k": 8,
+      "group": "categorical",
+      "n_objects": 26,
+      "n_subjects": 390,
+      "n_templates": 1
+    },
+    "star_constellation": {
+      "C": 22,
+      "category": "factual",
+      "compact": true,
+      "eff_k": 8,
+      "group": "categorical",
+      "n_objects": 24,
+      "n_subjects": 226,
+      "n_templates": 3
+    },
+    "substance_phase": {
+      "C": 3,
+      "category": "few_class_categorical",
+      "compact": false,
+      "eff_k": 4,
+      "group": "categorical",
+      "n_objects": 3,
+      "n_subjects": 42,
+      "n_templates": 1
+    },
+    "task_done_by_person": {
+      "C": 24,
+      "category": "commonsense",
+      "compact": false,
+      "eff_k": 16,
+      "group": "injective",
+      "n_objects": 24,
+      "n_subjects": 24,
+      "n_templates": 2
+    },
+    "task_done_by_tool": {
+      "C": 33,
+      "category": "commonsense",
+      "compact": true,
+      "eff_k": 16,
+      "group": "injective",
+      "n_objects": 34,
+      "n_subjects": 35,
+      "n_templates": 2
+    },
+    "verb_past_tense": {
+      "C": 76,
+      "category": "linguistic",
+      "compact": true,
+      "eff_k": 32,
+      "group": "injective",
+      "n_objects": 76,
+      "n_subjects": 76,
+      "n_templates": 2
+    },
+    "word_first_letter": {
+      "C": 25,
+      "category": "linguistic",
+      "compact": false,
+      "eff_k": 16,
+      "group": "categorical",
+      "n_objects": 25,
+      "n_subjects": 241,
+      "n_templates": 2
+    },
+    "word_last_letter": {
+      "C": 18,
+      "category": "linguistic",
+      "compact": true,
+      "eff_k": 8,
+      "group": "categorical",
+      "n_objects": 18,
+      "n_subjects": 173,
+      "n_templates": 2
+    },
+    "word_sentiment": {
+      "C": 3,
+      "category": "few_class_categorical",
+      "compact": false,
+      "eff_k": 4,
+      "group": "categorical",
+      "n_objects": 3,
+      "n_subjects": 34,
+      "n_templates": 1
+    }
+  },
+  "source": "<lre-relations-source>"
+}

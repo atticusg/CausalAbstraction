@@ -1,0 +1,33 @@
+# @package _global_
+# Chat-mode locked-values baseline for tests/end_to_end/goldens — chat-coherent
+# (Qwen3-4B-Instruct-2507). Companion to the weekdays golden, but exercises the
+# *multi-token* generation path: entity_binding answers are a single word the
+# model emits followed by EOS, so it stops before the max_new_tokens=4 budget is
+# spent. That early stop is what surfaced the generate() slice bug (the previous
+# `sequences[:, -max_new_tokens:]` leaked the chat template's trailing
+# `assistant\n` header into the decoded answer); the corrected slice decodes just
+# the answer word. Device follows the fixture (`auto` → CUDA when available).
+defaults:
+- /base
+- /task: entity_binding
+- /model: chat-coherent
+- /analysis/baseline
+- _self_
+
+# entity_binding's input space (person × food permutations across two clauses) is
+# far too large to enumerate, so — unlike weekdays — this pins a fixed-seed
+# *sample* of n_train inputs (the mcqa-golden shape). max_new_tokens stays at the
+# task default of 4; with the chat answer directive the model replies with the
+# bare answer word, which the 0.9 golden floor scores via exact match (measured
+# 1.0 on the deduped sample). `prob_accuracy` is only defined for the
+# single-token contract (max_new_tokens == 1), so it is dropped from the pinned
+# set rather than pinned as null (see docs/TESTS.md "Numeric contract"); coercing
+# to max_new_tokens=1 is not an option here because two answer words ("Pete",
+# "Sue") tokenize to 2 bare tokens and would be truncated.
+task:
+  target_variable: positional_answer
+  n_train: 50
+  n_test: 0
+
+baseline:
+  batch_size: 8

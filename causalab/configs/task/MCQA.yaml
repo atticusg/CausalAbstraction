@@ -1,0 +1,15 @@
+name: MCQA
+intervention_metric: string_match
+max_new_tokens: 1
+colormap: viridis
+n_train: 1000
+n_test: 50
+enumerate_all: false
+balanced: false
+resample_variable: all
+# Scoring convention: "letter" (default — score the option letter A/B) or
+# "value" (mode-agnostic — accept the choice colour OR the option letter,
+# since a bimodal chat model answers with either). See SCORE_MODES in
+# causalab/tasks/MCQA/causal_models.py. The golden runs value mode on the
+# chat-coherent fixture.
+score_by: letter

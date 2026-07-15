@@ -9,6 +9,9 @@ Usage: scripts/run_exp.sh [opts] <runner> [hydra overrides...]
 
 Opts:
   --slurm                   Dispatch as an sbatch job (else run inline).
+  --wait                    With --slurm: block until the job finishes and exit
+                            with its status (sbatch --wait). Replaces hand-rolled
+                            `while squeue -j <id>` pollers.
   --qos QOS                 normal | opportunistic | scavenge (--slurm only).
   --gpus N                  Override model-config GPU count (--slurm only).
   --time HH:MM:SS           Override runner-config walltime  (--slurm only).
@@ -16,24 +19,41 @@ Opts:
   --experiment-root DIR     Override experiment_root.
   -h, --help                Show this message.
 
+Hydra introspection flags (--cfg job|hydra|all, --resolve, --package PKG) may be
+passed anywhere — before or after <runner> — and are forwarded to Hydra.
+
+SLURM logs land in slurm_logs/<job-name>_<jobid>.out (and .err), relative to the
+repo root; the resolved path is printed at submit. When --experiment-root is a
+session dir, the resolved config is also snapshotted to
+<session>/run/<runner>_resolved.yaml before the run starts.
+
 Examples:
   scripts/run_exp.sh age_8b_k64
+  scripts/run_exp.sh age_8b_k64 --cfg job          # print resolved config, don't run
   scripts/run_exp.sh --slurm age_8b_k64
+  scripts/run_exp.sh --slurm --wait age_8b_k64     # submit and block until done
   scripts/run_exp.sh --slurm --qos=opportunistic --time=08:00:00 alphabet_70b_k128
 EOF
     exit 1
 }
 
 slurm=0
+wait_for_job=0
 qos=""
 gpus_override=""
 time_override=""
 config_dir=""
 experiment_root=""
+# Hydra introspection flags (--cfg/-c, --resolve, --package/-p) collected from
+# anywhere on the command line and forwarded to Hydra. Without this, a leading
+# `--cfg job` is caught by the `*) break` arm below and mistaken for the runner
+# name (#269 I4).
+hydra_passthrough=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --slurm)               slurm=1;                shift ;;
+        --wait)                wait_for_job=1;         shift ;;
         --qos)                 qos="$2";               shift 2 ;;
         --qos=*)               qos="${1#*=}";          shift ;;
         --gpus)                gpus_override="$2";     shift 2 ;;
@@ -44,6 +64,11 @@ while [[ $# -gt 0 ]]; do
         --config-dir=*)        config_dir="${1#*=}";   shift ;;
         --experiment-root)     experiment_root="$2";   shift 2 ;;
         --experiment-root=*)   experiment_root="${1#*=}"; shift ;;
+        --cfg|-c)              hydra_passthrough+=("$1" "$2");          shift 2 ;;
+        --cfg=*)              hydra_passthrough+=("--cfg" "${1#*=}");   shift ;;
+        --package|-p)         hydra_passthrough+=("$1" "$2");          shift 2 ;;
+        --package=*)          hydra_passthrough+=("--package" "${1#*=}"); shift ;;
+        --resolve)            hydra_passthrough+=("$1");               shift ;;
         -h|--help)             usage ;;
         *) break ;;
     esac
@@ -52,6 +77,11 @@ done
 
 runner="$1"
 shift
+# Strip leading runners/ prefix if present. The wrapper itself adds this prefix
+# during discovery so Hydra resolves the runner correctly, but on SLURM re-exec
+# the prefixed value gets passed back in as $1 — double-prefixing then breaks
+# the discovery check.
+runner="${runner#runners/}"
 
 # Auto-discover the runner config by basename if it wasn't passed as an
 # explicit relative path. Runners live under causalab/configs/runners/<group>/
@@ -70,14 +100,14 @@ fi
 # --- Session-local code detection (computed before runner resolution so
 # session-local runners can be discovered too) ----------------------------------
 # When --experiment-root lives under agent_logs/<session>/, expose the session's
-# code/ tree to the runner so /setup-methods and /setup-analyses prototypes
-# resolve. Channels:
+# code/ tree to the runner so session-local method/analysis prototypes resolve.
+# See causalab/runner/README.md "Session-local code injection" for the feature.
+# Channels:
 #   1) PYTHONPATH gets ${SESSION_DIR}/code/ prepended so
 #      `import analyses.<name>` and `import methods.<name>` work.
 #   2) Hydra's searchpath gets ${SESSION_DIR}/code/configs/ appended so
 #      `- analysis/<name>` defaults entries find the session-local YAML.
 #   3) Runner discovery also looks under ${SESSION_DIR}/code/configs/runners/.
-# See .claude/skills/research-session/CONVENTIONS.md "What goes in code/".
 session_dir=""
 if [ -n "$experiment_root" ]; then
     case "$experiment_root" in
@@ -102,14 +132,13 @@ session_runners_dir=""
 
 # Searches first in causalab/configs/runners/, then (if present) in the session's
 # code/configs/runners/. Session-local runners require the wrapper to invoke
-# Hydra with --config-dir pointing at the session's configs root.
-runner_session_local=0
+# Hydra with --config-dir pointing at the session's configs root (added
+# unconditionally below whenever session code is present).
 if [ ! -f "$configs_dir/$runner.yaml" ]; then
     if [ -f "$configs_dir/runners/$runner.yaml" ]; then
         runner="runners/$runner"
     elif [ -n "$session_runners_dir" ] && [ -f "$session_runners_dir/$runner.yaml" ]; then
         runner="runners/$runner"
-        runner_session_local=1
     else
         matches=$(find "$configs_dir/runners" -type f -name "$runner.yaml" 2>/dev/null)
         if [ -n "$session_runners_dir" ]; then
@@ -124,7 +153,6 @@ if [ ! -f "$configs_dir/$runner.yaml" ]; then
             else
                 runner=$(printf '%s\n' "$session_matches" | sed "s|$session_runners_dir/||;s|\.yaml\$||")
                 runner="runners/$runner"
-                runner_session_local=1
             fi
         elif [ "$all_matches" -gt 1 ]; then
             echo "Ambiguous runner name '$runner'; matches:" >&2
@@ -156,11 +184,42 @@ if [ -n "$session_code" ]; then
     export CAUSALAB_SESSION_CODE="$session_dir"
     if [ -d "$session_code/configs" ]; then
         hydra_overrides+=("++hydra.searchpath=[file://$session_code/configs]")
-    fi
-    if [ "$runner_session_local" -eq 1 ] && [ -z "$config_dir" ]; then
-        hydra_flags+=("--config-dir" "$session_code/configs")
+        # ++hydra.searchpath is applied AFTER the primary config's own defaults
+        # list is composed, so it can't resolve nested `defaults:` entries
+        # (e.g. - /analysis/<name>, - /task: <name>). --config-dir is added to
+        # the search path BEFORE composition, so it can. Add it whenever session
+        # configs exist — not only for runners discovered session-local (#166
+        # sub-bug C: a runner copied in-tree is "qualified", so the old
+        # runner_session_local gate skipped this and Hydra failed with
+        # "Could not load 'analysis/<name>'"). Mirrors the primary-vs-searchpath
+        # handling in causalab/runner/slurm_args.py.
+        [ -z "$config_dir" ] && hydra_flags+=("--config-dir" "$session_code/configs")
     fi
     echo "+ session-local code: $session_code (PYTHONPATH + Hydra searchpath)" >&2
+fi
+
+# --- Snapshot the resolved config at submit time (#269 I5) -------------------
+# the interpret phase treats <session>/run/<runner>_resolved.yaml as the
+# canonical record of what ran. Capture it here, before dispatch — for --slurm
+# on the submitting host, so it exists pre-run rather than as a separate manual
+# `--cfg job | tee` step that can be skipped or run after the fact. Done
+# whenever a session dir is detected; a --slurm job re-snapshots on the compute
+# node, which is a harmless idempotent overwrite.
+if [ -n "$session_dir" ]; then
+    cd "$repo_root"
+    snapshot_dir="$session_dir/run"
+    snapshot_file="$snapshot_dir/$(basename "$runner")_resolved.yaml"
+    mkdir -p "$snapshot_dir"
+    if uv run python -m causalab.runner.run_exp \
+        ${hydra_flags[@]+"${hydra_flags[@]}"} \
+        --config-name "$runner" \
+        ${hydra_overrides[@]+"${hydra_overrides[@]}"} \
+        --cfg job > "$snapshot_file" 2>/dev/null; then
+        echo "+ resolved config snapshot: $snapshot_file" >&2
+    else
+        echo "! could not snapshot resolved config to $snapshot_file" >&2
+        rm -f "$snapshot_file"
+    fi
 fi
 
 # --- Slurm submission path ---------------------------------------------------
@@ -193,21 +252,47 @@ if [ "$slurm" -eq 1 ]; then
     )
     [ -n "$qos" ] && sb_args+=(--qos="$qos")
 
+    # --wait: block until the job completes and exit with its status. This is the
+    # native "wait for a SLURM job" primitive — no hand-rolled `while squeue -j
+    # <id>` poller needed (#269 I2). exec keeps the clean handoff; the shell only
+    # returns once sbatch (and thus the job) is done.
+    [ "$wait_for_job" -eq 1 ] && sb_args+=(--wait)
+
+    # CAUSALAB_SESSION_CODE is exported above, but sbatch's env handling does not
+    # reliably propagate it into the job step, so the in-job re-exec can't
+    # re-detect the session (#166 sub-bug D). Force it through explicitly; the
+    # leading "ALL," keeps the normal inherit-submitting-env behaviour on top.
+    [ -n "$session_code" ] && sb_args+=(--export="ALL,CAUSALAB_SESSION_CODE=$session_dir")
+
     # Forward the original invocation, minus the --slurm flag (and its peers).
-    forward=("$runner")
+    # Flags MUST precede the runner positional arg — otherwise the wrapper's
+    # argparser breaks at the first positional and leaves --config-dir /
+    # --experiment-root in $@, which Hydra then rejects. See HANDOFF_v2.md §8
+    # issue #1 (v1 worktree patch). --cfg/--resolve/--package are now recognized
+    # before the positional too, so the passthrough goes here as well.
+    forward=()
     [ -n "$config_dir" ]      && forward+=(--config-dir "$config_dir")
     [ -n "$experiment_root" ] && forward+=(--experiment-root "$experiment_root")
+    forward+=("${hydra_passthrough[@]+"${hydra_passthrough[@]}"}")
+    forward+=("$runner")
     forward+=("$@")
 
+    # Log path (#269 I3): SBATCH --output/--error are slurm_logs/%x_%j.{out,err}
+    # (%x = job name, %j = job id), repo-root-relative. Surface the resolved
+    # pattern so the log is findable without guessing.
+    echo "+ logs: $repo_root/slurm_logs/${name}_<jobid>.{out,err}" >&2
     echo "+ sbatch ${sb_args[*]} $(realpath "$0") ${forward[*]}" >&2
     exec sbatch "${sb_args[@]}" "$(realpath "$0")" "${forward[@]}"
 fi
 
 # --- Inline path -------------------------------------------------------------
-# Works on laptop, dev pod, or inside an sbatch step alike.
+# Works on laptop, dev pod, or inside an sbatch step alike. Hydra introspection
+# flags collected before the positional (e.g. `--cfg job`) are forwarded after
+# --config-name; trailing "$@" carries any overrides given after the runner.
 cd "$repo_root"
 uv run python -m causalab.runner.run_exp \
     ${hydra_flags[@]+"${hydra_flags[@]}"} \
     --config-name "$runner" \
+    ${hydra_passthrough[@]+"${hydra_passthrough[@]}"} \
     ${hydra_overrides[@]+"${hydra_overrides[@]}"} \
     "$@"

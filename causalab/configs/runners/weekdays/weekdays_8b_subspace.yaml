@@ -1,0 +1,20 @@
+# @package _global_
+defaults:
+- /base
+- /task: natural_domains_arithmetic_weekdays
+- /model: llama31_8b
+- /analysis/baseline
+- /analysis/locate
+- /analysis/subspace
+- _self_
+
+task:
+  target_variable: result
+
+locate:
+  layers: [28]
+  token_positions: ["last_token"]
+
+subspace:
+  layers: [28]
+  token_positions: ["last_token"]

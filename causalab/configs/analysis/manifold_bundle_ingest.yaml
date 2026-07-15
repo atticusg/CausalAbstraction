@@ -1,0 +1,7 @@
+# @package manifold_bundle_ingest
+_name_: manifold_bundle_ingest
+_subdir: comm${.community_id}
+_output_dir: ${experiment_root}/manifold_bundle_ingest/${._subdir}
+
+bundle: ???        # path to the manifold-SAE-autointerp bundle dir (has hypotheses.jsonl)
+community_id: ???  # the `comm` field of the community to ingest

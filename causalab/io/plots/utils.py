@@ -23,7 +23,7 @@ def show_current_figure() -> None:
         plt.show()
         return
     try:
-        from IPython import get_ipython
+        from IPython.core.getipython import get_ipython
         from IPython.display import Image, display
     except ImportError:
         return
@@ -43,10 +43,11 @@ def create_heatmap(
     xlabel: str = "",
     ylabel: str = "",
     save_path: Optional[str] = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
     cmap: str = "viridis",
     vmin: float = 0.0,
     vmax: float = 1.0,
+    cbar_label: str = "Score",
     figsize: tuple[float, float] = (10, 8),
     **kwargs: Any,
 ) -> None:
@@ -65,6 +66,7 @@ def create_heatmap(
         cmap: Colormap to use
         vmin: Minimum value for colormap (default: 0.0)
         vmax: Maximum value for colormap (default: 1.0)
+        cbar_label: Label for the colorbar (default: "Score")
         figsize: Figure size as (width, height)
         **kwargs: Additional arguments passed to imshow
     """
@@ -86,7 +88,7 @@ def create_heatmap(
 
     # Add colorbar
     cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label("Score", rotation=270, labelpad=15)
+    cbar.set_label(cbar_label, rotation=270, labelpad=15)
 
     # Add text annotations
     for i in range(len(y_labels)):
@@ -128,7 +130,7 @@ def create_binary_mask_heatmap(
     xlabel: str = "",
     ylabel: str = "",
     save_path: Optional[str] = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
     figsize: tuple[float, float] = (12, 8),
     **kwargs: Any,
 ) -> None:
@@ -204,7 +206,7 @@ def create_feature_count_heatmap(
     score_label: str = "Acc",
     colorbar_label: str = "Feature Count",
     save_path: Optional[str] = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
     flip_vertical: bool = False,
     figsize: Optional[Tuple[float, float]] = None,
     show_accuracy_column: bool = True,

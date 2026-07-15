@@ -1,0 +1,94 @@
+{
+  "deterministic": false,
+  "model": "chat-coherent",
+  "runner": "golden/weekdays_output_manifold",
+  "seed": 0,
+  "tolerance": {
+    "default": 1e-05
+  },
+  "values": {
+    "output_manifold.hellinger_pca.components_.first": -0.3202938139438629,
+    "output_manifold.hellinger_pca.components_.last": -0.004501522518694401,
+    "output_manifold.hellinger_pca.components_.mean": 0.0015469867503270507,
+    "output_manifold.hellinger_pca.components_.shape": [
+      3,
+      8
+    ],
+    "output_manifold.hellinger_pca.components_.std": 0.361154168844223,
+    "output_manifold.hellinger_pca.explained_variance_.first": 0.15776215493679047,
+    "output_manifold.hellinger_pca.explained_variance_.last": 0.14559398591518402,
+    "output_manifold.hellinger_pca.explained_variance_.mean": 0.15223024785518646,
+    "output_manifold.hellinger_pca.explained_variance_.shape": [
+      3
+    ],
+    "output_manifold.hellinger_pca.explained_variance_.std": 0.006158796139061451,
+    "output_manifold.hellinger_pca.explained_variance_ratio_.first": 0.18374133110046387,
+    "output_manifold.hellinger_pca.explained_variance_ratio_.last": 0.16956940293312073,
+    "output_manifold.hellinger_pca.explained_variance_ratio_.mean": 0.17729847133159637,
+    "output_manifold.hellinger_pca.explained_variance_ratio_.shape": [
+      3
+    ],
+    "output_manifold.hellinger_pca.explained_variance_ratio_.std": 0.007172978483140469,
+    "output_manifold.hellinger_pca.mean_.first": 0.14710958302021027,
+    "output_manifold.hellinger_pca.mean_.last": 0.013553961180150509,
+    "output_manifold.hellinger_pca.mean_.mean": 0.13306768238544464,
+    "output_manifold.hellinger_pca.mean_.shape": [
+      8
+    ],
+    "output_manifold.hellinger_pca.mean_.std": 0.04965117946267128,
+    "output_manifold.hellinger_pca.noise_variance_.first": 0.08038386702537537,
+    "output_manifold.hellinger_pca.noise_variance_.last": 0.08038386702537537,
+    "output_manifold.hellinger_pca.noise_variance_.mean": 0.08038386702537537,
+    "output_manifold.hellinger_pca.noise_variance_.shape": [
+      1
+    ],
+    "output_manifold.hellinger_pca.sha256": "2de2d181d35bbf4def4564a56473a8c98cfcc2e091551356a8790caa765d902c",
+    "output_manifold.hellinger_pca.singular_values_.first": 2.7518327236175537,
+    "output_manifold.hellinger_pca.singular_values_.last": 2.6435792446136475,
+    "output_manifold.hellinger_pca.singular_values_.mean": 2.7027852535247803,
+    "output_manifold.hellinger_pca.singular_values_.shape": [
+      3
+    ],
+    "output_manifold.hellinger_pca.singular_values_.std": 0.054836973547935486,
+    "output_manifold.per_example_output_dists.dists.first": 3.927873137854476e-07,
+    "output_manifold.per_example_output_dists.dists.last": 1.609325408935547e-05,
+    "output_manifold.per_example_output_dists.dists.mean": 0.125,
+    "output_manifold.per_example_output_dists.dists.shape": [
+      49,
+      8
+    ],
+    "output_manifold.per_example_output_dists.dists.std": 0.3269832730293274,
+    "output_manifold.per_example_output_dists.sha256": "3775af672f8a2c44f08cdb16541f5296527a2a987f1a2d8b921b122173825fc8",
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.centroids.first": 0.993085503578186,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.centroids.last": 0.004515894688665867,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.centroids.mean": 0.14893336594104767,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.centroids.shape": [
+      7,
+      8
+    ],
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.centroids.std": 0.32355570793151855,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.control_points.first": -2.783996343612671,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.control_points.last": -1.3229434490203857,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.control_points.mean": -0.13212668895721436,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.control_points.shape": [
+      7,
+      1
+    ],
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.control_points.std": 2.101799964904785,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.mean.first": 0.0,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.mean.last": 0.0,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.mean.mean": 0.0,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.mean.shape": [
+      8
+    ],
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.mean.std": 0.0,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.std.first": 1.0,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.std.last": 1.0,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.std.mean": 1.0,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.std.shape": [
+      8
+    ],
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.std.std": 0.0,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.sha256": "2821189a8ee17684c4ef077698169fee47c9a58b6948121da2a8686466dc2646"
+  }
+}

@@ -32,6 +32,13 @@ class TPSPathModule(nn.Module):
             ``> 0`` adds a smoothing penalty.
     """
 
+    # Class-level annotations for register_buffer attributes; pyright
+    # cannot otherwise infer Tensor types for buffers.
+    x_knots: Tensor
+    eval_t: Tensor
+    h: Tensor
+    eval_seg_idx: Tensor
+
     def __init__(
         self,
         n_control: int,
@@ -66,7 +73,7 @@ class TPSPathModule(nn.Module):
         # Learnable control values.
         self.values = nn.Parameter(torch.zeros(n_control, k_features))
 
-    @torch.no_grad()
+    @torch.no_grad()  # pyright: ignore[reportUntypedFunctionDecorator]  # torch.no_grad stubs lose decorator type
     def initialize_from_path(self, path: Tensor) -> None:
         """Linearly interpolate a (K, k_features) init path at the control t-positions.
 
@@ -115,14 +122,14 @@ class TPSPathModule(nn.Module):
                 f"values shape {tuple(values.shape)} != "
                 f"({self.n_control}, {self.k_features})"
             )
-        gamma, y_hat = CubicSpline1D._fit_natural(
+        gamma, y_hat = CubicSpline1D._fit_natural(  # pyright: ignore[reportPrivateUsage]
             self.x_knots,
             values,
             self.h,
             self.smoothness,
         )
         idx = self.eval_seg_idx
-        return CubicSpline1D._eval_segment(
+        return CubicSpline1D._eval_segment(  # pyright: ignore[reportPrivateUsage]
             self.eval_t,
             self.x_knots[idx],
             self.x_knots[idx + 1],

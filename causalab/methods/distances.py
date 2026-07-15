@@ -21,10 +21,10 @@ import dataclasses
 import functools
 import math
 import random as _random
-from typing import Callable
+from typing import Callable, cast
 
 import numpy as np
-import ot
+import ot  # pyright: ignore[reportMissingTypeStubs]
 import torch
 from torch import Tensor
 
@@ -173,7 +173,7 @@ def wasserstein2_noncyclic(p: Tensor, q: Tensor) -> Tensor:
         q_i = q_flat[i].detach().double().numpy()
         p_i = p_i / p_i.sum()
         q_i = q_i / q_i.sum()
-        w2_sq = ot.emd2(p_i, q_i, cost_np)
+        w2_sq = float(ot.emd2(p_i, q_i, cost_np))  # pyright: ignore[reportArgumentType]  # emd2 returns scalar with default flags
         results.append(max(w2_sq, 0.0) ** 0.5)
 
     return torch.tensor(results, dtype=p.dtype).reshape(batch_shape)
@@ -222,7 +222,7 @@ def wasserstein2_cyclic(p: Tensor, q: Tensor) -> Tensor:
         q_i = q_flat[i].detach().double().numpy()
         p_i = p_i / p_i.sum()
         q_i = q_i / q_i.sum()
-        w2_sq = ot.emd2(p_i, q_i, cost_np)
+        w2_sq = float(ot.emd2(p_i, q_i, cost_np))  # pyright: ignore[reportArgumentType]  # emd2 returns scalar with default flags
         results.append(max(w2_sq, 0.0) ** 0.5)
 
     return torch.tensor(results, dtype=p.dtype).reshape(batch_shape)
@@ -345,9 +345,9 @@ def dissimilarity_from_confusion(P: Tensor, eps: float = 1e-10) -> Tensor:
         (N, N) symmetric dissimilarity matrix with zero diagonal.
     """
     # Zero diagonal and renormalize rows (conditional error distribution)
-    P = P.clone()
+    P = P.clone()  # pyright: ignore[reportConstantRedefinition]
     P.fill_diagonal_(0.0)
-    P = P / P.sum(dim=-1, keepdim=True).clamp(min=eps)
+    P = P / P.sum(dim=-1, keepdim=True).clamp(min=eps)  # pyright: ignore[reportConstantRedefinition]
     # Geometric mean symmetrization (last structural step → result is symmetric)
     S = (P * P.T).sqrt().clamp(min=eps)
     # Negative log
@@ -361,7 +361,7 @@ def compute_and_plot_mds(
     labels: list[str],
     output_dir: str,
     colormap: str = "tab10",
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> Tensor | None:
     """Run MDS on a dissimilarity matrix and save embedding + plot.
 
@@ -415,7 +415,7 @@ def compute_and_plot_mds(
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     out = path_with_figure_format(
-        os.path.join(output_dir, "mds_embedding.pdf"),
+        os.path.join(output_dir, "mds_embedding"),
         figure_format,
     )
     fig.savefig(out)
@@ -515,7 +515,7 @@ def pairwise_output_distance(
     dist_fn = _pairwise_fns[metric]
 
     n = distributions.shape[0]
-    D = torch.zeros(n, n)
+    D = torch.zeros(n, n)  # pyright: ignore[reportConstantRedefinition]
     for i in range(n):
         D[i] = dist_fn(
             distributions[i].unsqueeze(0).expand(n, -1),
@@ -1025,8 +1025,6 @@ def conformal_geodesic_basin_hopping(
 
     logger = logging.getLogger(__name__)
 
-    A = len(alphas)
-    D = p_start_W1.shape[0]
     interior_mask = (alphas > 0) & (alphas < 1)
     n_interior = interior_mask.sum().item()
 
@@ -1082,7 +1080,7 @@ def conformal_geodesic_basin_hopping(
         current_loss = eval_loss(current_logits)
     candidates: list[tuple[Tensor, float]] = [(current_logits.clone(), current_loss)]
 
-    for hop in range(n_hops):
+    for hop in range(n_hops):  # pyright: ignore[reportUnusedVariable]
         perturbation = torch.randn_like(current_logits) * step_size * init_scale
         candidate_logits = current_logits + perturbation
 
@@ -1133,6 +1131,8 @@ def conformal_geodesic_basin_hopping(
             belief_manifold=belief_manifold,
             base_metric=base_metric,
         )
+        # return_diagnostics=True so result is ConformalGeodesicResult
+        assert isinstance(result, ConformalGeodesicResult)
         final_loss = result.loss_history[-1] if result.loss_history else float("inf")
         if final_loss < best_loss:
             best_loss = final_loss
@@ -1140,6 +1140,7 @@ def conformal_geodesic_basin_hopping(
 
     logger.info("  Belief basin hopping done: best loss = %.6f", best_loss)
 
+    assert best_result is not None  # phase 2 loop ran at least once (n_cand >= 1)
     if return_diagnostics:
         return best_result
     return best_result.path
@@ -1290,7 +1291,7 @@ def conformal_geodesic_tps(
     eps = 1e-8
 
     interior_mask = (alphas > 0) & (alphas < 1)
-    n_interior = interior_mask.sum().item()
+    n_interior = int(interior_mask.sum().item())
 
     if n_interior == 0:
         result = torch.zeros(A, D, dtype=p_start_W1.dtype)
@@ -1495,9 +1496,6 @@ def _neb_project_gradients(
     Returns:
         (n_interior, D) NEB-projected gradient to replace the raw gradient.
     """
-    K = path.shape[0]
-    n_interior = K - 2  # exclude fixed endpoints
-
     # Tangent at each interior point: central difference on the probability path
     # τ_i = (p_{i+1} - p_{i-1}) / ||p_{i+1} - p_{i-1}||
     tangents = path[2:] - path[:-2]  # (n_interior, D)
@@ -1631,6 +1629,7 @@ def conformal_geodesic_neb(
 
         # NEB projection: replace raw gradient with nudged gradient
         with torch.no_grad():
+            assert logits.grad is not None  # loss.backward() just populated it
             logits.grad.copy_(
                 _neb_project_gradients(
                     logits.grad,
@@ -1717,7 +1716,10 @@ def compute_geodesic(
     **kwargs,
 ) -> Tensor:
     """Single-segment geodesic between two distributions."""
-    fn = GEODESIC_FNS[metric]
+    # GEODESIC_FNS is a heterogeneous registry — pyright unions all signatures.
+    # Each branch matches the metric to the correct function and we cast the
+    # result to Tensor (the non-diagnostic branch of conformal returns Tensor).
+    fn = cast(Callable[..., Tensor], GEODESIC_FNS[metric])
     if metric == "hellinger":
         return fn(p_start_W, p_end_W, alphas)
     if metric == "sinkhorn_cyclic":

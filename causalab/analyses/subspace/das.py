@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from safetensors.torch import save_file
 
@@ -39,7 +39,7 @@ def find_das_subspace(
     variable_values: list[str] | None = None,
     detailed_hover: bool = False,
     max_hover_chars: int = 50,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> dict[str, Any]:
     """Train a DAS subspace and collect features through it.
 
@@ -68,17 +68,24 @@ def find_das_subspace(
     """
     from causalab.methods.trained_subspace.train import train_interventions
     from causalab.methods.trained_subspace.train import save_train_results
-    from causalab.configs.train_config import merge_with_defaults
+    from causalab.configs.train_config import (
+        merge_with_defaults,
+        PartialExperimentConfig,
+    )
 
     loss_config = loss_config or {}
+    # Cast: dict literal conforms to PartialExperimentConfig TypedDict at runtime.
     das_config = merge_with_defaults(
-        {
-            "intervention_type": "interchange",
-            "DAS": {"n_features": k_features},
-            "train_batch_size": batch_size,
-            "evaluation_batch_size": batch_size,
-            **loss_config,
-        }
+        cast(
+            PartialExperimentConfig,
+            {
+                "intervention_type": "interchange",
+                "DAS": {"n_features": k_features},
+                "train_batch_size": batch_size,
+                "evaluation_batch_size": batch_size,
+                **loss_config,
+            },
+        )
     )
 
     das_dir = os.path.join(output_dir, "das") if output_dir else "das"
@@ -97,6 +104,8 @@ def find_das_subspace(
         else test_dataset
     )
 
+    if metric is None:
+        raise ValueError("`metric` is required for find_das_subspace")
     das_result = train_interventions(
         causal_model=causal_model,
         interchange_targets=target,
@@ -104,7 +113,8 @@ def find_das_subspace(
         test_dataset=test_examples,
         pipeline=pipeline,
         target_variable_group=target_variable_group,
-        config=das_config,
+        # ExperimentConfig (TypedDict) is structurally compatible with dict[str, Any]
+        config=cast(dict[str, Any], das_config),
         metric=metric,
     )
     save_train_results(das_result, das_dir)
@@ -115,11 +125,18 @@ def find_das_subspace(
 
     # Collect features through the learned featurizer
     unit = target.flatten()[0]
-    features_dict = collect_features(
-        dataset=train_examples,
-        pipeline=pipeline,
-        model_units=[unit],
-        batch_size=batch_size,
+    # collect_output_logits=False (default) returns dict[str, Tensor];
+    # cast tells pyright we're in that branch of the union.
+    from torch import Tensor as _Tensor
+
+    features_dict = cast(
+        dict[str, _Tensor],
+        collect_features(
+            dataset=train_examples,
+            pipeline=pipeline,
+            model_units=[unit],
+            batch_size=batch_size,
+        ),
     )
     features = features_dict[unit.id].detach()
     logger.info("Collected %d-dim features: %s", k_features, features.shape)

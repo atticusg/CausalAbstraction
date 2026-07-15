@@ -20,7 +20,7 @@ import torch
 from torch import Tensor
 
 from causalab.methods.metric import (
-    _normalize_var_indices,
+    _normalize_var_indices,  # pyright: ignore[reportPrivateUsage]
     class_probabilities,
     scores_to_joint_probs as _scores_to_joint_probs,
 )
@@ -245,17 +245,20 @@ def collect_grid_distributions(
             **_kwargs,
         ) -> torch.Tensor:
             target = target.to(f_base.device)
-            B, k_full = f_base.shape[0], f_base.shape[-1]
+            k_full = f_base.shape[-1]
             k_t = target.shape[-1]
+            # Feature interventions set keep_last_dim=True, so featurized tensors
+            # arrive as (batch[, num_pos], k) — index/concat on the LAST dim and
+            # broadcast the target across all leading dims, never a fixed dim 1.
+            opt = target.expand(*f_base.shape[:-1], k_t)
             if k_t < k_full:
                 # Partial-dim target: hold dropped dims at each sample's base values.
-                opt = target.unsqueeze(0).expand(B, -1)
-                return torch.cat([opt, f_base[:, k_t:]], dim=-1)
-            return target.unsqueeze(0).expand(B, -1)
+                return torch.cat([opt, f_base[..., k_t:]], dim=-1)
+            return opt
 
         results = run_interpolation_interventions(
             pipeline=pipeline,
-            counterfactual_dataset=dummy_cf,
+            counterfactual_dataset=dummy_cf,  # pyright: ignore[reportArgumentType]  # constructed dicts conform to CounterfactualExample TypedDict at runtime
             interchange_target=interchange_target,
             fn=replace_fn,
             params={},

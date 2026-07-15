@@ -1,0 +1,37 @@
+# =============================================================================
+# Chat-template *instruct* model used by the chat-mode numerical-tier golden.
+# =============================================================================
+#
+# Wraps `Qwen/Qwen3-4B-Instruct-2507` (the non-thinking instruct variant). The
+# golden contract scores the raw completion prompt at `max_new_tokens=1`, which
+# suits a *base* model but not an instruct model: fed a raw `Q:…\nA:` prompt,
+# 4B-Instruct opens with verbose restatement (` To…`), so it scores ~0.05 even
+# though it solves the task. Two knobs fix that:
+#
+#   * `chat_template: true` — wrap every prompt in the model's chat format (what
+#     the model was post-trained on). Read by `cfg.model.get("chat_template")`
+#     at every `load_pipeline` call site and threaded to `LMPipeline`.
+#   * `chat_answer_directive` — emitted as a system message so the model replies
+#     with only the bare answer; that bare answer then lands as the first token
+#     and the existing 1-token exact-match scorer credits it. Measured on
+#     `natural_domains_arithmetic_weekdays`: 0.980 (clears the 0.9 golden floor;
+#     the single miss is a genuine arithmetic error), vs 0/49 in chat mode with
+#     no directive (the model restates first). The wording is load-bearing: a
+#     bare "reply with only the final answer" scores only ~0.73 because the model
+#     reads "final answer" as the *number* in the question ("Six", "Four", …) —
+#     "final answer word" + "do not restate the question" disambiguates to the
+#     bare result token while staying task-agnostic (no mention of weekdays).
+#
+# `device: auto` follows the Phase 2 hardware contract (CUDA when available,
+# CPU otherwise). On GPU, golden bootstrap pins `deterministic: false`
+# automatically. This is a *test fixture* (only e2e tests compose it), which is
+# why it lives under `tests/end_to_end/configs/model/` and takes precedence over
+# the production model group via the e2e Hydra search path.
+id: chat-coherent
+name: Qwen/Qwen3-4B-Instruct-2507
+device: auto
+dtype: bfloat16
+chat_template: true
+chat_answer_directive: "Reply with only the final answer word and nothing else. Do not restate the question."
+slurm:
+  gpus: 1

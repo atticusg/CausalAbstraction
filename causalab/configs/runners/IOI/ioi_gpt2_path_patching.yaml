@@ -1,0 +1,26 @@
+# @package _global_
+# Path-patching direct-effect head sweep: IOI on GPT-2 small (paper-faithful).
+# Reproduces the IOI Fig. 3 / pyvene-tutorial readout — the direct effect of each
+# attention head on the IO-vs-S logit difference. Receiver = output (one forward
+# per cell). ABC corruption + restore=[attention] (MLPs/LayerNorm recompute)
+# match Wang et al. (2022) §3.1. Expect name-mover heads (9.6, 9.9, 10.0) to top
+# the heatmap and negative name-movers (10.7, 11.10) to be negative.
+defaults:
+- /base
+- /task: IOI
+- /model: gpt2
+- /analysis/path_patching
+- _self_
+
+task:
+  n_test: 64
+
+path_patching:
+  layers: null            # all 12 layers
+  heads: null             # all 12 heads
+  restore: [attention]    # paper §3.1 direct effect (MLPs recompute)
+  corruption: abc         # all three names -> distinct randoms (paper §3.1)
+  correct_variable: IO
+  distractor_variable: name_C
+  relative_to_base: true
+  batch_size: 16

@@ -1,0 +1,153 @@
+{
+  "deterministic": false,
+  "model": "chat-coherent",
+  "runner": "golden/weekdays_subspace",
+  "seed": 0,
+  "tolerance": {
+    "default": 1e-05
+  },
+  "values": {
+    "accuracy.accuracy": 0.9795918367346939,
+    "accuracy.correct": 48,
+    "accuracy.prob_accuracy": 0.9645608082005032,
+    "accuracy.total": 49,
+    "baseline.per_class_output_dists.dists.first": 9.576580850989558e-06,
+    "baseline.per_class_output_dists.dists.last": 5.058555416326271e-06,
+    "baseline.per_class_output_dists.dists.mean": 1.1684427363434224e-06,
+    "baseline.per_class_output_dists.dists.shape": [
+      7,
+      7
+    ],
+    "baseline.per_class_output_dists.dists.std": 3.85579278372461e-06,
+    "baseline.per_class_output_dists.sha256": "486a6b7c83bab03e95236954c82e717fbec5714859a07a0a78cb63507fcc5df4",
+    "full_output_dists.first": 5.6756337097566695e-14,
+    "full_output_dists.last": 4.809836059133529e-18,
+    "full_output_dists.mean": 6.581718480447307e-06,
+    "full_output_dists.sha256": "f6839b49f1aeef4b0960acc6c6b1b4ede9a5698cf0effef06d33bb67990e5b22",
+    "full_output_dists.shape": [
+      49,
+      151936
+    ],
+    "full_output_dists.std": 0.0025372866075485945,
+    "locate.interchange.result.results.base_accuracy": 0.9795918367346939,
+    "locate.interchange.result.results.scores_per_cell.0|entity": 11.149213240818769,
+    "locate.interchange.result.results.scores_per_cell.0|last_token": 0.00019428204737664256,
+    "locate.interchange.result.results.scores_per_cell.0|number": 10.884236995054751,
+    "locate.interchange.result.results.scores_per_cell.1|entity": 11.153087878841568,
+    "locate.interchange.result.results.scores_per_cell.1|last_token": 0.00021478349045486237,
+    "locate.interchange.result.results.scores_per_cell.1|number": 10.917826122395239,
+    "locate.interchange.result.results.scores_per_layer.0": 11.149213240818769,
+    "locate.interchange.result.results.scores_per_layer.1": 11.153087878841568,
+    "locate.interchange.results.base_accuracy": 0.9795918367346939,
+    "locate.interchange.results.scores_per_cell.0|entity": 11.149213240818769,
+    "locate.interchange.results.scores_per_cell.0|last_token": 0.00019428204737664256,
+    "locate.interchange.results.scores_per_cell.0|number": 10.884236995054751,
+    "locate.interchange.results.scores_per_cell.1|entity": 11.153087878841568,
+    "locate.interchange.results.scores_per_cell.1|last_token": 0.00021478349045486237,
+    "locate.interchange.results.scores_per_cell.1|number": 10.917826122395239,
+    "locate.interchange.results.scores_per_layer.0": 11.149213240818769,
+    "locate.interchange.results.scores_per_layer.1": 11.153087878841568,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/featurizer_state_dict/rotate.parametrizations.weight.0.base.first": -0.0014306306838989258,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/featurizer_state_dict/rotate.parametrizations.weight.0.base.last": 0.023177053779363632,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/featurizer_state_dict/rotate.parametrizations.weight.0.base.mean": -4.117239313927712e-06,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/featurizer_state_dict/rotate.parametrizations.weight.0.base.shape": [
+      2560,
+      2560
+    ],
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/featurizer_state_dict/rotate.parametrizations.weight.0.base.std": 0.019764237105846405,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/featurizer_state_dict/rotate.parametrizations.weight.original.first": -1.0,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/featurizer_state_dict/rotate.parametrizations.weight.original.last": -0.0006584484945051372,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/featurizer_state_dict/rotate.parametrizations.weight.original.mean": -0.00035494487383402884,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/featurizer_state_dict/rotate.parametrizations.weight.original.shape": [
+      2560,
+      8
+    ],
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/featurizer_state_dict/rotate.parametrizations.weight.original.std": 0.02123192697763443,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/inverse_state_dict/rotate.parametrizations.weight.0.base.first": -0.0014306306838989258,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/inverse_state_dict/rotate.parametrizations.weight.0.base.last": 0.023177053779363632,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/inverse_state_dict/rotate.parametrizations.weight.0.base.mean": -4.117239313927712e-06,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/inverse_state_dict/rotate.parametrizations.weight.0.base.shape": [
+      2560,
+      2560
+    ],
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/inverse_state_dict/rotate.parametrizations.weight.0.base.std": 0.019764237105846405,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/inverse_state_dict/rotate.parametrizations.weight.original.first": -1.0,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/inverse_state_dict/rotate.parametrizations.weight.original.last": -0.0006584484945051372,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/inverse_state_dict/rotate.parametrizations.weight.original.mean": -0.00035494487383402884,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/inverse_state_dict/rotate.parametrizations.weight.original.shape": [
+      2560,
+      8
+    ],
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/inverse_state_dict/rotate.parametrizations.weight.original.std": 0.02123192697763443,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/model_info/additional_config/rotation_matrix.first": -0.1796082705259323,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/model_info/additional_config/rotation_matrix.last": 0.016517234966158867,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/model_info/additional_config/rotation_matrix.mean": 0.00014659427688457072,
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/model_info/additional_config/rotation_matrix.shape": [
+      2560,
+      8
+    ],
+    "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/model_info/additional_config/rotation_matrix.std": 0.01976417563855648,
+    "subspace.das_k8.das.result.das.models.single.featurizers.sha256": "c8199a4fad46828f04cd57f1295fcb85ad3a8533d01841f1ac28c28125bdc3c5",
+    "subspace.das_k8.das.result.das.test_eval.raw_results.sequences.first": 40199.0,
+    "subspace.das_k8.das.result.das.test_eval.raw_results.sequences.last": 34620.0,
+    "subspace.das_k8.das.result.das.test_eval.raw_results.sequences.mean": 36842.51171875,
+    "subspace.das_k8.das.result.das.test_eval.raw_results.sequences.shape": [
+      49,
+      1
+    ],
+    "subspace.das_k8.das.result.das.test_eval.raw_results.sequences.std": 2546.05224609375,
+    "subspace.das_k8.das.result.das.test_eval.raw_results.sha256": "bee4b97847ae42df67e68747e1895a0212e7a738c732f6cfd718f14f65cff1ac",
+    "subspace.das_k8.das.result.das.train_eval.raw_results.sequences.first": 40199.0,
+    "subspace.das_k8.das.result.das.train_eval.raw_results.sequences.last": 34620.0,
+    "subspace.das_k8.das.result.das.train_eval.raw_results.sequences.mean": 36842.51171875,
+    "subspace.das_k8.das.result.das.train_eval.raw_results.sequences.shape": [
+      49,
+      1
+    ],
+    "subspace.das_k8.das.result.das.train_eval.raw_results.sequences.std": 2546.05224609375,
+    "subspace.das_k8.das.result.das.train_eval.raw_results.sha256": "bee4b97847ae42df67e68747e1895a0212e7a738c732f6cfd718f14f65cff1ac",
+    "subspace.das_k8.das.result.features.training_features.features.first": 0.3642738461494446,
+    "subspace.das_k8.das.result.features.training_features.features.last": -0.7372652888298035,
+    "subspace.das_k8.das.result.features.training_features.features.mean": -0.2615884244441986,
+    "subspace.das_k8.das.result.features.training_features.features.shape": [
+      49,
+      8
+    ],
+    "subspace.das_k8.das.result.features.training_features.features.std": 0.8098025321960449,
+    "subspace.das_k8.das.result.features.training_features.sha256": "923cd44ac2d8008550e8b9c2f94d3b4f47bce1d5e923870a562f7ef138bc15a0",
+    "subspace.pca_k8.pca.result.features.raw_features.features.first": 4.40625,
+    "subspace.pca_k8.pca.result.features.raw_features.features.last": -0.044189453125,
+    "subspace.pca_k8.pca.result.features.raw_features.features.mean": 0.0028900427278131247,
+    "subspace.pca_k8.pca.result.features.raw_features.features.shape": [
+      49,
+      2560
+    ],
+    "subspace.pca_k8.pca.result.features.raw_features.features.std": 0.17000284790992737,
+    "subspace.pca_k8.pca.result.features.raw_features.sha256": "cd5c16cd74805ea69b724009f9f4c6ce68b72bee3cf08a4f5780455ef1ab8897",
+    "subspace.pca_k8.pca.result.features.training_features.features.first": -2.367493152618408,
+    "subspace.pca_k8.pca.result.features.training_features.features.last": -0.2097955346107483,
+    "subspace.pca_k8.pca.result.features.training_features.features.mean": 0.12688088417053223,
+    "subspace.pca_k8.pca.result.features.training_features.features.shape": [
+      49,
+      8
+    ],
+    "subspace.pca_k8.pca.result.features.training_features.features.std": 1.720253348350525,
+    "subspace.pca_k8.pca.result.features.training_features.sha256": "e569adc2f70b4552922b97ddfdc068d3f65534c288369dcbfe9a72e182d47267",
+    "subspace.pca_k8.pca.result.rotation.explained_variance_ratio.first": 0.25480180978775024,
+    "subspace.pca_k8.pca.result.rotation.explained_variance_ratio.last": 0.03275902569293976,
+    "subspace.pca_k8.pca.result.rotation.explained_variance_ratio.mean": 0.09640151262283325,
+    "subspace.pca_k8.pca.result.rotation.explained_variance_ratio.shape": [
+      8
+    ],
+    "subspace.pca_k8.pca.result.rotation.explained_variance_ratio.std": 0.0759996697306633,
+    "subspace.pca_k8.pca.result.rotation.rotation_matrix.first": 0.14393918216228485,
+    "subspace.pca_k8.pca.result.rotation.rotation_matrix.last": 0.01662551611661911,
+    "subspace.pca_k8.pca.result.rotation.rotation_matrix.mean": 0.00031992472941055894,
+    "subspace.pca_k8.pca.result.rotation.rotation_matrix.shape": [
+      2560,
+      8
+    ],
+    "subspace.pca_k8.pca.result.rotation.rotation_matrix.std": 0.019762128591537476,
+    "subspace.pca_k8.pca.result.rotation.sha256": "30ed3c14eb70c2090bf5ed5a0ec5a1f6a5b98d52afef98384a17ecbfecdb4c87"
+  }
+}

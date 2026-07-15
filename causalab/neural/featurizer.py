@@ -181,6 +181,26 @@ class Featurizer:
             )
         return self._interpolation_intervention
 
+    def get_noise_intervention(self, seed: int = 0) -> type[pv.TrainableIntervention]:
+        """Get intervention class for additive Gaussian noise in this feature space.
+
+        Corruption intervention (ROME-style causal tracing): adds seeded
+        Gaussian noise, scaled by the per-call ``source`` value, to the
+        featurized base activation. The ``seed`` is captured at build time so a
+        given site produces reproducible noise across runs; pass distinct seeds
+        for independent draws.
+        """
+        cache_attr = f"_noise_intervention_seed{seed}"
+        if not hasattr(self, cache_attr):
+            setattr(
+                self,
+                cache_attr,
+                build_feature_noise_intervention(
+                    self.featurizer, self.inverse_featurizer, self.id, seed
+                ),
+            )
+        return getattr(self, cache_attr)
+
     # ------------------------- Convenience I/O --------------------------- #
     def is_trivial(self) -> bool:
         """Return True if this is an identity featurizer with no learned weights.
@@ -468,7 +488,13 @@ def build_feature_interchange_intervention(
         """Swap features between *base* and *source* in the featurized space."""
 
         def __init__(self, **kwargs):
-            super().__init__(**kwargs)
+            # keep_last_dim=True stops pyvene's do_intervention from folding a
+            # multi-token span into the feature dim (`(b, num_pos, d)` ->
+            # `(b, num_pos*d)`). With it set, the featurizer sees `(b, num_pos,
+            # d)` and its d-sized weights broadcast across the span — a
+            # per-position application. Numerically identical for single-token
+            # spans (an extra size-1 axis the swap/scatter tolerate).
+            super().__init__(**kwargs, keep_last_dim=True)
             self._featurizer = featurizer
             self._inverse = inverse_featurizer
 
@@ -479,7 +505,9 @@ def build_feature_interchange_intervention(
             if subspaces is None or _subspace_is_all_none(subspaces):
                 f_out = f_src
             else:
-                f_out = pv.models.intervention_utils._do_intervention_by_swap(
+                # pv.models is an internal pyvene path; the public type stubs
+                # don't surface the submodule but it is available at runtime.
+                f_out = pv.models.intervention_utils._do_intervention_by_swap(  # pyright: ignore[reportAttributeAccessIssue]
                     f_base,
                     f_src,
                     "interchange",
@@ -521,7 +549,9 @@ def build_feature_interpolation_intervention(
         """Patch an interpolation of base and source features into the model."""
 
         def __init__(self, **kwargs: Any) -> None:
-            super().__init__(**kwargs)
+            # See FeatureInterchangeIntervention: per-position broadcast over a
+            # multi-token span; identical for single-token spans.
+            super().__init__(**kwargs, keep_last_dim=True)
             self._featurizer = featurizer
             self._inverse_featurizer = inverse_featurizer
             self._interpolation_function = None
@@ -558,12 +588,19 @@ def build_feature_collect_intervention(
 
     class FeatureCollectIntervention(pv.CollectIntervention):
         def __init__(self, **kwargs):
-            super().__init__(**kwargs)
+            # See FeatureInterchangeIntervention: keeps the position axis so
+            # collection over a multi-token span reads per-position d-features
+            # instead of a folded num_pos*d vector.
+            super().__init__(**kwargs, keep_last_dim=True)
             self._featurizer = featurizer
 
-        def forward(self, base, source=None, subspaces=None):
+        # CollectIntervention.forward in pyvene takes (base, source, subspaces);
+        # we add **kwargs implicitly via the same signature. Override-incompatibility
+        # is a stub-mismatch only.
+        def forward(self, base, source=None, subspaces=None):  # pyright: ignore[reportIncompatibleMethodOverride]
             f_base, _ = self._featurizer(base)
-            return pv.models.intervention_utils._do_intervention_by_swap(
+            # pv.models is internal but importable at runtime; stubs hide it.
+            return pv.models.intervention_utils._do_intervention_by_swap(  # pyright: ignore[reportAttributeAccessIssue]
                 f_base,
                 source,
                 "collect",
@@ -573,7 +610,8 @@ def build_feature_collect_intervention(
                 use_fast=self.use_fast,
             )
 
-        def __str__(self):
+        # __str__ override returns a str (f-string), base returns LiteralString.
+        def __str__(self) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
             return f"FeatureCollectIntervention(id={featurizer_id})"
 
     return FeatureCollectIntervention
@@ -611,7 +649,9 @@ def build_feature_steering_intervention(
         """Add steering vectors to base activations in the featurized space."""
 
         def __init__(self, **kwargs):
-            super().__init__(**kwargs)
+            # See FeatureInterchangeIntervention: per-position broadcast over a
+            # multi-token span; identical for single-token spans.
+            super().__init__(**kwargs, keep_last_dim=True)
             self._featurizer = featurizer
             self._inverse = inverse_featurizer
 
@@ -632,6 +672,117 @@ def build_feature_steering_intervention(
             return f"FeatureSteeringIntervention(id={featurizer_id})"
 
     return FeatureSteeringIntervention
+
+
+def build_feature_noise_intervention(
+    featurizer: torch.nn.Module,
+    inverse_featurizer: torch.nn.Module,
+    featurizer_id: str,
+    seed: int = 0,
+) -> type[pv.TrainableIntervention]:
+    """Return a class implementing additive Gaussian-noise corruption in feature space.
+
+    This is the corruption entry point of ROME-style causal tracing: it
+    perturbs an activation toward noise rather than toward another run's value.
+
+    The intervention:
+    1. Featurizes base activation to get (base_features, base_error)
+    2. Draws seeded Gaussian noise shaped like base_features and scales it by
+       the per-call ``source`` value: noised = base_features + source * noise
+    3. Reconstructs via inverse_featurizer(noised, base_error)
+
+    Args:
+        featurizer: Module mapping activation -> (features, error)
+        inverse_featurizer: Module mapping (features, error) -> activation
+        featurizer_id: Human-readable identifier
+        seed: Base RNG seed. Each intervention *instance* owns a generator seeded
+            with this value at construction; successive ``forward`` calls draw
+            from the *continuing* stream rather than re-seeding, so consecutive
+            batches receive independent (i.i.d.) noise instead of an identical
+            repeat. A fresh instance with the same seed reproduces the same
+            sequence — so corruption is reproducible across runs and *identical*
+            across grid cells (each rebuilds the intervention), while remaining
+            independent across examples within a sweep. Pass distinct seeds for
+            independent draws.
+
+    Returns:
+        A pyvene intervention class
+
+    Note:
+        ``source`` carries the noise *scale* (a scalar or a tensor broadcastable
+        to the feature shape — e.g. a per-dimension standard deviation such as
+        ROME's ``3 * sigma``), supplied via ``source_representations`` exactly as
+        steering supplies its vector. The randomness itself is generated inside
+        the intervention, so callers pass a magnitude, not a pre-shaped noise
+        tensor. Steering with a pre-computed random vector is the alternative;
+        this op exists so the common "noise an activation by N sigma" case needs
+        no shape bookkeeping and stays reproducible.
+    """
+
+    class FeatureNoiseIntervention(
+        pv.TrainableIntervention, pv.DistributedRepresentationIntervention
+    ):
+        """Add seeded Gaussian noise to base activations in the featurized space."""
+
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self._featurizer = featurizer
+            self._inverse = inverse_featurizer
+            self._seed = seed
+            # One generator per device, seeded once and then advanced across
+            # forward calls so successive batches draw independent noise (a fixed
+            # re-seed every call would hand identical-shape batches the SAME
+            # noise — corruption would repeat across batch boundaries and depend
+            # on batch_size).
+            self._generators: dict[str, torch.Generator] = {}
+
+        def _generator(self, device: torch.device) -> torch.Generator:
+            key = str(device)
+            gen = self._generators.get(key)
+            if gen is None:
+                gen = torch.Generator(device=device).manual_seed(self._seed)
+                self._generators[key] = gen
+            return gen
+
+        def reset_noise_rng(self) -> None:
+            """Drop the cached generators so the next ``forward`` re-seeds from
+            ``_seed``. Used when one intervention instance is reused across
+            independent groups of examples (e.g. the length buckets of a single
+            causal-trace cell) to restart the noise stream at each boundary —
+            reproducing the per-group-rebuild behaviour without rebuilding the
+            pyvene model."""
+            self._generators.clear()
+
+        def forward(
+            self, base: torch.Tensor, source: torch.Tensor, subspaces: Any = None
+        ):
+            # source is the noise scale (std), already in feature space.
+            noise_scale = source
+
+            # Featurize base to get features and error term
+            base_features, base_error = self._featurizer(base)
+
+            # Seeded Gaussian noise matching the feature shape/device/dtype. The
+            # per-instance generator advances across calls (see __init__).
+            noise = torch.randn(
+                base_features.shape,
+                generator=self._generator(base_features.device),
+                device=base_features.device,
+                dtype=base_features.dtype,
+            )
+
+            # Add scaled noise to base features
+            noised_features = (
+                base_features + noise_scale.to(base_features.dtype) * noise
+            )
+
+            # Reconstruct, preserving orthogonal component
+            return self._inverse(noised_features, base_error).to(base.dtype)
+
+        def __str__(self):
+            return f"FeatureNoiseIntervention(id={featurizer_id}, seed={seed})"
+
+    return FeatureNoiseIntervention
 
 
 def build_feature_replace_intervention(
@@ -669,7 +820,9 @@ def build_feature_replace_intervention(
         """Replace base features with source vector in the featurized space."""
 
         def __init__(self, **kwargs: Any) -> None:
-            super().__init__(**kwargs)
+            # See FeatureInterchangeIntervention: per-position broadcast over a
+            # multi-token span; identical for single-token spans.
+            super().__init__(**kwargs, keep_last_dim=True)
             self._featurizer = featurizer
             self._inverse = inverse_featurizer
 
@@ -715,7 +868,10 @@ def build_feature_mask_intervention(
         """Differential-binary masking in the featurized space."""
 
         def __init__(self, **kwargs: Any) -> None:
-            super().__init__(**kwargs)
+            # See FeatureInterchangeIntervention: keeps the position axis so the
+            # d-sized mask broadcasts across a multi-token span (per-position
+            # gating); identical for single-token spans.
+            super().__init__(**kwargs, keep_last_dim=True)
             self._featurizer = featurizer
             self._inverse = inverse_featurizer
             self._tie_masks = tie_masks

@@ -112,10 +112,30 @@ def create_causal_model(config: GraphWalkConfig) -> CausalModel:
             key = "node_coordinates" if n_dims == 1 else f"node_coordinates_{dim}"
             periods[key] = period
 
+    # The model predicts the next node's *concept* string, not its coordinate.
+    # Declare that mapping as a plain ``{coordinate: [concept]}`` map (#296):
+    # node ``i``'s coordinate tuple → its concept. This replaces the former
+    # ``id()``-keyed result_token_pattern whose object-identity lookup broke when
+    # a coordinate tuple was reconstructed (the #258 graph_walk regression). The
+    # probability path reads the concept forms; the derived (exact) checker
+    # matches the generated concept literally.
+    output_tokens = {
+        "node_coordinates": {
+            node_coordinates[i]: [concepts[i]] for i in range(graph.n_nodes)
+        }
+    }
+
     model = CausalModel(
-        mechanisms, values, id=TASK_NAME, embeddings=EMBEDDINGS, periods=periods
+        mechanisms,
+        values,
+        id=TASK_NAME,
+        embeddings=EMBEDDINGS,
+        periods=periods,
+        output_tokens=output_tokens,
     )
-    model._graph = graph  # Store for coordinate_names access
+    # Store for coordinate_names access; CausalModel doesn't declare _graph,
+    # but the attribute is set dynamically here and read by downstream code.
+    model._graph = graph  # pyright: ignore[reportAttributeAccessIssue]
     return model
 
 
@@ -156,37 +176,6 @@ def GET_PERIODIC_INFO(model: CausalModel) -> dict[str, float] | None:
         key = "node_coordinates" if n_dims == 1 else f"node_coordinates_{dim}"
         periodic_info[key] = period
     return periodic_info
-
-
-def GET_RESULT_TOKEN_PATTERN(model: CausalModel):
-    """Build a result_token_pattern that maps coordinate tuples to concept tokens.
-
-    The model predicts concept strings (e.g. "time", "lot"), not coordinate values.
-    Uses index-based lookup (coordinates and concepts are aligned by node index)
-    to avoid fragile float-tuple dictionary keys.
-    """
-    coords = model.values["node_coordinates"]
-    concepts = model.values["concepts"]
-    # Build index: coords[i] -> concepts[i]. Use the id() of the original
-    # tuple objects for O(1) lookup, with a float-based fallback.
-    _id_map = {id(c): concepts[i] for i, c in enumerate(coords)}
-    _idx_map = {i: concepts[i] for i in range(len(coords))}
-
-    def _pattern(v):
-        # Fast path: same object from variable_values list
-        concept = _id_map.get(id(v))
-        if concept is None:
-            # Fallback: linear scan (handles reconstructed tuples)
-            key = v if not isinstance(v, (list, tuple)) else tuple(v)
-            for i, c in enumerate(coords):
-                if tuple(c) == key:
-                    concept = _idx_map[i]
-                    break
-            else:
-                raise KeyError(f"Coordinate {v} not found in graph nodes")
-        return [concept]
-
-    return _pattern
 
 
 def SCORE_TOKEN_IDS_FROM_MODEL(pipeline, concepts: list[str]) -> list[int]:

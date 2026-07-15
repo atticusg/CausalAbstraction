@@ -1,0 +1,48 @@
+# @package _global_
+# Smoke-tier causal-sufficiency (ROME-style causal tracing) runner —
+# attention-head restore, zero corruption of the subject span, softmax
+# P(answer) recovery metric.
+#
+# The companion to ioi_causal_sufficiency_residual.yaml: exercises the OTHER
+# heatmap branch (plot_attention_head_heatmap) and the (layer x head) grid path,
+# plus the `zero` (replace-broadcast) corruption entry. Same task choice and
+# rationale as the residual twin: natural_domains_arithmetic (alphabet), whose
+# single-letter answers are single-token under the tiny-random tokenizer (the
+# causal-sufficiency metric reads one answer-token logit per example, which
+# IOI's randomly-sampled, partly-multi-token name pool can't satisfy on
+# tiny-random). tiny-random + existence-only asserts (see docs/TESTS.md
+# "Smoke vs golden split").
+defaults:
+- /base
+- /task: natural_domains_arithmetic_alphabet
+- /model: tiny-random
+- /analysis/causal_sufficiency
+- _self_
+
+task:
+  target_variable: result
+  n_train: 2
+  n_test: 2
+  enumerate_all: false
+
+causal_sufficiency:
+  corruption:
+    kind: zero             # broadcast replace-vector entry corruption
+    layer: -1              # embedding / block-0 input entry site
+    span: [entity]         # the subject letter
+  restore:
+    component_type: attention_head
+    layers: [0, 1]
+    heads: [0, 1]
+    span: [last_token]     # single-token readout position
+    window: 1
+  metric:
+    kind: prob             # softmax P(answer) (ROME)
+    answer_variable: result
+  normalize: recovery
+  batch_size: 2
+
+expected_artifacts:
+- causal_sufficiency/attention_head_zero_last_token/metadata.json
+- causal_sufficiency/attention_head_zero_last_token/results.json
+- causal_sufficiency/attention_head_zero_last_token/heatmap.png

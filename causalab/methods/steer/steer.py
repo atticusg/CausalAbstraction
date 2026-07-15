@@ -117,16 +117,23 @@ def prepare_steering_inputs(
             - tokenized_base: Output of pipeline.load()
             - base_indices: Shape (num_model_units, batch_size, num_component_indices)
     """
-    batched_base = batch["input"]
+    raw_base = batch["input"]
+
+    # Load first so the padded `attention_mask` is available for shifting
+    # unpadded position indices into the padded-batch frame.
+    batched_base = pipeline.load(raw_base)
 
     # shape: (num_model_units, batch_size, num_component_indices)
     base_indices = [
-        model_unit.index_component(batched_base, batch=True, is_original=True)
+        model_unit.index_component(
+            raw_base,
+            batch=True,
+            is_original=True,
+            attention_mask=batched_base["attention_mask"],
+        )
         for group in interchange_target
         for model_unit in group
     ]
-
-    batched_base = pipeline.load(batched_base)
 
     return batched_base, base_indices
 
@@ -195,12 +202,40 @@ def validate_steering_vectors(
             )
 
 
+def _resolve_n_pos_per_unit(
+    interchange_target: InterchangeTarget,
+    base_indices: list[Any],
+) -> dict[str, int]:
+    """Map each flattened unit id -> number of token positions gathered this batch.
+
+    ``base_indices[i]`` aligns with ``interchange_target.flatten()[i]`` (both are
+    built in ``flatten()`` order). Its structure depends on the unit type:
+
+    - ``"pos"`` units (``ResidualStream``, ``MLP``): a list-of-rows
+      ``[[positions ex0], [positions ex1], ...]`` of shape ``(batch, n_pos)``.
+    - ``"h.pos"`` units (``AttentionHead``): ``[head_axis, position_axis]`` where
+      ``position_axis`` is the same list-of-rows shape. Reading ``len(idx[0])``
+      here would (wrongly) return the head-axis length — the position axis is
+      ``idx[1]``.
+
+    Within a batch the position count is constant (the caller length-buckets
+    all-position spans so the pyvene gather stays rectangular), so the first row
+    is representative.
+    """
+    n_pos_per_unit: dict[str, int] = {}
+    for unit, idx in zip(interchange_target.flatten(), base_indices):
+        position_axis = idx[1] if unit.unit == "h.pos" else idx
+        n_pos_per_unit[unit.id] = len(position_axis[0])
+    return n_pos_per_unit
+
+
 def get_batch_steering_vectors(
     steering_vectors: dict[str, Tensor],
     interchange_target: InterchangeTarget,
     batch_start: int,
     batch_size: int,
     device: torch.device | dict[str, torch.device],
+    n_pos_per_unit: dict[str, int] | None = None,
 ) -> list[Tensor]:
     """
     Extract steering vectors for a batch, handling broadcast vs per-example modes.
@@ -212,11 +247,23 @@ def get_batch_steering_vectors(
         batch_size: Size of current batch
         device: Either a single device (single-GPU model) or a per-unit
             mapping ``unit_id -> device`` for models sharded via ``device_map``.
+        n_pos_per_unit: Optional per-unit token-position count for this batch (see
+            :func:`_resolve_n_pos_per_unit`). When ``None`` (the legacy call path),
+            every unit is treated as a single-position ``pos`` unit and the source
+            is shaped ``(batch_size, 1, n_features)`` byte-for-byte as before. When
+            provided, the source is shaped to match the tensor pyvene gathers for
+            the unit, which is what enables attention-head and multi-position spans.
 
     Returns:
         List of steering tensors for this batch, one per unit in flatten() order.
-        Each tensor has shape (batch_size, 1, n_features) — the middle dimension
-        is the position axis that pyvene expects (each unit targets one position).
+        The source must match the *gathered* base shape that pyvene's
+        ``do_intervention`` dispatches on (transformers are stateless, so the
+        provided source is used unchanged):
+
+        - ``"pos"`` units  -> ``(batch_size, n_pos, n_features)`` — ``do_intervention``
+          flattens this 3-D tensor via ``bsd_to_b_sd``.
+        - ``"h.pos"`` units -> ``(batch_size, 1, n_pos, head_dim)`` — the 4-D shape
+          ``(b, h, s, d)`` that ``bhsd_to_bs_hd`` unpacks (one head per unit).
     """
     batch_vectors = []
     for unit in interchange_target.flatten():
@@ -229,10 +276,24 @@ def get_batch_steering_vectors(
             # Per-example mode: slice to (batch_size, n_features)
             batch_vec = vec[batch_start : batch_start + batch_size]
 
-        # Add sequence dimension for pyvene (expects batch, seq, features)
-        batch_vec = batch_vec.unsqueeze(1)  # (batch_size, 1, n_features)
         target_device = device[unit.id] if isinstance(device, dict) else device
-        batch_vectors.append(batch_vec.to(target_device))
+        batch_vec = batch_vec.to(target_device)  # (batch_size, n_features)
+
+        if n_pos_per_unit is None:
+            # Legacy single-position `pos` path, preserved byte-for-byte.
+            shaped = batch_vec.unsqueeze(1)  # (batch_size, 1, n_features)
+        else:
+            n_pos = n_pos_per_unit[unit.id]
+            if unit.unit == "h.pos":
+                # pyvene gathers (b, h, s, d) for head units; one head per unit.
+                shaped = (
+                    batch_vec.unsqueeze(1).unsqueeze(1).expand(batch_size, 1, n_pos, -1)
+                )
+            else:
+                # pos units: (b, n_pos, d). n_pos == 1 reproduces the legacy shape.
+                shaped = batch_vec.unsqueeze(1).expand(batch_size, n_pos, -1)
+
+        batch_vectors.append(shaped)
 
     return batch_vectors
 
@@ -242,28 +303,47 @@ def batched_steering_intervention(
     intervenable_model: pv.IntervenableModel,
     batch: dict[str, Any],
     interchange_target: InterchangeTarget,
-    steering_vectors_batch: list[Tensor],
+    steering_vectors: dict[str, Tensor],
+    batch_start: int,
+    batch_size: int,
+    unit_devices: torch.device | dict[str, torch.device],
     output_scores: bool | int = True,
 ) -> dict[str, Any]:
     """
     Perform steering intervention on a single batch.
+
+    The per-batch source vectors are built here rather than by the caller because
+    their shape depends on ``base_indices`` (how many positions pyvene gathers per
+    unit), which is only known once the batch has been tokenized.
 
     Args:
         pipeline: Pipeline containing the model
         intervenable_model: Pyvene model configured for steering interventions
         batch: Batch dict with "input" key
         interchange_target: Intervention target specification
-        steering_vectors_batch: List of steering tensors for this batch,
-            one per unit in interchange_target.flatten() order.
-            Each tensor has shape (batch_size, n_features).
+        steering_vectors: Dict mapping unit IDs to steering tensors (full dataset;
+            sliced per batch by :func:`get_batch_steering_vectors`).
+        batch_start: Start index of this batch in the dataset.
+        batch_size: Number of examples in this batch.
+        unit_devices: Single device or per-unit ``unit_id -> device`` mapping.
         output_scores: Score output control
 
     Returns:
         Dict with generation outputs
     """
-    # Prepare base inputs
+    # Prepare base inputs. base_indices tells us how many positions pyvene gathers
+    # per unit this batch, which fixes the required source-vector shape.
     batched_base, base_indices = prepare_steering_inputs(
         pipeline, batch, interchange_target
+    )
+    n_pos_per_unit = _resolve_n_pos_per_unit(interchange_target, base_indices)
+    steering_vectors_batch = get_batch_steering_vectors(
+        steering_vectors,
+        interchange_target,
+        batch_start,
+        batch_size,
+        unit_devices,
+        n_pos_per_unit=n_pos_per_unit,
     )
 
     # For steering, source indices are the same as base indices
@@ -302,6 +382,9 @@ def run_steering_interventions(
     output_scores: bool | int = True,
     mode: Literal["add", "replace"] = "add",
     scale: float = 1.0,
+    type_by_unit: dict[str, str] | None = None,
+    noise_seed: int = 0,
+    intervenable_model: pv.IntervenableModel | None = None,
 ) -> dict[str, list[Any]]:
     """
     Run steering interventions on a dataset.
@@ -329,6 +412,21 @@ def run_steering_interventions(
             Default is 1.0 (no scaling). Useful for controlling intervention strength.
             For mode="add": steered = base + scale * steering_vector
             For mode="replace": replaced = scale * steering_vector
+        type_by_unit: Optional ``unit_id -> intervention_type`` map for a *mixed*
+            model — each site uses its mapped type instead of ``mode``. The
+            per-unit source still comes from ``steering_vectors`` and is shaped
+            identically; the interventions interpret it (a ``replace`` value, a
+            ``noise`` scale, etc.). Used by causal tracing to run ``noise`` on the
+            corrupted entry and ``replace`` on the restored site in one pass.
+        noise_seed: Seed for any ``noise``-type sites (reproducible per site).
+        intervenable_model: Optional pre-built pyvene model to reuse instead of
+            building one. When given, the caller owns its lifecycle — this
+            function neither rebuilds nor deletes it — so a single model can be
+            reused across many calls (e.g. the length buckets of one
+            causal-trace cell) without paying pyvene's per-call hook-construction
+            cost. It must have been built for this ``interchange_target`` /
+            ``mode`` / ``type_by_unit`` / ``noise_seed``. When ``None`` (default),
+            a model is built and deleted internally, exactly as before.
 
     Returns:
         Dict with 'sequences', 'string', and optionally 'scores' keys
@@ -370,10 +468,17 @@ def run_steering_interventions(
         for unit_id, vec in steering_vectors.items()
     }
 
-    # Initialize intervenable model using shared infrastructure
-    intervenable_model = prepare_intervenable_model(
-        pipeline, interchange_target, intervention_type=mode
-    )
+    # Initialize intervenable model using shared infrastructure, unless the
+    # caller supplied one to reuse (then the caller owns its lifecycle).
+    owns_model = intervenable_model is None
+    if owns_model:
+        intervenable_model = prepare_intervenable_model(
+            pipeline,
+            interchange_target,
+            intervention_type=mode,
+            type_by_unit=type_by_unit,
+            noise_seed=noise_seed,
+        )
 
     all_outputs = []
 
@@ -390,28 +495,26 @@ def run_steering_interventions(
         # Build batch dict (what shallow_collate_fn did)
         batch = {key: [ex[key] for ex in examples] for key in examples[0].keys()}
 
-        # Get steering vectors for this batch
-        steering_vectors_batch = get_batch_steering_vectors(
-            steering_vectors,
-            interchange_target,
-            batch_start,
-            current_batch_size,
-            unit_devices,
-        )
-
         with torch.no_grad():
+            # Source vectors are built inside the intervention, where the
+            # gathered-position count per unit is known (see the function docstring).
             output_dict = batched_steering_intervention(
                 pipeline,
                 intervenable_model,
                 batch,
                 interchange_target,
-                steering_vectors_batch,
+                steering_vectors,
+                batch_start,
+                current_batch_size,
+                unit_devices,
                 output_scores=output_scores,
             )
             all_outputs.append(output_dict)
 
-    # Clean up the intervenable model to free GPU memory
-    delete_intervenable_model(intervenable_model)
+    # Clean up the intervenable model to free GPU memory (only if we built it;
+    # a caller-supplied model is the caller's to delete).
+    if owns_model:
+        delete_intervenable_model(intervenable_model)
 
     # Convert to top-k format if requested
     if not isinstance(output_scores, bool) and output_scores > 0:

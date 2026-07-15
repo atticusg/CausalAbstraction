@@ -322,8 +322,12 @@ def build_graph(
     if graph_type in ("cylinder", "torus"):
         if graph_size_2 is None:
             raise ValueError(f"{graph_type} requires graph_size_2")
-        return GRAPH_BUILDERS[graph_type](graph_size, graph_size_2)
-    return GRAPH_BUILDERS[graph_type](graph_size)
+        # The cylinder/torus builders take two positional sizes; the single-arg
+        # builders go through the branch below. pyright unifies the dict
+        # values to the narrowest signature.
+        return GRAPH_BUILDERS[graph_type](graph_size, graph_size_2)  # pyright: ignore[reportCallIssue]
+    # Single-arg builders selected by graph_type; the union signature confuses pyright.
+    return GRAPH_BUILDERS[graph_type](graph_size)  # pyright: ignore[reportCallIssue]
 
 
 def random_walk(

@@ -144,7 +144,7 @@ def train_umap_featurizer(
     epochs: int = 200,
     batch_size: int = 32,
     lr: float = 1e-3,
-    device: str | None = None,
+    device: str | torch.device | None = None,
 ) -> UMAPFeaturizer:
     """Train the encoder/decoder MLPs to approximate the UMAP mapping.
 
@@ -164,6 +164,7 @@ def train_umap_featurizer(
         device = raw_features.device
 
     umap_module = featurizer.featurizer
+    assert isinstance(umap_module, UMAPFeaturizerModule)
     encoder = umap_module.encoder.to(device)
     decoder = umap_module.decoder.to(device)
 

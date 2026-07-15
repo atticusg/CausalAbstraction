@@ -1,0 +1,26 @@
+{
+  "datasets": {
+    "wide": {
+      "size": 8,
+      "per_target": {
+        "total": {
+          "vs_null": 0.75,
+          "vs_all": 0.0,
+          "alternatives": {
+            "null": 0.75,
+            "all": 0.0
+          }
+        }
+      }
+    }
+  },
+  "always_confounded": [
+    [
+      "total",
+      "all"
+    ]
+  ],
+  "singletons": [
+    "null"
+  ]
+}

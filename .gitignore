@@ -7,9 +7,7 @@ __pycache__
 .config
 .zed
 .vscode
-
-# Claude
-.claude/settings.json
+*.lock
 
 # Testing and coverage artifacts
 .coverage
@@ -44,13 +42,15 @@ pytest.xml
 /causalab/tasks/**/*logs
 /causalab/tasks/**/outputs/
 
-/agent_logs/
+agent_logs/
+
 .vscode/settings.json
 .env
 
-*/worktrees*
+worktrees/
 
 # Generated files
 /figures/*.pdf
 **/output/*.html
 **/output/*.png
+test_run_logs/

@@ -5,7 +5,7 @@ discovery (PCA / DAS / DBM) lives in ``causalab.analyses.subspace`` and must
 be run first.
 
 Pipeline steps:
-1. Fit manifold (normalizing flow or thin-plate spline) in k-dim space
+1. Fit thin-plate spline manifold in k-dim space
 2. Compose featurizer chain: subspace >> standardize >> manifold
 3. Compute intrinsic ranges + 3D visualization
 3b. Decoding reconstruction test (optional, off by default)
@@ -19,7 +19,7 @@ model weights.
 Output Structure:
 ================
 output_dir/
-├── manifold_spline/ or manifold_flow/
+├── manifold_spline/
 │   ├── ckpt_final.pt
 │   └── metadata.json
 └── visualization/
@@ -106,7 +106,7 @@ class ManifoldFittingConfig:
     embedding_shuffle_seed: int | None = None
     colormap: str | None = None
     score_variable_values: dict[str, list] | None = None
-    figure_format: str = "pdf"
+    figure_format: str = "png"
     max_control_points: str | int = "all"
 
 
@@ -176,7 +176,7 @@ def run_manifold_fitting_pipeline(
     """Run the manifold fitting pipeline on pre-computed features.
 
     Steps:
-        1. Fit manifold (flow or spline)
+        1. Fit spline manifold
         2. Compose featurizer chain
         3. Compute intrinsic ranges + visualization
         3b. Manifold reconstruction test (optional)
@@ -196,11 +196,16 @@ def run_manifold_fitting_pipeline(
     features = config.features
     k = config.k_features
     manifold_method = config.manifold_method.lower()
+    if manifold_method != "spline":
+        raise ValueError(
+            f"manifold_method must be 'spline'; got {manifold_method!r}. "
+            "The 'flow' option is no longer supported."
+        )
 
     # Auto-detect intrinsic dim if not specified
     if config.intrinsic_dim is not None:
         d = config.intrinsic_dim
-    elif manifold_method == "spline":
+    else:
         if config.intervention_variable is not None:
             vals = config.causal_model.values.get(config.intervention_variable)
             if vals is not None:
@@ -211,9 +216,6 @@ def run_manifold_fitting_pipeline(
         else:
             d = _auto_detect_intrinsic_dim(config.causal_model)
         logger.info("Auto-detected intrinsic_dim=%d", d)
-    else:
-        d = 2  # default for flows
-        logger.info("Using default intrinsic_dim=%d", d)
 
     if d >= k:
         new_k = d + 1
@@ -249,68 +251,51 @@ def run_manifold_fitting_pipeline(
     result: dict[str, Any] = {"features": features}
 
     # =====================================================================
-    # Step 1: Fit manifold (flow or spline)
+    # Step 1: Fit spline manifold
     # =====================================================================
-    if manifold_method == "spline":
-        manifold_dir = os.path.join(config.output_dir, "manifold_spline")
-    else:
-        manifold_dir = os.path.join(config.output_dir, "manifold_flow")
+    manifold_dir = os.path.join(config.output_dir, "manifold_spline")
 
-    logger.info("Step 1: Fitting %s manifold (d=%d in k=%d)...", manifold_method, d, k)
+    logger.info("Step 1: Fitting spline manifold (d=%d in k=%d)...", d, k)
 
-    if manifold_method == "spline":
-        from causalab.neural.pipeline import resolve_device
+    from causalab.neural.pipeline import resolve_device
 
-        # Spline fitting runs on the cached features tensor; we don't need the
-        # model's device (or the model itself) to be loaded. resolve_device()
-        # picks a sensible default whether or not pipeline weights are present.
-        device = resolve_device()
-        spline_config = SplineManifoldConfig(
-            smoothness=config.smoothness,
-            batch_size=config.batch_size,
-            device=device,
-            intrinsic_mode=config.intrinsic_mode,
-            max_control_points=config.max_control_points,
-            spline_method=config.spline_method,
+    # Spline fitting runs on the cached features tensor; we don't need the
+    # model's device (or the model itself) to be loaded. resolve_device()
+    # picks a sensible default whether or not pipeline weights are present.
+    device = resolve_device()
+    spline_config = SplineManifoldConfig(
+        smoothness=config.smoothness,
+        batch_size=config.batch_size,
+        device=device,
+        intrinsic_mode=config.intrinsic_mode,
+        max_control_points=config.max_control_points,
+        spline_method=config.spline_method,
+    )
+    embeddings = config.embeddings
+    if embeddings is not None and config.embedding_shuffle_seed is not None:
+        logger.info(
+            "Shuffling embedding order with seed=%d",
+            config.embedding_shuffle_seed,
         )
-        embeddings = config.embeddings
-        if embeddings is not None and config.embedding_shuffle_seed is not None:
-            logger.info(
-                "Shuffling embedding order with seed=%d",
-                config.embedding_shuffle_seed,
-            )
-            embeddings = _shuffle_embeddings(
-                embeddings,
-                config.causal_model,
-                config.embedding_shuffle_seed,
-            )
-
-        manifold_result = train_spline_manifold(
-            interchange_target=config.interchange_target,
-            dataset_path=train_dataset,
-            pipeline=config.pipeline,
-            intrinsic_dim=d,
-            output_dir=manifold_dir,
-            config=spline_config,
-            causal_model=config.causal_model,
-            features=features,
-            intervention_variable=config.intervention_variable,
-            periodic_info=config.periodic_info,
-            embeddings=embeddings,
-        )
-    else:
-        from causalab.methods.flow.train import (
-            train_manifold,
+        embeddings = _shuffle_embeddings(
+            embeddings,
+            config.causal_model,
+            config.embedding_shuffle_seed,
         )
 
-        manifold_result = train_manifold(
-            interchange_target=config.interchange_target,
-            dataset_path=train_dataset,
-            pipeline=config.pipeline,
-            intrinsic_dim=d,
-            output_dir=manifold_dir,
-            features=features,
-        )
+    manifold_result = train_spline_manifold(
+        interchange_target=config.interchange_target,
+        dataset_path=train_dataset,
+        pipeline=config.pipeline,
+        intrinsic_dim=d,
+        output_dir=manifold_dir,
+        config=spline_config,
+        causal_model=config.causal_model,
+        features=features,
+        intervention_variable=config.intervention_variable,
+        periodic_info=config.periodic_info,
+        embeddings=embeddings,
+    )
 
     _t1 = _time.time()
     logger.info("Step 1 complete (%.1fs)", _t1 - _t0)

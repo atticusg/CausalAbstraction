@@ -1,0 +1,15 @@
+# @package _global_
+defaults:
+- /base
+- /task: MCQA
+- /model: llama32_1b_instruct
+- /analysis/locate
+- _self_
+task:
+  enumerate_all: true  # use all possible MCQA inputs
+  target_variables: [answer]
+locate:
+  method: interchange
+  mode: centroid    # centroid works correctly with resample_variable: all
+  layers: [0, 4, 8, 12, 15]
+  n_steer: 32

@@ -45,12 +45,13 @@ def save_pca(pca: PCA, output_dir: str, stem: str = "hellinger_pca") -> Tuple[st
         tensors[field] = torch.from_numpy(
             np.atleast_1d(np.asarray(arr, dtype=np.float64)).copy()
         )
+    # sklearn type stubs miss the constructor attrs (whiten, svd_solver).
     meta = {
         "n_components_": int(pca.n_components_),
         "n_features_in_": int(pca.n_features_in_),
         "n_samples_": int(getattr(pca, "n_samples_", 0)),
-        "whiten": bool(pca.whiten),
-        "svd_solver": str(pca.svd_solver),
+        "whiten": bool(pca.whiten),  # pyright: ignore[reportAttributeAccessIssue]
+        "svd_solver": str(pca.svd_solver),  # pyright: ignore[reportAttributeAccessIssue]
     }
     return save_tensors_with_meta(tensors, meta, output_dir, stem)
 
@@ -72,7 +73,9 @@ def load_pca(output_dir: str, stem: str = "hellinger_pca") -> PCA:
         pca.singular_values_ = tensors["singular_values_"].numpy()
     if "noise_variance_" in tensors:
         nv = tensors["noise_variance_"].numpy()
-        pca.noise_variance_ = float(nv) if nv.size == 1 else nv
+        # sklearn stubs type noise_variance_ as float, but runtime accepts
+        # ndarray for multi-component PCA — mirror the original behavior.
+        pca.noise_variance_ = float(nv) if nv.size == 1 else nv  # pyright: ignore[reportAttributeAccessIssue]
     pca.n_components_ = meta["n_components_"]
     pca.n_features_in_ = meta["n_features_in_"]
     if meta.get("n_samples_"):

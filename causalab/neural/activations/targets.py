@@ -15,7 +15,7 @@ Each builder returns a Dict[tuple, InterchangeTarget] with grouping controlled b
 from typing import List, Dict, Tuple, Any
 
 from causalab.neural.units import InterchangeTarget, AtomicModelUnit
-from causalab.neural.LM_units import AttentionHead, ResidualStream, MLP
+from causalab.neural.LM_units import AttentionHead, AttentionOutput, ResidualStream, MLP
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_positions import TokenPosition
 
@@ -69,8 +69,13 @@ def _detect_component_type_from_single_target(target: InterchangeTarget) -> str:
         raise ValueError("InterchangeTarget has no units")
 
     sample_unit_id = units[0].id
+    # Order matters: "AttentionOutput" must be checked before the "AttentionHead"
+    # substring test would otherwise be ambiguous (neither contains the other, but
+    # keep both explicit for clarity).
     if "AttentionHead" in sample_unit_id:
         return "attention_head"
+    elif "AttentionOutput" in sample_unit_id:
+        return "attention_output"
     elif "ResidualStream" in sample_unit_id:
         return "residual_stream"
     elif "MLP" in sample_unit_id:
@@ -103,6 +108,10 @@ def extract_grid_dimensions_from_targets(
         Dict with grid dimensions:
         - attention_head: {"layers": [...], "heads": [...]}
         - residual_stream/mlp: {"layers": [...], "token_position_ids": [...]}
+
+    Raises:
+        ValueError: If component_type is not one of "attention_head",
+            "residual_stream", "mlp".
     """
     keys = list(interchange_targets.keys())
 
@@ -110,10 +119,11 @@ def extract_grid_dimensions_from_targets(
         layers = sorted(set(k[0] for k in keys))
         heads = sorted(set(k[1] for k in keys))
         return {"layers": layers, "heads": heads}
-    else:
-        # residual_stream or mlp: keys are (layer, position_id)
+    elif component_type in ("residual_stream", "mlp", "attention_output"):
+        # keys are (layer, position_id)
         layers = sorted(set(k[0] for k in keys))
         # Token position IDs may be strings, preserve insertion order
+        # (downstream score_heatmap.py relies on this axis order).
         position_ids = []
         seen = set()
         for k in keys:
@@ -121,6 +131,11 @@ def extract_grid_dimensions_from_targets(
                 position_ids.append(k[1])
                 seen.add(k[1])
         return {"layers": layers, "token_position_ids": position_ids}
+    else:
+        raise ValueError(
+            f"Unknown component_type: {component_type!r}. Expected one of: "
+            f"'attention_head', 'residual_stream', 'mlp', 'attention_output'."
+        )
 
 
 # =============================================================================
@@ -274,6 +289,55 @@ def build_mlp_targets(
                 shape=(feature_size,),
                 feature_indices=None,
                 location=location,
+            )
+            units_with_keys.append(((layer, pos.id), unit))
+
+    return _group_units_into_targets(units_with_keys, layers, mode)
+
+
+def build_attention_output_targets(
+    pipeline: LMPipeline,
+    layers: List[int],
+    token_positions: List[TokenPosition],
+    mode: str = "one_target_per_unit",
+) -> Dict[Tuple[Any, ...], InterchangeTarget]:
+    """
+    Build InterchangeTargets for whole-attention-sublayer interventions.
+
+    Targets pyvene's ``attention_output`` component — the full attention
+    sublayer output (all heads jointly) written back into the residual stream.
+    This is the layer-level analogue of :func:`build_attention_head_targets`
+    (which targets a single head's value stream) and mirrors
+    :func:`build_mlp_targets` in shape and grouping. The merged sublayer output is
+    already ``hidden_size``-wide, so this is GQA-correct without per-head handling.
+
+    Args:
+        pipeline: LMPipeline with model configuration
+        layers: List of layer indices to intervene on
+        token_positions: List of TokenPosition objects for token positions
+        mode: How to group units into targets:
+            - "one_target_all_units": Single target with all units
+            - "one_target_per_unit": One target per (layer, position) combination
+            - "one_target_per_layer": One target per layer
+
+    Returns:
+        Dict mapping keys to InterchangeTarget objects:
+        - "one_target_all_units": {("all",): target}
+        - "one_target_per_unit": {(layer, position_id): target, ...}
+        - "one_target_per_layer": {(layer,): target, ...}
+    """
+
+    hidden_size = pipeline.model.config.hidden_size
+
+    units_with_keys = []
+    for layer in layers:
+        for pos in token_positions:
+            unit = AttentionOutput(
+                layer=layer,
+                token_indices=pos,
+                featurizer=None,  # Will default to identity Featurizer()
+                shape=(hidden_size,),
+                feature_indices=None,
             )
             units_with_keys.append(((layer, pos.id), unit))
 

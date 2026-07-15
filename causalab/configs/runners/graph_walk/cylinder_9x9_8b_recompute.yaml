@@ -1,0 +1,43 @@
+# @package _global_
+# Refit activation_manifold + output_manifold with the new (height, angle)
+# coord order (cached subspace train_dataset.json already had its node_coords
+# swapped in-place to match), then recompute path_steering (isometry).
+# Pullback skipped — still OOM-blocked on graph_walk.
+defaults:
+- /base
+- /task: graph_walk_cylinder_9x9
+- /model: llama31_8b
+- /analysis/activation_manifold
+- /analysis/output_manifold
+- /analysis/path_steering
+- _self_
+
+task:
+  target_variable: node_coordinates
+
+locate:
+  layers: [28]
+  batch_size: 8
+
+subspace:
+  layers: [28]
+  k_features: 64
+  batch_size: 8
+  token_positions: [last]
+
+activation_manifold:
+  layers: [28]
+  intrinsic_mode: parameter
+  intrinsic_dim: 2
+  batch_size: 8
+  token_positions: [last]
+
+output_manifold:
+  intrinsic_mode: parameter
+  intrinsic_dim: 2
+  batch_size: 8
+
+path_steering:
+  batch_size: 16
+  num_steps_along_path: 15
+  n_prompts: 5

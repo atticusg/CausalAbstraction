@@ -108,7 +108,7 @@ def compute_score(
         logger.warning("No belief manifold provided — returning NaN")
         return dict(NAN_RESULT)
 
-    n_pairs, num_steps, n_prompts, W = pair_distributions.shape
+    n_pairs, num_steps, n_prompts, W = pair_distributions.shape  # pyright: ignore[reportUnusedVariable]
     W_amb = belief_manifold.centroids.shape[-1]
 
     # Validate that pair_distributions is a sub-probability distribution
@@ -223,7 +223,7 @@ def _hellinger_to_geodesic_at_t(
         (n_pairs, num_steps, n_prompts) Hellinger distances in [0, 1].
         Caller transforms to Bhattacharyya via ``_hellinger_to_bhattacharyya``.
     """
-    from causalab.analyses.path_steering.path_mode import _build_geodesic_path
+    from causalab.analyses.path_steering.path_mode import _build_geodesic_path  # pyright: ignore[reportPrivateUsage]
 
     device = belief_manifold.centroids.device
     endpoints = endpoints.to(device)

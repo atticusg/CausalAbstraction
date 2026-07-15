@@ -53,10 +53,15 @@ def apply_experiment_root_variant(cfg) -> None:
     notebooks so both resolve paths identically. Appending preserves any
     caller-supplied override (e.g. a session-scoped root from research-mode
     workflows); rebuilding the path here would silently clobber it.
+
+    A no-op when ``cfg`` has no ``task`` (e.g. ``characterize_subspace``, whose
+    data is the step-1 JSON rather than a causal-model task); the struct-safe
+    ``cfg.get`` avoids a ``ConfigAttributeError`` under Hydra's struct mode.
     """
     from omegaconf import OmegaConf
 
-    variant = cfg.task.get("variant")
+    task = cfg.get("task")
+    variant = task.get("variant") if task is not None else None
     if variant:
         OmegaConf.update(
             cfg,

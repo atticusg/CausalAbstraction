@@ -15,5 +15,3 @@ path_steering:
   activation_manifold: L28_last_token/spline_s0.0
   selected_pairs: [["Monday", "Thursday"]]
   path_modes: [geometric, linear]
-  visualization:
-    figure_format: png

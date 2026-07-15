@@ -4,7 +4,7 @@ I/O utilities for saving and loading experiment results.
 This module provides functions for saving and loading experiment results,
 metadata, and trained models to/from disk.
 
-See ARCHITECTURE.md "Artifact serialization policy": all on-disk artifacts
+See docs/CODEBASE.md "Artifact serialization policy": all on-disk artifacts
 are split into a `.safetensors` tensor payload and an optional sibling
 `.meta.json` metadata file. `torch.save` / `torch.load` are forbidden in
 `causalab/` outside this module.

@@ -1,0 +1,732 @@
+{
+  "deterministic": false,
+  "model": "chat-coherent",
+  "runner": "golden/weekdays_pullback",
+  "seed": 0,
+  "tolerance": {
+    "default": 0.0001
+  },
+  "values": {
+    "accuracy.accuracy": 0.9795918367346939,
+    "accuracy.correct": 48,
+    "accuracy.prob_accuracy": 0.9645608082005032,
+    "accuracy.total": 49,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.manifold.centroids.first": -2.3520991802215576,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.manifold.centroids.last": -0.1896468549966812,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.manifold.centroids.mean": 0.12688086926937103,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.manifold.centroids.shape": [
+      7,
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.manifold.centroids.std": 1.7334368228912354,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.manifold.control_points.first": -2.3520991802215576,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.manifold.control_points.last": -2.341996908187866,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.manifold.control_points.mean": -2.348519802093506,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.manifold.control_points.shape": [
+      7,
+      1
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.manifold.control_points.std": 0.0072983936406672,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.mean.first": -2.348519802093506,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.mean.last": -0.19174635410308838,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.mean.mean": 0.1268809288740158,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.mean.shape": [
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.mean.std": 1.8364977836608887,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.std.first": 0.03985774144530296,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.std.last": 0.014291488565504551,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.std.mean": 0.023077817633748055,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.std.shape": [
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.std.std": 0.008845283649861813,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.manifold_spline.ckpt_final.sha256": "c9cf6610697aee5216a90ae170623dad4c0c40d21610a7b86804ac2c1733b4aa",
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/featurizer_state_dict/rotate.parametrizations.weight.0.base.first": 0.14393913745880127,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/featurizer_state_dict/rotate.parametrizations.weight.0.base.last": -0.027391422539949417,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/featurizer_state_dict/rotate.parametrizations.weight.0.base.mean": -3.601099024308496e-06,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/featurizer_state_dict/rotate.parametrizations.weight.0.base.shape": [
+      2560,
+      2560
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/featurizer_state_dict/rotate.parametrizations.weight.0.base.std": 0.019764237105846405,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/featurizer_state_dict/rotate.parametrizations.weight.original.first": -1.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/featurizer_state_dict/rotate.parametrizations.weight.original.last": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/featurizer_state_dict/rotate.parametrizations.weight.original.mean": -0.0003906250058207661,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/featurizer_state_dict/rotate.parametrizations.weight.original.shape": [
+      2560,
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/featurizer_state_dict/rotate.parametrizations.weight.original.std": 0.01976085640490055,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/inverse_state_dict/rotate.parametrizations.weight.0.base.first": 0.14393913745880127,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/inverse_state_dict/rotate.parametrizations.weight.0.base.last": -0.027391422539949417,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/inverse_state_dict/rotate.parametrizations.weight.0.base.mean": -3.601099024308496e-06,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/inverse_state_dict/rotate.parametrizations.weight.0.base.shape": [
+      2560,
+      2560
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/inverse_state_dict/rotate.parametrizations.weight.0.base.std": 0.019764237105846405,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/inverse_state_dict/rotate.parametrizations.weight.original.first": -1.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/inverse_state_dict/rotate.parametrizations.weight.original.last": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/inverse_state_dict/rotate.parametrizations.weight.original.mean": -0.0003906250058207661,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/inverse_state_dict/rotate.parametrizations.weight.original.shape": [
+      2560,
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/inverse_state_dict/rotate.parametrizations.weight.original.std": 0.01976085640490055,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/model_info/additional_config/rotation_matrix.first": 0.14393913745880127,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/model_info/additional_config/rotation_matrix.last": 0.01662551611661911,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/model_info/additional_config/rotation_matrix.mean": 0.0003199248167220503,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/model_info/additional_config/rotation_matrix.shape": [
+      2560,
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/0/model_info/additional_config/rotation_matrix.std": 0.019762128591537476,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/featurizer_state_dict/_mean.first": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/featurizer_state_dict/_mean.last": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/featurizer_state_dict/_mean.mean": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/featurizer_state_dict/_mean.shape": [
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/featurizer_state_dict/_mean.std": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/featurizer_state_dict/_std.first": 1.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/featurizer_state_dict/_std.last": 1.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/featurizer_state_dict/_std.mean": 1.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/featurizer_state_dict/_std.shape": [
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/featurizer_state_dict/_std.std": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/inverse_state_dict/_mean.first": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/inverse_state_dict/_mean.last": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/inverse_state_dict/_mean.mean": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/inverse_state_dict/_mean.shape": [
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/inverse_state_dict/_mean.std": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/inverse_state_dict/_std.first": 1.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/inverse_state_dict/_std.last": 1.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/inverse_state_dict/_std.mean": 1.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/inverse_state_dict/_std.shape": [
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/inverse_state_dict/_std.std": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/model_info/additional_config/mean.first": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/model_info/additional_config/mean.last": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/model_info/additional_config/mean.mean": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/model_info/additional_config/mean.shape": [
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/model_info/additional_config/mean.std": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/model_info/additional_config/std.first": 1.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/model_info/additional_config/std.last": 1.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/model_info/additional_config/std.mean": 1.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/model_info/additional_config/std.shape": [
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/1/model_info/additional_config/std.std": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold._cp_min.first": -2.358219861984253,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold._cp_min.last": -2.358219861984253,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold._cp_min.mean": -2.358219861984253,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold._cp_min.shape": [
+      1
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold._cp_range.first": 0.020691633224487305,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold._cp_range.last": 0.020691633224487305,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold._cp_range.mean": 0.020691633224487305,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold._cp_range.shape": [
+      1
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold._sphere_base.shape": [
+      0
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.centroids.first": -2.3520991802215576,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.centroids.last": -0.1896468549966812,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.centroids.mean": 0.12688086926937103,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.centroids.shape": [
+      7,
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.centroids.std": 1.7334368228912354,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.control_points.first": -2.3520991802215576,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.control_points.last": -2.341996908187866,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.control_points.mean": -2.348519802093506,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.control_points.shape": [
+      7,
+      1
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.control_points.std": 0.0072983936406672,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.control_points.first": 0.2958046793937683,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.control_points.last": 0.7840344905853271,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.control_points.mean": 0.46880292892456055,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.control_points.shape": [
+      7,
+      1
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.control_points.std": 0.3527219593524933,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.gamma.first": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.gamma.last": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.gamma.mean": 0.01887647435069084,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.gamma.shape": [
+      7,
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.gamma.std": 0.4104030728340149,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.h.first": 0.14744143187999725,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.h.last": 0.21596550941467285,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.h.mean": 0.1666666716337204,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.h.shape": [
+      6
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.h.std": 0.04276644438505173,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.values.first": -2.3520991802215576,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.values.last": -0.1896468549966812,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.values.mean": 0.12688086926937103,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.values.shape": [
+      7,
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.values.std": 1.7334368228912354,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.x_sorted.first": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.x_sorted.last": 1.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.x_sorted.mean": 0.46880292892456055,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.x_sorted.shape": [
+      7
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.x_sorted.std": 0.3527219593524933,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.y_hat.first": -2.358219861984253,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.y_hat.last": -0.19509227573871613,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.y_hat.mean": 0.12688086926937103,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.y_hat.shape": [
+      7,
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.spline.y_hat.std": 1.7334368228912354,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.target_points.first": -2.3520991802215576,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.target_points.last": -0.1896468549966812,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.target_points.mean": 0.12688086926937103,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.target_points.shape": [
+      7,
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/featurizer_state_dict/manifold.target_points.std": 1.7334368228912354,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold._cp_min.first": -2.358219861984253,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold._cp_min.last": -2.358219861984253,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold._cp_min.mean": -2.358219861984253,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold._cp_min.shape": [
+      1
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold._cp_range.first": 0.020691633224487305,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold._cp_range.last": 0.020691633224487305,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold._cp_range.mean": 0.020691633224487305,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold._cp_range.shape": [
+      1
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold._sphere_base.shape": [
+      0
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.centroids.first": -2.3520991802215576,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.centroids.last": -0.1896468549966812,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.centroids.mean": 0.12688086926937103,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.centroids.shape": [
+      7,
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.centroids.std": 1.7334368228912354,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.control_points.first": -2.3520991802215576,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.control_points.last": -2.341996908187866,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.control_points.mean": -2.348519802093506,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.control_points.shape": [
+      7,
+      1
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.control_points.std": 0.0072983936406672,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.control_points.first": 0.2958046793937683,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.control_points.last": 0.7840344905853271,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.control_points.mean": 0.46880292892456055,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.control_points.shape": [
+      7,
+      1
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.control_points.std": 0.3527219593524933,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.gamma.first": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.gamma.last": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.gamma.mean": 0.01887647435069084,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.gamma.shape": [
+      7,
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.gamma.std": 0.4104030728340149,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.h.first": 0.14744143187999725,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.h.last": 0.21596550941467285,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.h.mean": 0.1666666716337204,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.h.shape": [
+      6
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.h.std": 0.04276644438505173,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.values.first": -2.3520991802215576,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.values.last": -0.1896468549966812,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.values.mean": 0.12688086926937103,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.values.shape": [
+      7,
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.values.std": 1.7334368228912354,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.x_sorted.first": 0.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.x_sorted.last": 1.0,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.x_sorted.mean": 0.46880292892456055,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.x_sorted.shape": [
+      7
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.x_sorted.std": 0.3527219593524933,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.y_hat.first": -2.358219861984253,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.y_hat.last": -0.19509227573871613,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.y_hat.mean": 0.12688086926937103,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.y_hat.shape": [
+      7,
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.spline.y_hat.std": 1.7334368228912354,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.target_points.first": -2.3520991802215576,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.target_points.last": -0.1896468549966812,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.target_points.mean": 0.12688086926937103,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.target_points.shape": [
+      7,
+      8
+    ],
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/stages/2/inverse_state_dict/manifold.target_points.std": 1.7334368228912354,
+    "activation_manifold.pca_k8.L1_last_token.spline_s0.0.result.models.1__last_token.featurizers.sha256": "14a61cab8ac2575979893b5003c739eb0deb28ad343d54bda3eb345e5f8d0670",
+    "baseline.per_class_output_dists.dists.first": 9.576580850989558e-06,
+    "baseline.per_class_output_dists.dists.last": 5.058555416326271e-06,
+    "baseline.per_class_output_dists.dists.mean": 1.1684427363434224e-06,
+    "baseline.per_class_output_dists.dists.shape": [
+      7,
+      7
+    ],
+    "baseline.per_class_output_dists.dists.std": 3.85579278372461e-06,
+    "baseline.per_class_output_dists.sha256": "486a6b7c83bab03e95236954c82e717fbec5714859a07a0a78cb63507fcc5df4",
+    "full_output_dists.first": 5.6756337097566695e-14,
+    "full_output_dists.last": 4.809836059133529e-18,
+    "full_output_dists.mean": 6.581718480447307e-06,
+    "full_output_dists.sha256": "f6839b49f1aeef4b0960acc6c6b1b4ede9a5698cf0effef06d33bb67990e5b22",
+    "full_output_dists.shape": [
+      49,
+      151936
+    ],
+    "full_output_dists.std": 0.0025372866075485945,
+    "locate.interchange.result.results.base_accuracy": 0.9795918367346939,
+    "locate.interchange.result.results.scores_per_cell.1|entity": 11.153087878841568,
+    "locate.interchange.result.results.scores_per_cell.1|last_token": 0.00021478349045486237,
+    "locate.interchange.result.results.scores_per_cell.1|number": 10.917826122395239,
+    "locate.interchange.result.results.scores_per_layer.1": 11.153087878841568,
+    "locate.interchange.results.base_accuracy": 0.9795918367346939,
+    "locate.interchange.results.scores_per_cell.1|entity": 11.153087878841568,
+    "locate.interchange.results.scores_per_cell.1|last_token": 0.00021478349045486237,
+    "locate.interchange.results.scores_per_cell.1|number": 10.917826122395239,
+    "locate.interchange.results.scores_per_layer.1": 11.153087878841568,
+    "output_manifold.hellinger_pca.components_.first": -0.3202938139438629,
+    "output_manifold.hellinger_pca.components_.last": -0.004501522518694401,
+    "output_manifold.hellinger_pca.components_.mean": 0.0015469867503270507,
+    "output_manifold.hellinger_pca.components_.shape": [
+      3,
+      8
+    ],
+    "output_manifold.hellinger_pca.components_.std": 0.361154168844223,
+    "output_manifold.hellinger_pca.explained_variance_.first": 0.15776215493679047,
+    "output_manifold.hellinger_pca.explained_variance_.last": 0.14559398591518402,
+    "output_manifold.hellinger_pca.explained_variance_.mean": 0.15223024785518646,
+    "output_manifold.hellinger_pca.explained_variance_.shape": [
+      3
+    ],
+    "output_manifold.hellinger_pca.explained_variance_.std": 0.006158796139061451,
+    "output_manifold.hellinger_pca.explained_variance_ratio_.first": 0.18374133110046387,
+    "output_manifold.hellinger_pca.explained_variance_ratio_.last": 0.16956940293312073,
+    "output_manifold.hellinger_pca.explained_variance_ratio_.mean": 0.17729847133159637,
+    "output_manifold.hellinger_pca.explained_variance_ratio_.shape": [
+      3
+    ],
+    "output_manifold.hellinger_pca.explained_variance_ratio_.std": 0.007172978483140469,
+    "output_manifold.hellinger_pca.mean_.first": 0.14710958302021027,
+    "output_manifold.hellinger_pca.mean_.last": 0.013553961180150509,
+    "output_manifold.hellinger_pca.mean_.mean": 0.13306768238544464,
+    "output_manifold.hellinger_pca.mean_.shape": [
+      8
+    ],
+    "output_manifold.hellinger_pca.mean_.std": 0.04965117946267128,
+    "output_manifold.hellinger_pca.noise_variance_.first": 0.08038386702537537,
+    "output_manifold.hellinger_pca.noise_variance_.last": 0.08038386702537537,
+    "output_manifold.hellinger_pca.noise_variance_.mean": 0.08038386702537537,
+    "output_manifold.hellinger_pca.noise_variance_.shape": [
+      1
+    ],
+    "output_manifold.hellinger_pca.sha256": "2de2d181d35bbf4def4564a56473a8c98cfcc2e091551356a8790caa765d902c",
+    "output_manifold.hellinger_pca.singular_values_.first": 2.7518327236175537,
+    "output_manifold.hellinger_pca.singular_values_.last": 2.6435792446136475,
+    "output_manifold.hellinger_pca.singular_values_.mean": 2.7027852535247803,
+    "output_manifold.hellinger_pca.singular_values_.shape": [
+      3
+    ],
+    "output_manifold.hellinger_pca.singular_values_.std": 0.054836973547935486,
+    "output_manifold.per_example_output_dists.dists.first": 3.927873137854476e-07,
+    "output_manifold.per_example_output_dists.dists.last": 1.609325408935547e-05,
+    "output_manifold.per_example_output_dists.dists.mean": 0.125,
+    "output_manifold.per_example_output_dists.dists.shape": [
+      49,
+      8
+    ],
+    "output_manifold.per_example_output_dists.dists.std": 0.3269832730293274,
+    "output_manifold.per_example_output_dists.sha256": "3775af672f8a2c44f08cdb16541f5296527a2a987f1a2d8b921b122173825fc8",
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.centroids.first": 0.993085503578186,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.centroids.last": 0.004515894688665867,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.centroids.mean": 0.14893336594104767,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.centroids.shape": [
+      7,
+      8
+    ],
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.centroids.std": 0.32355570793151855,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.control_points.first": -2.783996343612671,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.control_points.last": -1.3229434490203857,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.control_points.mean": -0.13212668895721436,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.control_points.shape": [
+      7,
+      1
+    ],
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.manifold.control_points.std": 2.101799964904785,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.mean.first": 0.0,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.mean.last": 0.0,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.mean.mean": 0.0,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.mean.shape": [
+      8
+    ],
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.mean.std": 0.0,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.std.first": 1.0,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.std.last": 1.0,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.std.mean": 1.0,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.std.shape": [
+      8
+    ],
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.preprocess.std.std": 0.0,
+    "output_manifold.spline_s0.0.result.manifold_spline.ckpt_final.sha256": "2821189a8ee17684c4ef077698169fee47c9a58b6948121da2a8686466dc2646",
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.geodesic_paths.2,4.first": 8.63509649207117e-06,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.geodesic_paths.2,4.last": 0.00027591007528826594,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.geodesic_paths.2,4.mean": 0.125,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.geodesic_paths.2,4.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.geodesic_paths.2,4.std": 0.31437066197395325,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.geodesic_paths.2,5.first": 8.63509649207117e-06,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.geodesic_paths.2,5.last": 0.0006096528377383947,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.geodesic_paths.2,5.mean": 0.125,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.geodesic_paths.2,5.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.geodesic_paths.2,5.std": 0.3085954487323761,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.geodesic_paths.sha256": "b3ea59bed1ad8939852d2a112550ddf65d78c577bd36f92d65309ba02a05ae06",
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/f_end_k.first": -2.3375282287597656,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/f_end_k.last": -0.19509227573871613,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/f_end_k.mean": 0.12840764224529266,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/f_end_k.shape": [
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/f_end_k.std": 1.8353451490402222,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/f_start_k.first": -2.358220338821411,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/f_start_k.last": -0.18922412395477295,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/f_start_k.mean": 0.12707680463790894,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/f_start_k.shape": [
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/f_start_k.std": 1.8402217626571655,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/geo_probs_AW1.first": 4.763553818065702e-07,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/geo_probs_AW1.last": 2.6464462280273438e-05,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/geo_probs_AW1.mean": 0.125,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/geo_probs_AW1.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/geo_probs_AW1.std": 0.3360007107257843,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/geo_probs_raw.first": 9.42243730150949e-07,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/geo_probs_raw.last": 4.363226668857578e-09,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/geo_probs_raw.mean": 0.1428537666797638,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/geo_probs_raw.shape": [
+      4,
+      2,
+      7
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/geo_probs_raw.std": 0.3530845642089844,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/lin_probs_AW1.first": 5.379268372962542e-07,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/lin_probs_AW1.last": 2.6404857635498047e-05,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/lin_probs_AW1.mean": 0.1249999925494194,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/lin_probs_AW1.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/lin_probs_AW1.std": 0.336001455783844,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/lin_probs_raw.first": 1.0677019872673554e-06,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/lin_probs_raw.last": 4.363226668857578e-09,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/lin_probs_raw.mean": 0.14285404980182648,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/lin_probs_raw.shape": [
+      4,
+      2,
+      7
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/lin_probs_raw.std": 0.3530852496623993,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/opt_probs_AW1.first": 5.379268372962542e-07,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/opt_probs_AW1.last": 2.6404857635498047e-05,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/opt_probs_AW1.mean": 0.1249999925494194,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/opt_probs_AW1.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/opt_probs_AW1.std": 0.336001455783844,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/opt_probs_raw.first": 1.0677019872673554e-06,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/opt_probs_raw.last": 4.363226668857578e-09,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/opt_probs_raw.mean": 0.14285404980182648,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/opt_probs_raw.shape": [
+      4,
+      2,
+      7
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/opt_probs_raw.std": 0.3530852496623993,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/p_end.first": 4.754384463012684e-06,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/p_end.last": 0.0002759099006652832,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/p_end.mean": 0.125,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/p_end.shape": [
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/p_end.std": 0.34413057565689087,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/p_start.first": 8.635945960122626e-06,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/p_start.last": 0.0002522298600524664,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/p_start.mean": 0.125,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/p_start.shape": [
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/p_start.std": 0.3529304265975952,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/p_target_AW1.first": 8.63509649207117e-06,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/p_target_AW1.last": 0.00027591007528826594,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/p_target_AW1.mean": 0.125,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/p_target_AW1.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/p_target_AW1.std": 0.31437066197395325,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/path_history_k/0.first": -2.358220338821411,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/path_history_k/0.last": -0.19509227573871613,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/path_history_k/0.mean": 0.12774226069450378,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/path_history_k/0.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/path_history_k/0.std": 1.746595025062561,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/per_step_loss.first": 0.0007290476933121681,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/per_step_loss.last": 0.9606560468673706,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/per_step_loss.mean": 0.7211813926696777,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/per_step_loss.shape": [
+      2,
+      4
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/per_step_loss.std": 0.445543497800827,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_geometric_k.first": -2.358222007751465,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_geometric_k.last": -0.19509245455265045,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_geometric_k.mean": 0.1272946447134018,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_geometric_k.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_geometric_k.std": 1.7456868886947632,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_init_k.first": -2.358220338821411,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_init_k.last": -0.19509227573871613,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_init_k.mean": 0.12774226069450378,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_init_k.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_init_k.std": 1.746595025062561,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_linear_k.first": -2.358220338821411,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_linear_k.last": -0.19509227573871613,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_linear_k.mean": 0.12774226069450378,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_linear_k.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_linear_k.std": 1.746595025062561,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_optimized_k.first": -2.358220338821411,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_optimized_k.last": -0.19509227573871613,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_optimized_k.mean": 0.12774226069450378,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_optimized_k.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,4/v_optimized_k.std": 1.746595025062561,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/f_end_k.first": -2.3551690578460693,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/f_end_k.last": -0.19305379688739777,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/f_end_k.mean": 0.12592248618602753,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/f_end_k.shape": [
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/f_end_k.std": 1.8391772508621216,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/f_start_k.first": -2.358220338821411,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/f_start_k.last": -0.18922412395477295,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/f_start_k.mean": 0.12707680463790894,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/f_start_k.shape": [
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/f_start_k.std": 1.8402217626571655,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/geo_probs_AW1.first": 2.253314778499771e-05,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/geo_probs_AW1.last": 0.00042939186096191406,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/geo_probs_AW1.mean": 0.125,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/geo_probs_AW1.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/geo_probs_AW1.std": 0.3338609039783478,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/geo_probs_raw.first": 4.504413664108142e-05,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/geo_probs_raw.last": 2.3355539724434493e-09,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/geo_probs_raw.mean": 0.14278551936149597,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/geo_probs_raw.shape": [
+      4,
+      2,
+      7
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/geo_probs_raw.std": 0.3508266508579254,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_AW1.first": 3.264318365836516e-05,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_AW1.last": 0.0004112124443054199,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_AW1.mean": 0.1249999925494194,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_AW1.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_AW1.std": 0.33356890082359314,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_raw.first": 6.526125798700377e-05,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_raw.last": 2.646523888927277e-09,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_raw.mean": 0.14278876781463623,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_raw.shape": [
+      4,
+      2,
+      7
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_raw.std": 0.35051435232162476,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_AW1.first": 3.264318365836516e-05,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_AW1.last": 0.0004112124443054199,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_AW1.mean": 0.1249999925494194,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_AW1.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_AW1.std": 0.33356890082359314,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_raw.first": 6.526125798700377e-05,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_raw.last": 2.646523888927277e-09,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_raw.mean": 0.14278876781463623,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_raw.shape": [
+      4,
+      2,
+      7
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_raw.std": 0.35051435232162476,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_end.first": 4.3814936361741275e-05,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_end.last": 0.0006096534198150039,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_end.mean": 0.125,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_end.shape": [
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_end.std": 0.3526478409767151,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_start.first": 8.635945960122626e-06,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_start.last": 0.0002522298600524664,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_start.mean": 0.125,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_start.shape": [
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_start.std": 0.3529304265975952,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_target_AW1.first": 8.63509649207117e-06,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_target_AW1.last": 0.0006096528377383947,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_target_AW1.mean": 0.125,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_target_AW1.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_target_AW1.std": 0.3085954487323761,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/path_history_k/0.first": -2.358220338821411,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/path_history_k/0.last": -0.19305379688739777,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/path_history_k/0.mean": 0.12649963796138763,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/path_history_k/0.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/path_history_k/0.std": 1.7484166622161865,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/per_step_loss.first": 0.0016702888533473015,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/per_step_loss.last": 0.9885257482528687,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/per_step_loss.mean": 0.599730372428894,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/per_step_loss.shape": [
+      2,
+      4
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/per_step_loss.std": 0.4453583061695099,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_geometric_k.first": -2.358222007751465,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_geometric_k.last": -0.1930539608001709,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_geometric_k.mean": 0.12641915678977966,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_geometric_k.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_geometric_k.std": 1.748438835144043,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_init_k.first": -2.358220338821411,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_init_k.last": -0.19305379688739777,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_init_k.mean": 0.12649963796138763,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_init_k.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_init_k.std": 1.7484166622161865,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_linear_k.first": -2.358220338821411,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_linear_k.last": -0.19305379688739777,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_linear_k.mean": 0.12649963796138763,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_linear_k.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_linear_k.std": 1.7484166622161865,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_optimized_k.first": -2.358220338821411,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_optimized_k.last": -0.19305379688739777,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_optimized_k.mean": 0.12649963796138763,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_optimized_k.shape": [
+      4,
+      8
+    ],
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_optimized_k.std": 1.7484166622161865,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.sha256": "2486344cacd51b4547d0d70456aa7aaf2c0a2d261aa0a55b9007aa5d5adb711f",
+    "subspace.pca_k8.result.features.raw_features.features.first": 4.40625,
+    "subspace.pca_k8.result.features.raw_features.features.last": -0.044189453125,
+    "subspace.pca_k8.result.features.raw_features.features.mean": 0.0028900427278131247,
+    "subspace.pca_k8.result.features.raw_features.features.shape": [
+      49,
+      2560
+    ],
+    "subspace.pca_k8.result.features.raw_features.features.std": 0.17000284790992737,
+    "subspace.pca_k8.result.features.raw_features.sha256": "cd5c16cd74805ea69b724009f9f4c6ce68b72bee3cf08a4f5780455ef1ab8897",
+    "subspace.pca_k8.result.features.training_features.features.first": -2.367493152618408,
+    "subspace.pca_k8.result.features.training_features.features.last": -0.2097955346107483,
+    "subspace.pca_k8.result.features.training_features.features.mean": 0.12688088417053223,
+    "subspace.pca_k8.result.features.training_features.features.shape": [
+      49,
+      8
+    ],
+    "subspace.pca_k8.result.features.training_features.features.std": 1.720253348350525,
+    "subspace.pca_k8.result.features.training_features.sha256": "e569adc2f70b4552922b97ddfdc068d3f65534c288369dcbfe9a72e182d47267",
+    "subspace.pca_k8.result.rotation.explained_variance_ratio.first": 0.25480180978775024,
+    "subspace.pca_k8.result.rotation.explained_variance_ratio.last": 0.03275902569293976,
+    "subspace.pca_k8.result.rotation.explained_variance_ratio.mean": 0.09640151262283325,
+    "subspace.pca_k8.result.rotation.explained_variance_ratio.shape": [
+      8
+    ],
+    "subspace.pca_k8.result.rotation.explained_variance_ratio.std": 0.0759996697306633,
+    "subspace.pca_k8.result.rotation.rotation_matrix.first": 0.14393918216228485,
+    "subspace.pca_k8.result.rotation.rotation_matrix.last": 0.01662551611661911,
+    "subspace.pca_k8.result.rotation.rotation_matrix.mean": 0.00031992472941055894,
+    "subspace.pca_k8.result.rotation.rotation_matrix.shape": [
+      2560,
+      8
+    ],
+    "subspace.pca_k8.result.rotation.rotation_matrix.std": 0.019762128591537476,
+    "subspace.pca_k8.result.rotation.sha256": "30ed3c14eb70c2090bf5ed5a0ec5a1f6a5b98d52afef98384a17ecbfecdb4c87"
+  }
+}

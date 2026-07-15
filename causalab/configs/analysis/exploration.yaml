@@ -1,0 +1,46 @@
+# @package exploration
+_name_: exploration
+_subdir: ${.mode}
+_output_dir: ${experiment_root}/exploration/${._subdir}
+
+mode: ???                  # probe | logit_lens | pair | pca | knockout (selects the op below)
+
+probe:                     # mode: probe — greedy-decode prompts, report outputs
+  prompts: ???             # path to JSON list[str] of candidate prompts
+  out: null                # output JSON path; default <out_dir>/outputs.json
+  max_new_tokens: 3
+
+logit_lens:                # mode: logit_lens — logit lens over raw prompts
+  inputs: ???              # path to JSON list[str] of prompts
+  top_k: 10                # per-cell top-k predicted tokens to record
+  batch_size: 16
+  figure_format: png
+
+pair:                      # mode: pair — one base/CF interchange trace
+  manifest: ???            # path to pairs.jsonl (one pair per row)
+  index: 0                 # manifest row to run (the SLURM-array fan unit)
+  figure_format: png
+  max_new_tokens: 3
+
+pca:                       # mode: pca — PCA of the residual stream at critical tokens
+  inputs: ???              # JSON list[str] or [{input, positions}]
+  essential_tokens: ???    # JSON list of {label, index?/text?/occurrence?}
+  labels: null             # optional JSON list of per-input color-scheme rows
+  n_components: 10
+  layers: null             # comma-separated layer indices; null = all layers
+  tokens: null             # comma-separated token indices; null = all (the fan unit)
+  batch_size: 16
+
+knockout:                  # mode: knockout — ablate components, measure behavioral drop
+  inputs: ???              # JSON list[str] or [{input, positions}] of prompts
+  span: all                # all | last | essential (the tokens ablated above)
+  essential_tokens: null   # JSON list of {label, index?/text?/occurrence?}; required when span=essential
+  components: [attention_head, mlp]   # which families to knock out
+  ablation_modes: [zero, mean]        # zero = drop contribution; mean = corpus-mean replace
+  mlp_widths: [1, 3, 5, 10]           # contiguous MLP layer-band widths to sweep
+  head_band_widths: [1, 3, 5, 10]     # attention-head layer-band widths (all heads/layer, jointly)
+  complement: false        # also ablate everything EXCEPT each band (sufficiency sweep)
+  layers: null             # list[int] or null = all layers
+  heads: null              # list[int] or null = all heads (attention_head only)
+  batch_size: 16
+  max_new_tokens: 3

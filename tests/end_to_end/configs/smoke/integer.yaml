@@ -1,0 +1,21 @@
+# @package _global_
+# Smoke-tier baseline runner; coverage-oriented, not a scientific run.
+# tiny-random + existence-only asserts (see docs/TESTS.md "Smoke vs golden split").
+defaults:
+- /base
+- /task: natural_domains_arithmetic_integer
+- /model: tiny-random
+- /analysis/baseline
+- _self_
+
+task:
+  target_variable: result
+  n_train: 2
+  n_test: 2
+
+baseline:
+  batch_size: 2
+
+expected_artifacts:
+- baseline/metadata.json
+- baseline/accuracy.json

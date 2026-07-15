@@ -1,0 +1,67 @@
+# @package _global_
+# Golden-tier path-patching with an INTERNAL receiver: the two-pass collect/inject
+# path (the headline new capability of #332), pinned as a value golden on GPT-2 small.
+#
+# The sibling golden `ioi_path_patching` pins the degenerate one-pass `receiver=output`
+# head sweep. This one pins the *two-pass* internal-receiver path — PASS 1 collects the
+# receiver's path-restricted value v* under the sender+restorer interchange, PASS 2
+# re-injects v* on a clean base run — which no value golden covered before. Without it,
+# a refactor could silently break the two-pass wiring and only the random-weight CPU
+# tests (finiteness, not a sign-checkable result) would notice.
+#
+# Receiver: residual block_output at layer 9 (the residual stream entering the second
+# name-mover layer), read at the last token. The two-pass collect/inject is shared by
+# *every* internal receiver (head_value_input / mlp_input / residual all route through
+# run_two_pass_path_patching), so this golden pins the two-pass numerics on a real model
+# for all of them.
+#
+# Why residual and not head_value_input (the receiver #332's follow-up first named): a
+# head's *value at the last token* contributes almost nothing to the IO-vs-S logit diff
+# with other attention frozen — the IOI signal flows via attention to the IO position,
+# not the END-position value — so a head_value_input map on IOI is flat at the noise
+# floor (~1e-4) and would not discriminate a working two-pass from a no-op. The residual
+# stream at the last token, by contrast, carries the circuit's IO-vs-S signal, giving
+# sign-checkable structure (S-inhibition heads 7.x/8.x and the layer-9 name movers score
+# large; the random heads sit near zero). The head_value *unit* itself is covered by the
+# CPU property tests (query->KV-group mapping + decoupled-head_dim guard).
+#
+# Sender grid: layers null = all; the analysis drops senders at/after the receiver's
+# read point (block_output at layer 9 reads past block 9, so layers 0..9 reach it),
+# leaving a 0..9 x 12 grid (logged).
+#
+# extract_values() pins every finite float leaf of
+# path_patching/<corruption>_<rel>/residual_block_output_L9/results.json — the
+# per-(layer, head) effect_grid plus the top_k cell effects. GPU bootstrap pins
+# deterministic:false. The JSON pins tolerance.default = 1e-3 (not the 1e-5
+# global default): of the 140 pinned leaves (120-cell sender×head grid = 10
+# layers 0..9 x 12 heads, plus 20 top-k entries), ~100 sit at the IOI noise
+# floor (|effect| < 1e-2, the random heads the config calls out as "near zero"),
+# where an absolute 1e-5 pins run-to-run noise and flakes cross-node. 1e-3 keeps
+# the golden's real signal — the ~40 structural cells (S-inhibition 8.x, layer-9
+# name movers, |effect| up to ~0.88) and their sign — while absorbing the floor;
+# a regression that breaks the two-pass wiring moves those cells by >>1e-3.
+# See docs/TESTS.md "Golden JSON contract" and docs/PATH_PATCHING.md
+# (two-pass + §9 IOI).
+defaults:
+- /base
+- /task: IOI
+- /model: gpt2
+- /analysis/path_patching
+- _self_
+
+task:
+  n_test: 64
+
+path_patching:
+  layers: null            # all layers; analysis keeps the senders upstream of the receiver
+  heads: null             # all heads
+  receiver:
+    kind: residual
+    layer: 9              # residual entering the second name-mover layer
+    residual_point: block_output
+  restore: [attention]    # paper §3.1 direct effect (MLPs/LayerNorm recompute)
+  corruption: abc         # all three names -> distinct randoms (paper §3.1)
+  correct_variable: IO
+  distractor_variable: name_C
+  relative_to_base: true
+  batch_size: 16

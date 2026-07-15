@@ -1,0 +1,157 @@
+{
+  "samples": [
+    {
+      "counterfactual_inputs": [
+        {
+          "left_equality": false,
+          "raw_input": "f(R,L,F,J)=1\nf(L,J,M,M)=0\nf(D,N,L,L)=0\nf(C,C,U,U)=1\nf(U,U,L,O)=0\nf(P,H,D,J)=1\nf(Q,K,C,C)=0\nf(M,M,Z,Z)=1\nf(M,M,I,I)=1\nf(N,R,C,I)=1\nf(P,R,L,Y)=1\nf(V,V,M,N)=0\nf(O,O,Q,O)=0\nf(X,X,F,L)=0\nf(K,K,Q,W)=0\nf(T,D,I,Q)=1\nf(J,I,H,H)=0\nf(K,D,V,A)=1\nf(S,S,T,H)=0\nf(A,Q,L,L)=0\nf(J,J,D,Q)=0\nf(P,I,F,H)=1\nf(H,I,P,P)=0\nf(Q,Q,O,O)=1\nf(T,E,O,C)=1\nf(Y,Y,Y,W)=0\nf(N,H,X,X)=0\nf(E,E,M,M)=1\nf(P,W,Z,Z)=0\nf(T,E,Y,Y)=0\nf(G,Y,Y,Y)=0\nf(I,I,L,N)=0\nf(Q,P,H,H)=0\nf(S,S,B,B)=1\nf(E,I,J,J)=0\nf(C,K,S,S)=0\nf(E,V,B,S)=1\nf(Q,Q,N,N)=1\nf(E,E,L,H)=0\nf(V,V,M,R)=0\nf(T,T,V,V)=1\nf(E,L,Z,D)=1\nf(U,X,L,L)=0\nf(F,F,O,O)=1\nf(S,S,M,M)=1\nf(A,A,C,Q)=0\nf(K,K,H,H)=1\nf(P,R,U,M)=1\nf(A,A,S,S)=1\nf(M,R,W,Y)=1\nf(G,G,O,O)=1\nf(J,J,D,P)=0\nf(L,N,Y,Y)=0\nf(W,W,V,V)=1\nf(T,P,W,D)=1\nf(P,P,H,D)=0\nf(B,B,P,P)=1\nf(J,J,P,H)=0\nf(R,G,A,B)=1\nf(C,P,M,S)=1\nf(Y,O,Q,Q)=",
+          "raw_output": "0",
+          "result_equality": false,
+          "right_equality": true,
+          "template": "minimal_function",
+          "var_1": "Y",
+          "var_2": "O",
+          "var_3": "Q",
+          "var_4": "Q"
+        }
+      ],
+      "input": {
+        "left_equality": true,
+        "raw_input": "f(P,I,W,W)=0\nf(R,R,H,P)=0\nf(P,P,G,L)=0\nf(K,K,P,P)=1\nf(W,W,Q,Q)=1\nf(Y,L,N,N)=0\nf(U,U,B,B)=1\nf(P,P,P,P)=1\nf(L,L,U,U)=1\nf(N,E,O,W)=1\nf(E,Y,S,J)=1\nf(A,L,B,D)=1\nf(F,O,L,Z)=1\nf(L,B,X,X)=0\nf(W,J,X,H)=1\nf(M,M,M,M)=1\nf(R,R,O,K)=0\nf(C,V,X,M)=1\nf(W,K,M,F)=1\nf(A,A,E,C)=0\nf(U,R,X,X)=0\nf(P,P,B,B)=1\nf(P,P,X,X)=1\nf(E,E,X,X)=1\nf(O,B,U,U)=0\nf(A,A,J,V)=0\nf(I,I,A,R)=0\nf(N,N,G,G)=1\nf(M,B,H,H)=0\nf(D,D,T,C)=0\nf(W,Q,V,V)=0\nf(H,U,J,J)=0\nf(Q,Z,J,J)=0\nf(T,C,W,W)=0\nf(E,Q,K,G)=1\nf(E,E,R,R)=1\nf(M,N,Z,P)=1\nf(S,X,B,B)=0\nf(M,X,H,Z)=1\nf(W,W,D,D)=1\nf(V,V,J,J)=1\nf(U,W,F,F)=0\nf(Z,Z,N,W)=0\nf(S,S,O,O)=1\nf(T,G,A,L)=1\nf(C,C,G,R)=0\nf(G,P,G,G)=0\nf(Z,Z,K,L)=0\nf(K,N,U,V)=1\nf(U,C,F,F)=0\nf(H,H,T,M)=0\nf(T,A,I,U)=1\nf(B,B,F,M)=0\nf(I,I,B,C)=0\nf(N,T,O,O)=0\nf(P,M,A,Q)=1\nf(B,B,G,M)=0\nf(G,G,K,U)=0\nf(O,O,J,J)=1\nf(G,D,N,O)=1\nf(Y,Y,N,B)=",
+        "raw_output": "0",
+        "result_equality": false,
+        "right_equality": false,
+        "template": "minimal_function",
+        "var_1": "Y",
+        "var_2": "Y",
+        "var_3": "N",
+        "var_4": "B"
+      },
+      "seed": 0
+    },
+    {
+      "counterfactual_inputs": [
+        {
+          "left_equality": true,
+          "raw_input": "f(X,U,I,I)=0\nf(S,S,Q,Q)=1\nf(E,S,D,M)=1\nf(N,N,X,F)=0\nf(C,P,U,R)=1\nf(F,F,G,I)=0\nf(E,K,R,R)=0\nf(B,B,R,R)=1\nf(S,S,Q,D)=0\nf(M,M,I,I)=1\nf(L,L,P,P)=1\nf(E,B,O,O)=0\nf(R,A,F,K)=1\nf(U,U,J,J)=1\nf(H,H,U,A)=0\nf(D,D,S,E)=0\nf(N,M,Q,Z)=1\nf(A,A,P,B)=0\nf(I,Y,P,P)=0\nf(L,L,Z,X)=0\nf(U,H,Z,Z)=0\nf(K,J,Q,Q)=0\nf(H,G,D,D)=0\nf(B,U,L,S)=1\nf(M,M,C,C)=1\nf(J,G,R,R)=0\nf(B,W,C,Y)=1\nf(X,X,I,P)=0\nf(C,X,F,F)=0\nf(C,S,K,K)=0\nf(B,Y,Q,Q)=0\nf(K,Q,N,L)=1\nf(S,Q,A,D)=1\nf(L,L,O,K)=0\nf(S,S,W,V)=0\nf(B,B,A,L)=0\nf(M,M,Z,Z)=1\nf(L,G,E,S)=1\nf(K,L,Y,R)=1\nf(O,K,Q,Z)=1\nf(R,J,S,S)=0\nf(I,Z,M,M)=0\nf(S,R,I,C)=1\nf(A,S,D,B)=1\nf(K,I,T,L)=1\nf(K,K,Z,Z)=1\nf(S,S,X,X)=1\nf(U,U,Q,N)=0\nf(G,G,Z,B)=0\nf(N,N,J,J)=1\nf(Z,T,C,C)=0\nf(Q,Q,S,S)=1\nf(R,R,B,X)=0\nf(E,E,T,T)=1\nf(P,P,B,B)=1\nf(C,C,S,S)=1\nf(I,O,C,C)=0\nf(T,T,X,L)=0\nf(T,Z,Y,L)=1\nf(P,P,A,A)=1\nf(I,I,P,O)=",
+          "raw_output": "0",
+          "result_equality": false,
+          "right_equality": false,
+          "template": "minimal_function",
+          "var_1": "I",
+          "var_2": "I",
+          "var_3": "P",
+          "var_4": "O"
+        }
+      ],
+      "input": {
+        "left_equality": false,
+        "raw_input": "f(N,N,B,C)=0\nf(U,U,C,R)=0\nf(X,Z,C,C)=0\nf(Z,Z,D,W)=0\nf(N,S,G,G)=0\nf(E,E,R,B)=0\nf(H,H,M,M)=1\nf(V,R,B,S)=1\nf(P,P,W,W)=1\nf(C,C,J,B)=0\nf(E,B,G,G)=0\nf(B,I,Y,D)=1\nf(M,M,G,G)=1\nf(D,D,K,B)=0\nf(T,T,W,W)=1\nf(I,J,U,U)=0\nf(O,O,V,E)=0\nf(I,I,K,Y)=0\nf(I,V,G,O)=1\nf(C,B,A,Z)=1\nf(F,Y,U,E)=1\nf(O,O,M,M)=1\nf(R,V,Q,Q)=0\nf(T,T,O,O)=1\nf(V,C,W,W)=0\nf(I,I,D,D)=1\nf(H,H,H,H)=1\nf(O,O,A,Y)=0\nf(K,K,V,V)=1\nf(W,R,N,N)=0\nf(P,S,D,G)=1\nf(O,U,J,A)=1\nf(M,I,E,C)=1\nf(J,J,O,O)=1\nf(Y,Y,F,F)=1\nf(A,P,K,M)=1\nf(Q,Q,X,X)=1\nf(S,F,L,L)=0\nf(I,F,D,D)=0\nf(P,P,Q,L)=0\nf(M,M,B,Y)=0\nf(B,T,Z,Z)=0\nf(P,U,E,X)=1\nf(I,Y,T,T)=0\nf(H,H,P,P)=1\nf(E,E,I,N)=0\nf(M,K,U,U)=0\nf(B,M,R,R)=0\nf(B,R,Q,E)=1\nf(I,I,Z,K)=0\nf(M,M,Y,W)=0\nf(Z,A,M,E)=1\nf(R,R,S,S)=1\nf(N,U,W,W)=0\nf(U,H,H,H)=0\nf(O,W,I,K)=1\nf(Q,Q,I,C)=0\nf(N,C,G,A)=1\nf(F,F,D,D)=1\nf(S,J,G,M)=1\nf(S,Z,Y,C)=",
+        "raw_output": "1",
+        "result_equality": true,
+        "right_equality": false,
+        "template": "minimal_function",
+        "var_1": "S",
+        "var_2": "Z",
+        "var_3": "Y",
+        "var_4": "C"
+      },
+      "seed": 1
+    },
+    {
+      "counterfactual_inputs": [
+        {
+          "left_equality": true,
+          "raw_input": "f(G,G,T,C)=0\nf(I,I,W,A)=0\nf(Z,Z,M,C)=0\nf(M,M,K,K)=1\nf(T,U,N,C)=1\nf(X,X,N,M)=0\nf(T,T,E,E)=1\nf(K,F,Q,H)=1\nf(K,W,X,X)=0\nf(G,L,B,A)=1\nf(O,X,Z,G)=1\nf(Q,Q,V,V)=1\nf(A,X,T,S)=1\nf(M,M,P,Z)=0\nf(Q,Z,S,S)=0\nf(Z,Z,B,B)=1\nf(K,B,D,D)=0\nf(U,U,N,Y)=0\nf(S,I,N,N)=0\nf(T,V,L,L)=0\nf(W,W,R,R)=1\nf(A,A,F,W)=0\nf(F,F,J,J)=1\nf(K,K,X,X)=1\nf(R,L,J,J)=0\nf(D,N,T,O)=1\nf(G,H,C,C)=0\nf(U,U,Z,Z)=1\nf(D,D,Q,Q)=1\nf(F,F,R,R)=1\nf(Y,A,I,I)=0\nf(P,R,R,R)=0\nf(F,F,A,A)=1\nf(V,V,S,C)=0\nf(T,E,W,B)=1\nf(E,J,I,I)=0\nf(E,E,D,L)=0\nf(Y,V,P,M)=1\nf(J,J,B,W)=0\nf(Y,R,I,I)=0\nf(O,O,O,O)=1\nf(T,T,I,I)=1\nf(M,M,C,R)=0\nf(Z,G,T,B)=1\nf(T,T,X,X)=1\nf(C,S,H,E)=1\nf(N,N,D,D)=1\nf(P,P,R,L)=0\nf(N,N,Y,J)=0\nf(D,I,Z,K)=1\nf(J,F,V,V)=0\nf(S,K,W,B)=1\nf(A,B,F,F)=0\nf(O,O,T,I)=0\nf(K,R,A,T)=1\nf(J,T,K,K)=0\nf(P,P,A,S)=0\nf(T,S,U,E)=1\nf(R,O,N,N)=0\nf(P,X,V,I)=1\nf(Q,Q,I,I)=",
+          "raw_output": "1",
+          "result_equality": true,
+          "right_equality": true,
+          "template": "minimal_function",
+          "var_1": "Q",
+          "var_2": "Q",
+          "var_3": "I",
+          "var_4": "I"
+        }
+      ],
+      "input": {
+        "left_equality": true,
+        "raw_input": "f(G,R,J,D)=1\nf(U,U,V,V)=1\nf(H,R,I,I)=0\nf(V,V,J,J)=1\nf(R,Q,C,C)=0\nf(P,P,H,H)=1\nf(H,I,B,B)=0\nf(F,F,L,L)=1\nf(M,J,G,G)=0\nf(E,E,G,L)=0\nf(T,W,M,Q)=1\nf(A,A,A,Q)=0\nf(W,A,J,S)=1\nf(B,B,E,V)=0\nf(E,E,N,X)=0\nf(A,Z,G,K)=1\nf(N,H,U,G)=1\nf(I,U,C,P)=1\nf(T,T,E,V)=0\nf(L,L,Y,K)=0\nf(S,J,H,G)=1\nf(Y,Y,T,T)=1\nf(W,W,H,J)=0\nf(P,T,C,C)=0\nf(D,M,Q,Q)=0\nf(O,C,N,P)=1\nf(V,H,E,E)=0\nf(Y,Y,P,P)=1\nf(P,Z,H,E)=1\nf(J,J,C,C)=1\nf(S,S,E,E)=1\nf(N,D,O,O)=0\nf(A,C,M,M)=0\nf(W,W,O,Y)=0\nf(O,O,G,G)=1\nf(S,S,P,P)=1\nf(M,N,P,P)=0\nf(J,J,Y,D)=0\nf(M,M,P,P)=1\nf(T,W,K,S)=1\nf(S,E,G,F)=1\nf(T,T,G,G)=1\nf(T,T,I,I)=1\nf(T,T,U,U)=1\nf(C,C,V,W)=0\nf(T,Y,M,M)=0\nf(Z,X,V,K)=1\nf(R,B,I,I)=0\nf(B,K,R,I)=1\nf(W,N,M,M)=0\nf(U,U,R,S)=0\nf(E,E,B,K)=0\nf(T,Y,M,X)=1\nf(H,H,R,B)=0\nf(Q,Q,V,I)=0\nf(P,P,B,S)=0\nf(C,U,S,O)=1\nf(T,R,V,V)=0\nf(S,S,K,K)=1\nf(L,R,Z,Z)=0\nf(C,C,C,C)=",
+        "raw_output": "1",
+        "result_equality": true,
+        "right_equality": true,
+        "template": "minimal_function",
+        "var_1": "C",
+        "var_2": "C",
+        "var_3": "C",
+        "var_4": "C"
+      },
+      "seed": 2
+    },
+    {
+      "counterfactual_inputs": [
+        {
+          "left_equality": true,
+          "raw_input": "f(H,H,G,Z)=0\nf(C,C,P,P)=1\nf(U,F,Q,Q)=0\nf(I,G,L,L)=0\nf(A,P,T,B)=1\nf(N,N,T,G)=0\nf(U,F,C,V)=1\nf(E,E,O,O)=1\nf(A,L,J,J)=0\nf(W,Q,P,A)=1\nf(D,V,I,I)=0\nf(N,N,A,A)=1\nf(Q,Q,E,E)=1\nf(D,V,G,H)=1\nf(F,F,A,H)=0\nf(Y,Y,M,L)=0\nf(Q,X,Y,E)=1\nf(E,J,U,S)=1\nf(D,D,J,J)=1\nf(C,F,X,M)=1\nf(Q,Q,Q,S)=0\nf(S,S,T,T)=1\nf(B,B,L,Y)=0\nf(Z,Z,H,H)=1\nf(N,O,K,T)=1\nf(C,L,V,P)=1\nf(X,K,T,T)=0\nf(U,U,R,X)=0\nf(Z,Z,O,O)=1\nf(B,L,V,J)=1\nf(F,L,D,D)=0\nf(Q,Q,Q,Q)=1\nf(K,R,Z,M)=1\nf(C,M,U,B)=1\nf(P,Y,U,U)=0\nf(S,B,T,T)=0\nf(N,T,S,S)=0\nf(C,C,P,P)=1\nf(J,J,D,D)=1\nf(M,H,M,M)=0\nf(C,N,V,W)=1\nf(T,T,Y,M)=0\nf(X,P,N,N)=0\nf(J,P,Y,Z)=1\nf(X,X,Y,Y)=1\nf(B,W,H,H)=0\nf(P,P,P,M)=0\nf(X,X,M,I)=0\nf(F,F,H,H)=1\nf(I,Q,X,X)=0\nf(Q,Q,H,E)=0\nf(J,Q,A,P)=1\nf(L,L,Q,Q)=1\nf(N,N,X,D)=0\nf(J,J,Q,Q)=1\nf(K,K,M,O)=0\nf(T,T,A,V)=0\nf(O,I,N,N)=0\nf(P,P,M,B)=0\nf(P,Z,G,G)=0\nf(W,W,R,N)=",
+          "raw_output": "0",
+          "result_equality": false,
+          "right_equality": false,
+          "template": "minimal_function",
+          "var_1": "W",
+          "var_2": "W",
+          "var_3": "R",
+          "var_4": "N"
+        }
+      ],
+      "input": {
+        "left_equality": false,
+        "raw_input": "f(T,B,O,O)=0\nf(D,D,O,M)=0\nf(A,A,K,K)=1\nf(Z,Z,J,J)=1\nf(P,P,H,H)=1\nf(W,M,P,P)=0\nf(Z,Z,O,O)=1\nf(Y,T,W,W)=0\nf(P,P,G,G)=1\nf(S,S,J,D)=0\nf(G,G,H,X)=0\nf(T,T,D,D)=1\nf(T,T,B,B)=1\nf(W,Z,A,A)=0\nf(X,M,R,L)=1\nf(G,G,H,S)=0\nf(W,V,V,V)=0\nf(O,C,Y,Y)=0\nf(S,T,A,D)=1\nf(Y,M,F,X)=1\nf(Y,P,K,Z)=1\nf(T,T,A,E)=0\nf(P,L,I,I)=0\nf(U,M,C,J)=1\nf(G,G,I,C)=0\nf(A,V,C,F)=1\nf(F,F,K,K)=1\nf(O,O,F,U)=0\nf(B,V,N,C)=1\nf(Z,Z,R,G)=0\nf(R,R,I,I)=1\nf(P,L,V,B)=1\nf(L,L,D,D)=1\nf(U,Q,K,G)=1\nf(O,H,Y,W)=1\nf(D,D,M,M)=1\nf(B,F,F,F)=0\nf(C,C,B,E)=0\nf(U,U,L,L)=1\nf(F,N,D,Q)=1\nf(E,E,S,A)=0\nf(O,O,C,V)=0\nf(Q,B,P,G)=1\nf(J,J,I,I)=1\nf(F,L,Z,N)=1\nf(D,D,H,K)=0\nf(D,L,H,H)=0\nf(M,R,K,V)=1\nf(M,J,Y,T)=1\nf(Z,D,K,K)=0\nf(K,M,A,A)=0\nf(B,B,E,V)=0\nf(F,R,X,X)=0\nf(O,Y,U,U)=0\nf(Z,Z,X,X)=1\nf(T,V,B,B)=0\nf(C,H,M,M)=0\nf(Y,Y,T,K)=0\nf(Q,Q,N,R)=0\nf(K,K,C,C)=1\nf(S,R,E,L)=",
+        "raw_output": "1",
+        "result_equality": true,
+        "right_equality": false,
+        "template": "minimal_function",
+        "var_1": "S",
+        "var_2": "R",
+        "var_3": "E",
+        "var_4": "L"
+      },
+      "seed": 3
+    },
+    {
+      "counterfactual_inputs": [
+        {
+          "left_equality": false,
+          "raw_input": "f(B,Z,P,U)=1\nf(S,V,W,L)=1\nf(Q,W,L,N)=1\nf(K,K,Y,Y)=1\nf(F,F,S,S)=1\nf(Q,N,Y,M)=1\nf(Y,Y,Q,Q)=1\nf(T,B,U,U)=0\nf(I,K,G,G)=0\nf(B,R,J,J)=0\nf(Y,Y,E,Y)=0\nf(P,P,I,M)=0\nf(B,I,K,K)=0\nf(T,T,K,E)=0\nf(U,U,A,H)=0\nf(S,W,K,J)=1\nf(B,Q,O,A)=1\nf(E,Q,Q,Q)=0\nf(T,E,Z,A)=1\nf(K,K,C,U)=0\nf(G,D,W,W)=0\nf(O,O,J,M)=0\nf(N,S,O,O)=0\nf(K,T,G,G)=0\nf(Z,Z,H,A)=0\nf(Z,F,V,D)=1\nf(X,Y,G,V)=1\nf(Q,V,I,J)=1\nf(D,D,B,B)=1\nf(U,X,V,N)=1\nf(P,P,P,P)=1\nf(B,B,Z,Z)=1\nf(B,B,P,O)=0\nf(V,V,L,L)=1\nf(K,K,V,J)=0\nf(X,X,F,F)=1\nf(Y,Y,C,B)=0\nf(I,I,Y,Y)=1\nf(V,V,S,S)=1\nf(T,M,Q,J)=1\nf(H,H,Q,F)=0\nf(U,U,A,A)=1\nf(H,T,B,B)=0\nf(Z,T,V,P)=1\nf(G,O,E,L)=1\nf(Z,Z,U,Y)=0\nf(S,R,H,H)=0\nf(Q,B,W,W)=0\nf(S,S,F,N)=0\nf(N,N,E,E)=1\nf(M,Q,E,D)=1\nf(L,L,O,O)=1\nf(P,R,J,J)=0\nf(Z,Z,N,N)=1\nf(I,I,W,F)=0\nf(Z,C,J,J)=0\nf(A,G,H,H)=0\nf(S,R,G,G)=0\nf(Y,Y,Z,Z)=1\nf(V,V,F,Z)=0\nf(E,J,R,R)=",
+          "raw_output": "0",
+          "result_equality": false,
+          "right_equality": true,
+          "template": "minimal_function",
+          "var_1": "E",
+          "var_2": "J",
+          "var_3": "R",
+          "var_4": "R"
+        }
+      ],
+      "input": {
+        "left_equality": false,
+        "raw_input": "f(H,M,U,U)=0\nf(K,D,H,H)=0\nf(U,U,K,K)=1\nf(G,S,P,P)=0\nf(W,W,X,X)=1\nf(Q,Q,W,W)=1\nf(C,C,C,C)=1\nf(Z,K,U,U)=0\nf(K,K,Q,L)=0\nf(V,V,G,G)=1\nf(L,L,L,D)=0\nf(S,S,N,S)=0\nf(G,F,O,O)=0\nf(X,X,C,N)=0\nf(C,L,Z,Z)=0\nf(D,K,B,B)=0\nf(R,R,B,B)=1\nf(U,U,G,G)=1\nf(G,G,P,L)=0\nf(Q,A,B,B)=0\nf(C,E,N,D)=1\nf(J,J,Q,Q)=1\nf(B,B,N,A)=0\nf(M,N,H,H)=0\nf(B,B,D,G)=0\nf(R,F,H,H)=0\nf(R,R,H,M)=0\nf(Y,Y,M,T)=0\nf(Y,Q,K,V)=1\nf(F,F,G,G)=1\nf(I,E,S,D)=1\nf(N,J,Q,Q)=0\nf(N,N,C,C)=1\nf(Y,Y,A,D)=0\nf(A,V,V,V)=0\nf(V,V,F,F)=1\nf(W,W,B,B)=1\nf(L,R,O,H)=1\nf(S,V,X,T)=1\nf(T,J,I,I)=0\nf(A,A,A,A)=1\nf(L,W,F,F)=0\nf(T,O,F,P)=1\nf(N,Y,J,S)=1\nf(M,M,Q,G)=0\nf(V,V,E,A)=0\nf(T,A,F,B)=1\nf(U,O,X,X)=0\nf(U,S,R,A)=1\nf(Y,I,R,U)=1\nf(S,R,G,I)=1\nf(V,V,X,B)=0\nf(L,Y,E,Q)=1\nf(M,M,F,O)=0\nf(W,O,K,F)=1\nf(J,F,K,W)=1\nf(F,F,C,P)=0\nf(C,C,Q,Q)=1\nf(Q,Q,Q,Q)=1\nf(S,U,T,C)=1\nf(J,D,X,M)=",
+        "raw_output": "1",
+        "result_equality": true,
+        "right_equality": false,
+        "template": "minimal_function",
+        "var_1": "J",
+        "var_2": "D",
+        "var_3": "X",
+        "var_4": "M"
+      },
+      "seed": 4
+    }
+  ],
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "task": "hierarchical_equality"
+}

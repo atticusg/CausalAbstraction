@@ -1,0 +1,56 @@
+# @package _global_
+# Smoke-tier causal-sufficiency (ROME-style causal tracing) runner —
+# residual-stream restore, noise corruption of the subject span, softmax
+# P(answer) recovery metric.
+#
+# Task: natural_domains_arithmetic (alphabet). The causal-sufficiency metric
+# (prob/logit/logit_diff) reads ONE answer-token logit per example via
+# `single_token_id`, so the answer must be single-token under the smoke
+# tokenizer. IOI's name pool is randomly sampled and ~half its names are
+# multi-token under the tiny-random Llama tokenizer (the metric raises on
+# those — exactly why path_patching, which shares this single-token
+# requirement, has no smoke and is GPT-2-golden-only). The alphabet domain's
+# answers are single letters (E-Z), every one single-token here, so the
+# metric path is smoke-able. See docs/TESTS.md "Smoke vs golden split".
+#
+# Exercises the noise corruption path (the dynamic per-token Gaussian entry
+# intervention) + the residual restore grid + plot_residual_stream_heatmap.
+# Corruption sits at the embedding entry (layer -1) over the `entity` (subject
+# letter) span; restore sweeps residual layers [0, 1] at the single-token
+# `last_token` readout, so the corrupted entry and restored sites never
+# overlap. tiny-random + existence-only asserts.
+defaults:
+- /base
+- /task: natural_domains_arithmetic_alphabet
+- /model: tiny-random
+- /analysis/causal_sufficiency
+- _self_
+
+task:
+  target_variable: result
+  n_train: 2
+  n_test: 2
+  enumerate_all: false
+
+causal_sufficiency:
+  corruption:
+    kind: noise            # ROME 3-sigma per-token Gaussian over the subject span
+    layer: -1              # embedding / block-0 input entry site
+    span: [entity]         # the subject letter (ROME corrupts the subject)
+    noise_scale: 3.0
+    noise_seed: 0
+  restore:
+    component_type: residual
+    layers: [0, 1]
+    span: [last_token]     # single-token readout position
+    window: 1
+  metric:
+    kind: prob             # softmax P(answer) (ROME)
+    answer_variable: result
+  normalize: recovery
+  batch_size: 2
+
+expected_artifacts:
+- causal_sufficiency/residual_noise_last_token/metadata.json
+- causal_sufficiency/residual_noise_last_token/results.json
+- causal_sufficiency/residual_noise_last_token/heatmap.png

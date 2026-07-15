@@ -1,0 +1,34 @@
+# @package _global_
+# Golden-tier output_manifold runner for weekdays — chat-coherent
+# (Qwen3-4B-Instruct-2507). A full golden: value pins (extracted tensor
+# reductions) + determinism, not just artifact existence.
+#
+# Golden-only (no smoke coverage) by nature: the Hellinger TPS fit needs the
+# per-class belief centroids to be linearly independent in PCA-of-√p space.
+# With random-init (tiny-random) logits every class produces a near-uniform
+# output distribution, so the centroids collapse to a single point and the
+# spline solver legitimately raises. A coherent model is required → GPU → it
+# is pinned as a golden. See docs/TESTS.md "Smoke vs golden split".
+#
+# Reruns are byte-identical at a fixed seed (probed on chat-coherent); the
+# extracted scalars are pinned within the default 1e-5 tolerance.
+defaults:
+- /base
+- /task: natural_domains_arithmetic_weekdays
+- /model: chat-coherent
+- /analysis/output_manifold
+- _self_
+
+task:
+  target_variable: result
+  # enumerate_all + n_train >= n_unique_inputs (49 for weekdays: 7 entities ×
+  # 7 addends) triggers the exhaustive-enumeration path in
+  # ``generate_datasets``, guaranteeing every weekday class has training
+  # examples — required so per-class belief centroids are non-zero and the
+  # Hellinger PCA / TPS fit doesn't collapse to duplicate control points.
+  n_train: 49
+  n_test: 2
+
+output_manifold:
+  batch_size: 8
+  intrinsic_dim: 1

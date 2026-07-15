@@ -17,7 +17,7 @@ from causalab.io.plots.figure_format import path_with_figure_format
 
 # Eagerly import plot_utils so its module-level _register_custom_colormaps()
 # call runs (registers dark_seismic, etc.) before any colormap lookup here.
-from causalab.io.plots import plot_utils as _plot_utils  # noqa: F401
+from causalab.io.plots import plot_utils as _plot_utils  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ def plot_distance_scatter(
     D_Y: np.ndarray,
     output_path: str,
     *,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
     x_label: str = "Distance X",
     y_label: str = "Distance Y",
     title: str = "Distance Comparison",
@@ -143,8 +143,8 @@ def plot_dual_mds(
             panels. Useful for graph-walk tasks where the underlying
             adjacency is informative.
     """
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
+    import plotly.graph_objects as go  # pyright: ignore[reportMissingTypeStubs]
+    from plotly.subplots import make_subplots  # pyright: ignore[reportMissingTypeStubs]
 
     logger.info("Computing %dD MDS embeddings", n_mds_components)
     pts_left = mds_embed(D_left, n_components=n_mds_components)
@@ -188,7 +188,7 @@ def plot_dual_mds(
                 size=marker_size,
                 opacity=0.6,
                 **{
-                    k: v[n_c:] if k == "color" else v
+                    k: v[n_c:] if k == "color" else v  # pyright: ignore[reportIndexIssue]  # only "color" entry is subscripted; dict has heterogeneous value types
                     for k, v in shared_color_kwargs.items()
                 },
             )
@@ -215,7 +215,7 @@ def plot_dual_mds(
             opacity=1.0,
             line=dict(width=1, color="black"),
             **{
-                k: v[:n_c] if k == "color" else v
+                k: v[:n_c] if k == "color" else v  # pyright: ignore[reportIndexIssue]  # only "color" entry is subscripted; dict has heterogeneous value types
                 for k, v in shared_color_kwargs.items()
             },
         )
@@ -295,7 +295,7 @@ def plot_dual_mds(
     # traces inherit a scene assignment from the trace they shadow — so we
     # compute per-scene z_floors and per-scene shadows.
     if is_3d:
-        import plotly.graph_objects as _go
+        import plotly.graph_objects as _go  # pyright: ignore[reportMissingTypeStubs]
         from causalab.io.plots.plot_utils import FigureGenerator
 
         fg = FigureGenerator()
@@ -334,23 +334,23 @@ def plot_dual_mds(
                 continue
             z_vals = []
             for _, t in scene_traces:
-                z_vals.extend([v for v in t.z if v is not None])
+                z_vals.extend([v for v in t.z if v is not None])  # pyright: ignore[reportOptionalIterable]  # filtered above by `t.z is not None`
             if not z_vals:
                 continue
             z_floor = min(z_vals)
             for _, t in scene_traces:
                 m = t.marker or {}
-                symbol = m.symbol if m.symbol is not None else "circle"
+                symbol = m.symbol if m.symbol is not None else "circle"  # pyright: ignore[reportAttributeAccessIssue]  # plotly Marker dynamic attribute typed as unknown
                 if symbol == "circle":
                     continue
-                z_proj = [z_floor] * len(t.z)
+                z_proj = [z_floor] * len(t.z)  # pyright: ignore[reportArgumentType]  # filtered above by `t.z is not None`
                 shadow = _go.Scatter3d(
                     x=t.x,
                     y=t.y,
                     z=z_proj,
                     mode="markers",
                     marker=dict(
-                        size=m.size if m.size is not None else 2,
+                        size=m.size if m.size is not None else 2,  # pyright: ignore[reportAttributeAccessIssue]  # plotly Marker dynamic attribute typed as unknown
                         color=fg.shadow_color,
                         symbol=symbol,
                         opacity=fg.shadow_opacity,
@@ -372,7 +372,7 @@ def plot_matrix_heatmap(
     row_labels: list[str],
     col_labels: list[str] | None,
     output_dir: str,
-    filename: str = "ref_dists_heatmap.pdf",
+    filename: str = "ref_dists_heatmap",
     title: str = "Reference distributions",
     figure_format: str | None = None,
     xlabel: str = "Output token",
@@ -387,7 +387,7 @@ def plot_matrix_heatmap(
         output_dir: Directory to save the plot.
         filename: Output filename.
         title: Plot title.
-        figure_format: If set, replace extension with this format (``png`` or ``pdf``).
+        figure_format: Output format (``png`` or ``pdf``); defaults to ``png`` when unset.
         xlabel: Label for x-axis.
         ylabel: Label for y-axis.
     """
@@ -413,8 +413,6 @@ def plot_matrix_heatmap(
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     fig.tight_layout()
-    out = os.path.join(output_dir, filename)
-    if figure_format is not None:
-        out = path_with_figure_format(out, figure_format)
+    out = path_with_figure_format(os.path.join(output_dir, filename), figure_format)
     fig.savefig(out)
     plt.close(fig)

@@ -1,0 +1,72 @@
+{
+ "category": "factual",
+ "group": "injective",
+ "objects": [
+  "English",
+  "Spanish",
+  "Portuguese",
+  "Russian",
+  "Mandarin Chinese",
+  "Hindi",
+  "Urdu",
+  "Arabic",
+  "Turkish"
+ ],
+ "provenance": {
+  "C": 9,
+  "bundle": "lre_relations",
+  "compact": false,
+  "eff_k": 8,
+  "n_source_rows": 26,
+  "n_subject_object_conflicts": 0
+ },
+ "range_name": "language",
+ "relation": "country_language",
+ "subject_to_object": {
+  "Argentina": "Spanish",
+  "Australia": "English",
+  "Brazil": "Portuguese",
+  "Canada": "English",
+  "Chile": "Spanish",
+  "China": "Mandarin Chinese",
+  "Colombia": "Spanish",
+  "Egypt": "Arabic",
+  "India": "Hindi",
+  "Mexico": "Spanish",
+  "Nigeria": "English",
+  "Pakistan": "Urdu",
+  "Peru": "Spanish",
+  "Russia": "Russian",
+  "Saudi Arabia": "Arabic",
+  "Spain": "Spanish",
+  "Turkey": "Turkish",
+  "United States": "English",
+  "Venezuela": "Spanish"
+ },
+ "subjects": [
+  "United States",
+  "Canada",
+  "Mexico",
+  "Brazil",
+  "Argentina",
+  "Chile",
+  "Peru",
+  "Colombia",
+  "Venezuela",
+  "Spain",
+  "Russia",
+  "China",
+  "India",
+  "Pakistan",
+  "Nigeria",
+  "Egypt",
+  "Saudi Arabia",
+  "Turkey",
+  "Australia"
+ ],
+ "templates": [
+  "{subject}, where most people speak",
+  "In {subject}, people speak the language of",
+  "People in {subject} speak the language of"
+ ]
+}

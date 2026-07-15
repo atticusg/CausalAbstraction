@@ -14,16 +14,17 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
 import numpy as np
-import plotly.graph_objects as go
+import plotly.graph_objects as go  # pyright: ignore[reportMissingTypeStubs]
 import torch
 import torch.nn.functional as F
 from sklearn.decomposition import PCA
 from torch import Tensor
 
-from causalab.methods.spline.builders import (
+from causalab.io.centroids import (
     compute_centroids,
     extract_parameters_from_dataset,
 )
@@ -587,7 +588,7 @@ def _resolve_categorical_colors(
 
 def _resolve_continuous_colorscale(
     colormap: str | None = None,
-) -> str:
+) -> str | list[list[float | str]]:
     """Return a Plotly-compatible colorscale name for continuous data.
 
     If the colormap is qualitative / categorical-only (tab10, Set1, etc.),
@@ -765,7 +766,7 @@ def _assemble_dropdown_figure(
     title: str,
     axis_labels: tuple[str, str, str],
     save_path: str,
-) -> None:
+) -> go.Figure:
     """Build figure with a single combined dropdown, write to HTML.
 
     Args:
@@ -786,7 +787,7 @@ def _assemble_dropdown_figure(
     for _, traces in param_trace_groups:
         all_scatter_traces.extend(traces)
     temp_fig = go.Figure(data=all_scatter_traces)
-    z_floor = fg._get_z_floor(temp_fig)
+    z_floor = fg._get_z_floor(temp_fig)  # pyright: ignore[reportPrivateUsage]
 
     # Add always-visible traces
     for t in always_visible_traces:
@@ -797,26 +798,26 @@ def _assemble_dropdown_figure(
     fg.style_plotly_3d(fig, floor_shadow=False)
 
     # Add shadows for always-visible traces at the global z_floor
-    fg._add_floor_shadows(fig, z_floor=z_floor)
-    n_always = len(fig.data)
+    fg._add_floor_shadows(fig, z_floor=z_floor)  # pyright: ignore[reportPrivateUsage]
+    n_always = len(fig.data)  # pyright: ignore[reportArgumentType]  # plotly Figure.data is a tuple-like Sized container; stubs widen to Figure
 
     # Add dropdown trace groups + their shadows
     group_ranges: list[tuple[int, int]] = []
     for _, traces in param_trace_groups:
-        start = len(fig.data)
+        start = len(fig.data)  # pyright: ignore[reportArgumentType]  # plotly Figure.data is a tuple-like Sized container; stubs widen to Figure
         for t in traces:
             t.visible = False
             fig.add_trace(t)
         # Add shadows for this group's traces (also hidden)
-        shadow_start = len(fig.data)
-        fg._add_floor_shadows(
+        shadow_start = len(fig.data)  # pyright: ignore[reportArgumentType]  # plotly Figure.data is a tuple-like Sized container; stubs widen to Figure
+        fg._add_floor_shadows(  # pyright: ignore[reportPrivateUsage]
             fig, only_indices=list(range(start, shadow_start)), z_floor=z_floor
         )
-        for i in range(shadow_start, len(fig.data)):
+        for i in range(shadow_start, len(fig.data)):  # pyright: ignore[reportArgumentType]  # plotly Figure.data is a tuple-like Sized container; stubs widen to Figure
             fig.data[i].visible = False
-        group_ranges.append((start, len(fig.data)))
+        group_ranges.append((start, len(fig.data)))  # pyright: ignore[reportArgumentType]  # plotly Figure.data is a tuple-like Sized container; stubs widen to Figure
 
-    total_traces = len(fig.data)
+    total_traces = len(fig.data)  # pyright: ignore[reportArgumentType]  # plotly Figure.data is a tuple-like Sized container; stubs widen to Figure
 
     # Build dropdown buttons
     buttons = []
@@ -872,8 +873,6 @@ def _assemble_dropdown_figure(
 # ---------------------------------------------------------------------------
 # Unified 3D plot
 # ---------------------------------------------------------------------------
-
-from dataclasses import dataclass
 
 
 @dataclass
@@ -1134,7 +1133,10 @@ def plot_3d(
         centroids_3d = centroids_3d_t.numpy()
     else:
         features_cpu = features[:n_features].detach().cpu().float()
+        mean_cpu: Tensor | None = None
+        std_cpu: Tensor | None = None
         if has_manifold:
+            assert mean is not None and std is not None
             mean_cpu = mean.detach().cpu()
             std_cpu = std.detach().cpu()
             features_for_centroids = (features_cpu - mean_cpu) / (std_cpu + 1e-6)
@@ -1145,6 +1147,7 @@ def plot_3d(
             # Aggregate raw probabilities per class, then √: gives proper
             # Hellinger centroids √(mean(p)) on the unit sphere. Standardization
             # doesn't apply (sphere_project manifolds use mean=0, std=1).
+            assert raw_probs is not None
             raw_probs_cpu = raw_probs[:n_features].detach().cpu().float()
             control_points, mean_p_per_class, metadata = compute_centroids(
                 raw_probs_cpu,
@@ -1160,9 +1163,13 @@ def plot_3d(
         if pre_computed_centroids_3d is not None:
             centroids_3d = np.asarray(pre_computed_centroids_3d)
         elif has_manifold and not hellinger_mode:
+            assert (
+                mean_cpu is not None and std_cpu is not None and project_fn is not None
+            )
             centroids_ambient = centroids_raw * (std_cpu + 1e-6) + mean_cpu
             centroids_3d = project_fn(centroids_ambient.detach().cpu().numpy())
         else:
+            assert project_fn is not None
             centroids_3d = project_fn(centroids_raw.detach().cpu().numpy())
 
     centroid_param_names = metadata["parameter_names"]
@@ -1194,6 +1201,7 @@ def plot_3d(
 
     # Manifold mesh
     if has_manifold and ranges is not None:
+        assert mean is not None and std is not None and project_fn is not None
         mesh_traces = _build_manifold_mesh_traces(
             manifold_obj,
             mean,
@@ -1242,6 +1250,7 @@ def plot_3d(
                         "Skipping intrinsic path '%s' (no manifold)", pt.name
                     )
                     continue
+                assert mean is not None and std is not None and project_fn is not None
                 device = _get_manifold_device(manifold_obj)
                 mean_d = mean.to(device)
                 std_d = std.to(device)
@@ -1250,6 +1259,7 @@ def plot_3d(
                     decoded = decoded * (std_d + 1e-6) + mean_d
                 pts_3d = project_fn(decoded.cpu().numpy())
             else:
+                assert project_fn is not None
                 pts_3d = project_fn(pt.points.detach().cpu().numpy())
             line_kwargs = dict(color=pt.color, width=pt.width)
             if pt.dash is not None:
@@ -1356,9 +1366,10 @@ def plot_3d(
         ]
         trace_groups.append(("features", traces))
 
+    axis_labels: tuple[str, str, str]
     if features.shape[1] > 3:
         idx = list(pca_components) if pca_components is not None else [0, 1, 2]
-        axis_labels = tuple(f"PC {i}" for i in idx)
+        axis_labels = (f"PC {idx[0]}", f"PC {idx[1]}", f"PC {idx[2]}")
     else:
         axis_labels = ("Dim 0", "Dim 1", "Dim 2")
     _assemble_dropdown_figure(
@@ -1371,7 +1382,7 @@ def plot_3d(
 # ---------------------------------------------------------------------------
 
 
-def _prepare_features_data(
+def _prepare_features_data(  # pyright: ignore[reportUnusedFunction]
     features: Tensor,
     n_components: int,
     train_dataset: list | None = None,
@@ -1571,7 +1582,7 @@ def plot_steering_results(
 
     Args:
         steer_result: Dict from steer_manifold() with grid_points, scores, etc.
-        manifold_obj: SplineManifold or ManifoldFlow.
+        manifold_obj: SplineManifold.
         mean: Standardization mean (k,).
         std: Standardization std (k,).
         ranges: Intrinsic ranges for surface sampling.

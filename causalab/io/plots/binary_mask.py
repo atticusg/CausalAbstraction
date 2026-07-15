@@ -170,7 +170,7 @@ def plot_attention_head_mask(
     heads: List[int],
     title: Optional[str] = None,
     save_path: Optional[str] = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     """
     Plot binary mask showing which attention heads were selected by DBM.
@@ -240,7 +240,7 @@ def plot_residual_stream_mask(
     token_position_ids: List[str],
     title: Optional[str] = None,
     save_path: Optional[str] = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     """
     Plot binary mask showing which residual stream positions were selected by DBM.
@@ -311,7 +311,7 @@ def plot_mlp_mask(
     token_position_ids: List[str],
     title: Optional[str] = None,
     save_path: Optional[str] = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     """
     Plot binary mask showing which MLP units were selected by DBM.
@@ -378,7 +378,7 @@ def plot_binary_mask(
     feature_indices: Dict[str, Optional[List[int]]],
     title: Optional[str] = None,
     save_path: Optional[str] = None,
-    figure_format: str = "pdf",
+    figure_format: str = "png",
 ) -> None:
     """
     Plot binary mask, auto-detecting component type and grid dimensions.

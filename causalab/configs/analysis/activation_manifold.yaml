@@ -11,7 +11,7 @@ n_grid: 21
 batch_size: 32
 subspace: null
 layers: null                   # list[int] or null. Selects which grid cells to use from subspace. null = best_cell.
-token_positions: [last_token]  # list[str] or null. Selects which positions from subspace grid. null = best_cell.
+token_positions: null          # list[str] or null. Selects which positions from subspace grid. null = best_cell.
 intrinsic_mode: pca  # "parameter" (canonical θ) or "pca" (data-driven from centroid PCA).
 max_control_points: "all"      # int or "all"; subsamples evenly spaced centroids before TPS fit
 skip_decoding_eval: true       # Default: skip the decoding reconstruction test (step 3b) so model weights aren't loaded.
@@ -20,4 +20,4 @@ colormap: ${task.colormap}     # inherited from task config
 embedding_shuffle_seed: null   # Seed for permuting embedding order (null = canonical order)
 
 visualization:
-  figure_format: pdf
+  figure_format: ${figure_format}

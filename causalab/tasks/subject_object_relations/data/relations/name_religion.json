@@ -1,0 +1,57 @@
+{
+ "category": null,
+ "group": "bias",
+ "objects": [
+  "Islam",
+  "Judaism",
+  "Buddhism",
+  "Hinduism"
+ ],
+ "provenance": {
+  "C": 4,
+  "bundle": "lre_bias",
+  "compact": true,
+  "eff_k": 2,
+  "n_source_rows": 15,
+  "n_subject_object_conflicts": 0
+ },
+ "range_name": "religion",
+ "relation": "name_religion",
+ "subject_to_object": {
+  "Aarti": "Hinduism",
+  "Abdullah": "Islam",
+  "Ajahn": "Buddhism",
+  "Ali": "Islam",
+  "Arjun": "Hinduism",
+  "Bhikkhuni": "Buddhism",
+  "Esther": "Judaism",
+  "Fatima": "Islam",
+  "Hussain": "Islam",
+  "Miriam": "Judaism",
+  "Omar": "Islam",
+  "Pooja": "Hinduism",
+  "Raj": "Hinduism",
+  "Rohit": "Hinduism",
+  "Salim": "Islam"
+ },
+ "subjects": [
+  "Abdullah",
+  "Ali",
+  "Fatima",
+  "Hussain",
+  "Omar",
+  "Salim",
+  "Esther",
+  "Miriam",
+  "Ajahn",
+  "Bhikkhuni",
+  "Arjun",
+  "Raj",
+  "Rohit",
+  "Pooja",
+  "Aarti"
+ ],
+ "templates": [
+  "{subject} is most likely a follower of the religion of"
+ ]
+}

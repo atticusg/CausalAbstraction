@@ -2,150 +2,10 @@
 
 from __future__ import annotations
 
-import logging
-from collections import defaultdict
-from typing import Any, Callable
-
 import torch
 from torch import Tensor
 
-from causalab.causal.counterfactual_dataset import CounterfactualExample
 from .manifold import SplineManifold
-
-logger = logging.getLogger(__name__)
-
-EXCLUDED_VARS = {
-    "probs",
-    "sequence",
-    "raw_input",
-    "raw_output",
-    "true_probs",
-    "observations",
-    "context_length",
-}
-
-
-def extract_parameters_from_dataset(
-    dataset: list[CounterfactualExample],
-    excluded_vars: set[str] | None = None,
-    embeddings: dict[str, Callable[[Any], list[float]]] | None = None,
-    causal_model: Any | None = None,
-) -> dict[str, Tensor]:
-    """Extract parameter values from input traces of a counterfactual dataset.
-
-    Iterates over examples and extracts causal parameter values from the input
-    trace only (not counterfactual traces). This gives one value per example,
-    aligned with features from collect_features().
-
-    When an embedding function is provided for a variable, it is used to map
-    the value to one or more floats (e.g. cyclic day -> [cos, sin]).
-    Multi-dimensional embeddings produce keys like ``var_0``, ``var_1``, etc.
-    When no embedding is provided, the value is converted via ``float()``.
-
-    Tuple-valued parameters (without an embedding) are expanded into separate
-    dimensions (mu_0, mu_1).
-
-    Args:
-        dataset: List of CounterfactualExample dicts.
-        excluded_vars: Set of variable names to skip. Uses EXCLUDED_VARS if None.
-        embeddings: Optional dict mapping variable names to embedding functions.
-            Each function takes a variable value and returns a list of floats.
-        causal_model: Optional CausalModel. If provided and ``embeddings`` is
-            None, embeddings are read from ``causal_model.embeddings``.
-
-    Returns:
-        Dict mapping parameter names to tensors of shape (n_examples,).
-    """
-    if excluded_vars is None:
-        excluded_vars = EXCLUDED_VARS
-    if embeddings is None:
-        embeddings = getattr(causal_model, "embeddings", None) or {}
-
-    param_values: dict[str, list[float]] = defaultdict(list)
-    tuple_params: dict[str, int] = {}
-
-    def _extract_from_trace(trace):
-        for var in trace._values:
-            if var in excluded_vars:
-                continue
-            val = trace[var]
-            if val is None:
-                continue
-            if var in embeddings:
-                coords = embeddings[var](val)
-                if len(coords) == 1:
-                    param_values[var].append(coords[0])
-                else:
-                    for j, c in enumerate(coords):
-                        param_values[f"{var}_{j}"].append(c)
-            elif isinstance(val, (tuple, list)):
-                if var not in tuple_params:
-                    tuple_params[var] = len(val)
-                for j, v in enumerate(val):
-                    param_values[f"{var}_{j}"].append(float(v))
-            else:
-                param_values[var].append(float(val))
-
-    for ex in dataset:
-        _extract_from_trace(ex["input"])
-
-    return {k: torch.tensor(v) for k, v in param_values.items()}
-
-
-def compute_centroids(
-    features: Tensor,
-    param_tensors: dict[str, Tensor],
-) -> tuple[Tensor, Tensor, dict[str, Any]]:
-    """Group features by unique parameter combinations and compute mean centroids.
-
-    **Ordering warning**: The returned centroids are sorted by torch.unique's
-    lexicographic order on the parameter combinations, which may NOT match the
-    task's class index order. For example, 2D grid coordinates (angle, height)
-    get sorted by (angle, height) while class indices may enumerate by
-    (height, angle). Do not assume centroid[i] corresponds to class i.
-    Use manifold.encode(class_ordered_centroids) to get intrinsic coordinates
-    in class order.
-
-    Args:
-        features: Feature tensor (n_samples, ambient_dim).
-        param_tensors: Dict mapping parameter names to tensors of shape (n_samples,).
-
-    Returns:
-        control_points: Unique parameter combinations (n_centroids, n_params).
-        centroids: Mean features per group (n_centroids, ambient_dim).
-        metadata: Dict with parameter_names and counts.
-    """
-    n = features.shape[0]
-    param_names = sorted(param_tensors.keys())
-    param_matrix = torch.stack([param_tensors[name] for name in param_names], dim=1)
-
-    # Find unique parameter combinations
-    unique_params, inverse_indices = torch.unique(
-        param_matrix, dim=0, return_inverse=True
-    )
-    n_centroids = unique_params.shape[0]
-
-    # Compute mean features per group
-    centroids = torch.zeros(n_centroids, features.shape[1], dtype=features.dtype)
-    counts = torch.zeros(n_centroids, dtype=torch.long)
-    for i in range(n):
-        idx = inverse_indices[i]
-        centroids[idx] += features[i]
-        counts[idx] += 1
-
-    centroids = centroids / counts.unsqueeze(1).float()
-
-    metadata = {
-        "parameter_names": param_names,
-        "n_centroids": n_centroids,
-        "counts": counts.tolist(),
-    }
-
-    logger.info(
-        f"Computed {n_centroids} centroids from {n} samples (params: {param_names})"
-    )
-
-    return unique_params, centroids, metadata
 
 
 def build_spline_manifold(
@@ -155,7 +15,7 @@ def build_spline_manifold(
     ambient_dim: int | None = None,
     smoothness: float = 0.0,
     device: str | torch.device = "cpu",
-    periodic_dims: tuple[bool, ...] | None = None,
+    periodic_dims: list[int] | tuple[bool, ...] | None = None,
     periods: list[float] | None = None,
     spline_method: str = "auto",
     sphere_project: bool = False,
@@ -291,7 +151,6 @@ def remap_periodic_to_angle(
     """
     import math
 
-    n = control_points.shape[0]
     n_comp = control_points.shape[1]
 
     paired_dims = set()

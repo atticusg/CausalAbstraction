@@ -50,6 +50,13 @@ class ThinPlateSpline(nn.Module):
         smoothness: Regularization parameter (0 = exact interpolation).
     """
 
+    # Class-level annotations for register_buffer attributes; pyright
+    # cannot otherwise infer Tensor types for buffers.
+    control_points: Tensor
+    values: Tensor
+    rbf_weights: Tensor
+    poly_coeffs: Tensor
+
     def __init__(
         self,
         control_points: Tensor,
@@ -108,7 +115,7 @@ class ThinPlateSpline(nn.Module):
             K = torch.ones(n_a, n_b, device=A.device, dtype=A.dtype)
             for dim_idx, period in zip(self.periodic_dims, self.periods):
                 diff = A[:, dim_idx : dim_idx + 1] - B[:, dim_idx : dim_idx + 1].T
-                K = K * _bernoulli4_kernel(diff.abs(), period)
+                K = K * _bernoulli4_kernel(diff.abs(), period)  # pyright: ignore[reportConstantRedefinition]
             return K
 
         # Mixed: fall through to standard TPS on full dim
@@ -141,7 +148,7 @@ class ThinPlateSpline(nn.Module):
 
         K = self._compute_kernel_matrix(self.control_points, self.control_points)
         if self.smoothness > 0:
-            K = K + self.smoothness * torch.eye(n, device=device, dtype=dtype)
+            K = K + self.smoothness * torch.eye(n, device=device, dtype=dtype)  # pyright: ignore[reportConstantRedefinition]
 
         P = self._build_polynomial(self.control_points)
         m = P.shape[1]
