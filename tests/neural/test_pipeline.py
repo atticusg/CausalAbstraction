@@ -303,17 +303,36 @@ class TestLMPipelineInitUnit:
         # module, but the underlying config must be the same.
         assert pipe.tokenizer is not None
 
-    def test_load_weights_false_yields_simplenamespace_config(self) -> None:
-        # load_weights=False is the InterchangeTargets-only path: build the
-        # tokenizer + config without paying for weight load. Forward passes
-        # will fail (no .device, no parameters), so the constraint is
-        # documented here: don't call generate/load in this mode.
+    def test_load_weights_false_builds_meta_model(self) -> None:
+        # load_weights=False is the InterchangeTargets-only path: skip the weight
+        # load but keep everything that doesn't need weights. nnsight builds the
+        # real architecture on the meta device, so unlike the config-only stub
+        # this used to return, the whole module tree is present and shapes are
+        # inspectable via `pipeline.nnsight.scan(...)`. Running a forward is
+        # still meaningless — there are no weights.
         pipe = LMPipeline(TINY_RANDOM_MODEL_NAME, max_new_tokens=1, load_weights=False)
-        assert isinstance(pipe.model, SimpleNamespace)
-        assert hasattr(pipe.model, "config")
+        assert pipe.model.device.type == "meta"
         # Hidden size is still readable so InterchangeTargets can size
         # activation buffers without forward.
         assert pipe.model.config.hidden_size > 0
+        # ...and now the layer tree is too, which the stub could not offer.
+        assert len(pipe.model.model.layers) == pipe.model.config.num_hidden_layers
+        assert pipe.nnsight.dispatched is False
+
+    def test_load_weights_false_can_tokenize(self) -> None:
+        # The lite pipeline's whole job is tokenize + read config. Token ids must
+        # stay on CPU: moving them to the meta device would silently void them.
+        pipe = LMPipeline(TINY_RANDOM_MODEL_NAME, max_new_tokens=1, load_weights=False)
+        enc = pipe.load([_make_trace("hello world")])
+        assert enc["input_ids"].device.type == "cpu"
+        assert enc["input_ids"].shape[0] == 1
+
+    def test_model_is_the_module_the_envoy_wraps(
+        self, tiny_pipeline: LMPipeline
+    ) -> None:
+        # `model` (raw nn.Module, for config/hooks) and `nnsight` (the envoy the
+        # intervention engine traces) must be two handles on ONE network.
+        assert tiny_pipeline.model is tiny_pipeline.nnsight._module
 
 
 # --------------------------------------------------------------------------- #

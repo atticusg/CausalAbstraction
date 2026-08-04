@@ -8,14 +8,11 @@ counterfactual, gathered at the source's tokenization.
 
 This test pins that with a hand-rolled hook ground truth. To prove the injected
 value comes from the source model (not the target), the source pipeline is a
-deep copy of the target with perturbed weights — so its activation at the
-counterfactual differs, and the target output must follow the *source's* value.
-See ``docs/PYVENE_HOOK_COVERAGE.md``.
+weight-perturbed rebuild of the target — so its activation at the counterfactual
+differs, and the target output must follow the *source's* value.
 """
 
 from __future__ import annotations
-
-import copy
 
 import pytest
 import torch
@@ -40,14 +37,24 @@ _SOURCE = "a slow lazy old dog sits"
 
 
 def _perturbed_source(pipeline: LMPipeline) -> LMPipeline:
-    """A deep copy of ``pipeline`` with weights perturbed by fixed-seed noise — a
-    genuinely different source model that shares the tokenizer."""
-    src_model = copy.deepcopy(pipeline.model)
+    """A fresh model with ``pipeline``'s weights perturbed by fixed-seed noise — a
+    genuinely different source model that shares the tokenizer.
+
+    Rebuilt from the config and a copied state dict rather than
+    ``copy.deepcopy(pipeline.model)``. A pipeline's module has been wrapped by an
+    nnsight ``Envoy``, which installs a controller ``forward`` closing over a
+    *weakref to that module*; deepcopy copies the closure but the weakref still
+    resolves to the original, so the copy silently runs the ORIGINAL model's
+    layers. That produces wrong numbers with no error — exactly the failure this
+    test exists to catch, so it must not be built on it.
+    """
+    src_model = type(pipeline.model)(pipeline.model.config)
+    src_model.load_state_dict(pipeline.model.state_dict())
     g = torch.Generator().manual_seed(0)
     with torch.no_grad():
         for p in src_model.parameters():
             p.add_(0.1 * torch.randn(p.shape, generator=g))
-    return LMPipeline(src_model, max_new_tokens=1, padding_side="left")
+    return LMPipeline(src_model.eval(), max_new_tokens=1, padding_side="left")
 
 
 def _single_pos_target(pipeline: LMPipeline) -> InterchangeTarget:

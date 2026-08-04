@@ -8,7 +8,8 @@ from typing import Any, Dict, List
 
 import torch
 from torch import Tensor
-from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel
+from transformers import AutoTokenizer, PreTrainedModel
+from nnsight import TransformersModel  # type: ignore[import-untyped]
 from pyvene import IntervenableModel  # type: ignore[import-untyped]
 from causalab.causal.counterfactual_dataset import CounterfactualExample
 from causalab.causal.trace import CausalTrace
@@ -160,9 +161,29 @@ class Pipeline(ABC):
     Subclasses must implement the hooks below. The base class deliberately
     avoids variadic parameters so implementers have full freedom to define
     their own concrete signatures.
+
+    Two handles on the same network, deliberately:
+
+    * ``model`` — the raw ``torch.nn.Module`` (a HuggingFace model). Everything
+      that reads config, moves devices, or installs its own hooks uses this.
+    * ``nnsight`` — the :class:`nnsight.TransformersModel` envoy wrapping *that
+      same module*. The intervention engine traces through this.
+
+    They are never two copies: ``model is nnsight._module``.
+
+    **Do not ``copy.deepcopy(pipeline.model)``.** Wrapping installs a controller
+    ``forward`` on every submodule that closes over a *weakref* to that module.
+    Deepcopy duplicates the closure but the weakref still resolves to the
+    original, so the copy runs the original model's layers — wrong activations,
+    wrong logits, and no error to notice it by. To build a second model from an
+    existing one, rebuild it from its config and state dict::
+
+        clone = type(pipeline.model)(pipeline.model.config)
+        clone.load_state_dict(pipeline.model.state_dict())
     """
 
     model: Any
+    nnsight: TransformersModel
     tokenizer: Any
     model_or_name: Any
 
@@ -209,7 +230,13 @@ class Pipeline(ABC):
 
 
 class LMPipeline(Pipeline):
-    """Pipeline for autoregressive HuggingFace causal‑LMs."""
+    """Pipeline for autoregressive HuggingFace causal‑LMs.
+
+    Extra keyword arguments (via ``**kwargs``) that affect loading:
+    ``device``, ``dtype``, ``device_map``, ``config``, ``hf_token``,
+    ``eager_attn``, and ``tokenizer`` — pass the last one when wrapping a model
+    built in-process, which has no ``config.name_or_path`` to resolve one from.
+    """
 
     # Content-independent sentinel used to locate where user content begins in
     # the chat-wrapped prompt. ``wrapped.find(content)`` is unsafe because task
@@ -253,6 +280,14 @@ class LMPipeline(Pipeline):
     # ------------------------------------------------------------------
 
     def _setup_model(self) -> None:
+        """Build ``self.nnsight`` (the envoy) and ``self.model`` (the raw module).
+
+        The tokenizer is loaded here rather than left to nnsight's pipeline: the
+        token-position machinery depends on this exact instance's
+        ``padding_side`` / ``pad_token`` / ``offset_mapping`` behaviour, so we
+        configure it and hand the *same object* to ``TransformersModel`` — the
+        pipeline and ``pipeline.load`` must never disagree about tokenization.
+        """
         _patch_extra_special_tokens()
 
         device, dtype = _infer_device_and_dtype(
@@ -269,54 +304,79 @@ class LMPipeline(Pipeline):
                 self.model_or_name, token=hf_token
             )
             device_map = self._init_extra_kwargs.get("device_map")
-            pretrained_kwargs: dict[str, Any] = dict(
-                config=self._init_extra_kwargs.get("config"),
-                token=hf_token,
-                dtype=dtype,
-            )
+            load_kwargs: dict[str, Any] = {"token": hf_token}
+            # `dtype="auto"` means "read it off the checkpoint", which only
+            # `from_pretrained` understands. The meta build goes through
+            # `from_config`, where the string reaches `getattr(torch, "auto")`
+            # and raises — and there are no weights whose dtype to adopt anyway.
+            if self.load_weights or isinstance(dtype, torch.dtype):
+                load_kwargs["dtype"] = dtype
+            config = self._init_extra_kwargs.get("config")
+            if config is not None:
+                load_kwargs["config"] = config
             if device_map is not None:
-                pretrained_kwargs["device_map"] = device_map
-            if self.load_weights:
-                self.model = AutoModelForCausalLM.from_pretrained(  # type: ignore[call-arg]
-                    self.model_or_name, **pretrained_kwargs
-                )
-                if device_map is None:
-                    self.model = self.model.to(device=device)
-                if self._init_extra_kwargs.get("eager_attn", True):
-                    if hasattr(self.model.config, "_attn_implementation"):
-                        self.model.config._attn_implementation = "eager"
-                if hasattr(self.model.config, "use_cache"):
-                    self.model.config.use_cache = False
-                # We always greedy-decode (do_sample=False); strip sampling-only
-                # fields from generation_config so transformers doesn't warn that
-                # temperature/top_p are being ignored on every generate() call.
-                gen_cfg = getattr(self.model, "generation_config", None)
-                if gen_cfg is not None:
-                    gen_cfg.do_sample = False
-                    gen_cfg.temperature = None
-                    gen_cfg.top_p = None
-                    gen_cfg.top_k = None
-            else:
-                # Tokenizer + config only: skip weight load. Forward passes will fail;
-                # this mode is for code paths that only need hidden_size + tokenization
-                # (e.g. building InterchangeTargets for cached-feature manifold fitting).
-                from types import SimpleNamespace
-                from transformers import AutoConfig
-
-                hf_config = AutoConfig.from_pretrained(
-                    self.model_or_name,
-                    token=hf_token,
-                )
-                self.model = SimpleNamespace(config=hf_config)
+                load_kwargs["device_map"] = device_map
+            elif self.load_weights:
+                load_kwargs["device"] = device
+            if self._init_extra_kwargs.get("eager_attn", True):
+                load_kwargs["attn_implementation"] = "eager"
+            # dispatch=False builds the architecture on the meta device: a full,
+            # traceable envoy tree (and `nnsight.scan()` for shapes) without
+            # paying the weight load. That is the `load_weights=False` mode —
+            # strictly more capable than the config-only stub it replaces.
+            self.nnsight = TransformersModel(
+                self.model_or_name,
+                task="text-generation",
+                tokenizer=self.tokenizer,
+                dispatch=self.load_weights,
+                **load_kwargs,
+            )
         else:
             # Pre-loaded model: move to device, and only convert dtype if explicit
-            self.model = self.model_or_name.to(device)
+            module = self.model_or_name.to(device)
             if isinstance(dtype, torch.dtype):
-                self.model = self.model.to(dtype)
+                module = module.to(dtype)
             # If dtype is "auto", keep the model's existing dtype
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                self.model.config.name_or_path
+            tokenizer = self._init_extra_kwargs.get("tokenizer")
+            if tokenizer is None:
+                # A model built in-process (`LlamaForCausalLM(config)`) has an
+                # empty `name_or_path`, so there is nothing to resolve — say so
+                # instead of failing inside the Hub client's repo-id validator.
+                name_or_path = getattr(module.config, "name_or_path", "")
+                if not name_or_path:
+                    raise ValueError(
+                        "A pre-loaded model with no `config.name_or_path` gives "
+                        "LMPipeline no way to find its tokenizer. Pass one "
+                        "explicitly: LMPipeline(model, tokenizer=<tokenizer>)."
+                    )
+                tokenizer = AutoTokenizer.from_pretrained(name_or_path)
+            self.tokenizer = tokenizer
+            self.nnsight = TransformersModel(
+                module,
+                task="text-generation",
+                tokenizer=self.tokenizer,
+                dispatch=True,
             )
+
+        # The raw module the envoy wraps — the handle for config reads, device
+        # moves, and any code that installs its own PyTorch hooks.
+        self.model = self.nnsight._module
+
+        if self.load_weights:
+            if self._init_extra_kwargs.get("eager_attn", True):
+                if hasattr(self.model.config, "_attn_implementation"):
+                    self.model.config._attn_implementation = "eager"
+            if hasattr(self.model.config, "use_cache"):
+                self.model.config.use_cache = False
+            # We always greedy-decode (do_sample=False); strip sampling-only
+            # fields from generation_config so transformers doesn't warn that
+            # temperature/top_p are being ignored on every generate() call.
+            gen_cfg = getattr(self.model, "generation_config", None)
+            if gen_cfg is not None:
+                gen_cfg.do_sample = False
+                gen_cfg.temperature = None
+                gen_cfg.top_p = None
+                gen_cfg.top_k = None
 
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.pad_token_id = self.tokenizer.convert_tokens_to_ids(
@@ -460,8 +520,13 @@ class LMPipeline(Pipeline):
         # Pop offset_mapping if present - it's a list of tuples, not a tensor
         offset_mapping = enc.pop("offset_mapping", None)
 
-        for k, v in enc.items():
-            enc[k] = v.to(self.model.device)
+        # A `load_weights=False` pipeline lives on the meta device — it exists to
+        # tokenize and read config, never to run a forward. Moving real ids onto
+        # meta would silently discard them, so leave them on CPU.
+        target_device = self.model.device
+        if target_device.type != "meta":
+            for k, v in enc.items():
+                enc[k] = v.to(target_device)
 
         # Add back offset_mapping if it was present
         if offset_mapping is not None:

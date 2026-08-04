@@ -6,9 +6,31 @@ from typing import Any, cast
 
 import torch
 from torch import Tensor
-import pyvene as pv  # type: ignore[import-untyped]
 
 from causalab.neural.featurizer import Featurizer
+
+
+class RotateLayer(torch.nn.Module):
+    """An ``(n, m)`` linear map with orthogonal initialization — DAS's rotation.
+
+    Wrapped in ``torch.nn.utils.parametrizations.orthogonal`` by
+    :class:`SubspaceFeaturizer`, which keeps the columns orthonormal across
+    training so the learned subspace stays a genuine rotation rather than
+    drifting into an arbitrary linear map.
+
+    Inlined from ``pyvene.models.layers.LowRankRotateLayer`` (same shape, same
+    initializer, same parameter name), so rotations serialized before the
+    nnsight migration deserialize unchanged.
+    """
+
+    def __init__(self, n: int, m: int, init_orth: bool = True) -> None:
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.empty(n, m), requires_grad=True)
+        if init_orth:
+            torch.nn.init.orthogonal_(self.weight)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return torch.matmul(x.to(self.weight.dtype), self.weight)
 
 
 class SubspaceFeaturizerModule(torch.nn.Module):
@@ -16,7 +38,7 @@ class SubspaceFeaturizerModule(torch.nn.Module):
 
     def __init__(
         self, rotate_layer: torch.nn.Module
-    ) -> None:  # pv.models.layers.LowRankRotateLayer
+    ) -> None:  # a RotateLayer, orthogonally parametrized
         super().__init__()
         self.rotate = rotate_layer
 
@@ -32,7 +54,7 @@ class SubspaceInverseFeaturizerModule(torch.nn.Module):
 
     def __init__(
         self, rotate_layer: torch.nn.Module
-    ) -> None:  # pv.models.layers.LowRankRotateLayer
+    ) -> None:  # a RotateLayer, orthogonally parametrized
         super().__init__()
         self.rotate = rotate_layer
 
@@ -63,11 +85,11 @@ class SubspaceFeaturizer(Featurizer):
         )
 
         if shape is not None:
-            rotate = pv.models.layers.LowRankRotateLayer(*shape, init_orth=True)  # pyright: ignore[reportAttributeAccessIssue]  # pyvene lacks stubs for models.layers
+            rotate = RotateLayer(*shape, init_orth=True)
         else:
             assert rotation_subspace is not None  # validated by assert at top
             shape = cast("tuple[int, int]", tuple(rotation_subspace.shape))
-            rotate = pv.models.layers.LowRankRotateLayer(*shape, init_orth=False)  # pyright: ignore[reportAttributeAccessIssue]  # pyvene lacks stubs for models.layers
+            rotate = RotateLayer(*shape, init_orth=False)
             rotate.weight.data.copy_(rotation_subspace)
 
         rotate = torch.nn.utils.parametrizations.orthogonal(rotate)

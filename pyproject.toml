@@ -27,7 +27,7 @@ dependencies = [
     "dash-cytoscape",
     "jupyter-dash",
     "rich",
-    "nnsight>=0.5.9",
+    "nnsight>=0.8.0",
     "ipykernel>=7.0.1",
     "umap-learn>=0.5.0",
     "hydra-core>=1.3.0",
@@ -39,6 +39,9 @@ dependencies = [
 
 [tool.uv.sources]
 pyvene = { git = "https://github.com/stanfordnlp/pyvene.git", branch = "main" }
+# nnsight 0.8 is not on PyPI yet; develop against the local checkout. Switch to a
+# plain version pin once 0.8.0 is released.
+nnsight = { path = "../nnsight", editable = true }
 
 [tool.pytest.ini_options]
 markers = [
