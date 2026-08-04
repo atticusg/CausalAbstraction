@@ -1064,7 +1064,7 @@ def LM_loss_and_metric_fn(
     source_representations = None
     if source_pipeline is not None:
         source_representations = collect_source_representations(
-            source_pipeline, examples, interchange_target, source_intervenable_model
+            source_pipeline, examples, interchange_target
         )
         batched_counterfactuals = None
 

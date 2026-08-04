@@ -60,6 +60,9 @@ from causalab.methods.steer.steer import run_steering_interventions
 # truth (GH #380). Imported under their original private names to keep the call
 # sites in this file unchanged.
 from tests.neural.activations.hook_oracle import (
+    cf_example as _make_cf_example,
+    random_rotation as _random_rotation,
+    rotate_featurizer as _rotate_featurizer,
     make_trace as _make_trace,
     diag_featurizer as _diag_featurizer,
     RotateFeaturizerModule as _RotateFeaturizerModule,
@@ -1454,3 +1457,86 @@ class TestRunInterchangeInterventionsProperty:
             output_scores=False,
         )
         assert "scores" not in result
+
+
+# --------------------------------------------------------------------------- #
+#  Interchange through a non-trivial featurizer                               #
+# --------------------------------------------------------------------------- #
+class TestInterchangeThroughFeaturizer:
+    """The featurizer must be applied exactly once to the source.
+
+    The source of an interchange is read in one forward and written in another.
+    Whether the *read* returns activation space or feature space is invisible in
+    the identity case and in the output shape — but with a real featurizer,
+    reading through it and then letting the interchange featurize again applies
+    it twice. For a DAS rotation that is ``x @ Rᵀ @ Rᵀ`` (silently wrong); for a
+    rank-reducing subspace it is a shape error.
+
+    A *square orthonormal* rotation makes the correct answer checkable without a
+    second implementation: the rotation is a bijection, so swapping features is
+    exactly swapping activations, and interchange through it must equal
+    interchange through no featurizer at all. Applying R twice does not.
+    """
+
+    pytestmark = pytest.mark.unit
+
+    # Both prompts tokenize to the same length, and the swap targets the LAST
+    # token — position 0 is BOS, whose activation is identical for any prompt, so
+    # a swap there is a no-op and every assertion below would pass vacuously.
+    _BASE = "the quick brown fox"
+    _SOURCE = "a slow lazy dog"
+
+    @staticmethod
+    def _scores(pipeline, featurizer, *, intervene: bool = True) -> torch.Tensor:
+        hidden = pipeline.model.config.hidden_size
+        cls = TestInterchangeThroughFeaturizer
+        unit = ResidualStream(
+            layer=1,
+            token_indices=TokenPosition(
+                lambda trace: [
+                    len(pipeline.tokenizer(trace["raw_input"])["input_ids"]) - 1
+                ],
+                pipeline,
+                id="last_token",
+            ),
+            target_output=True,
+            shape=(hidden,),
+            featurizer=featurizer,
+        )
+        source = cls._BASE if not intervene else cls._SOURCE
+        result = run_interchange_interventions(
+            pipeline,
+            [_make_cf_example(cls._BASE, source)],
+            InterchangeTarget([[unit]]),
+            batch_size=1,
+            output_scores=True,
+        )
+        return result["scores"][0][0]
+
+    def test_bijective_featurizer_matches_raw_interchange(self, tiny_pipeline) -> None:
+        hidden = tiny_pipeline.model.config.hidden_size
+        rotation = _random_rotation(hidden, seed=3)
+        rotated = self._scores(tiny_pipeline, _rotate_featurizer(rotation))
+        plain = self._scores(tiny_pipeline, Featurizer())
+        torch.testing.assert_close(rotated, plain, atol=1e-4, rtol=1e-3)
+
+    def test_rank_reducing_subspace_swaps_only_that_subspace(
+        self, tiny_pipeline
+    ) -> None:
+        """A rank-k subspace featurizer must swap the source's projection onto the
+        subspace and keep the base's orthogonal complement — and must not raise,
+        which is what a doubly-applied rank-reducing featurizer does."""
+        from causalab.methods.trained_subspace.subspace import SubspaceFeaturizer
+
+        hidden = tiny_pipeline.model.config.hidden_size
+        torch.manual_seed(0)
+        subspace = SubspaceFeaturizer(shape=(hidden, 2), trainable=False)
+
+        subspace_swap = self._scores(tiny_pipeline, subspace)
+        full_swap = self._scores(tiny_pipeline, Featurizer())
+        no_swap = self._scores(tiny_pipeline, Featurizer(), intervene=False)
+
+        # The swap has an effect...
+        assert not torch.allclose(subspace_swap, no_swap, atol=1e-6)
+        # ...but only within the 2-dim subspace, so it is not the full swap.
+        assert not torch.allclose(subspace_swap, full_swap, atol=1e-6)

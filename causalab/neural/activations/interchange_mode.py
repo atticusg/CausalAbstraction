@@ -13,9 +13,11 @@ For training intervention models, see train.py.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Sequence
 
 import torch
+from torch import Tensor
 from tqdm import tqdm
 from pyvene import IntervenableModel  # type: ignore[import-untyped]
 
@@ -25,6 +27,11 @@ from causalab.causal.counterfactual_dataset import (
 )
 from causalab.neural.pipeline import Pipeline, ensure_position_ids
 from causalab.neural.units import AtomicModelUnit, InterchangeTarget
+from causalab.neural.activations.engine import (
+    build_plans,
+    collect_unit_activations,
+    generate_with_interventions,
+)
 from causalab.neural.activations.intervenable_model import (
     prepare_intervenable_model,
     prepare_mixed_intervenable_model,
@@ -256,6 +263,181 @@ def prepare_intervenable_inputs(
     return batched_base, batched_counterfactuals, inv_locations, feature_indices
 
 
+# --------------------------------------------------------------------------- #
+#  Trace-engine batch preparation                                             #
+# --------------------------------------------------------------------------- #
+@dataclass
+class InterchangeBatch:
+    """One batch's tokenized inputs and resolved positions, ready for the engine.
+
+    Positions are per unit, in the padded-batch frame, and already validated: the
+    base/counterfactual shapes match and no span is ragged across the batch (see
+    :func:`prepare_intervenable_inputs` for what those two failures look like and
+    why they must be caught here rather than deep in a gather).
+    """
+
+    base_encoding: dict[str, Any]
+    source_encodings: list[dict[str, Any]]
+    base_positions: list[list[list[int]]]
+    source_positions: list[list[list[int]]]
+    feature_indices: list[list[int] | None]
+    units: list[AtomicModelUnit]
+    group_sizes: list[int]
+
+
+def _validate_positions(
+    units: Sequence[AtomicModelUnit],
+    base_indices: Sequence[Any],
+    counterfactual_indices: Sequence[Any],
+) -> None:
+    """Reject shape mismatches and ragged spans before they reach a gather.
+
+    Both failures used to surface as a CUDA assertion that poisoned the context;
+    they are cheap to detect here and impossible to diagnose there. The
+    restriction they encode — a uniform, matched span width — is what lets the
+    engine build one rectangular index tensor per unit.
+    """
+    mismatch = _first_index_shape_mismatch(
+        list(base_indices), list(counterfactual_indices)
+    )
+    if mismatch is not None:
+        _path, base_len, cf_len = mismatch
+        raise ValueError(
+            f"Base and counterfactual token positions have mismatched shapes at "
+            f"index path {list(_path)}: base selects {base_len}, counterfactual "
+            f"selects {cf_len}. Interchange pairs positions, so both must select "
+            f"the same number of tokens per example. Usual cause: a counterfactual "
+            f"value string that tokenizes to a different number of tokens than the "
+            f"base value. Use single-token values or a fixed single position."
+        )
+    for label, all_indices in (
+        ("base", base_indices),
+        ("counterfactual", counterfactual_indices),
+    ):
+        for unit_idx, unit_indices in enumerate(all_indices):
+            for group in units[unit_idx].tensorized_index_groups(unit_indices):
+                ragged = _first_ragged_span(group)
+                if ragged is not None:
+                    example_index, (_path, len0, len_j) = ragged
+                    raise ValueError(
+                        f"A {label} token position selects a variable number of "
+                        f"tokens across the batch (unit {unit_idx}: example 0 "
+                        f"selects {len0}, example {example_index} selects {len_j} "
+                        f"at index path {list(_path)}). A unit's per-example "
+                        f"positions are stacked into one index tensor, so every "
+                        f"example must select the same number of tokens. Usual "
+                        f"cause: a value string that tokenizes to a different "
+                        f"number of tokens for different examples. Use a "
+                        f"fixed-width position (e.g. the last token of the value)."
+                    )
+
+
+def prepare_interchange_batch(
+    pipeline: Pipeline,
+    examples: list[CounterfactualExample] | list[LabeledCounterfactualExample],
+    interchange_target: InterchangeTarget,
+    source_pipeline: Pipeline | None = None,
+) -> InterchangeBatch:
+    """Tokenize a batch and resolve every unit's base and source positions.
+
+    ``source_pipeline`` (cross-model patching) changes only where the *source*
+    side is tokenized and indexed: a different model means a different tokenizer,
+    so the counterfactual positions must be computed against it, while the base
+    stays on ``pipeline``.
+    """
+    source_pipeline = source_pipeline or pipeline
+    raw_base = [ex["input"] for ex in examples]
+    raw_sources = [
+        list(cf_tuple)
+        for cf_tuple in zip(*[ex["counterfactual_inputs"] for ex in examples])
+    ]
+
+    base_encoding = pipeline.load(raw_base)
+    source_encodings = [source_pipeline.load(group) for group in raw_sources]
+
+    units = interchange_target.flatten()
+    group_sizes = [len(group) for group in interchange_target]
+
+    base_positions = [
+        unit.resolve_positions(
+            raw_base,
+            attention_mask=base_encoding["attention_mask"],
+            is_original=True,
+        )
+        for unit in units
+    ]
+    source_positions = [
+        unit.resolve_positions(
+            raw_sources[group_index],
+            attention_mask=source_encodings[group_index]["attention_mask"],
+            is_original=False,
+        )
+        for group_index, group in enumerate(interchange_target)
+        for unit in group
+    ]
+
+    # Validate on the full index structures (which carry the head axis for
+    # per-head units), not the extracted positions.
+    _validate_positions(
+        units,
+        [
+            unit.index_component(
+                raw_base,
+                batch=True,
+                is_original=True,
+                attention_mask=base_encoding["attention_mask"],
+            )
+            for unit in units
+        ],
+        [
+            unit.index_component(
+                raw_sources[group_index],
+                batch=True,
+                is_original=False,
+                attention_mask=source_encodings[group_index]["attention_mask"],
+            )
+            for group_index, group in enumerate(interchange_target)
+            for unit in group
+        ],
+    )
+
+    return InterchangeBatch(
+        base_encoding=base_encoding,
+        source_encodings=source_encodings,
+        base_positions=base_positions,
+        source_positions=source_positions,
+        feature_indices=[unit.get_feature_indices() for unit in units],
+        units=units,
+        group_sizes=group_sizes,
+    )
+
+
+def collect_group_sources(
+    source_pipeline: Pipeline, batch: InterchangeBatch
+) -> list[Tensor]:
+    """Read every unit's source activation, one forward per counterfactual group.
+
+    Groups are separate forwards because each has its own counterfactual input —
+    the same reason the pyvene backbone ran one collection pass per source.
+
+    Read ``raw``: the interchange intervention featurizes the source itself, so
+    reading through the unit's featurizer here would apply it twice.
+    """
+    sources: list[Tensor] = []
+    offset = 0
+    for group_index, size in enumerate(batch.group_sizes):
+        units = batch.units[offset : offset + size]
+        positions = batch.source_positions[offset : offset + size]
+        offset += size
+        plans = build_plans(units, positions, "collect", raw=True)
+        collected = collect_unit_activations(
+            source_pipeline, batch.source_encodings[group_index], plans
+        )
+        assert isinstance(collected, list)
+        sources.extend(collected)
+    return sources
+
+
 def batched_interchange_intervention(
     pipeline: Pipeline,
     intervenable_model: IntervenableModel,
@@ -301,7 +483,6 @@ def batched_interchange_intervention(
                 source_pipeline,
                 examples,
                 interchange_target,
-                source_intervenable_model,
             )
             # When using cross-model patching, we don't pass counterfactuals to pyvene
             # because we're using pre-collected source_representations instead
@@ -331,6 +512,37 @@ def batched_interchange_intervention(
         return output
     finally:
         delete_intervenable_model(intervenable_model)
+
+
+def interchange_batch(
+    pipeline: Pipeline,
+    examples: list[CounterfactualExample] | list[LabeledCounterfactualExample],
+    interchange_target: InterchangeTarget,
+    output_scores: bool | int = True,
+    source_pipeline: Pipeline | None = None,
+) -> dict[str, Any]:
+    """Swap each unit's source activation into the base run, for one batch.
+
+    Two forwards per counterfactual group plus one generation: the sources are
+    read first (from ``source_pipeline`` when patching across models), then
+    written into the base's prefill. See :mod:`causalab.neural.activations.engine`
+    for why the sources are a separate pass rather than a batched invoke.
+    """
+    batch = prepare_interchange_batch(
+        pipeline, examples, interchange_target, source_pipeline
+    )
+    sources = collect_group_sources(source_pipeline or pipeline, batch)
+    plans = build_plans(
+        batch.units,
+        batch.base_positions,
+        "interchange",
+        sources=sources,
+        feature_indices=batch.feature_indices,
+    )
+    result = generate_with_interventions(
+        pipeline, batch.base_encoding, plans, output_scores=bool(output_scores)
+    )
+    return pipeline.format_generation(result, batch.base_encoding, output_scores)
 
 
 def run_interchange_interventions(
@@ -369,18 +581,6 @@ def run_interchange_interventions(
         List[dict]: List of dictionaries, each with 'sequences' (on CPU) and optionally
                    'scores' keys (on CPU, in top-k format if int was provided)
     """
-    # Initialize intervenable model with interchange intervention type
-    intervenable_model = prepare_intervenable_model(
-        pipeline, interchange_target, intervention_type="interchange"
-    )
-
-    # Create source intervenable model if doing cross-model patching
-    source_intervenable_model = None
-    if source_pipeline is not None:
-        source_intervenable_model = prepare_intervenable_model(
-            source_pipeline, interchange_target, intervention_type="collect"
-        )
-
     all_outputs = []
 
     # Process each batch with progress tracking
@@ -392,24 +592,15 @@ def run_interchange_interventions(
     ):
         examples = counterfactual_dataset[start : start + batch_size]
         with torch.no_grad():  # Disable gradient tracking for inference
-            # Perform interchange interventions on the batch - returns dict
-            output_dict = batched_interchange_intervention(
-                pipeline,
-                intervenable_model,
-                examples,
-                interchange_target,
-                output_scores=output_scores,
-                source_pipeline=source_pipeline,
-                source_intervenable_model=source_intervenable_model,
+            all_outputs.append(
+                interchange_batch(
+                    pipeline,
+                    examples,
+                    interchange_target,
+                    output_scores=output_scores,
+                    source_pipeline=source_pipeline,
+                )
             )
-
-            # Collect outputs from this batch
-            all_outputs.append(output_dict)
-
-    # Clean up the intervenable models to free GPU memory
-    delete_intervenable_model(intervenable_model)
-    if source_intervenable_model is not None:
-        delete_intervenable_model(source_intervenable_model)
 
     # Convert to top-k format if requested (while still on GPU for efficiency)
     if not isinstance(output_scores, bool) and output_scores > 0:

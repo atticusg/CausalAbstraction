@@ -82,21 +82,15 @@ _SOURCE = "Q: What color is fresh grass? A:"
 
 # Real finding surfaced by this harness (GH #380): pyvene 0.1.8's per-head
 # accessors (head_value_output / head_query_output / head_attention_value_output)
-# assume head_dim == hidden / n_head. Qwen3-4B *decouples* head_dim (128) from
-# hidden / n_head (2560/32 = 80), so on the real backbone the per-head receivers
-# return 80-wide slices instead of the true 128 — a genuinely wrong activation
-# (docs/PATH_PATCHING.md §0.5; docs/CAUSALAB_NEURAL.md §2 flags this as the one
-# real capability gap). These tests encode the CORRECT contract (true head_dim),
-# so they fail today; xfail(strict=True) documents the break and flips to a hard
-# failure the moment the backbone migration fixes per-head addressing — so the
-# marker can't go stale silently.
-_HEAD_DIM_XFAIL = (
-    "pyvene 0.1.8 per-head accessors assume head_dim == hidden/n_head; Qwen3-4B "
-    "decouples it (128 vs 80). causalab now refuses per-head ops on such models "
-    "with a loud guard (NotImplementedError, #386) instead of silently returning "
-    "80-wide slices, so these raise today; the equivalence contract resolves on "
-    "the nnsight backbone migration (guard removed + per-head honors head_dim)."
-)
+# assumed head_dim == hidden / n_head. Qwen3-4B *decouples* head_dim (128) from
+# hidden / n_head (2560/32 = 80), so pyvene returned 80-wide slices instead of the
+# true 128 — a genuinely wrong activation (#386). causalab refused per-head ops on
+# such models rather than report one, and the tests below were xfail(strict=True)
+# pending the backbone migration.
+#
+# The nnsight engine reads per-head width from `config.head_dim`, so they pass:
+# these are now live assertions that a decoupled-head_dim model is addressed
+# correctly, on a real model rather than a synthetic config.
 
 
 @pytest.fixture(scope="module")
@@ -722,7 +716,6 @@ class TestCausalTracingGolden:
 #  Per-head value / query receivers — the decoupled-head_dim GQA risk          #
 # --------------------------------------------------------------------------- #
 class TestHeadReceiversGolden:
-    @pytest.mark.xfail(reason=_HEAD_DIM_XFAIL, strict=True)
     def test_head_value_matches_vproj_kv_slice(self, chat_coherent_pipeline) -> None:
         """Per-head value receiver vs. the v_proj KV slice. Qwen3-4B has a
         *decoupled* head_dim (128 ≠ hidden/n_head=80), the case pyvene 0.1.8's
@@ -738,7 +731,6 @@ class TestHeadReceiversGolden:
         expected = v_out[:, -1, 0:d].cpu().float()
         torch.testing.assert_close(collected, expected, atol=_ATOL_ACT, rtol=_RTOL_ACT)
 
-    @pytest.mark.xfail(reason=_HEAD_DIM_XFAIL, strict=True)
     def test_head_query_matches_qproj_slice(self, chat_coherent_pipeline) -> None:
         pipe = chat_coherent_pipeline
         d = head_dim(pipe)
@@ -750,7 +742,6 @@ class TestHeadReceiversGolden:
         expected = q_out[:, -1, 0:d].cpu().float()
         torch.testing.assert_close(collected, expected, atol=_ATOL_ACT, rtol=_RTOL_ACT)
 
-    @pytest.mark.xfail(reason=_HEAD_DIM_XFAIL, strict=True)
     def test_head_attention_value_output_sender(self, chat_coherent_pipeline) -> None:
         """The path-patching *sender* (head_attention_value_output) = the head's
         slice of o_proj's input."""

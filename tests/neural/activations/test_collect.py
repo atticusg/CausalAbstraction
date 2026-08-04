@@ -30,9 +30,9 @@ import pytest
 import torch
 
 from causalab.causal.trace import CausalTrace, Mechanism
-from causalab.neural.LM_units import ResidualStream
+from causalab.neural.LM_units import AttentionHead, ResidualStream
+from causalab.neural.components import head_layout
 from causalab.neural.activations.collect import (
-    _collect_activations_single_batch,  # pyright: ignore[reportPrivateUsage]
     collect_batch_representations,
     collect_class_centroids,
     collect_features,
@@ -57,74 +57,34 @@ def randn(shape: tuple[int, ...], generator: torch.Generator) -> torch.Tensor:
 
 
 # --------------------------------------------------------------------------- #
-#  Module-level fixtures shared across the mocked unit-tier classes           #
+#  Shared builders — real units and datasets on the tiny pipelines            #
 # --------------------------------------------------------------------------- #
-@pytest.fixture
-def mock_dataset() -> list[dict]:
-    """Tiny mock dataset matching the ``CounterfactualExample`` schema."""
-    return [
-        {"input": "input_1"},
-        {"input": "input_2"},
-        {"input": "input_3"},
+def _example(text: str) -> dict:
+    """One dataset entry with no counterfactuals — all `collect_features` needs."""
+    return {"input": _trace(text), "counterfactual_inputs": []}
+
+
+def _dataset(n: int) -> list[dict]:
+    """`n` distinct prompts, deliberately of differing token lengths so every
+    collection exercises the padded-batch position shift."""
+    prompts = [
+        "the quick brown fox",
+        "a slow lazy old dog sits",
+        "hello",
+        "one two three four five six",
+        "alpha beta",
     ]
+    return [_example(prompts[i % len(prompts)]) for i in range(n)]
 
 
-@pytest.fixture
-def mock_loaded_inputs() -> dict[str, torch.Tensor]:
-    """Mock output of ``pipeline.load`` — a batch of tokenized inputs."""
-    return {
-        "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6]]),
-        "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1]]),
-    }
+def _last_tp(pipeline) -> TokenPosition:
+    """The last real token of each example, in its own unpadded frame."""
 
+    def index(trace):
+        ids = pipeline.tokenizer(trace["raw_input"])["input_ids"]
+        return [len(ids) - 1]
 
-@pytest.fixture
-def residual_units() -> list[MagicMock]:
-    """Two distinct ``ResidualStream``-shaped mocks (distinct ``id``s)."""
-    unit1 = MagicMock()
-    unit1.id = "ResidualStream(Layer:0,Token:last_token)"
-    unit1.index_component.return_value = [[0, 1], [0, 1]]
-    unit2 = MagicMock()
-    unit2.id = "ResidualStream(Layer:2,Token:last_token)"
-    unit2.index_component.return_value = [[0, 1], [0, 1]]
-    return [unit1, unit2]
-
-
-@pytest.fixture
-def mock_pipeline(mock_loaded_inputs) -> MagicMock:
-    """Lightweight ``Pipeline`` stand-in: just needs ``model.eval()`` + ``load()``.
-
-    Avoids ``mock_pipeline`` (deprecated; tries to ``AutoTokenizer.from_pretrained``
-    the literal string ``"mock_model"``). ``collect_features`` only touches
-    ``pipeline.model.eval()`` and ``pipeline.load(...)`` on the pipeline
-    itself — everything else flows through the mocked ``IntervenableModel``.
-    """
-    pipeline = MagicMock()
-    pipeline.load = MagicMock(return_value=mock_loaded_inputs)
-    pipeline.model = MagicMock()
-    return pipeline
-
-
-def _patch_pyvene_returning(activations_factory):
-    """Patch the pyvene helpers in ``collect`` to return a fabricated tuple.
-
-    The returned ``activations_factory`` is invoked on every call so each batch
-    gets a fresh list of tensors (matching pyvene 0.1.8+'s
-    ``((base_outputs, collected_activations), cf_outputs)`` envelope).
-    """
-    mock_model = MagicMock()
-    mock_model.side_effect = lambda *args, **kwargs: (
-        (MagicMock(), activations_factory()),
-        None,
-    )
-    return (
-        patch(
-            "causalab.neural.activations.collect.prepare_intervenable_model",
-            return_value=mock_model,
-        ),
-        patch("causalab.neural.activations.collect.delete_intervenable_model"),
-        mock_model,
-    )
+    return TokenPosition(index, pipeline, id="last_token")
 
 
 # --------------------------------------------------------------------------- #
@@ -137,321 +97,146 @@ class TestCollectFeaturesUnit:
     run: ``methods/pca``, ``methods/spline``, ``methods/flow``,
     ``methods/interchange/layer_scan``, and the
     ``analyses/{activation_manifold, subspace, path_steering}`` analyses all
-    consume its ``{unit.id -> (n_samples, hidden)}`` output on CPU. This class
-    asserts the post-pyvene reshape / dict-keying logic via mocked
-    ``IntervenableModel``s (numerics-free).
+    consume its ``{unit.id -> (n_samples, hidden)}`` output on CPU.
+
+    These ran against a mocked pyvene ``IntervenableModel`` until the nnsight
+    migration removed the object they mocked. They now run on the real tiny
+    pipeline, which is both closer to docs/TESTS.md's mocking policy and
+    strictly more informative — a mocked backbone could not have caught a
+    wrong-width per-head read, which is the failure mode that motivated #386.
     """
 
     pytestmark = pytest.mark.unit
 
-    def test_returns_dict_keyed_by_unit_id(
-        self, mock_pipeline, residual_units, mock_dataset, mock_loaded_inputs
-    ) -> None:
-        prep_p, del_p, _ = _patch_pyvene_returning(
-            lambda: [torch.randn(2, 32), torch.randn(2, 32)]
-        )
-        with (
-            prep_p as mock_prepare,
-            del_p,
-        ):
-            result = collect_features(
-                mock_dataset, mock_pipeline, residual_units, batch_size=2
-            )
-
-        mock_prepare.assert_called_once_with(
-            mock_pipeline, residual_units, intervention_type="collect"
-        )
+    def test_returns_dict_keyed_by_unit_id(self, tiny_pipeline) -> None:
+        units = [_make_residual_unit(tiny_pipeline, layer) for layer in (0, 1)]
+        result = collect_features(_dataset(3), tiny_pipeline, units, batch_size=2)
         assert isinstance(result, dict)
-        assert set(result) == {u.id for u in residual_units}
-        for u in residual_units:
-            assert isinstance(result[u.id], torch.Tensor)
+        assert set(result) == {u.id for u in units}
+        for unit in units:
+            assert isinstance(result[unit.id], torch.Tensor)
 
     def test_emits_debug_log_with_unit_count_and_shape(
-        self,
-        mock_pipeline,
-        residual_units,
-        mock_dataset,
-        mock_loaded_inputs,
-        caplog,
+        self, tiny_pipeline, caplog
     ) -> None:
-        prep_p, del_p, _ = _patch_pyvene_returning(
-            lambda: [torch.randn(2, 32), torch.randn(2, 32)]
-        )
-        with (
-            prep_p,
-            del_p,
-            caplog.at_level(
-                logging.DEBUG, logger="causalab.neural.activations.collect"
-            ),
+        units = [_make_residual_unit(tiny_pipeline, 0)]
+        with caplog.at_level(
+            logging.DEBUG, logger="causalab.neural.activations.collect"
         ):
-            collect_features(mock_dataset, mock_pipeline, residual_units, batch_size=2)
-
+            collect_features(_dataset(2), tiny_pipeline, units, batch_size=2)
         assert "Collected features for" in caplog.text
         assert "Feature tensor shape:" in caplog.text
 
-    def test_returns_tensors_on_cpu_when_source_is_gpu_like(
-        self, mock_pipeline, residual_units, mock_dataset, mock_loaded_inputs
-    ) -> None:
-        """Even if pyvene returns tensors on a non-CPU device, the dict is CPU."""
-        from causalab.neural.pipeline import resolve_device
-
-        device = torch.device(resolve_device())
-        prep_p, del_p, _ = _patch_pyvene_returning(
-            lambda: [
-                torch.randn(2, 32, device=device),
-                torch.randn(2, 32, device=device),
-            ]
-        )
-        with (
-            prep_p,
-            del_p,
-            patch("torch.cuda.empty_cache"),
-        ):
-            result = collect_features(
-                mock_dataset, mock_pipeline, residual_units, batch_size=2
-            )
-
+    def test_returns_tensors_on_cpu(self, tiny_pipeline) -> None:
+        """Whatever device the model runs on, the harvest lands on CPU — a
+        dataset-sized activation dump must not pin GPU memory."""
+        units = [_make_residual_unit(tiny_pipeline, 0)]
+        result = collect_features(_dataset(3), tiny_pipeline, units, batch_size=2)
         for tensor in result.values():
             assert tensor.device.type == "cpu"
 
-    def test_result_is_2d_with_hidden_last(
-        self, mock_pipeline, residual_units, mock_dataset, mock_loaded_inputs
-    ) -> None:
-        hidden_size = 32
-        prep_p, del_p, _ = _patch_pyvene_returning(
-            lambda: [torch.randn(2, hidden_size), torch.randn(2, hidden_size)]
-        )
-        with (
-            prep_p,
-            del_p,
-        ):
-            result = collect_features(
-                mock_dataset, mock_pipeline, residual_units, batch_size=2
-            )
-
+    def test_result_is_2d_with_hidden_last(self, tiny_pipeline) -> None:
+        hidden = tiny_pipeline.model.config.hidden_size
+        units = [_make_residual_unit(tiny_pipeline, 0)]
+        result = collect_features(_dataset(3), tiny_pipeline, units, batch_size=2)
         for tensor in result.values():
             assert tensor.ndim == 2
-            assert tensor.shape[1] == hidden_size
+            assert tensor.shape == (3, hidden)
 
-    def test_attention_head_4d_reshapes_to_head_dim(
-        self, mock_pipeline, mock_dataset, mock_loaded_inputs
-    ) -> None:
-        """4-D ``(batch, seq, n_heads, head_dim)`` flattens onto ``head_dim``."""
-        unit1 = MagicMock()
-        unit1.id = "AttentionHead(Layer:0,Head:0)"
-        unit1.index_component.return_value = [[0], [0]]
-        unit2 = MagicMock()
-        unit2.id = "AttentionHead(Layer:0,Head:1)"
-        unit2.index_component.return_value = [[0], [0]]
-        attention_units = [unit1, unit2]
+    def test_attention_head_collects_at_head_dim(self, tiny_pipeline) -> None:
+        """A per-head unit yields ``head_dim`` columns, not ``hidden``."""
+        _n_q, _n_kv, head_dim = head_layout(tiny_pipeline.model.config)
+        units = [
+            AttentionHead(layer=0, head=head, token_indices=_last_tp(tiny_pipeline))
+            for head in (0, 1)
+        ]
+        result = collect_features(_dataset(3), tiny_pipeline, units, batch_size=2)
+        for unit in units:
+            assert result[unit.id].shape == (3, head_dim)
 
-        prep_p, del_p, _ = _patch_pyvene_returning(
-            lambda: [torch.randn(2, 1, 4, 8), torch.randn(2, 1, 4, 8)]
+    def test_mixed_component_widths_are_supported(self, tiny_pipeline) -> None:
+        """Residual and per-head units collect together, each at its own width."""
+        hidden = tiny_pipeline.model.config.hidden_size
+        _n_q, _n_kv, head_dim = head_layout(tiny_pipeline.model.config)
+        residual = _make_residual_unit(tiny_pipeline, 0)
+        head = AttentionHead(layer=0, head=0, token_indices=_last_tp(tiny_pipeline))
+        result = collect_features(
+            _dataset(3), tiny_pipeline, [residual, head], batch_size=2
         )
-        with (
-            prep_p,
-            del_p,
-        ):
-            result = collect_features(
-                mock_dataset, mock_pipeline, attention_units, batch_size=2
-            )
+        assert result[residual.id].shape == (3, hidden)
+        assert result[head.id].shape == (3, head_dim)
 
-        for u in attention_units:
-            assert result[u.id].shape[1] == 8
-
-    def test_residual_3d_reshapes_to_hidden_dim(
-        self, mock_pipeline, mock_dataset, mock_loaded_inputs
+    def test_multi_token_span_contributes_one_row_per_position(
+        self, tiny_pipeline
     ) -> None:
-        """3-D ``(batch, seq, hidden)`` flattens onto ``hidden``."""
-        unit1 = MagicMock()
-        unit1.id = "ResidualStream(Layer:0)"
-        unit1.index_component.return_value = [[0], [0]]
-        unit2 = MagicMock()
-        unit2.id = "ResidualStream(Layer:1)"
-        unit2.index_component.return_value = [[0], [0]]
-        rs_units = [unit1, unit2]
-
-        prep_p, del_p, _ = _patch_pyvene_returning(
-            lambda: [torch.randn(2, 1, 32), torch.randn(2, 1, 32)]
+        """A unit selecting N tokens yields N samples per example — the flattening
+        every featurizer fitter downstream assumes."""
+        hidden = tiny_pipeline.model.config.hidden_size
+        span = TokenPosition(lambda _x: [0, 1], tiny_pipeline, id="first_two")
+        unit = ResidualStream(
+            layer=0, token_indices=span, target_output=True, shape=(hidden,)
         )
-        with (
-            prep_p,
-            del_p,
-        ):
-            result = collect_features(
-                mock_dataset, mock_pipeline, rs_units, batch_size=2
-            )
-
-        for u in rs_units:
-            assert result[u.id].shape[1] == 32
-
-    def test_mixed_2d_and_3d_shapes_are_supported(
-        self, mock_pipeline, mock_dataset, mock_loaded_inputs
-    ) -> None:
-        unit1 = MagicMock()
-        unit1.id = "Unit1"
-        unit1.index_component.return_value = [[0], [0]]
-        unit2 = MagicMock()
-        unit2.id = "Unit2"
-        unit2.index_component.return_value = [[0], [0]]
-        mixed_units = [unit1, unit2]
-
-        prep_p, del_p, _ = _patch_pyvene_returning(
-            lambda: [torch.randn(2, 64), torch.randn(2, 1, 32)]
-        )
-        with (
-            prep_p,
-            del_p,
-        ):
-            result = collect_features(
-                mock_dataset,
-                mock_pipeline,
-                mixed_units,  # pyright: ignore[reportArgumentType]
-                batch_size=2,
-            )
-
-        assert result["Unit1"].shape[1] == 64
-        assert result["Unit2"].shape[1] == 32
-
-    def test_raises_when_pyvene_returns_wrong_unit_count(
-        self, mock_pipeline, residual_units, mock_dataset, mock_loaded_inputs
-    ) -> None:
-        """Defends against a future pyvene refactor changing the envelope contract."""
-        # One activation tensor returned but two units requested.
-        prep_p, del_p, _ = _patch_pyvene_returning(lambda: [torch.randn(2, 32)])
-        with (
-            prep_p,
-            del_p,
-            pytest.raises(ValueError, match="Unexpected activations format"),
-        ):
-            collect_features(mock_dataset, mock_pipeline, residual_units, batch_size=2)
+        result = collect_features(_dataset(3), tiny_pipeline, [unit], batch_size=2)
+        assert result[unit.id].shape == (6, hidden)
 
     def test_collect_output_logits_returns_tuple_dict_and_list(
-        self, mock_pipeline, residual_units, mock_dataset, mock_loaded_inputs
+        self, tiny_pipeline
     ) -> None:
-        """When ``collect_output_logits=True``, return ``(dict, list[Tensor])``."""
-        # Two batches: first carries 2 examples, second carries 1.
-        batch_sizes = iter([2, 1])
-
-        def model_side_effect(*args, **kwargs):
-            n = next(batch_sizes)
-            fake_model_output = MagicMock()
-            fake_model_output.logits = torch.randn(n, 3, 100)
-            return (
-                (fake_model_output, [torch.randn(n, 32), torch.randn(n, 32)]),
-                None,
-            )
-
-        mock_model = MagicMock()
-        mock_model.side_effect = model_side_effect
-        with (
-            patch(
-                "causalab.neural.activations.collect.prepare_intervenable_model",
-                return_value=mock_model,
-            ),
-            patch("causalab.neural.activations.collect.delete_intervenable_model"),
-        ):
-            result = collect_features(
-                mock_dataset,
-                mock_pipeline,
-                residual_units,
-                batch_size=2,
-                collect_output_logits=True,
-            )
-
+        """``collect_output_logits=True`` returns ``(dict, list[Tensor])`` with one
+        logits tensor per example, so a caller needing both activations and output
+        distributions pays for one forward instead of two."""
+        units = [_make_residual_unit(tiny_pipeline, 0)]
+        result = collect_features(
+            _dataset(3), tiny_pipeline, units, batch_size=2, collect_output_logits=True
+        )
         assert isinstance(result, tuple)
         features_dict, logits_list = result
         assert isinstance(features_dict, dict)
-        assert isinstance(logits_list, list)
-        # 3 examples / batch_size=2 → 2 batches → 2 + 1 = 3 per-example logits.
+        # 3 examples / batch_size=2 -> 2 batches -> 2 + 1 = 3 per-example logits.
         assert len(logits_list) == 3
-        for lg in logits_list:
-            assert isinstance(lg, torch.Tensor)
+        for logits in logits_list:
+            assert isinstance(logits, torch.Tensor)
+            assert logits.shape[-1] == tiny_pipeline.model.config.vocab_size
 
-    def test_duplicate_unit_id_raises(
-        self, mock_pipeline, mock_dataset, mock_loaded_inputs
-    ) -> None:
+    def test_duplicate_unit_id_raises(self, tiny_pipeline) -> None:
         """Two units sharing an ``id`` would silently merge — must raise instead."""
-        u1 = MagicMock()
-        u1.id = "dupe"
-        u1.index_component.return_value = [[0, 1], [0, 1]]
-        u2 = MagicMock()
-        u2.id = "dupe"
-        u2.index_component.return_value = [[0, 1], [0, 1]]
+        unit = _make_residual_unit(tiny_pipeline, 0)
         with pytest.raises(ValueError, match="Duplicate model_unit.id"):
-            collect_features(mock_dataset, mock_pipeline, [u1, u2], batch_size=2)
+            collect_features(_dataset(2), tiny_pipeline, [unit, unit], batch_size=2)
 
 
-class TestCollectActivationsPositionIds:
-    """The collection forward must receive left-pad-correct ``position_ids``.
+class TestCollectPaddingCorrectness:
+    """A padded row must collect the same activation it would collect alone.
 
-    Without them the plain (non-generate) forward numbers positions from the pad
-    tokens, corrupting padded-row activations on absolute-position models. RoPE
-    models are immune, so the RoPE ``tiny_pipeline`` fixture can't catch this
-    numerically — we assert the contract directly via a mock that captures the
-    inputs dict handed to the forward (the primitive now routes it through
-    ``pipeline.ensure_position_ids``).
+    Left padding shifts every real token's absolute index, so a forward that
+    numbers positions from the pad tokens corrupts every activation in a padded
+    row. RoPE models are immune (relative positions cancel a uniform shift), so
+    this must run on the **absolute-position** GPT-2 stub to mean anything — the
+    RoPE ``tiny_pipeline`` cannot fail it.
 
-    Scope: this pins what *this function* hands to the model; it does not prove
-    pyvene forwards ``position_ids`` on to the underlying HF model. The
-    ``ensure_position_ids`` formula itself is pinned in
-    ``tests/neural/test_pipeline.py``.
+    This replaces a mock that asserted a ``position_ids`` tensor was handed to
+    pyvene's forward. The backbone now derives them itself, so the contract worth
+    pinning is the observable one: batching must not change the numbers.
     """
 
     pytestmark = pytest.mark.unit
 
-    @staticmethod
-    def _capture_forward_inputs(loaded_inputs: dict[str, torch.Tensor]) -> dict:
-        """Run the primitive against a mock model; return the captured inputs dict."""
-        captured: dict = {}
+    def test_padded_row_matches_unpadded_collection(self, tiny_gpt2_pipeline) -> None:
+        short, long = "hello", "a considerably longer prompt than the other one"
+        unit_alone = _make_residual_unit(tiny_gpt2_pipeline, 1)
+        alone = collect_features(
+            [_example(short)], tiny_gpt2_pipeline, [unit_alone], batch_size=1
+        )[unit_alone.id]
 
-        def side_effect(inputs, unit_locations=None):
-            captured["inputs"] = inputs
-            # pyvene envelope: ((base_outputs, collected_activations), cf_outputs)
-            return ((MagicMock(), [torch.zeros(2, 1, 4)]), None)
+        unit_batched = _make_residual_unit(tiny_gpt2_pipeline, 1)
+        batched = collect_features(
+            [_example(short), _example(long)],
+            tiny_gpt2_pipeline,
+            [unit_batched],
+            batch_size=2,
+        )[unit_batched.id]
 
-        mock_model = MagicMock(side_effect=side_effect)
-        # indices: one unit, batch of 2, one position each — shape only needs to
-        # be well-formed; the mock ignores it.
-        _collect_activations_single_batch(
-            mock_model, loaded_inputs, indices=[[[0], [0]]]
-        )
-        assert "inputs" in captured, "forward was never called"
-        return captured["inputs"]
-
-    def test_derives_leftpad_position_ids_for_padded_batch(self) -> None:
-        """A left-padded mask → HF left-pad ``position_ids`` (pads pinned to 1)."""
-        loaded = {
-            "input_ids": torch.tensor([[0, 0, 5, 6], [7, 8, 9, 10]]),
-            "attention_mask": torch.tensor([[0, 0, 1, 1], [1, 1, 1, 1]]),
-        }
-        inputs = self._capture_forward_inputs(loaded)
-        assert "position_ids" in inputs, "collection forward got no position_ids"
-        # cumsum(mask)-1, with pad slots (mask==0) pinned to 1 — matches HF's
-        # prepare_inputs_for_generation for left padding.
-        expected = torch.tensor([[1, 1, 0, 1], [0, 1, 2, 3]])
-        assert torch.equal(inputs["position_ids"], expected)
-
-    def test_unpadded_batch_reduces_to_arange(self) -> None:
-        """An all-ones mask → plain ``arange`` (the previously-correct behavior)."""
-        loaded = {
-            "input_ids": torch.tensor([[5, 6, 7], [8, 9, 10]]),
-            "attention_mask": torch.ones(2, 3, dtype=torch.long),
-        }
-        inputs = self._capture_forward_inputs(loaded)
-        expected = torch.arange(3).unsqueeze(0).expand(2, -1)
-        assert torch.equal(inputs["position_ids"], expected)
-
-    def test_existing_position_ids_are_not_overwritten(self) -> None:
-        """If the pipeline already emitted position_ids, leave them untouched."""
-        preset = torch.tensor([[3, 4, 5], [6, 7, 8]])
-        loaded = {
-            "input_ids": torch.tensor([[5, 6, 7], [8, 9, 10]]),
-            "attention_mask": torch.tensor([[0, 1, 1], [1, 1, 1]]),
-            "position_ids": preset,
-        }
-        inputs = self._capture_forward_inputs(loaded)
-        assert torch.equal(inputs["position_ids"], preset)
+        torch.testing.assert_close(batched[0:1], alone, atol=1e-5, rtol=1e-4)
 
 
 def _trace(text: str) -> CausalTrace:
@@ -650,142 +435,114 @@ class TestCollectFeaturesProperty:
 #  collect_batch_representations                                              #
 # --------------------------------------------------------------------------- #
 class TestCollectBatchRepresentationsUnit:
-    """Per-batch primitive producing pyvene-compatible ``source_representations``.
+    """Per-batch primitive producing the source activations an interchange writes.
 
     Returns ``list[Tensor]`` ordered to match the flat-unit traversal across
-    ``interchange_target`` groups. ``neural/activations/interchange_mode.py``
-    and ``methods/metric.py`` then feed that list to pyvene as
-    ``source_representations`` during cross-model patching, so any drift in
-    ordering or length silently corrupts the patched outputs.
+    ``interchange_target`` groups. ``neural/activations/interchange_mode.py`` and
+    ``methods/metric.py`` consume that list positionally against the same
+    traversal, so a drift in ordering or length silently patches the wrong site.
+
+    Each group is its own forward — the groups have different counterfactual
+    inputs — which is what makes the per-group unit-cursor slicing load-bearing.
     """
 
     pytestmark = pytest.mark.unit
 
-    def test_returns_one_tensor_per_unit_across_groups(self) -> None:
+    def test_returns_one_tensor_per_unit_across_groups(self, tiny_pipeline) -> None:
         """Flat output length equals ``sum(len(group) for group in target)``."""
-        groups = [
-            [MagicMock(id=f"u{i}") for i in range(2)],
-            [MagicMock(id="u2")],
+        target = InterchangeTarget(
+            [
+                [
+                    _make_residual_unit(tiny_pipeline, 0),
+                    _make_residual_unit(tiny_pipeline, 1),
+                ],
+                [_make_residual_unit_at_token(tiny_pipeline, 1, 0)],
+            ]
+        )
+        cf_groups = [[_trace("alpha beta")], [_trace("gamma delta")]]
+        batched_cf = [tiny_pipeline.load(group) for group in cf_groups]
+        positions = [
+            unit.resolve_positions(
+                cf_groups[group_index],
+                attention_mask=batched_cf[group_index]["attention_mask"],
+                is_original=False,
+            )
+            for group_index, group in enumerate(target)
+            for unit in group
         ]
-        target = InterchangeTarget(groups)
-        pipeline = MagicMock()
-        call_idx = {"n": 0}
 
-        def model_side_effect(*args, **kwargs):
-            call_idx["n"] += 1
-            # Group 0 has 2 units, group 1 has 1 unit.
-            num_units = [2, 1][call_idx["n"] - 1]
-            acts = [torch.randn(1, 16) for _ in range(num_units)]
-            return ((MagicMock(), acts), None)
-
-        mock_im = MagicMock()
-        mock_im.side_effect = model_side_effect
-
-        batched_cf = [
-            {
-                "input_ids": torch.tensor([[1, 2]]),
-                "attention_mask": torch.tensor([[1, 1]]),
-            },
-            {
-                "input_ids": torch.tensor([[3, 4]]),
-                "attention_mask": torch.tensor([[1, 1]]),
-            },
-        ]
-        cf_indices = [[[0]], [[0]], [[0]]]  # one per flat unit
         out = collect_batch_representations(
-            pipeline, batched_cf, target, cf_indices, intervenable_model=mock_im
+            tiny_pipeline, batched_cf, target, positions
         )
         assert len(out) == 3
 
-    def test_does_not_delete_externally_provided_model(self) -> None:
-        """When caller passes ``intervenable_model``, function must NOT delete it."""
-        groups = [[MagicMock(id="u0")]]
-        target = InterchangeTarget(groups)
-        pipeline = MagicMock()
-        mock_im = MagicMock()
-        mock_im.side_effect = lambda *a, **k: ((MagicMock(), [torch.randn(1, 8)]), None)
-        batched_cf = [
-            {"input_ids": torch.tensor([[1]]), "attention_mask": torch.tensor([[1]])}
-        ]
-        cf_indices = [[[0]]]
-
-        with patch(
-            "causalab.neural.activations.collect.delete_intervenable_model"
-        ) as mock_del:
-            _ = collect_batch_representations(
-                pipeline,
-                batched_cf,
-                target,
-                cf_indices,
-                intervenable_model=mock_im,
+    def test_each_group_reads_its_own_counterfactual(self, tiny_pipeline) -> None:
+        """Two groups pointing at the same site but different inputs must return
+        different activations — proof the per-group forward is not shared."""
+        unit_a = _make_residual_unit(tiny_pipeline, 0)
+        unit_b = _make_residual_unit(tiny_pipeline, 0)
+        target = InterchangeTarget([[unit_a], [unit_b]])
+        cf_groups = [[_trace("alpha beta")], [_trace("wholly different words")]]
+        batched_cf = [tiny_pipeline.load(group) for group in cf_groups]
+        positions = [
+            unit.resolve_positions(
+                cf_groups[group_index],
+                attention_mask=batched_cf[group_index]["attention_mask"],
+                is_original=False,
             )
-        mock_del.assert_not_called()
-
-    def test_owns_and_deletes_model_when_none_passed(self) -> None:
-        """When caller omits ``intervenable_model``, function creates AND tears down."""
-        groups = [[MagicMock(id="u0", is_static=lambda: True)]]
-        target = InterchangeTarget(groups)
-        pipeline = MagicMock()
-        mock_im = MagicMock()
-        mock_im.side_effect = lambda *a, **k: ((MagicMock(), [torch.randn(1, 8)]), None)
-        batched_cf = [
-            {"input_ids": torch.tensor([[1]]), "attention_mask": torch.tensor([[1]])}
+            for group_index, group in enumerate(target)
+            for unit in group
         ]
-        cf_indices = [[[0]]]
 
-        with (
-            patch(
-                "causalab.neural.activations.collect.prepare_intervenable_model",
-                return_value=mock_im,
-            ) as mock_prep,
-            patch(
-                "causalab.neural.activations.collect.delete_intervenable_model"
-            ) as mock_del,
-        ):
-            _ = collect_batch_representations(
-                pipeline,
-                batched_cf,
-                target,
-                cf_indices,
-                intervenable_model=None,
-            )
-        mock_prep.assert_called_once()
-        mock_del.assert_called_once_with(mock_im)
-
-    def test_per_group_indices_are_sliced_by_unit_cursor(self) -> None:
-        """``counterfactual_indices`` is sliced ``[unit_idx : unit_idx + n]`` per group."""
-        groups = [
-            [MagicMock(id="u0"), MagicMock(id="u1")],
-            [MagicMock(id="u2")],
-        ]
-        target = InterchangeTarget(groups)
-        pipeline = MagicMock()
-        seen_indices: list[list] = []
-
-        def model_side_effect(_inp, unit_locations=None, **kwargs):
-            sources, _base = unit_locations["sources->base"]
-            seen_indices.append(sources)
-            n = len(sources)
-            return ((MagicMock(), [torch.randn(1, 8) for _ in range(n)]), None)
-
-        mock_im = MagicMock()
-        mock_im.side_effect = model_side_effect
-
-        cf_indices = [
-            ["GROUP0_UNIT0"],
-            ["GROUP0_UNIT1"],
-            ["GROUP1_UNIT0"],
-        ]
-        batched_cf = [
-            {"input_ids": torch.tensor([[1]]), "attention_mask": torch.tensor([[1]])},
-            {"input_ids": torch.tensor([[2]]), "attention_mask": torch.tensor([[1]])},
-        ]
-        _ = collect_batch_representations(
-            pipeline, batched_cf, target, cf_indices, intervenable_model=mock_im
+        first, second = collect_batch_representations(
+            tiny_pipeline, batched_cf, target, positions
         )
-        # First call (group 0) saw indices for [u0, u1]; second call (group 1) saw [u2].
-        assert seen_indices[0] == [["GROUP0_UNIT0"], ["GROUP0_UNIT1"]]
-        assert seen_indices[1] == [["GROUP1_UNIT0"]]
+        assert not torch.allclose(first, second)
+
+    def test_per_group_positions_are_sliced_by_unit_cursor(self, tiny_pipeline) -> None:
+        """A unit's activation must be the one at *its* position, even when the
+        groups have different unit counts — i.e. the cursor advances by group size.
+
+        Group 0 holds two units at different token positions; group 1 holds one.
+        Reading the same sites directly gives the expected values.
+        """
+        g0_tok0 = _make_residual_unit_at_token(tiny_pipeline, 0, 0)
+        g0_tok1 = _make_residual_unit_at_token(tiny_pipeline, 0, 1)
+        g1_tok0 = _make_residual_unit_at_token(tiny_pipeline, 1, 0)
+        target = InterchangeTarget([[g0_tok0, g0_tok1], [g1_tok0]])
+
+        cf_groups = [[_trace("alpha beta gamma")], [_trace("delta epsilon zeta")]]
+        batched_cf = [tiny_pipeline.load(group) for group in cf_groups]
+        positions = [
+            unit.resolve_positions(
+                cf_groups[group_index],
+                attention_mask=batched_cf[group_index]["attention_mask"],
+                is_original=False,
+            )
+            for group_index, group in enumerate(target)
+            for unit in group
+        ]
+        out = collect_batch_representations(
+            tiny_pipeline, batched_cf, target, positions
+        )
+        assert len(out) == 3
+
+        # Independent reads of the same three sites, one per group input.
+        expected_g0 = collect_features(
+            [{"input": cf_groups[0][0], "counterfactual_inputs": []}],
+            tiny_pipeline,
+            [g0_tok0, g0_tok1],
+            batch_size=1,
+        )
+        expected_g1 = collect_features(
+            [{"input": cf_groups[1][0], "counterfactual_inputs": []}],
+            tiny_pipeline,
+            [g1_tok0],
+            batch_size=1,
+        )
+        torch.testing.assert_close(out[0].reshape(1, -1), expected_g0[g0_tok0.id])
+        torch.testing.assert_close(out[1].reshape(1, -1), expected_g0[g0_tok1.id])
+        torch.testing.assert_close(out[2].reshape(1, -1), expected_g1[g1_tok0.id])
 
 
 class TestCollectBatchRepresentationsProperty:
@@ -819,40 +576,6 @@ class TestCollectBatchRepresentationsProperty:
         )
         assert len(out) == len(target.flatten())
 
-    def test_owns_vs_borrows_model_returns_same_lengths(self, tiny_pipeline) -> None:
-        """Hoisting the ``intervenable_model`` outside the call must not change output shape."""
-        from causalab.neural.activations.intervenable_model import (
-            delete_intervenable_model,
-            prepare_intervenable_model,
-        )
-
-        unit = _make_residual_unit(tiny_pipeline, layer=0)
-        target = InterchangeTarget([[unit]])
-        cf_inputs = [_trace("alpha")]
-        batched_cf = [tiny_pipeline.load(cf_inputs)]
-        cf_indices = [unit.index_component(cf_inputs, batch=True, is_original=False)]
-
-        out_owned = collect_batch_representations(
-            tiny_pipeline, batched_cf, target, cf_indices
-        )
-        im = prepare_intervenable_model(
-            tiny_pipeline, target, intervention_type="collect"
-        )
-        try:
-            out_borrowed = collect_batch_representations(
-                tiny_pipeline,
-                batched_cf,
-                target,
-                cf_indices,
-                intervenable_model=im,
-            )
-        finally:
-            delete_intervenable_model(im)
-
-        assert len(out_owned) == len(out_borrowed)
-        for a, b in zip(out_owned, out_borrowed):
-            assert a.shape == b.shape
-
 
 # --------------------------------------------------------------------------- #
 #  collect_source_representations                                             #
@@ -861,101 +584,75 @@ class TestCollectSourceRepresentationsUnit:
     """Convenience wrapper: tokenize counterfactuals + delegate to batch primitive.
 
     Used by ``neural/activations/interchange_mode.py`` and ``methods/metric.py``
-    to harvest source-pipeline activations before patching them into a target
-    pipeline. The wrapper composes ``pipeline.load`` over zipped
-    ``counterfactual_inputs`` and computes per-unit indices with
-    ``is_original=False``.
+    to harvest source-pipeline activations before writing them into a target
+    pipeline. The wrapper zips ``counterfactual_inputs`` into per-group batches,
+    tokenizes each with the *source* pipeline, and resolves positions with
+    ``is_original=False`` — the flag a paired token position uses to pick the
+    counterfactual's positions rather than the base's.
     """
 
     pytestmark = pytest.mark.unit
 
-    def test_forwards_to_collect_batch_representations(self) -> None:
-        pipeline = MagicMock()
-        pipeline.load = MagicMock(
-            side_effect=lambda group: {
-                "_loaded": group,
-                "attention_mask": torch.ones(len(group), 1, dtype=torch.long),
-            }
+    def test_zips_counterfactuals_into_per_group_batches(self, tiny_pipeline) -> None:
+        """``examples[i]["counterfactual_inputs"][g]`` becomes row ``i`` of group ``g``."""
+        target = InterchangeTarget(
+            [
+                [_make_residual_unit(tiny_pipeline, 0)],
+                [_make_residual_unit(tiny_pipeline, 1)],
+            ]
         )
-
-        unit = MagicMock(id="u0")
-        unit.index_component = MagicMock(return_value=[[0]])
-        target = InterchangeTarget([[unit]])
         examples = [
-            {"input": "base", "counterfactual_inputs": ["cf_g0_e0"]},
-            {"input": "base2", "counterfactual_inputs": ["cf_g0_e1"]},
+            {
+                "input": _trace("base one"),
+                "counterfactual_inputs": [_trace("g0 e0"), _trace("g1 e0")],
+            },
+            {
+                "input": _trace("base two"),
+                "counterfactual_inputs": [_trace("g0 e1"), _trace("g1 e1")],
+            },
         ]
-        with patch(
-            "causalab.neural.activations.collect.collect_batch_representations",
-            return_value=[torch.randn(1, 8)],
-        ) as mock_delegate:
-            out = collect_source_representations(
-                pipeline,
-                examples,
-                target,
-                source_intervenable_model=None,
-            )
+        out = collect_source_representations(tiny_pipeline, examples, target)
+        # One tensor per flat unit, each carrying both examples' rows.
+        assert len(out) == 2
+        for tensor in out:
+            assert tensor.shape[0] == 2
 
-        # Exactly one delegation: the wrapper does not loop.
-        assert mock_delegate.call_count == 1
-        _, kwargs = mock_delegate.call_args
-        assert kwargs["intervenable_model"] is None
-        assert out is mock_delegate.return_value
+    def test_resolves_counterfactual_positions_not_base_ones(
+        self, tiny_pipeline
+    ) -> None:
+        """A paired token position must be resolved with ``is_original=False``.
 
-    def test_passes_through_prebuilt_intervenable_model(self) -> None:
-        """A caller-provided ``source_intervenable_model`` reaches the delegate."""
-        pipeline = MagicMock()
-        pipeline.load = MagicMock(
-            side_effect=lambda group: {
-                "_loaded": group,
-                "attention_mask": torch.ones(len(group), 1, dtype=torch.long),
-            }
+        The indexer here returns position 0 for a base read and position 2 for a
+        counterfactual read, so reading the wrong side is numerically visible.
+        """
+        hidden = tiny_pipeline.model.config.hidden_size
+        paired = TokenPosition(
+            lambda _x, is_original=True: [0] if is_original else [2],
+            tiny_pipeline,
+            id="paired",
         )
-
-        unit = MagicMock(id="u0")
-        unit.index_component = MagicMock(return_value=[[0]])
-        target = InterchangeTarget([[unit]])
-        examples = [{"input": "b", "counterfactual_inputs": ["cf"]}]
-        sentinel = object()
-
-        with patch(
-            "causalab.neural.activations.collect.collect_batch_representations",
-            return_value=[],
-        ) as mock_delegate:
-            _ = collect_source_representations(
-                pipeline,
-                examples,
-                target,
-                source_intervenable_model=sentinel,  # type: ignore[arg-type]
-            )
-
-        _, kwargs = mock_delegate.call_args
-        assert kwargs["intervenable_model"] is sentinel
-
-    def test_index_component_called_with_is_original_false(self) -> None:
-        """Counterfactual indices use ``is_original=False`` (vs. base inputs)."""
-        pipeline = MagicMock()
-        pipeline.load = MagicMock(
-            side_effect=lambda group: {
-                "_loaded": group,
-                "attention_mask": torch.ones(len(group), 1, dtype=torch.long),
-            }
+        unit = ResidualStream(
+            layer=0, token_indices=paired, target_output=True, shape=(hidden,)
         )
-
-        unit = MagicMock(id="u0")
-        unit.index_component = MagicMock(return_value=[[0]])
         target = InterchangeTarget([[unit]])
-        examples = [{"input": "b", "counterfactual_inputs": ["cf_a"]}]
+        cf_text = "alpha beta gamma delta"
+        examples = [
+            {
+                "input": _trace("base text here"),
+                "counterfactual_inputs": [_trace(cf_text)],
+            }
+        ]
 
-        with patch(
-            "causalab.neural.activations.collect.collect_batch_representations",
-            return_value=[],
-        ):
-            _ = collect_source_representations(pipeline, examples, target)
+        out = collect_source_representations(tiny_pipeline, examples, target)
 
-        called_kwargs = unit.index_component.call_args.kwargs
-        assert called_kwargs["is_original"] is False
-        assert called_kwargs["batch"] is True
+        at_pos_2 = _make_residual_unit_at_token(tiny_pipeline, 0, 2)
+        expected = collect_features(
+            [{"input": _trace(cf_text), "counterfactual_inputs": []}],
+            tiny_pipeline,
+            [at_pos_2],
+            batch_size=1,
+        )[at_pos_2.id]
+        torch.testing.assert_close(out[0].reshape(1, -1), expected)
 
 
 class TestCollectSourceRepresentationsProperty:
@@ -984,37 +681,6 @@ class TestCollectSourceRepresentationsProperty:
         ]
         out = collect_source_representations(tiny_pipeline, examples, target)
         assert len(out) == len(target.flatten())
-
-    def test_prebuilt_model_yields_same_shapes(self, tiny_pipeline) -> None:
-        """Wrapper output is invariant to caller pre-building the intervenable model."""
-        from causalab.neural.activations.intervenable_model import (
-            delete_intervenable_model,
-            prepare_intervenable_model,
-        )
-
-        unit = _make_residual_unit(tiny_pipeline, layer=0)
-        target = InterchangeTarget([[unit]])
-        examples = [
-            {"input": _trace("base"), "counterfactual_inputs": [_trace("cf_a")]},
-        ]
-
-        out_no_model = collect_source_representations(tiny_pipeline, examples, target)
-        im = prepare_intervenable_model(
-            tiny_pipeline, target, intervention_type="collect"
-        )
-        try:
-            out_with_model = collect_source_representations(
-                tiny_pipeline,
-                examples,
-                target,
-                source_intervenable_model=im,
-            )
-        finally:
-            delete_intervenable_model(im)
-
-        assert len(out_no_model) == len(out_with_model)
-        for a, b in zip(out_no_model, out_with_model):
-            assert a.shape == b.shape
 
 
 # --------------------------------------------------------------------------- #

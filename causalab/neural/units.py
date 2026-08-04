@@ -512,6 +512,33 @@ class AtomicModelUnit:
             return raw
         return self._apply_padding_shift(raw, attention_mask, batch=batch)
 
+    def resolve_positions(
+        self,
+        raw_inputs: Any,
+        *,
+        attention_mask: Any = _ATTENTION_MASK_UNSET,
+        is_original: bool | None = None,
+    ) -> list[list[int]]:
+        """Per-example token positions for a *batch*, in the padded-batch frame.
+
+        Where :meth:`index_component` returns whatever nested structure the
+        backbone's gather wanted — a bare position axis here, ``[head_axis,
+        position_axis]`` on :class:`~causalab.neural.LM_units.AttentionHead` —
+        this always returns just the positions. The head, when a unit has one, is
+        a separate scalar (:meth:`head_index`), because the engine indexes the
+        head and position axes independently.
+        """
+        return self.index_component(  # type: ignore[return-value]
+            raw_inputs,
+            batch=True,
+            attention_mask=attention_mask,
+            is_original=is_original,
+        )
+
+    def head_index(self) -> int | None:
+        """The attention head this unit selects, or ``None`` for whole-width units."""
+        return None
+
     def tensorized_index_groups(self, unit_indices: Any) -> list[Any]:
         """Split a unit's per-batch index structure into the groups pyvene
         stacks *separately* with ``torch.tensor`` in ``gather_neurons``.

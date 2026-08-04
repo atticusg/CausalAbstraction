@@ -293,6 +293,40 @@ _HEAD_COMPONENTS = frozenset(
 )
 
 
+# Order in which a decoder block reaches each component during its forward.
+# The interleaver serves each location once and in order, so a trace that touches
+# several components must request them in this order or hit `OutOfOrderError`.
+# Sites are ordered globally by ``(layer, _FORWARD_RANK[component_type])``.
+_FORWARD_RANK: dict[str, int] = {
+    "block_input": 0,
+    "attention_input": 1,
+    "query_output": 2,
+    "key_output": 2,
+    "value_output": 2,
+    "head_query_output": 2,
+    "head_key_output": 2,
+    "head_value_output": 2,
+    "attention_value_output": 3,
+    "head_attention_value_output": 3,
+    "attention_output": 4,
+    "mlp_input": 5,
+    "mlp_activation": 6,
+    "mlp_output": 7,
+    "block_output": 8,
+}
+
+
+def forward_order(layer: int, component_type: str) -> tuple[int, int]:
+    """Sort key placing ``(layer, component_type)`` in forward-pass order."""
+    try:
+        return (layer, _FORWARD_RANK[component_type])
+    except KeyError:
+        raise UnsupportedComponent(
+            f"No forward-order rank for component type {component_type!r}; add one "
+            f"to `_FORWARD_RANK` in causalab/neural/components.py."
+        ) from None
+
+
 def _walk(root: Any, path: tuple[str, ...]) -> Any:
     for part in path:
         root = getattr(root, part)

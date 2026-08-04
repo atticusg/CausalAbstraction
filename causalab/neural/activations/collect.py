@@ -20,58 +20,14 @@ from causalab.causal.counterfactual_dataset import (
     CounterfactualExample,
     LabeledCounterfactualExample,
 )
-from pyvene import IntervenableModel  # type: ignore[reportMissingTypeStubs]
-
-from causalab.neural.activations.intervenable_model import (
-    prepare_intervenable_model,
-    delete_intervenable_model,
+from causalab.neural.activations.engine import (
+    build_plans,
+    collect_unit_activations,
 )
-from causalab.neural.pipeline import Pipeline, ensure_position_ids
+from causalab.neural.pipeline import Pipeline
 from causalab.neural.units import AtomicModelUnit, InterchangeTarget
 
 logger = logging.getLogger(__name__)
-
-
-def _collect_activations_single_batch(
-    intervenable_model: IntervenableModel,
-    loaded_inputs: dict[str, Tensor],
-    indices: list[Any],
-    return_model_output: bool = False,
-) -> list[Tensor] | tuple[list[Tensor], Any]:
-    """
-    Collect activations from a single batch using an intervenable model.
-
-    This is the core primitive for activation collection, used by both
-    collect_features() for dataset-wide collection and collect_batch_representations()
-    for cross-model patching.
-
-    Args:
-        intervenable_model: Model configured with "collect" intervention type
-        loaded_inputs: Tokenized inputs (output of pipeline.load())
-        indices: Position indices for each model unit, shape (num_units, batch_size, num_positions)
-        return_model_output: If True, also return the model's forward pass output
-            (e.g., CausalLMOutputWithPast with .logits).
-
-    Returns:
-        If return_model_output is False:
-            List of activation tensors, one per intervention location.
-        If return_model_output is True:
-            Tuple of (activations_list, model_output).
-    """
-    # Create location map - for collection, source and base indices are the same
-    location_map = {"sources->base": (indices, indices)}
-
-    # Supply position_ids for this plain (non-generate) forward; without them a
-    # left-padded batch is mis-encoded on absolute-position models. See
-    # ensure_position_ids.
-    result = intervenable_model(
-        ensure_position_ids(loaded_inputs), unit_locations=location_map
-    )
-    activations = result[0][1]
-
-    if return_model_output:
-        return activations, result[0][0]
-    return activations
 
 
 def collect_features(
@@ -127,12 +83,6 @@ def collect_features(
             )
         seen_ids.add(u.id)
 
-    # Initialize model with "collect" intervention type (extracts activations without modifying them)
-    # prepare_intervenable_model auto-wraps flat lists into InterchangeTarget
-    intervenable_model = prepare_intervenable_model(
-        pipeline, model_units, intervention_type="collect"
-    )
-
     # Pin eval mode + no_grad: collection is a forward-only operation. Without
     # these, autograd builds a graph and dropout / batchnorm-like layers stay
     # in train mode, leaking gradients and randomness into the cached
@@ -159,46 +109,34 @@ def collect_features(
             # shifting unpadded position indices into the padded-batch frame.
             loaded_inputs = pipeline.load(batched_inputs)
 
-            # Compute indices for each model unit
-            indices = [
-                model_unit.index_component(
+            positions = [
+                model_unit.resolve_positions(
                     batched_inputs,
-                    batch=True,
-                    is_original=True,
                     attention_mask=loaded_inputs["attention_mask"],
+                    is_original=True,
                 )
                 for model_unit in model_units
             ]
 
-            # Use shared helper to collect activations
-            result = _collect_activations_single_batch(
-                intervenable_model,
-                loaded_inputs,
-                indices,
-                return_model_output=collect_output_logits,
+            plans = build_plans(model_units, positions, "collect")
+            result = collect_unit_activations(
+                pipeline, loaded_inputs, plans, return_logits=collect_output_logits
             )
 
             if collect_output_logits:
-                # When return_model_output=True, result is tuple[list[Tensor], Any]
                 assert isinstance(result, tuple)
-                activations, model_output = result
+                activations, batch_logits = result
                 # Store full logits per example (seq lengths may vary across batches)
-                batch_logits = model_output.logits.detach().cpu()
+                batch_logits = batch_logits.detach().cpu()
                 for j in range(batch_logits.shape[0]):
                     output_logits_list.append(batch_logits[j])
-                del model_output
             else:
-                # return_model_output=False path returns list[Tensor].
                 assert isinstance(result, list)
                 activations = result
 
-            # Process activations: pyvene 0.1.8+ returns one tensor per unit
-            if len(activations) != len(model_units):
-                raise ValueError(
-                    f"Unexpected activations format. Got {len(activations)} tensors "
-                    f"but expected {len(model_units)} (one per model unit)"
-                )
-
+            # One activation per unit — a (batch, n_positions, width) tensor.
+            # Flattening the position axis makes each (example, position) pair a
+            # sample, which is what every downstream featurizer fitter expects.
             for activation_idx, model_unit in enumerate(model_units):
                 unit_activations = activations[activation_idx]
                 hidden_size = unit_activations.shape[-1]
@@ -207,9 +145,6 @@ def collect_features(
 
             del loaded_inputs
             del activations
-
-    # Clean up intervenable model
-    delete_intervenable_model(intervenable_model)
 
     # Stack collected activations into 2D tensors with shape (n_samples, n_features)
     features_dict = {
@@ -231,45 +166,42 @@ def collect_source_representations(
     source_pipeline: Pipeline,
     examples: list[CounterfactualExample] | list[LabeledCounterfactualExample],
     interchange_target: InterchangeTarget,
-    source_intervenable_model: IntervenableModel | None = None,
 ) -> list[Tensor]:
     """
     Collect activations from source pipeline for cross-model patching.
 
     This is a convenience wrapper around collect_batch_representations that handles
-    tokenization and index computation for the source pipeline.
+    tokenization and position resolution for the source pipeline.
 
     Args:
         source_pipeline: Pipeline to collect activations from
         examples: List of CounterfactualExample objects
         interchange_target: InterchangeTarget specifying which locations to collect
-        source_intervenable_model: Optional pre-created intervenable model for efficiency
 
     Returns:
-        List of activation tensors for use as pyvene's source_representations
+        One activation tensor per unit, in ``interchange_target.flatten()`` order,
+        ready to be written as the sources of an interchange.
     """
-    cf_inputs_raw = list(zip(*[ex["counterfactual_inputs"] for ex in examples]))
-    batched_cf_for_source = [
-        source_pipeline.load(list(cf_group)) for cf_group in cf_inputs_raw
+    cf_inputs_raw = [
+        list(group) for group in zip(*[ex["counterfactual_inputs"] for ex in examples])
     ]
-    source_cf_indices = [
-        model_unit.index_component(
-            list(cf_group),
-            batch=True,
-            is_original=False,
+    batched_cf_for_source = [
+        source_pipeline.load(cf_group) for cf_group in cf_inputs_raw
+    ]
+    source_cf_positions = [
+        model_unit.resolve_positions(
+            cf_inputs_raw[group_idx],
             attention_mask=batched_cf_for_source[group_idx]["attention_mask"],
+            is_original=False,
         )
-        for group_idx, (group, cf_group) in enumerate(
-            zip(interchange_target, cf_inputs_raw)
-        )
+        for group_idx, group in enumerate(interchange_target)
         for model_unit in group
     ]
     return collect_batch_representations(
         source_pipeline,
         batched_cf_for_source,
         interchange_target,
-        source_cf_indices,
-        intervenable_model=source_intervenable_model,
+        source_cf_positions,
     )
 
 
@@ -277,14 +209,15 @@ def collect_batch_representations(
     pipeline: Pipeline,
     batched_counterfactuals: list[dict[str, Tensor]],
     interchange_target: InterchangeTarget,
-    counterfactual_indices: list[Any],
-    intervenable_model: IntervenableModel | None = None,
+    counterfactual_positions: list[Any],
 ) -> list[Tensor]:
     """
-    Collect activations from a single batch for use as source_representations.
+    Collect activations from a single batch for use as intervention sources.
 
     This is the primitive for cross-model patching: collect activations from
-    source_pipeline, then pass them to target_pipeline via source_representations.
+    source_pipeline, then write them into target_pipeline's run.
+
+    Each counterfactual group is its own forward, because each has its own input.
 
     Args:
         pipeline: Source pipeline to collect activations from
@@ -292,70 +225,37 @@ def collect_batch_representations(
             Each element is the output of pipeline.load() for one counterfactual group.
         interchange_target: InterchangeTarget specifying which locations to collect from.
             Groups in the target correspond to counterfactual inputs.
-        counterfactual_indices: Indices for each model unit, shape (num_units, batch_size, num_positions).
-            These should be computed using the SOURCE pipeline's tokenization.
-        intervenable_model: Optional pre-created intervenable model configured for collection.
-            If provided, this model will be used instead of creating a new one.
-            This allows hoisting model creation outside batch loops for efficiency.
-            If None, a model will be created and cleaned up within this function.
+        counterfactual_positions: Token positions for each model unit, shape
+            (num_units, batch_size, num_positions), computed against the SOURCE
+            pipeline's tokenization.
 
     Returns:
-        List of activation tensors in the format expected by pyvene's source_representations
-        parameter. Each tensor corresponds to one intervention location, in order matching
-        intervenable_model.sorted_keys.
+        One activation tensor per unit, in ``interchange_target.flatten()`` order.
 
     Example:
-        >>> # Collect from source model
         >>> source_reps = collect_batch_representations(
         ...     source_pipeline,
         ...     batched_cf_tokenized,
         ...     interchange_target,
-        ...     source_cf_indices,
-        ... )
-        >>> # Use in target model
-        >>> target_pipeline.intervenable_generate(
-        ...     intervenable_model,
-        ...     base_inputs,
-        ...     sources=None,  # Not needed when using source_representations
-        ...     source_representations=source_reps,
-        ...     ...
+        ...     source_cf_positions,
         ... )
     """
-    # Create intervenable model in collect mode if not provided
-    owns_model = intervenable_model is None
-    if owns_model:
-        model_units = interchange_target.flatten()
-        intervenable_model = prepare_intervenable_model(
-            pipeline, model_units, intervention_type="collect"
-        )
-
-    # Collect activations for each counterfactual group
-    # We need to run each group separately since they have different inputs
     all_activations: list[Tensor] = []
 
     unit_idx = 0
     for group_idx, group in enumerate(interchange_target):
-        # Get the tokenized counterfactual input for this group
-        cf_input = batched_counterfactuals[group_idx]
-
-        # Get indices for units in this group
         num_units_in_group = len(group)
-        group_indices = counterfactual_indices[unit_idx : unit_idx + num_units_in_group]
+        group_positions = counterfactual_positions[
+            unit_idx : unit_idx + num_units_in_group
+        ]
         unit_idx += num_units_in_group
 
-        # Collect activations using shared helper
-        # return_model_output defaults to False here, so result is list[Tensor].
-        activations = _collect_activations_single_batch(
-            intervenable_model, cf_input, group_indices
+        plans = build_plans(list(group), group_positions, "collect")
+        activations = collect_unit_activations(
+            pipeline, batched_counterfactuals[group_idx], plans
         )
         assert isinstance(activations, list)
-
-        # Extend our list with activations for this group's units
         all_activations.extend(activations)
-
-    # Cleanup only if we created the model
-    if owns_model:
-        delete_intervenable_model(intervenable_model)
 
     return all_activations
 

@@ -647,6 +647,28 @@ class LMPipeline(Pipeline):
             "string": self.dump(seq, is_logits=False),
         }
 
+    def format_generation(
+        self,
+        result: Any,
+        base_encoding: dict[str, Any],
+        output_scores: bool | int = True,
+    ) -> dict[str, Any]:
+        """A ``generate`` result → the ``{sequences, scores, string}`` dict callers expect.
+
+        ``result`` is a HuggingFace ``GenerateDecoderOnlyOutput`` (what
+        ``tracer.result`` carries when generation ran with
+        ``return_dict_in_generate=True``). The generated region is sliced from the
+        prompt end — see :meth:`_generated_tokens` for why the last
+        ``max_new_tokens`` is the wrong window.
+        """
+        prompt_len = base_encoding["input_ids"].shape[1]
+        sequences = self._generated_tokens(result.sequences, prompt_len).detach().cpu()
+        formatted: dict[str, Any] = {"sequences": sequences}
+        if output_scores:
+            formatted["scores"] = [s.detach().cpu() for s in (result.scores or [])]
+        formatted["string"] = self.dump(sequences, is_logits=False)
+        return formatted
+
     # ------------------------------------------------------------------
     # Intervention generation
     # ------------------------------------------------------------------
@@ -838,6 +860,27 @@ class LMPipeline(Pipeline):
     # ------------------------------------------------------------------
     # Convenience
     # ------------------------------------------------------------------
+
+    def ensure_instrumented(self) -> None:
+        """Re-install nnsight's forward hooks if something removed them.
+
+        pyvene's ``IntervenableModel`` teardown clears *every* forward hook on the
+        module tree, not only the ones it registered — so any pyvene run in the
+        same process leaves nnsight's interleaver hooks stripped, and the next
+        trace fails to serve ``.input`` (``OutOfOrderError``). While both
+        backbones coexist during the nnsight migration, the trace engine calls
+        this before each run.
+
+        Cheap when nothing is wrong: it checks one module for its hooks and only
+        walks the tree when they are missing. Delete this once pyvene is gone —
+        nothing else removes hooks behind nnsight's back.
+        """
+        envoys = [self.nnsight, *self.nnsight.modules()]
+        probe = envoys[-1]
+        if probe._module._forward_pre_hooks:
+            return
+        for envoy in envoys:
+            envoy.interleaver.instrument(envoy)
 
     def get_num_layers(self) -> int:
         return int(self.model.config.num_hidden_layers)

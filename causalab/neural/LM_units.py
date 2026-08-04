@@ -463,6 +463,24 @@ class AttentionHead(AtomicModelUnit):
         """
         return list(unit_indices)
 
+    def resolve_positions(
+        self,
+        raw_inputs: Any,
+        *,
+        attention_mask: Any = _ATTENTION_MASK_UNSET,
+        is_original: bool | None = None,
+    ) -> list[list[int]]:
+        """Just the position axis of ``[head_axis, position_axis]``."""
+        return self.index_component(
+            raw_inputs,
+            batch=True,
+            attention_mask=attention_mask,
+            is_original=is_original,
+        )[1]
+
+    def head_index(self) -> int:
+        return self.head
+
 
 class AttentionHeadValue(AttentionHead):
     """A single head's *value vector* (pyvene ``head_value_output``) at (*layer*, *head*).
