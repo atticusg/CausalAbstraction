@@ -2,12 +2,20 @@
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Callable, Tuple, Any
+from typing import Dict, List, Callable, Sequence, Tuple, Any
 import copy
 import math
 import torch
 import torch.nn.functional as F
-from causalab.neural.activations.interchange_mode import prepare_intervenable_inputs
+from causalab.neural.activations.engine import (
+    build_plans,
+    forward_with_interventions,
+)
+from causalab.neural.activations.interchange_mode import (
+    collect_group_sources,
+    prepare_interchange_batch,
+)
+from causalab.neural.interventions import FeatureIntervention
 from causalab.causal.counterfactual_dataset import (
     CounterfactualExample,
     LabeledCounterfactualExample,
@@ -15,9 +23,8 @@ from causalab.causal.counterfactual_dataset import (
 from causalab.causal.causal_model import CausalModel
 from causalab.causal.trace import CausalTrace, Mechanism
 
-from causalab.neural.pipeline import LMPipeline, ensure_position_ids
+from causalab.neural.pipeline import LMPipeline
 from causalab.neural.units import InterchangeTarget
-from causalab.neural.activations.collect import collect_source_representations
 from torch import Tensor
 
 logger = logging.getLogger(__name__)
@@ -1047,26 +1054,28 @@ def score_intervention_outputs(
 
 def LM_loss_and_metric_fn(
     pipeline: LMPipeline,
-    intervenable_model: Any,
     examples: List[LabeledCounterfactualExample],
     interchange_target: InterchangeTarget,
     checker: Callable[[Dict[str, Any], Dict[str, Any]], float],
+    interventions: Sequence[FeatureIntervention] | None = None,
     source_pipeline: LMPipeline | None = None,
-    source_intervenable_model: Any = None,
 ) -> Tuple[torch.Tensor, Dict[str, float], Dict[str, Any]]:
-    """Concatenate labels, run intervention forward pass, compute accuracy + cross-entropy loss."""
-    # Prepare intervenable inputs (using target pipeline)
-    batched_base, batched_counterfactuals, inv_locations, feature_indices = (
-        prepare_intervenable_inputs(pipeline, examples, interchange_target)
-    )
+    """Concatenate labels, run an intervened forward, return loss + accuracy.
 
-    # Collect source representations if using cross-model patching
-    source_representations = None
-    if source_pipeline is not None:
-        source_representations = collect_source_representations(
-            source_pipeline, examples, interchange_target
-        )
-        batched_counterfactuals = None
+    The differentiable step of DAS / DBM training. Nothing here detaches, so the
+    returned loss backpropagates through the intervention into whatever the
+    featurizer or mask owns — see ``forward_with_interventions``.
+
+    ``interventions`` are the run's intervention objects, reused across steps so
+    a mask's parameters are one set for the whole run. Built per call if omitted,
+    which is only correct for a stateless mode.
+    """
+    batch = prepare_interchange_batch(
+        pipeline, examples, interchange_target, source_pipeline
+    )
+    # Raw: the interchange featurizes the source itself (a featurized read would
+    # apply a DAS rotation twice).
+    sources = collect_group_sources(source_pipeline or pipeline, batch)
 
     # Get ground truth labels
     batched_inv_label_strs = [ex["label"] for ex in examples]
@@ -1091,29 +1100,29 @@ def LM_loss_and_metric_fn(
         use_chat_template=False,
     )
 
-    # Drop any load-time position_ids before concatenating: base is left-padded
-    # and the label is right-padded, so segment-local position_ids (present when
-    # the pipeline is built with position_ids=True) would make the label restart
-    # at 0 instead of continuing from the base. ensure_position_ids below re-derives
-    # them from the *concatenated* mask, where base's right-aligned real tokens and
-    # the label's left-aligned real tokens are contiguous — so cumsum numbers the
-    # whole real span continuously regardless of padding side.
-    batched_base.pop("position_ids", None)
+    # Concatenate labels onto the base so one forward scores every label token.
+    # Drop any load-time position_ids first: base is left-padded and the label is
+    # right-padded, so segment-local ids would restart the label at 0 instead of
+    # continuing the base. The backbone re-derives them from the *concatenated*
+    # mask, where the base's right-aligned real tokens and the label's
+    # left-aligned ones are contiguous, so cumsum numbers the whole real span
+    # continuously regardless of padding side.
+    base_encoding = dict(batch.base_encoding)
+    base_encoding.pop("position_ids", None)
+    for key in ("input_ids", "attention_mask"):
+        base_encoding[key] = torch.cat(
+            [base_encoding[key], batched_inv_label[key]], dim=-1
+        )
 
-    # Concatenate labels to base inputs for evaluation
-    for k in batched_base:
-        batched_base[k] = torch.cat([batched_base[k], batched_inv_label[k]], dim=-1)
-
-    # Run the intervenable model with interventions. This is a plain
-    # (non-generate) forward, so supply position_ids — otherwise a left-padded
-    # batch is mis-encoded on absolute-position models (see ensure_position_ids).
-    _, counterfactual_logits = intervenable_model(
-        ensure_position_ids(batched_base),
-        batched_counterfactuals,
-        unit_locations=inv_locations,
-        subspaces=feature_indices,
-        source_representations=source_representations,
+    plans = build_plans(
+        batch.units,
+        batch.base_positions,
+        "interchange",
+        sources=sources,
+        feature_indices=batch.feature_indices,
+        interventions=interventions,
     )
+    counterfactual_logits = forward_with_interventions(pipeline, base_encoding, plans)
 
     # Extract relevant portions of logits and labels for evaluation
     labels = batched_inv_label["input_ids"]
@@ -1145,22 +1154,20 @@ def LM_loss_and_metric_fn(
     logging_info: Dict[str, Any] = {
         "preds": pipeline.dump(pred_ids),
         "labels": pipeline.dump(labels),
-        "base_ids": batched_base["input_ids"][0],
-        "base_masks": batched_base["attention_mask"][0],
-        "base_inputs": pipeline.dump(batched_base["input_ids"][0]),
-        "inv_locations": inv_locations,
-        "feature_indices": feature_indices,
+        "base_ids": base_encoding["input_ids"][0],
+        "base_masks": base_encoding["attention_mask"][0],
+        "base_inputs": pipeline.dump(base_encoding["input_ids"][0]),
+        "base_positions": batch.base_positions,
+        "source_positions": batch.source_positions,
+        "feature_indices": batch.feature_indices,
+        "counterfactual_masks": [
+            c["attention_mask"][0] for c in batch.source_encodings
+        ],
+        "counterfactual_ids": [c["input_ids"][0] for c in batch.source_encodings],
+        "counterfactual_inputs": [
+            pipeline.dump(c["input_ids"][0]) for c in batch.source_encodings
+        ],
     }
-    if batched_counterfactuals is not None:
-        logging_info["counterfactual_masks"] = [
-            c["attention_mask"][0] for c in batched_counterfactuals
-        ]
-        logging_info["counterfactual_ids"] = [
-            c["input_ids"][0] for c in batched_counterfactuals
-        ]
-        logging_info["counterfactual_inputs"] = [
-            pipeline.dump(c["input_ids"][0]) for c in batched_counterfactuals
-        ]
 
     return loss, eval_metrics, logging_info
 

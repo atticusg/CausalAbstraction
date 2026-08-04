@@ -76,6 +76,13 @@ class FeatureIntervention(torch.nn.Module):
     def __init__(self, featurizer: Any) -> None:
         super().__init__()
         self._featurizer = featurizer
+        # Register the featurizer's two modules as children. `Featurizer` is a
+        # plain container, not an `nn.Module`, so binding it alone registers
+        # nothing and `self.parameters()` would miss a *learned* feature space —
+        # DAS's rotation above all, whose weights the optimizer must see. Both
+        # usually wrap the same underlying layer; `parameters()` de-duplicates.
+        self._featurize_module = featurizer.featurizer
+        self._inverse_module = featurizer.inverse_featurizer
 
     def combine(
         self, f_base: Tensor, f_src: Tensor | None, feature_indices: list[int] | None

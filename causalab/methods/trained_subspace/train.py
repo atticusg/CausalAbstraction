@@ -39,16 +39,13 @@ from tqdm import tqdm
 from causalab.causal.causal_model import CausalModel
 from causalab.causal.counterfactual_dataset import CounterfactualExample
 from causalab.neural.featurizer import Featurizer
+from causalab.neural.activations.engine import build_interventions
 from causalab.neural.activations.interchange_mode import run_interchange_interventions
 from causalab.methods.metric import (
     LM_loss_and_metric_fn,
     causal_score_intervention_outputs,
 )
 from causalab.methods.trained_subspace.subspace import SubspaceFeaturizer
-from causalab.neural.activations.intervenable_model import (
-    prepare_intervenable_model,
-    delete_intervenable_model,
-)
 from causalab.neural.pipeline import Pipeline, LMPipeline
 from causalab.neural.units import InterchangeTarget
 from causalab.io.artifacts import (
@@ -162,9 +159,9 @@ def train_interventions(
         total=len(interchange_targets),
     )
 
-    def loss_fn(p, m, b, t, sp, sim):
+    def loss_fn(p, b, t, interventions, sp):
         return LM_loss_and_metric_fn(
-            p, m, b, t, metric, source_pipeline=sp, source_intervenable_model=sim
+            p, b, t, metric, interventions=interventions, source_pipeline=sp
         )
 
     for key, target in pbar:
@@ -379,19 +376,17 @@ def _run_training_loop(
     Returns:
         str: Summary string with final metrics
     """
-    # ----- Model Initialization ----- #
-    intervenable_model = prepare_intervenable_model(
-        pipeline, interchange_target, intervention_type=intervention_type
-    )
-    intervenable_model.disable_model_gradients()
-    intervenable_model.eval()
-
-    # Create source intervenable model if doing cross-model patching
-    source_intervenable_model = None
+    # ----- Model / intervention initialization ----- #
+    # The base model is frozen: only the interventions train. One set of
+    # intervention objects for the whole run, so a mask's parameters are the
+    # ones the optimizer holds and a featurizer's are updated in place.
+    model_units = interchange_target.flatten()
+    pipeline.model.requires_grad_(False)
+    pipeline.model.eval()
     if source_pipeline is not None:
-        source_intervenable_model = prepare_intervenable_model(
-            source_pipeline, interchange_target, intervention_type="collect"
-        )
+        source_pipeline.model.requires_grad_(False)
+        source_pipeline.model.eval()
+    interventions = build_interventions(model_units, intervention_type)
 
     # ----- Data Preparation ----- #
     train_batch_size = config["train_batch_size"]
@@ -411,9 +406,22 @@ def _run_training_loop(
     early_stopping_enabled = patience is not None
 
     # ----- Optimizer Configuration ----- #
-    optimizer_params = []
-    for k, v in intervenable_model.interventions.items():
-        optimizer_params += list(v.parameters())
+    # A mask intervention owns its parameters directly; a learned featurizer
+    # (DAS's rotation) owns them through the modules the intervention wraps, and
+    # both are reachable from the intervention's `parameters()`.
+    optimizer_params = [
+        parameter
+        for intervention in interventions
+        for parameter in intervention.parameters()
+        if parameter.requires_grad
+    ]
+    if not optimizer_params:
+        raise ValueError(
+            f"No trainable parameters found for intervention_type="
+            f"{intervention_type!r}. A DAS run needs a trainable "
+            f"SubspaceFeaturizer on each unit; a DBM run needs n_features set so "
+            f"the mask can be built."
+        )
 
     optimizer = torch.optim.AdamW(
         optimizer_params, lr=config["init_lr"], weight_decay=0
@@ -430,7 +438,6 @@ def _run_training_loop(
 
     # ----- Temperature Scheduling for Mask Interventions ----- #
     temperature_schedule = None
-    interventions = None
     if intervention_type == "mask":
         temperature_start, temperature_end = config["masking"]["temperature_schedule"]
         temperature_annealing_fraction = config["masking"][
@@ -454,12 +461,8 @@ def _run_training_loop(
         )
 
         # Set initial temperature for all mask interventions
-        interventions = intervenable_model.interventions
-        assert interventions is not None
-        for k, v in interventions.items():
-            # pyvene's intervention dict values are dynamically typed
-            init_intervention = v[0] if isinstance(v, tuple) else v
-            init_intervention.set_temperature(temperature_schedule[current_step])  # pyright: ignore[reportCallIssue]
+        for intervention in interventions:
+            intervention.set_temperature(temperature_schedule[current_step])
 
     # ----- Training Loop ----- #
     postfix_dict: dict[str, str] = {}  # Initialize to avoid unbound error
@@ -491,11 +494,10 @@ def _run_training_loop(
             # Run training step
             loss, eval_metrics, _logging_info = loss_and_metric_fn(
                 pipeline,
-                intervenable_model,
                 examples,
                 interchange_target,
+                interventions,
                 source_pipeline,
-                source_intervenable_model,
             )
 
             # Add sparsity loss for mask interventions
@@ -507,14 +509,12 @@ def _run_training_loop(
                 # Collect sparsity losses and mask sizes for normalization
                 total_sparsity: Tensor = torch.tensor(0.0, device=loss.device)
                 total_mask_elements = 0
-                for k, v in interventions.items():
-                    # pyvene's intervention dict values are dynamically typed
-                    mask_intervention = v[0] if isinstance(v, tuple) else v
+                for mask_intervention in interventions:
                     total_sparsity = (
-                        total_sparsity + mask_intervention.get_sparsity_loss()  # pyright: ignore[reportCallIssue]
+                        total_sparsity + mask_intervention.get_sparsity_loss()
                     )
-                    total_mask_elements += mask_intervention.mask.numel()  # pyright: ignore[reportAttributeAccessIssue, reportCallIssue]
-                    mask_intervention.set_temperature(temp)  # pyright: ignore[reportCallIssue]
+                    total_mask_elements += mask_intervention.mask.numel()
+                    mask_intervention.set_temperature(temp)
 
                 # Normalize by total mask elements so regularization_coefficient
                 # has consistent meaning regardless of number of features/units
@@ -540,7 +540,7 @@ def _run_training_loop(
             # but we only use schedulers that don't require it
             scheduler.step()  # pyright: ignore[reportCallIssue]
             current_step += 1
-            intervenable_model.set_zero_grad()
+            optimizer.zero_grad(set_to_none=True)
 
             # Periodic memory cleanup
             if step % memory_cleanup_freq == 0 and torch.cuda.is_available():
@@ -577,36 +577,20 @@ def _run_training_loop(
 
     # ----- Feature Selection for Mask Interventions ----- #
     if intervention_type == "mask":
-        # Flatten InterchangeTarget to get all model units
-        model_units = interchange_target.flatten()
-        assert intervenable_model.interventions is not None
-
-        for kv, model_unit in zip(
-            intervenable_model.interventions.items(),
-            model_units,
-        ):
-            k, v = kv
-            # pyvene's intervention dict values are dynamically typed
-            intervention = v[0] if isinstance(v, tuple) else v
-
+        for intervention, model_unit in zip(interventions, model_units):
             if config["featurizer_kwargs"]["tie_masks"]:
                 # If masks are tied, use the average mask across all units
-                if torch.sigmoid(intervention.mask[0]) > 0.5:  # pyright: ignore[reportIndexIssue,reportArgumentType]
+                if torch.sigmoid(intervention.mask[0]) > 0.5:
                     indices = None
                 else:
                     indices = []
             else:
                 # Get binary mask and indices
-                mask_binary = (torch.sigmoid(intervention.mask) > 0.5).float().cpu()  # pyright: ignore[reportArgumentType]
+                mask_binary = (torch.sigmoid(intervention.mask) > 0.5).float().cpu()
                 indices = torch.nonzero(mask_binary).numpy().flatten().tolist()
 
             # Update model unit
             model_unit.set_feature_indices(indices)
-
-    # ----- Cleanup ----- #
-    delete_intervenable_model(intervenable_model)
-    if source_intervenable_model is not None:
-        delete_intervenable_model(source_intervenable_model)
 
     summary = f"Trained intervention for {str(interchange_target)[:200]}"
     summary += "\nFinal metrics: " + " ".join(

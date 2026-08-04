@@ -353,6 +353,20 @@ def prepare_interchange_batch(
         for cf_tuple in zip(*[ex["counterfactual_inputs"] for ex in examples])
     ]
 
+    n_groups = len(list(interchange_target))
+    if len(raw_sources) < n_groups:
+        raise ValueError(
+            f"The target has {n_groups} group(s) but each example carries only "
+            f"{len(raw_sources)} counterfactual input(s). A group is the set of "
+            f"units that share one counterfactual, so every group needs one — "
+            f"put units that should read the same counterfactual in the same "
+            f"group, or supply more counterfactuals."
+        )
+    # Surplus counterfactuals are ignored, not an error: path patching presents
+    # every example as `[source, *bases-for-restorers]`, so a configuration with
+    # fewer restorers than the dataset was built for simply consumes fewer.
+    raw_sources = raw_sources[:n_groups]
+
     base_encoding = pipeline.load(raw_base)
     source_encodings = [source_pipeline.load(group) for group in raw_sources]
 
