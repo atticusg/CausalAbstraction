@@ -508,10 +508,8 @@ class TestMaskGolden:
 #  Interpolation                                                               #
 # --------------------------------------------------------------------------- #
 def _interp_logits(pipe, target, fn, params) -> torch.Tensor:
-    model = prepare_intervenable_model(pipe, target, intervention_type="interpolation")
     out = batched_interpolation_intervention(
         pipe,
-        model,
         [cf_example(_BASE, _SOURCE)],
         target,
         fn=fn,

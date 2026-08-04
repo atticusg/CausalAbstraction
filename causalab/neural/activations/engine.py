@@ -60,9 +60,11 @@ _IDENTITY_FEATURIZER = Featurizer()
 __all__ = [
     "UnitPlan",
     "build_plans",
+    "build_interventions",
     "gather_positions",
     "scatter_positions",
     "collect_unit_activations",
+    "collect_unit_activations_under",
     "generate_with_interventions",
     "forward_with_interventions",
     "model_inputs",
@@ -158,6 +160,41 @@ class UnitPlan:
         return forward_order(self.unit.layer, self.unit.component_type)
 
 
+def build_interventions(
+    units: Iterable[AtomicModelUnit],
+    mode: str,
+    *,
+    type_by_unit: dict[str, str] | None = None,
+    noise_seed: int = 0,
+    raw: bool = False,
+) -> list[FeatureIntervention]:
+    """One intervention per unit, in ``units`` order.
+
+    Build these **once per run** and pass them to every batch's
+    :func:`build_plans`. Two modes carry state across batches and would be wrong
+    if rebuilt per batch:
+
+    * ``noise`` advances its RNG, so rebuilding would hand identically-shaped
+      consecutive batches the same corruption — making results depend on
+      ``batch_size``.
+    * ``mask`` owns learnable parameters, which an optimizer must see as one set
+      for the whole run.
+    """
+    interventions = []
+    for unit in units:
+        unit_mode = type_by_unit[unit.id] if type_by_unit is not None else mode
+        featurizer = _IDENTITY_FEATURIZER if raw else unit.featurizer
+        interventions.append(
+            build_intervention(
+                featurizer,
+                unit_mode,
+                seed=noise_seed,
+                tie_masks=featurizer.tie_masks,
+            )
+        )
+    return interventions
+
+
 def build_plans(
     units: Iterable[AtomicModelUnit],
     positions: Sequence[Sequence[Sequence[int]]],
@@ -168,6 +205,7 @@ def build_plans(
     type_by_unit: dict[str, str] | None = None,
     noise_seed: int = 0,
     raw: bool = False,
+    interventions: Sequence[FeatureIntervention] | None = None,
 ) -> list[UnitPlan]:
     """Pair each unit with its positions, mode and source for one batch.
 
@@ -182,23 +220,24 @@ def build_plans(
     the featurizer twice — for a DAS rotation that is ``x @ Rᵀ @ Rᵀ``, which is
     both wrong and (for a rank-reducing subspace) a shape error. Collecting
     features for analysis is the opposite case and must keep the featurizer.
+
+    ``interventions`` reuses objects from :func:`build_interventions` instead of
+    constructing fresh ones — required whenever the interventions carry state
+    across batches (``noise``, ``mask``).
     """
     units = list(units)
+    if interventions is None:
+        interventions = build_interventions(
+            units, mode, type_by_unit=type_by_unit, noise_seed=noise_seed, raw=raw
+        )
     plans: list[UnitPlan] = []
     for index, unit in enumerate(units):
-        unit_mode = type_by_unit[unit.id] if type_by_unit is not None else mode
-        featurizer = _IDENTITY_FEATURIZER if raw else unit.featurizer
         plans.append(
             UnitPlan(
                 unit=unit,
                 positions=positions[index],
                 head=unit.head_index(),
-                intervention=build_intervention(
-                    featurizer,
-                    unit_mode,
-                    seed=noise_seed,
-                    tie_masks=featurizer.tie_masks,
-                ),
+                intervention=interventions[index],
                 feature_indices=(
                     feature_indices[index] if feature_indices is not None else None
                 ),
@@ -285,6 +324,70 @@ def _apply(pipeline: Any, plans: Sequence[UnitPlan], device: Any) -> None:
                 activation, positions, replacement, plan.head
             )
         site.write(activation)
+
+
+def collect_unit_activations_under(
+    pipeline: Any,
+    encoding: dict[str, Any],
+    write_plans: Sequence[UnitPlan],
+    read_plans: Sequence[UnitPlan],
+) -> list[Tensor]:
+    """One forward that *writes* some sites and *reads* others.
+
+    Path patching's first pass: the sender and restorers write while the
+    receivers read, so each receiver sees the value it would see when only the
+    sender→receiver path is perturbed. Correctness rests entirely on ordering —
+    a receiver must be read after every upstream restorer has written — which
+    holds because reads and writes are merged into one forward-ordered sequence
+    rather than run as two independent passes.
+
+    Returns the read plans' activations in ``read_plans`` order.
+    """
+    pipeline.ensure_instrumented()
+    device = pipeline.model.device
+    results: list[Tensor | None] = [None] * len(read_plans)
+    read_index = {id(plan): i for i, plan in enumerate(read_plans)}
+    combined = [*write_plans, *read_plans]
+    writes = {id(plan) for plan in write_plans}
+
+    with pipeline.nnsight.trace(**model_inputs(encoding)):
+        for _key, group in _grouped_in_forward_order(combined):
+            site = resolve_site(
+                pipeline.nnsight, group[0].unit.component_type, group[0].unit.layer
+            )
+            activation = site.read()
+            # Writes first: a receiver sharing a site with a restorer must read
+            # the restored value, which is the whole point of the single pass.
+            for plan in group:
+                if id(plan) not in writes:
+                    continue
+                positions = _as_position_tensor(plan.positions, device)
+                selected = gather_positions(activation, positions, plan.head)
+                replacement = plan.intervention(
+                    selected, plan.source, plan.feature_indices
+                )
+                activation = scatter_positions(
+                    activation, positions, replacement, plan.head
+                )
+            wrote = any(id(plan) in writes for plan in group)
+            if wrote:
+                site.write(activation)
+            for plan in group:
+                if id(plan) in writes:
+                    continue
+                selected = gather_positions(
+                    activation, _as_position_tensor(plan.positions, device), plan.head
+                )
+                results[read_index[id(plan)]] = plan.intervention(
+                    selected, None, plan.feature_indices
+                ).save()
+
+    collected = [r for r in results if r is not None]
+    if len(collected) != len(read_plans):  # pragma: no cover - defensive
+        raise RuntimeError(
+            f"Collected {len(collected)} activations for {len(read_plans)} receivers."
+        )
+    return collected
 
 
 def generate_with_interventions(

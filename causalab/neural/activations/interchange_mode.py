@@ -25,16 +25,15 @@ from causalab.causal.counterfactual_dataset import (
     CounterfactualExample,
     LabeledCounterfactualExample,
 )
-from causalab.neural.pipeline import Pipeline, ensure_position_ids
+from causalab.neural.pipeline import Pipeline
 from causalab.neural.units import AtomicModelUnit, InterchangeTarget
 from causalab.neural.activations.engine import (
     build_plans,
     collect_unit_activations,
+    collect_unit_activations_under,
     generate_with_interventions,
 )
 from causalab.neural.activations.intervenable_model import (
-    prepare_intervenable_model,
-    prepare_mixed_intervenable_model,
     delete_intervenable_model,
 )
 from causalab.neural.activations.collect import collect_source_representations
@@ -229,8 +228,8 @@ def prepare_intervenable_inputs(
     # as ragged.
     model_units = [model_unit for group in interchange_target for model_unit in group]
     for label, all_indices in (
-        ("base", base_indices),
-        ("counterfactual", counterfactual_indices),
+        ("base token position", base_indices),
+        ("counterfactual token position", counterfactual_indices),
     ):
         for unit_idx, unit_indices in enumerate(all_indices):
             # The unit class knows how pyvene tensorizes its index axes: a plain
@@ -246,7 +245,7 @@ def prepare_intervenable_inputs(
                 if ragged is not None:
                     example_index, (_path, len0, len_j) = ragged
                     raise ValueError(
-                        f"A {label} token position selects a variable number of "
+                        f"A {label} selects a variable number of "
                         f"tokens across the batch (unit {unit_idx}: example 0 "
                         f"selects {len0}, example {example_index} selects {len_j} "
                         f"at index path {list(_path)}). Interchange stacks a "
@@ -289,6 +288,8 @@ def _validate_positions(
     units: Sequence[AtomicModelUnit],
     base_indices: Sequence[Any],
     counterfactual_indices: Sequence[Any],
+    *,
+    role: str = "base token position",
 ) -> None:
     """Reject shape mismatches and ragged spans before they reach a gather.
 
@@ -311,8 +312,8 @@ def _validate_positions(
             f"base value. Use single-token values or a fixed single position."
         )
     for label, all_indices in (
-        ("base", base_indices),
-        ("counterfactual", counterfactual_indices),
+        (role, base_indices),
+        ("counterfactual token position", counterfactual_indices),
     ):
         for unit_idx, unit_indices in enumerate(all_indices):
             for group in units[unit_idx].tensorized_index_groups(unit_indices):
@@ -320,7 +321,7 @@ def _validate_positions(
                 if ragged is not None:
                     example_index, (_path, len0, len_j) = ragged
                     raise ValueError(
-                        f"A {label} token position selects a variable number of "
+                        f"A {label} selects a variable number of "
                         f"tokens across the batch (unit {unit_idx}: example 0 "
                         f"selects {len0}, example {example_index} selects {len_j} "
                         f"at index path {list(_path)}). A unit's per-example "
@@ -651,13 +652,14 @@ def run_two_pass_path_patching(
     single receivers — because the metric is a nonlinear function of the patched
     activations and the receivers interact downstream (the IOI Fig. 4 / Fig. 5 case:
     one sender into all name-mover queries or all S-inhibition values at once). The
-    same ``receiver`` list is used for PASS 1's ``collect_units`` and PASS 2's
-    ``InterchangeTarget``, so the collected order (``result[0][1]``, in pyvene's
-    ``sorted_keys`` = config-add order) matches the injected order
-    (``source_representations[i] → sorted_keys[i]``) with no reordering. PASS 2 puts
-    each receiver in its own group (``[[r] for r in receivers]``) because pyvene's
-    ``_input_validation`` requires one source representation per intervention group.
-    A 1-element list reproduces the single-receiver run exactly.
+    same ``receiver`` list drives both passes, and the engine returns activations in
+    the order it was given units, so PASS 2 injects what PASS 1 collected with no
+    reordering step to get wrong.
+
+    PASS 1 mixes roles in one forward — the sender/restorer units write while the
+    receivers read. Forward order is what makes it exact, and the engine visits
+    sites in that order, so each receiver is read only after every upstream
+    restorer has written.
 
     ``counterfactual_dataset`` must already be presented so each example's
     ``counterfactual_inputs`` lead with the source (group 0) followed by the base for
@@ -666,122 +668,76 @@ def run_two_pass_path_patching(
     :func:`run_interchange_interventions`, so existing scoring applies unchanged.
     """
     receivers = list(receiver) if isinstance(receiver, (list, tuple)) else [receiver]
-    n_groups = len(list(interchange_target))
-    n_recv = len(receivers)
-    pass1_model = prepare_mixed_intervenable_model(
-        pipeline, interchange_target, receivers
-    )
-    # One group PER receiver (not one group of N): pyvene's _input_validation checks
-    # len(source_representations) == len(_intervention_group), and PASS 2 injects one
-    # v* per receiver, so the group count must equal the receiver count.
-    pass2_model = prepare_intervenable_model(
-        pipeline,
-        InterchangeTarget([[r] for r in receivers]),
-        intervention_type="interchange",
-    )
 
     all_outputs: list[dict[str, Any]] = []
-    try:
-        for start in tqdm(
-            range(0, len(counterfactual_dataset), batch_size),
-            desc="path-patch two-pass",
-            disable=not logger.isEnabledFor(logging.DEBUG),
-            leave=False,
-        ):
-            examples = counterfactual_dataset[start : start + batch_size]
-            with torch.no_grad():
-                # PASS 1 — collect v* under the sender+restorer interchange. Reuse
-                # prepare_intervenable_inputs for the interchange groups' indices and
-                # its shape guards, then append the receiver (collected from the base:
-                # source index == base index, as in a plain collect).
-                batched_base, batched_cfs, inv_locations, feature_indices = (
-                    prepare_intervenable_inputs(pipeline, examples, interchange_target)
+    for start in tqdm(
+        range(0, len(counterfactual_dataset), batch_size),
+        desc="path-patch two-pass",
+        disable=not logger.isEnabledFor(logging.DEBUG),
+        leave=False,
+    ):
+        examples = counterfactual_dataset[start : start + batch_size]
+        with torch.no_grad():
+            batch = prepare_interchange_batch(pipeline, examples, interchange_target)
+            raw_base = [ex["input"] for ex in examples]
+            receiver_positions = [
+                r.resolve_positions(
+                    raw_base,
+                    attention_mask=batch.base_encoding["attention_mask"],
+                    is_original=True,
                 )
-                raw_base = [ex["input"] for ex in examples]
-                # The receiver indices are spliced straight into the pyvene locations
-                # below, bypassing the ragged-span guard prepare_intervenable_inputs
-                # runs on the interchange groups. Validate each on the same path — per
-                # tensorized axis group, like prepare_intervenable_inputs — so a ragged
-                # receiver span raises the actionable error rather than reaching
-                # pyvene's gather as the cryptic span error. A uniform multi-token span
-                # is fine; today every receiver reads a single last-token position.
-                recv_base_idxs = []
-                for r in receivers:
-                    recv_base_idx = r.index_component(
-                        raw_base,
-                        batch=True,
-                        is_original=True,
-                        attention_mask=batched_base["attention_mask"],
-                    )
-                    for group in r.tensorized_index_groups(recv_base_idx):
-                        ragged = _first_ragged_span(group)
-                        if ragged is not None:
-                            example_index, (_path, len0, len_j) = ragged
-                            raise ValueError(
-                                f"A path-patching receiver selects a variable number "
-                                f"of tokens across the batch (example 0 selects "
-                                f"{len0}, example {example_index} selects {len_j} at "
-                                f"index path {list(_path)}). Interchange stacks the "
-                                f"receiver's per-example positions with `torch.tensor`, "
-                                f"so every example must select the same number of "
-                                f"tokens — a ragged span reaches pyvene's gather as an "
-                                f"`expected sequence of length N at dim 1` error that "
-                                f"poisons the context. Use a fixed-width receiver "
-                                f"position (e.g. the last token)."
-                            )
-                    recv_base_idxs.append(recv_base_idx)
-                cf_idx, base_idx = inv_locations["sources->base"]
-                pass1_locations = {
-                    "sources->base": (
-                        cf_idx + recv_base_idxs,
-                        base_idx + recv_base_idxs,
-                    )
-                }
-                # One source per interchange group, then None per collected receiver
-                # (each consumes no source and reads the base).
-                sources = list(batched_cfs[:n_groups]) + [None] * n_recv
-                # Plain (non-generate) forward: supply position_ids on BOTH the base
-                # and every source so a left-padded batch is not mis-encoded on
-                # absolute-position models — pyvene runs each source as its own
-                # collection forward (see ensure_position_ids). PASS 2 below goes
-                # through intervenable_generate, which (being single-step) applies the
-                # same position_ids fix to its base internally.
-                sources = [
-                    ensure_position_ids(s) if s is not None else None for s in sources
-                ]
-                result = pass1_model(
-                    ensure_position_ids(batched_base),
-                    sources=sources,
-                    unit_locations=pass1_locations,
+                for r in receivers
+            ]
+            # The receivers bypass prepare_interchange_batch's guards (they are
+            # not interchange groups), so validate them on the same path — a
+            # ragged receiver span would otherwise fail deep in an index build.
+            receiver_indices = [
+                r.index_component(
+                    raw_base,
+                    batch=True,
+                    is_original=True,
+                    attention_mask=batch.base_encoding["attention_mask"],
                 )
-                v_star = result[0][1]  # list[Tensor], one per receiver, in order
-                if len(v_star) != n_recv:
-                    raise RuntimeError(
-                        f"PASS 1 collected {len(v_star)} activations for {n_recv} "
-                        f"receivers — the collect-order ↔ sorted_keys contract pyvene "
-                        f"relies on (one CollectIntervention per receiver, in "
-                        f"config-add order) was violated."
-                    )
+                for r in receivers
+            ]
+            _validate_positions(
+                receivers,
+                receiver_indices,
+                receiver_indices,
+                role="path-patching receiver",
+            )
 
-                # PASS 2 — inject v* into the receivers on an otherwise-clean base run.
-                pass2_locations = {"sources->base": (recv_base_idxs, recv_base_idxs)}
-                pass2_feature_indices = [
-                    [r.get_feature_indices() for _ in range(len(raw_base))]
-                    for r in receivers
-                ]
-                output = pipeline.intervenable_generate(
-                    pass2_model,
-                    batched_base,
-                    None,
-                    pass2_locations,
-                    pass2_feature_indices,
-                    source_representations=v_star,
-                    output_scores=output_scores,
-                )
-                all_outputs.append(output)
-    finally:
-        delete_intervenable_model(pass1_model)
-        delete_intervenable_model(pass2_model)
+            # PASS 1 — write the sender + restorers, read v* at the receivers.
+            sources = collect_group_sources(pipeline, batch)
+            write_plans = build_plans(
+                batch.units,
+                batch.base_positions,
+                "interchange",
+                sources=sources,
+                feature_indices=batch.feature_indices,
+            )
+            read_plans = build_plans(receivers, receiver_positions, "collect", raw=True)
+            v_star = collect_unit_activations_under(
+                pipeline, batch.base_encoding, write_plans, read_plans
+            )
+
+            # PASS 2 — inject v* on an otherwise-clean base run.
+            inject_plans = build_plans(
+                receivers,
+                receiver_positions,
+                "interchange",
+                sources=v_star,
+                feature_indices=[r.get_feature_indices() for r in receivers],
+            )
+            result = generate_with_interventions(
+                pipeline,
+                batch.base_encoding,
+                inject_plans,
+                output_scores=bool(output_scores),
+            )
+            all_outputs.append(
+                pipeline.format_generation(result, batch.base_encoding, output_scores)
+            )
 
     if not isinstance(output_scores, bool) and output_scores > 0:
         all_outputs = convert_to_top_k(all_outputs, pipeline, k=output_scores)

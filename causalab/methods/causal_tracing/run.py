@@ -37,11 +37,6 @@ from causalab.methods.ablation._spans import group_by_position_count
 from causalab.methods.ablation.run import _stitch_bucket_outputs
 from causalab.methods.metric import InterchangeMetric, score_intervention_outputs
 from causalab.methods.steer.steer import run_steering_interventions
-from causalab.neural.activations.intervenable_model import (
-    delete_intervenable_model,
-    prepare_intervenable_model,
-    reset_noise_interventions,
-)
 from causalab.neural.units import AtomicModelUnit, InterchangeTarget
 
 
@@ -102,60 +97,43 @@ def run_causal_trace(
     gather stays rectangular, with per-example vectors reindexed per bucket and
     the outputs stitched back into dataset order for direct scoring.
 
-    The pyvene model is built **once** and reused across every bucket. Its hooks
-    depend only on ``target`` / ``type_by_unit`` / ``noise_seed`` — all
-    bucket-invariant — while the per-example positions and source values ride in
-    per batch. Rebuilding per bucket (the previous behaviour) re-paid pyvene's
-    hook construction for each distinct subject length, the dominant cost for
-    variable-length (ROME-style) corruption. The noise RNG is reset at each
-    bucket boundary so every bucket's noise stream restarts from ``noise_seed``
-    exactly as a fresh per-bucket model gave — scores are unchanged.
+    Each bucket is one ``run_steering_interventions`` call, which builds its own
+    interventions — so every bucket's noise stream starts from ``noise_seed``
+    while advancing across the batches *within* a bucket. That is the property
+    that makes grid cells comparable, and it now falls out of the call structure
+    rather than needing a model to be built once and its RNG reset by hand at
+    each boundary.
     """
     buckets = group_by_position_count(target, dataset)
 
-    model = prepare_intervenable_model(
-        pipeline,
-        target,
-        intervention_type="replace",
-        type_by_unit=type_by_unit,
-        noise_seed=noise_seed,
-    )
-    try:
-        if len(buckets) == 1:
-            reset_noise_interventions(model)
-            return run_steering_interventions(
-                pipeline,
-                dataset,
-                target,
-                vectors,
-                batch_size=batch_size,
-                output_scores=output_scores,
-                mode="replace",
-                type_by_unit=type_by_unit,
-                noise_seed=noise_seed,
-                intervenable_model=model,
-            )
+    if len(buckets) == 1:
+        return run_steering_interventions(
+            pipeline,
+            dataset,
+            target,
+            vectors,
+            batch_size=batch_size,
+            output_scores=output_scores,
+            mode="replace",
+            type_by_unit=type_by_unit,
+            noise_seed=noise_seed,
+        )
 
-        bucket_outputs = []
-        for indices, sub_dataset in buckets:
-            reset_noise_interventions(model)
-            bucket_outputs.append(
-                run_steering_interventions(
-                    pipeline,
-                    sub_dataset,
-                    target,
-                    _slice_vectors(vectors, indices),
-                    batch_size=batch_size,
-                    output_scores=output_scores,
-                    mode="replace",
-                    type_by_unit=type_by_unit,
-                    noise_seed=noise_seed,
-                    intervenable_model=model,
-                )
-            )
-        return _stitch_bucket_outputs(buckets, bucket_outputs, len(dataset))
-    finally:
-        delete_intervenable_model(model)
+    bucket_outputs = [
+        run_steering_interventions(
+            pipeline,
+            sub_dataset,
+            target,
+            _slice_vectors(vectors, indices),
+            batch_size=batch_size,
+            output_scores=output_scores,
+            mode="replace",
+            type_by_unit=type_by_unit,
+            noise_seed=noise_seed,
+        )
+        for indices, sub_dataset in buckets
+    ]
+    return _stitch_bucket_outputs(buckets, bucket_outputs, len(dataset))
 
 
 def run_corrupted_floor(

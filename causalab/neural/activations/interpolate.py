@@ -24,7 +24,6 @@ from typing import Any, Callable
 
 import torch
 from tqdm import tqdm
-from pyvene import IntervenableModel  # type: ignore[import-untyped]
 
 from causalab.causal.counterfactual_dataset import (
     CounterfactualExample,
@@ -33,11 +32,15 @@ from causalab.causal.counterfactual_dataset import (
 from causalab.neural.pipeline import Pipeline
 from causalab.neural.units import InterchangeTarget
 from causalab.neural.featurizer import Featurizer
-from causalab.neural.activations.intervenable_model import (
-    prepare_intervenable_model,
-    delete_intervenable_model,
+from causalab.neural.activations.engine import (
+    build_interventions,
+    build_plans,
+    generate_with_interventions,
 )
-from causalab.neural.activations.interchange_mode import prepare_intervenable_inputs
+from causalab.neural.activations.interchange_mode import (
+    collect_group_sources,
+    prepare_interchange_batch,
+)
 from causalab.neural.activations.data_utils import (
     convert_to_top_k,
     move_outputs_to_cpu,
@@ -47,70 +50,68 @@ logger = logging.getLogger(__name__)
 
 
 def set_interventions_interpolation(
-    intervenable_model: IntervenableModel,
+    interventions: Any,
     fn: Callable[..., torch.Tensor],
     **params: Any,
 ) -> None:
-    """Push an interpolation function and its parameters onto all intervention instances.
+    """Push an interpolation function and its parameters onto every intervention.
+
+    The function cannot ride in the intervention's ``forward`` signature (which is
+    fixed to base/source/feature-indices), so it is set on the object first — the
+    same pattern a mask intervention uses for its temperature.
 
     Args:
-        intervenable_model: The pyvene IntervenableModel whose interventions to configure.
+        interventions: The interventions to configure.
         fn: Callable with signature (f_base, f_src, **params) -> Tensor.
         **params: Keyword arguments forwarded to fn on each call.
     """
-    for v in intervenable_model.interventions.values():
-        intervention: Any = v[0] if isinstance(v, tuple) else v
+    for intervention in interventions:
         if hasattr(intervention, "set_interpolation"):
             intervention.set_interpolation(fn, **params)
 
 
 def batched_interpolation_intervention(
     pipeline: Pipeline,
-    intervenable_model: IntervenableModel,
     examples: list[CounterfactualExample] | list[LabeledCounterfactualExample],
     interchange_target: InterchangeTarget,
     fn: Callable[..., torch.Tensor],
     params: dict[str, Any],
     output_scores: bool | int = True,
+    interventions: Any = None,
 ) -> dict[str, Any]:
     """Perform interpolation interventions on a batch of examples.
 
     Args:
         pipeline: The pipeline containing the model.
-        intervenable_model: PyVENE model with preset intervention locations.
         examples: List of counterfactual examples.
         interchange_target: InterchangeTarget containing model components to intervene on.
         fn: Interpolation function with signature (f_base, f_src, **params) -> Tensor.
         params: Keyword arguments forwarded to fn.
         output_scores: Whether to include scores in output dictionary (default: True).
+        interventions: The run's interventions, one per flattened unit; built if
+            not supplied.
 
     Returns:
         dict: Dictionary with 'sequences' and optionally 'scores' keys.
     """
-    try:
-        batched_base, batched_counterfactuals, inv_locations, feature_indices = (
-            prepare_intervenable_inputs(pipeline, examples, interchange_target)
-        )
-
-        set_interventions_interpolation(intervenable_model, fn, **params)
-
-        gen_kwargs = {"output_scores": output_scores}
-        output = pipeline.intervenable_generate(
-            intervenable_model,
-            batched_base,
-            batched_counterfactuals,
-            inv_locations,
-            feature_indices,
-            **gen_kwargs,
-        )
-
-        for batched in [batched_base] + batched_counterfactuals:
-            for k, v in batched.items():
-                batched[k] = v.cpu()
-
-        return output
-    finally:
-        delete_intervenable_model(intervenable_model)
+    batch = prepare_interchange_batch(pipeline, examples, interchange_target)
+    # Raw, like interchange: the interpolation featurizes the source itself.
+    sources = collect_group_sources(pipeline, batch)
+    if interventions is None:
+        interventions = build_interventions(batch.units, "interpolation")
+    set_interventions_interpolation(interventions, fn, **params)
+    plans = build_plans(
+        batch.units,
+        batch.base_positions,
+        "interpolation",
+        sources=sources,
+        feature_indices=batch.feature_indices,
+        interventions=interventions,
+    )
+    result = generate_with_interventions(
+        pipeline, batch.base_encoding, plans, output_scores=bool(output_scores)
+    )
+    return pipeline.format_generation(result, batch.base_encoding, output_scores)
 
 
 def run_interpolation_interventions(
@@ -146,9 +147,7 @@ def run_interpolation_interventions(
         dict: Dictionary with 'sequences' (on CPU) and optionally 'scores' keys
               (on CPU, in top-k format if int was provided).
     """
-    intervenable_model = prepare_intervenable_model(
-        pipeline, interchange_target, intervention_type="interpolation"
-    )
+    interventions = build_interventions(interchange_target.flatten(), "interpolation")
 
     all_outputs = []
 
@@ -162,16 +161,14 @@ def run_interpolation_interventions(
         with torch.no_grad():
             output_dict = batched_interpolation_intervention(
                 pipeline,
-                intervenable_model,
                 examples,
                 interchange_target,
                 fn=fn,
                 params=params,
                 output_scores=output_scores,
+                interventions=interventions,
             )
             all_outputs.append(output_dict)
-
-    delete_intervenable_model(intervenable_model)
 
     if not isinstance(output_scores, bool) and output_scores > 0:
         all_outputs = convert_to_top_k(all_outputs, pipeline, k=output_scores)

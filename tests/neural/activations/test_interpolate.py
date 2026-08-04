@@ -140,6 +140,11 @@ def _make_cf_dataset(n: int) -> list[dict[str, Any]]:
     ]
 
 
+def _lerp(f_base: torch.Tensor, f_src: torch.Tensor, alpha: float) -> torch.Tensor:
+    """The canonical blend: ``(1-alpha)*f_base + alpha*f_src``."""
+    return (1 - alpha) * f_base + alpha * f_src
+
+
 # --------------------------------------------------------------------------- #
 #  set_interventions_interpolation                                            #
 # --------------------------------------------------------------------------- #
@@ -147,600 +152,197 @@ class TestSetInterventionsInterpolationUnit:
     """``set_interventions_interpolation`` pushes ``fn`` + ``params`` onto every
     intervention exposing ``set_interpolation``.
 
-    This is the single entry point by which the batched runner gets a user's
-    interpolation function onto pyvene's intervention instances. If it
-    silently drops the kwargs or skips the tuple-shape branch, the model
-    runs with stale or no interpolation and produces silently-wrong
-    activations.
+    This is the single entry point by which the runner gets a user's
+    interpolation function onto the intervention objects. If it silently drops
+    the kwargs or skips an intervention, the model runs with stale or no
+    interpolation and produces silently-wrong activations.
+
+    It takes a plain sequence of interventions; the pyvene-era tuple-unwrapping
+    branch is gone, because there is no intervention dict whose values might be
+    ``(module, ...)`` tuples any more.
     """
 
     pytestmark = pytest.mark.unit
 
-    def test_pushes_fn_and_params_onto_plain_intervention(self) -> None:
-        inter = _FakeIntervention()
-        model = _make_fake_intervenable_model({"k0": inter})
+    def test_pushes_fn_and_params_onto_every_intervention(self) -> None:
+        interventions = [_FakeIntervention(), _FakeIntervention()]
 
         def linear(
             *, f_base: torch.Tensor, f_src: torch.Tensor, alpha: float
         ) -> torch.Tensor:
             return (1 - alpha) * f_base + alpha * f_src
 
-        set_interventions_interpolation(model, linear, alpha=0.3)
+        set_interventions_interpolation(interventions, linear, alpha=0.3)
 
-        assert inter.fn is linear
-        assert inter.params == {"alpha": 0.3}
-        assert inter.set_calls == 1
-
-    def test_unwraps_tuple_intervention_shape(self) -> None:
-        """pyvene sometimes stores interventions as ``(module, ...)`` tuples;
-        the source explicitly handles ``isinstance(v, tuple)``.
-        """
-        inter = _FakeIntervention()
-        # Tuple form: first element is the live intervention, rest are metadata.
-        model = _make_fake_intervenable_model({"k0": (inter, "metadata")})
-
-        def fn(*, f_base: torch.Tensor, f_src: torch.Tensor) -> torch.Tensor:
-            return f_base
-
-        set_interventions_interpolation(model, fn)
-
-        assert inter.fn is fn
-        assert inter.set_calls == 1
-
-    def test_skips_intervention_without_set_interpolation(self) -> None:
-        """Interventions lacking the hook (e.g. a CollectIntervention placed on
-        the same intervenable model) are silently passed over — no
-        ``AttributeError`` propagates.
-        """
-        bare = _BarePyveneStub()
-        live = _FakeIntervention()
-        model = _make_fake_intervenable_model({"k_bare": bare, "k_live": live})
-
-        def fn(*, f_base: torch.Tensor, f_src: torch.Tensor) -> torch.Tensor:
-            return f_base
-
-        # Must not raise.
-        set_interventions_interpolation(model, fn, alpha=0.5)
-
-        # bare untouched; live got the call.
-        assert bare.touched is False
-        assert live.fn is fn
-        assert live.params == {"alpha": 0.5}
-
-    def test_calling_twice_replaces_rather_than_stacks(self) -> None:
-        """Each call overwrites the previous fn/params — last write wins."""
-        inter = _FakeIntervention()
-        model = _make_fake_intervenable_model({"k0": inter})
-
-        def fn_a(*, f_base: torch.Tensor, f_src: torch.Tensor) -> torch.Tensor:
-            return f_base
-
-        def fn_b(
-            *, f_base: torch.Tensor, f_src: torch.Tensor, beta: float
-        ) -> torch.Tensor:
-            return beta * f_src
-
-        set_interventions_interpolation(model, fn_a, alpha=0.0)
-        set_interventions_interpolation(model, fn_b, beta=0.7)
-
-        assert inter.fn is fn_b
-        assert inter.params == {"beta": 0.7}
-        assert "alpha" not in inter.params
-        assert inter.set_calls == 2
-
-    def test_visits_every_intervention(self) -> None:
-        """All values in ``intervenable_model.interventions`` are visited."""
-        inters = [_FakeIntervention() for _ in range(4)]
-        model = _make_fake_intervenable_model(
-            {f"k{i}": inter for i, inter in enumerate(inters)}
-        )
-
-        def fn(*, f_base: torch.Tensor, f_src: torch.Tensor) -> torch.Tensor:
-            return f_base
-
-        set_interventions_interpolation(model, fn)
-
-        for inter in inters:
-            assert inter.fn is fn
+        for inter in interventions:
+            assert inter.fn is linear
+            assert inter.params == {"alpha": 0.3}
             assert inter.set_calls == 1
 
+    def test_skips_intervention_without_set_interpolation(self) -> None:
+        """A mixed run (interpolation at one site, another mode elsewhere) must
+        not crash on the sites that take no interpolation function."""
+        inter = _FakeIntervention()
+        set_interventions_interpolation([inter, _BarePyveneStub()], _lerp, alpha=0.1)
+        assert inter.set_calls == 1
 
-# --------------------------------------------------------------------------- #
-#  batched_interpolation_intervention                                         #
-# --------------------------------------------------------------------------- #
+    def test_calling_twice_replaces_rather_than_stacks(self) -> None:
+        inter = _FakeIntervention()
+        set_interventions_interpolation([inter], _lerp, alpha=0.1)
+        set_interventions_interpolation([inter], _lerp, alpha=0.9)
+        assert inter.params == {"alpha": 0.9}
+        assert inter.set_calls == 2
+
+
 class TestBatchedInterpolationInterventionUnit:
-    """``batched_interpolation_intervention`` performs one batched forward.
+    """One batch: read the sources, blend, generate.
 
-    Wires ``prepare_intervenable_inputs`` → ``set_interventions_interpolation``
-    → ``pipeline.intervenable_generate`` and moves the batched tensor inputs
-    back to CPU. Returns the raw output dict produced by the pipeline.
+    These ran against a mocked pyvene ``IntervenableModel`` and asserted its
+    lifecycle (constructed with ``intervention_type="interpolation"``, deleted
+    afterwards). The nnsight engine has no such object — an intervention lives
+    only for a trace — so the assertions are re-aimed at the behaviour that
+    actually matters: the blend the caller asked for is the blend applied, and
+    the returned dict has the documented shape.
+
+    ``docs/PATH_PATCHING.md``-style numerical equivalence lives in
+    ``test_interpolation_hook_oracle.py``; this class covers the wiring.
     """
 
     pytestmark = pytest.mark.unit
 
-    def test_dispatches_fn_through_set_interventions(self) -> None:
-        """The user-supplied ``fn`` must reach the interventions via
-        :func:`set_interventions_interpolation` exactly once.
-        """
-        pipeline = MagicMock()
-        intervenable_model = MagicMock()
-        interchange_target = MagicMock()
+    @staticmethod
+    def _run(pipeline, fn, params, *, output_scores=True):
+        target = InterchangeTarget([[_make_residual_unit(pipeline, layer=1)]])
+        return batched_interpolation_intervention(
+            pipeline,
+            _make_cf_dataset(2),
+            target,
+            fn=fn,
+            params=params,
+            output_scores=output_scores,
+        )
 
-        # Stub prepared inputs as plain dicts so the CPU move loop is a no-op
-        # on tensor-less batches.
-        with (
-            patch(
-                f"{MODULE}.prepare_intervenable_inputs",
-                return_value=({}, [{}], {}, []),
-            ),
-            patch(f"{MODULE}.set_interventions_interpolation") as mock_set,
-        ):
-            pipeline.intervenable_generate.return_value = {
-                "sequences": torch.tensor([[1, 2]])
-            }
+    def test_alpha_zero_leaves_the_base_untouched(self, tiny_pipeline) -> None:
+        """``(1-α)·f_base + α·f_src`` at α=0 is the identity, so the logits must
+        equal an un-intervened run's."""
+        blended = self._run(tiny_pipeline, _lerp, {"alpha": 0.0})
+        target = InterchangeTarget([[_make_residual_unit(tiny_pipeline, layer=1)]])
+        untouched = run_interchange_interventions(
+            tiny_pipeline,
+            [
+                {"input": ex["input"], "counterfactual_inputs": [ex["input"]]}
+                for ex in _make_cf_dataset(2)
+            ],
+            target,
+            batch_size=2,
+            output_scores=True,
+        )
+        torch.testing.assert_close(
+            blended["scores"][0], untouched["scores"][0][0], atol=1e-5, rtol=1e-4
+        )
 
-            def fn(
-                *, f_base: torch.Tensor, f_src: torch.Tensor, alpha: float
-            ) -> torch.Tensor:
-                return f_base
+    def test_alpha_one_equals_interchange(self, tiny_pipeline) -> None:
+        """At α=1 the blend keeps only the source — i.e. a plain interchange."""
+        blended = self._run(tiny_pipeline, _lerp, {"alpha": 1.0})
+        target = InterchangeTarget([[_make_residual_unit(tiny_pipeline, layer=1)]])
+        swapped = run_interchange_interventions(
+            tiny_pipeline,
+            _make_cf_dataset(2),
+            target,
+            batch_size=2,
+            output_scores=True,
+        )
+        torch.testing.assert_close(
+            blended["scores"][0], swapped["scores"][0][0], atol=1e-5, rtol=1e-4
+        )
 
-            out = batched_interpolation_intervention(
-                pipeline,
-                intervenable_model,
-                examples=_make_test_dataset(1),
-                interchange_target=interchange_target,
-                fn=fn,
-                params={"alpha": 0.5},
-            )
+    def test_params_reach_the_interpolation_function(self, tiny_pipeline) -> None:
+        """A different ``alpha`` must produce a different blend — otherwise the
+        parameters are being dropped somewhere between caller and intervention."""
+        quarter = self._run(tiny_pipeline, _lerp, {"alpha": 0.25})
+        three_quarters = self._run(tiny_pipeline, _lerp, {"alpha": 0.75})
+        assert not torch.allclose(
+            quarter["scores"][0], three_quarters["scores"][0], atol=1e-6
+        )
 
-            mock_set.assert_called_once_with(intervenable_model, fn, alpha=0.5)
-            assert "sequences" in out
+    def test_arbitrary_callable_is_used(self, tiny_pipeline) -> None:
+        """Any ``fn(f_base, f_src, **params)`` works, not just a linear blend."""
 
-    def test_forwards_output_scores_kwarg(self) -> None:
-        """``output_scores`` is plumbed through to ``intervenable_generate``."""
-        pipeline = MagicMock()
-        with (
-            patch(
-                f"{MODULE}.prepare_intervenable_inputs",
-                return_value=({}, [{}], {}, []),
-            ),
-            patch(f"{MODULE}.set_interventions_interpolation"),
-        ):
-            pipeline.intervenable_generate.return_value = {
-                "sequences": torch.tensor([[1, 2]]),
-                "scores": [torch.tensor([[0.1, 0.2]])],
-            }
+        def elementwise_max(f_base, f_src):
+            return torch.maximum(f_base, f_src)
 
-            def fn(*, f_base: torch.Tensor, f_src: torch.Tensor) -> torch.Tensor:
-                return f_base
+        out = self._run(tiny_pipeline, elementwise_max, {})
+        lerped = self._run(tiny_pipeline, _lerp, {"alpha": 0.5})
+        assert not torch.allclose(out["scores"][0], lerped["scores"][0], atol=1e-6)
 
-            batched_interpolation_intervention(
-                pipeline,
-                MagicMock(),
-                examples=_make_test_dataset(1),
-                interchange_target=MagicMock(),
-                fn=fn,
-                params={},
-                output_scores=10,
-            )
+    def test_returns_documented_keys(self, tiny_pipeline) -> None:
+        out = self._run(tiny_pipeline, _lerp, {"alpha": 0.5})
+        assert set(out) == {"sequences", "scores", "string"}
+        assert out["sequences"].shape[0] == 2
 
-            kwargs = pipeline.intervenable_generate.call_args.kwargs
-            assert kwargs["output_scores"] == 10
-
-    def test_moves_prepared_inputs_to_cpu(self) -> None:
-        """After the generate call, every prepared-input tensor is on CPU."""
-        pipeline = MagicMock()
-        # Prepared inputs carry tensors that we will assert are CPU-resident
-        # after the call. We start them on CPU (no GPU in CI), and assert the
-        # method invoked is ``.cpu()`` on each, which is what the source uses.
-        base_t = MagicMock(spec=torch.Tensor)
-        base_t.cpu.return_value = torch.tensor([1, 2])
-        cf_t = MagicMock(spec=torch.Tensor)
-        cf_t.cpu.return_value = torch.tensor([3, 4])
-        batched_base = {"input_ids": base_t}
-        batched_cfs = [{"input_ids": cf_t}]
-
-        with (
-            patch(
-                f"{MODULE}.prepare_intervenable_inputs",
-                return_value=(batched_base, batched_cfs, {}, []),
-            ),
-            patch(f"{MODULE}.set_interventions_interpolation"),
-        ):
-            pipeline.intervenable_generate.return_value = {
-                "sequences": torch.tensor([[1, 2]])
-            }
-
-            def fn(*, f_base: torch.Tensor, f_src: torch.Tensor) -> torch.Tensor:
-                return f_base
-
-            batched_interpolation_intervention(
-                pipeline,
-                MagicMock(),
-                examples=_make_test_dataset(1),
-                interchange_target=MagicMock(),
-                fn=fn,
-                params={},
-            )
-
-        # CPU move applied to both batched_base and every counterfactual batch.
-        assert base_t.cpu.called
-        assert cf_t.cpu.called
-
-    def test_returns_pipeline_output_dict_verbatim(self) -> None:
-        """The dict from ``intervenable_generate`` is returned unwrapped
-        (the public contract is "dict with sequences and optionally scores").
-        """
-        pipeline = MagicMock()
-        expected = {
-            "sequences": torch.tensor([[1, 2, 3]]),
-            "scores": [torch.tensor([[0.1, 0.2, 0.3]])],
-        }
-        pipeline.intervenable_generate.return_value = expected
-
-        with (
-            patch(
-                f"{MODULE}.prepare_intervenable_inputs",
-                return_value=({}, [{}], {}, []),
-            ),
-            patch(f"{MODULE}.set_interventions_interpolation"),
-        ):
-
-            def fn(*, f_base: torch.Tensor, f_src: torch.Tensor) -> torch.Tensor:
-                return f_base
-
-            out = batched_interpolation_intervention(
-                pipeline,
-                MagicMock(),
-                examples=_make_test_dataset(1),
-                interchange_target=MagicMock(),
-                fn=fn,
-                params={},
-            )
-
-        assert out is expected
-
-    def test_cleans_up_intervenable_model(self) -> None:
-        """Batched form should also clean up — pin the *desired* behaviour."""
-        pipeline = MagicMock()
-        pipeline.intervenable_generate.return_value = {
-            "sequences": torch.tensor([[1, 2]])
-        }
-        intervenable_model = MagicMock()
-
-        with (
-            patch(
-                f"{MODULE}.prepare_intervenable_inputs",
-                return_value=({}, [{}], {}, []),
-            ),
-            patch(f"{MODULE}.set_interventions_interpolation"),
-            patch(f"{MODULE}.delete_intervenable_model") as mock_delete,
-        ):
-
-            def fn(*, f_base: torch.Tensor, f_src: torch.Tensor) -> torch.Tensor:
-                return f_base
-
-            batched_interpolation_intervention(
-                pipeline,
-                intervenable_model,
-                examples=_make_test_dataset(1),
-                interchange_target=MagicMock(),
-                fn=fn,
-                params={},
-            )
-
-            mock_delete.assert_called_once_with(intervenable_model)
+    def test_output_scores_false_omits_scores(self, tiny_pipeline) -> None:
+        out = self._run(tiny_pipeline, _lerp, {"alpha": 0.5}, output_scores=False)
+        assert "scores" not in out
 
 
-# --------------------------------------------------------------------------- #
-#  run_interpolation_interventions                                            #
-# --------------------------------------------------------------------------- #
 class TestRunInterpolationInterventionsUnit:
-    """``run_interpolation_interventions`` is the public batched entrypoint.
+    """The dataset loop: batch, blend, aggregate.
 
-    Constructs an ``IntervenableModel`` once, iterates the dataset in
-    ``batch_size`` chunks, and aggregates per-batch dicts into the final
-    ``{key: [batch_outputs...]}`` shape. Owns the IntervenableModel lifecycle:
-    cleanup is unconditional.
+    Like the class above, re-aimed from a mocked ``IntervenableModel``'s
+    lifecycle onto the observable contract.
     """
 
     pytestmark = pytest.mark.unit
 
-    def test_constructs_intervenable_model_with_interpolation_type(self) -> None:
-        """``prepare_intervenable_model`` is called once with
-        ``intervention_type="interpolation"``.
-        """
-        pipeline = MagicMock()
-        target = MagicMock()
-        mock_iv = MagicMock()
-        dataset = _make_test_dataset(2)
+    @staticmethod
+    def _run(pipeline, n, batch_size, *, output_scores=True):
+        target = InterchangeTarget([[_make_residual_unit(pipeline, layer=1)]])
+        return run_interpolation_interventions(
+            pipeline,
+            _make_cf_dataset(n),
+            target,
+            fn=_lerp,
+            params={"alpha": 0.5},
+            batch_size=batch_size,
+            output_scores=output_scores,
+        )
 
-        with (
-            patch(
-                f"{MODULE}.prepare_intervenable_model", return_value=mock_iv
-            ) as mock_prepare,
-            patch(
-                f"{MODULE}.batched_interpolation_intervention",
-                return_value={"sequences": torch.tensor([[1, 2]])},
-            ),
-            patch(f"{MODULE}.delete_intervenable_model"),
-        ):
+    def test_aggregates_one_entry_per_batch(self, tiny_pipeline) -> None:
+        """5 examples at batch_size=2 -> 3 batches, and the per-batch entries
+        together cover every example."""
+        out = self._run(tiny_pipeline, 5, 2)
+        assert len(out["sequences"]) == 3
+        assert sum(s.shape[0] for s in out["sequences"]) == 5
 
-            def fn(*, f_base: torch.Tensor, f_src: torch.Tensor) -> torch.Tensor:
-                return f_base
+    def test_batching_does_not_change_results(self, tiny_pipeline) -> None:
+        """Batch size is a memory knob, not a semantic one: the same dataset
+        scored one-at-a-time and all-at-once must agree."""
+        one_at_a_time = self._run(tiny_pipeline, 4, 1)
+        all_at_once = self._run(tiny_pipeline, 4, 4)
+        single = torch.cat([s[0] for s in one_at_a_time["scores"]])
+        batched = all_at_once["scores"][0][0]
+        torch.testing.assert_close(single, batched, atol=1e-5, rtol=1e-4)
 
-            run_interpolation_interventions(
-                pipeline,
-                dataset,
-                target,
-                fn=fn,
-                params={},
-                batch_size=2,
-                output_scores=False,
-            )
+    def test_output_scores_false_omits_scores_key(self, tiny_pipeline) -> None:
+        out = self._run(tiny_pipeline, 2, 2, output_scores=False)
+        assert "scores" not in out
+        assert "sequences" in out
 
-            mock_prepare.assert_called_once_with(
-                pipeline, target, intervention_type="interpolation"
-            )
+    def test_output_scores_int_returns_top_k(self, tiny_pipeline) -> None:
+        out = self._run(tiny_pipeline, 2, 2, output_scores=4)
+        assert "scores" in out
+        top_k = out["scores"][0][0]
+        assert top_k["top_k_logits"].shape[-1] == 4
 
-    def test_cleans_up_intervenable_model(self) -> None:
-        """``delete_intervenable_model`` is called after the batch loop."""
-        mock_iv = MagicMock()
-
-        with (
-            patch(f"{MODULE}.prepare_intervenable_model", return_value=mock_iv),
-            patch(
-                f"{MODULE}.batched_interpolation_intervention",
-                return_value={"sequences": torch.tensor([[1, 2]])},
-            ),
-            patch(f"{MODULE}.delete_intervenable_model") as mock_delete,
-        ):
-
-            def fn(*, f_base: torch.Tensor, f_src: torch.Tensor) -> torch.Tensor:
-                return f_base
-
-            run_interpolation_interventions(
-                MagicMock(),
-                _make_test_dataset(1),
-                MagicMock(),
-                fn=fn,
-                params={},
-                batch_size=2,
-                output_scores=False,
-            )
-
-            mock_delete.assert_called_once_with(mock_iv)
-
-    def test_batches_dataset_by_batch_size(self) -> None:
-        """A dataset of 5 examples with batch_size=2 produces 3 batched calls
-        (sizes 2, 2, 1).
-        """
-        mock_iv = MagicMock()
-        with (
-            patch(f"{MODULE}.prepare_intervenable_model", return_value=mock_iv),
-            patch(
-                f"{MODULE}.batched_interpolation_intervention",
-            ) as mock_batched,
-            patch(f"{MODULE}.delete_intervenable_model"),
-        ):
-            mock_batched.side_effect = [
-                {"sequences": torch.tensor([[1, 2]])},  # batch of 2
-                {"sequences": torch.tensor([[3, 4]])},  # batch of 2
-                {"sequences": torch.tensor([[5]])},  # batch of 1
-            ]
-
-            def fn(*, f_base: torch.Tensor, f_src: torch.Tensor) -> torch.Tensor:
-                return f_base
-
-            results = run_interpolation_interventions(
-                MagicMock(),
-                _make_test_dataset(5),
-                MagicMock(),
-                fn=fn,
-                params={},
-                batch_size=2,
-                output_scores=False,
-            )
-
-            assert mock_batched.call_count == 3
-            assert "sequences" in results
-            assert len(results["sequences"]) == 3
-
-    def test_forwards_fn_and_params_to_batched(self) -> None:
-        """``fn`` and ``params`` are plumbed through verbatim to each batched call."""
-        mock_iv = MagicMock()
-        with (
-            patch(f"{MODULE}.prepare_intervenable_model", return_value=mock_iv),
-            patch(
-                f"{MODULE}.batched_interpolation_intervention",
-                return_value={"sequences": torch.tensor([[1, 2]])},
-            ) as mock_batched,
-            patch(f"{MODULE}.delete_intervenable_model"),
-        ):
-
-            def fn(
-                *, f_base: torch.Tensor, f_src: torch.Tensor, alpha: float
-            ) -> torch.Tensor:
-                return f_base
-
-            run_interpolation_interventions(
-                MagicMock(),
-                _make_test_dataset(1),
-                MagicMock(),
-                fn=fn,
-                params={"alpha": 0.7},
-                batch_size=4,
-                output_scores=False,
-            )
-
-            kwargs = mock_batched.call_args.kwargs
-            assert kwargs["fn"] is fn
-            assert kwargs["params"] == {"alpha": 0.7}
-
-    def test_output_scores_false_omits_scores_key(self) -> None:
-        """With ``output_scores=False``, the aggregated dict has no ``scores`` key."""
-        mock_iv = MagicMock()
-        with (
-            patch(f"{MODULE}.prepare_intervenable_model", return_value=mock_iv),
-            patch(
-                f"{MODULE}.batched_interpolation_intervention",
-                return_value={"sequences": torch.tensor([[1, 2]])},
-            ),
-            patch(f"{MODULE}.delete_intervenable_model"),
-        ):
-
-            def fn(*, f_base: torch.Tensor, f_src: torch.Tensor) -> torch.Tensor:
-                return f_base
-
-            results = run_interpolation_interventions(
-                MagicMock(),
-                _make_test_dataset(1),
-                MagicMock(),
-                fn=fn,
-                params={},
-                output_scores=False,
-            )
-            assert "scores" not in results
-            assert "sequences" in results
-
-    def test_output_scores_int_invokes_top_k_conversion(self) -> None:
-        """An ``int`` ``output_scores`` value triggers ``convert_to_top_k``."""
-        mock_iv = MagicMock()
-        batched_dicts = [
-            {
-                "sequences": torch.tensor([[1, 2]]),
-                "scores": [torch.tensor([[0.1, 0.2]])],
-            },
-        ]
-        with (
-            patch(f"{MODULE}.prepare_intervenable_model", return_value=mock_iv),
-            patch(
-                f"{MODULE}.batched_interpolation_intervention",
-                side_effect=batched_dicts,
-            ),
-            patch(f"{MODULE}.delete_intervenable_model"),
-            patch(
-                f"{MODULE}.convert_to_top_k",
-                return_value=batched_dicts,
-            ) as mock_convert,
-        ):
-
-            def fn(*, f_base: torch.Tensor, f_src: torch.Tensor) -> torch.Tensor:
-                return f_base
-
-            results = run_interpolation_interventions(
-                MagicMock(),
-                _make_test_dataset(1),
-                MagicMock(),
-                fn=fn,
-                params={},
-                output_scores=5,
-            )
-
-            mock_convert.assert_called_once()
-            # k argument forwarded as the integer output_scores value
-            call_kwargs = mock_convert.call_args
-            assert (
-                call_kwargs.kwargs.get(
-                    "k", call_kwargs.args[-1] if call_kwargs.args else None
-                )
-                == 5
-            )
-            assert "scores" in results
-
-    def test_output_scores_true_skips_top_k_conversion(self) -> None:
-        """``output_scores=True`` keeps full-vocab scores (no top-k pass)."""
-        mock_iv = MagicMock()
-        with (
-            patch(f"{MODULE}.prepare_intervenable_model", return_value=mock_iv),
-            patch(
-                f"{MODULE}.batched_interpolation_intervention",
-                return_value={
-                    "sequences": torch.tensor([[1, 2]]),
-                    "scores": [torch.tensor([[0.1, 0.2]])],
-                },
-            ),
-            patch(f"{MODULE}.delete_intervenable_model"),
-            patch(f"{MODULE}.convert_to_top_k") as mock_convert,
-        ):
-
-            def fn(*, f_base: torch.Tensor, f_src: torch.Tensor) -> torch.Tensor:
-                return f_base
-
-            run_interpolation_interventions(
-                MagicMock(),
-                _make_test_dataset(1),
-                MagicMock(),
-                fn=fn,
-                params={},
-                output_scores=True,
-            )
-
-            mock_convert.assert_not_called()
-
-    def test_final_output_is_moved_to_cpu(self) -> None:
-        """``move_outputs_to_cpu`` is invoked on the aggregated batch list."""
-        mock_iv = MagicMock()
-        with (
-            patch(f"{MODULE}.prepare_intervenable_model", return_value=mock_iv),
-            patch(
-                f"{MODULE}.batched_interpolation_intervention",
-                return_value={"sequences": torch.tensor([[1, 2]])},
-            ),
-            patch(f"{MODULE}.delete_intervenable_model"),
-            patch(
-                f"{MODULE}.move_outputs_to_cpu",
-                side_effect=lambda outs: outs,
-            ) as mock_move,
-        ):
-
-            def fn(*, f_base: torch.Tensor, f_src: torch.Tensor) -> torch.Tensor:
-                return f_base
-
-            run_interpolation_interventions(
-                MagicMock(),
-                _make_test_dataset(1),
-                MagicMock(),
-                fn=fn,
-                params={},
-                output_scores=False,
-            )
-
-            mock_move.assert_called_once()
-
-    def test_aggregates_per_batch_dicts_into_lists(self) -> None:
-        """Two batches → ``results["sequences"]`` has two entries."""
-        mock_iv = MagicMock()
-        with (
-            patch(f"{MODULE}.prepare_intervenable_model", return_value=mock_iv),
-            patch(
-                f"{MODULE}.batched_interpolation_intervention",
-                side_effect=[
-                    {"sequences": torch.tensor([[1]])},
-                    {"sequences": torch.tensor([[2]])},
-                ],
-            ),
-            patch(f"{MODULE}.delete_intervenable_model"),
-        ):
-
-            def fn(*, f_base: torch.Tensor, f_src: torch.Tensor) -> torch.Tensor:
-                return f_base
-
-            results = run_interpolation_interventions(
-                MagicMock(),
-                _make_test_dataset(2),
-                MagicMock(),
-                fn=fn,
-                params={},
-                batch_size=1,
-                output_scores=False,
-            )
-
-            assert isinstance(results["sequences"], list)
-            assert len(results["sequences"]) == 2
+    def test_results_are_on_cpu(self, tiny_pipeline) -> None:
+        out = self._run(tiny_pipeline, 2, 2)
+        for sequences in out["sequences"]:
+            assert sequences.device.type == "cpu"
+        for batch_scores in out["scores"]:
+            for step in batch_scores:
+                assert step.device.type == "cpu"
 
 
-# --------------------------------------------------------------------------- #
 #  sweep_interpolation_interventions                                          #
 # --------------------------------------------------------------------------- #
 class TestSweepInterpolationInterventionsUnit:

@@ -145,43 +145,44 @@ class TestTwoPassReceivers:
             return ReceiverSpec(kind=kind, layer=1, token_position=pos)
         return ReceiverSpec(kind=kind, layer=1, token_position=pos)
 
-    def test_pass1_forward_gets_position_ids(
-        self, mock_tiny_lm: LMPipeline, monkeypatch
+    def test_batching_does_not_change_two_pass_scores(
+        self, tiny_gpt2_lm: LMPipeline
     ) -> None:
-        """PASS-1's plain (collect-under-interchange) forward must route its base
-        inputs through ``ensure_position_ids`` — otherwise a left-padded batch is
-        mis-encoded on absolute-position models. The tiny model is RoPE (immune
-        numerically), so we spy on the wiring: ``ensure_position_ids`` is called
-        with a batch carrying ``attention_mask`` and returns one with
-        ``position_ids``. (PASS 2 goes through ``intervenable_generate``, which —
-        being single-step for path patching — applies the same left-pad
-        ``position_ids`` fix to its base internally; the end-to-end numeric guard
-        for both passes is ``TestLeftPadGenerateParity`` on ``tiny_gpt2_lm``.)"""
-        import causalab.neural.activations.interchange_mode as im
+        """Left padding must not perturb either pass.
 
-        real = im.ensure_position_ids
-        seen: dict[str, bool] = {}
+        Both passes number positions from the attention mask; if either one let a
+        padded row be numbered from its pad tokens, an example scored in a padded
+        batch would disagree with the same example scored alone. Runs on the
+        **absolute-position** GPT-2 stub — a RoPE model cancels a uniform
+        left-pad shift and cannot fail this.
 
-        def spy(inputs):
-            out = real(inputs)
-            seen["had_mask"] = "attention_mask" in inputs
-            seen["got_position_ids"] = "position_ids" in out
-            return out
-
-        monkeypatch.setattr(im, "ensure_position_ids", spy)
-        pos = _last_token(mock_tiny_lm)
-        targets = build_attention_head_targets(mock_tiny_lm, [0], [0], pos)
+        This replaces a spy on the old backbone's `ensure_position_ids` call:
+        position_ids are now derived by the backbone, so the contract worth
+        pinning is the observable one rather than the plumbing.
+        """
+        pos = _last_token(tiny_gpt2_lm)
+        targets = build_attention_head_targets(tiny_gpt2_lm, [0], [0], pos)
         senders = {key: t.flatten()[0] for key, t in targets.items()}
-        run_path_patching_scan(
-            mock_tiny_lm,
-            _dataset(),
-            senders,
-            metric=_first_logit_metric(),
-            receiver=self._receiver("residual", pos),
-            restore=("attention", "mlp"),
-            batch_size=2,
-        )
-        assert seen.get("had_mask") and seen.get("got_position_ids")
+        dataset = _mixed_length_dataset()
+
+        def scan(data, batch_size):
+            return run_path_patching_scan(
+                tiny_gpt2_lm,
+                data,
+                senders,
+                metric=_first_logit_metric(),
+                receiver=self._receiver("residual", pos),
+                restore=("attention", "mlp"),
+                batch_size=batch_size,
+            )
+
+        # The whole dataset padded together vs. one example at a time.
+        padded = scan(dataset, len(dataset))
+        unpadded = scan(dataset, 1)
+        for key, score in padded.items():
+            assert score == pytest.approx(unpadded[key], abs=1e-4), (
+                f"cell {key} moved when the batch was padded"
+            )
 
     @pytest.mark.parametrize("kind", ["head_value_input", "mlp_input", "residual"])
     def test_internal_receiver_scan_finite(

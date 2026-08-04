@@ -25,7 +25,6 @@ from causalab.neural.LM_units import ResidualStream
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_positions import TokenPosition
 from causalab.neural.units import InterchangeTarget
-from causalab.neural.activations.intervenable_model import prepare_intervenable_model
 from causalab.neural.activations.interpolate import batched_interpolation_intervention
 
 from tests.neural.activations.hook_oracle import (
@@ -62,12 +61,8 @@ def _run(pipeline: LMPipeline, fn, params: dict) -> torch.Tensor:
     """Run causalab's interpolation intervention on one example; return the
     first example's next-token logits ``(1, vocab)``."""
     target = _single_pos_unit(pipeline)
-    model = prepare_intervenable_model(
-        pipeline, target, intervention_type="interpolation"
-    )
     out = batched_interpolation_intervention(
         pipeline,
-        model,
         [cf_example(_BASE, _SOURCE)],
         target,
         fn=fn,
@@ -145,12 +140,8 @@ class TestInterpolationHookOracle:
         )
 
         target = _single_pos_unit(oracle_pipeline)
-        model = prepare_intervenable_model(
-            oracle_pipeline, target, intervention_type="interpolation"
-        )
         out = batched_interpolation_intervention(
             oracle_pipeline,
-            model,
             [cf_example(_BASE, _SOURCE)],
             target,
             fn=feature_max,
