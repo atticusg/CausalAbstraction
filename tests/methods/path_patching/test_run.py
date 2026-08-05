@@ -417,18 +417,16 @@ class TestMixedForwardPropagation:
         assert not torch.allclose(v_source, v_base)
 
 
-class TestReceiverSpanGuard:
-    """The two-pass receiver index is spliced into the resolved locations *outside*
-    ``prepare_interchange_batch``, so it would bypass the ragged-span guard the
-    interchange groups get. A uniform multi-token receiver span is fine, but a
-    *ragged* one (width varying across the batch) must raise the actionable
-    ``ValueError`` rather than reach the gather as the cryptic ``expected
-    sequence of length N`` error (latent today: every receiver reads at the last
-    token, a uniform single-token span)."""
+class TestReceiverSpan:
+    """The two-pass receiver index is spliced into the resolved locations
+    *outside* ``prepare_interchange_batch``, so it is worth pinning that a
+    receiver whose span width varies across the batch runs. It used to raise:
+    positions were stacked into one rectangular tensor and a ragged receiver
+    could not be built. They are flat ``(example, position)`` pairs now."""
 
     pytestmark = pytest.mark.property
 
-    def test_ragged_receiver_position_raises(self, mock_tiny_lm: LMPipeline) -> None:
+    def test_ragged_receiver_position_runs(self, mock_tiny_lm: LMPipeline) -> None:
         # Empty-restorer config so the receiver is the *only* unit with a ragged
         # span: a top-layer sender under attention-only restore has no restorers
         # between it and the receiver, so the interchange group is just the
@@ -464,17 +462,15 @@ class TestReceiverSpanGuard:
             build_restorer_set(mock_tiny_lm, sender, receiver, restore=("attention",))
             == []
         )
-        with pytest.raises(
-            ValueError, match="path-patching receiver selects a variable number"
-        ):
-            run_path_patching(
-                mock_tiny_lm,
-                dataset,
-                sender,
-                receiver,
-                restore=("attention",),
-                batch_size=2,
-            )
+        out = run_path_patching(
+            mock_tiny_lm,
+            dataset,
+            sender,
+            receiver,
+            restore=("attention",),
+            batch_size=2,
+        )
+        assert "scores" in out and out["scores"]
 
 
 def _mixed_length_dataset() -> list[dict[str, Any]]:

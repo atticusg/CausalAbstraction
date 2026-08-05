@@ -539,20 +539,6 @@ class AtomicModelUnit:
         """The attention head this unit selects, or ``None`` for whole-width units."""
         return None
 
-    def tensorized_index_groups(self, unit_indices: Any) -> list[Any]:
-        """Split a unit's per-batch index structure into the groups that are
-        stacked *separately* into index tensors before the gather/scatter.
-
-        A plain single-axis ``pos`` unit's whole structure is stacked by one
-        ``torch.tensor`` call, so it is a single group. Multi-axis units (e.g.
-        :class:`AttentionHead`, whose structure is ``[head_axis, position_axis]``
-        and which indexes the head and position axes separately) override this
-        to return one group per axis. The ragged-span guard checks
-        each group independently so the head and position axes — which
-        legitimately differ in width — are never compared against each other.
-        """
-        return [unit_indices]
-
     @staticmethod
     def _resolve_attention_mask(
         input: Any, batch: bool, attention_mask: Any

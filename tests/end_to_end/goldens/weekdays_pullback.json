@@ -600,33 +600,33 @@
       4,
       8
     ],
-    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_AW1.std": 0.3333721458911896,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_AW1.std": 0.33337223529815674,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_raw.first": 8.348789560841396e-05,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_raw.last": 2.061114834361888e-09,
-    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_raw.mean": 0.142782524228096,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_raw.mean": 0.1427825540304184,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_raw.shape": [
       4,
       2,
       7
     ],
-    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_raw.std": 0.35030823945999146,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/lin_probs_raw.std": 0.3503083288669586,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_AW1.first": 4.1881445213221014e-05,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_AW1.last": 0.0004761219024658203,
-    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_AW1.mean": 0.1250000149011612,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_AW1.mean": 0.125,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_AW1.shape": [
       4,
       8
     ],
-    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_AW1.std": 0.33341923356056213,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_AW1.std": 0.3334038555622101,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_raw.first": 8.373443415621296e-05,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_raw.last": 2.335549531551351e-09,
-    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_raw.mean": 0.14278575778007507,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_raw.mean": 0.1427839994430542,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_raw.shape": [
       4,
       2,
       7
     ],
-    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_raw.std": 0.35035672783851624,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/opt_probs_raw.std": 0.3503410816192627,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_end.first": 4.371165414340794e-05,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_end.last": 0.0007443002541549504,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/p_end.mean": 0.125,
@@ -659,12 +659,12 @@
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/path_history_k/0.std": 1.6684918403625488,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/per_step_loss.first": 0.0017874822951853275,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/per_step_loss.last": 0.9890769720077515,
-    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/per_step_loss.mean": 0.6305171251296997,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/per_step_loss.mean": 0.6302041411399841,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/per_step_loss.shape": [
-      2,
+      3,
       4
     ],
-    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/per_step_loss.std": 0.4341161847114563,
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/per_step_loss.std": 0.42384740710258484,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_geometric_k.first": -1.3416132926940918,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_geometric_k.last": 2.7530438899993896,
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_geometric_k.mean": 1.0980770587921143,
@@ -697,7 +697,7 @@
       8
     ],
     "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.k8/2,5/v_optimized_k.std": 1.6685206890106201,
-    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.sha256": "2ca7dfc8cc332ecd56dd65fb2459acef3e211bb4be1340a31fb5852e6e11651b",
+    "pullback.pca_k8.L1_last_token.spline_s0.0.result.optimization_results.sha256": "eb649de2d11efc4d4eadecbf456af9508e931e0a7335a91a1739828cac82c054",
     "subspace.pca_k8.result.features.raw_features.features.first": 4.40625,
     "subspace.pca_k8.result.features.raw_features.features.last": -0.04443359375,
     "subspace.pca_k8.result.features.raw_features.features.mean": 0.002884151414036751,

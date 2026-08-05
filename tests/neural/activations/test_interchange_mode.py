@@ -319,15 +319,18 @@ class TestPrepareInterchangeBatchUnit:
         assert [len(ex) for ex in batch.base_positions[0]] == [2, 2]
         assert [len(ex) for ex in batch.source_positions[0]] == [2, 2]
 
-    def test_ragged_span_raises_clean_error(self, tiny_pipeline: LMPipeline) -> None:
-        """A token position whose span width *varies across the batch* (2 tokens
-        for one example, 1 for another) raises a catchable, actionable
-        ``ValueError`` here instead of reaching the position stack as the cryptic
-        ``expected sequence of length N at dim 1`` error. The indexer keys on the
-        prompt so base and counterfactual agree *per example* (passing the #251
-        mismatch guard) yet disagree *across* examples — the residual ragged case
-        the relaxed guard targets. Distinct from #176: positions 0,1 are
-        individually in-bounds."""
+    def test_ragged_span_across_the_batch_is_accepted(
+        self, tiny_pipeline: LMPipeline
+    ) -> None:
+        """A span whose width *varies across the batch* (2 tokens for one
+        example, 1 for another) is supported.
+
+        The indexer keys on the prompt, so base and counterfactual agree *per
+        example* — satisfying the pairing requirement — while the batch as a
+        whole is ragged. That used to be rejected because positions were stacked
+        into one rectangular tensor; they are now flat ``(example, position)``
+        pairs, so there is nothing to make rectangular. The numerical equivalence
+        to a per-example loop is pinned in ``test_ragged_span_hook_oracle.py``."""
         hidden = tiny_pipeline.model.config.hidden_size
 
         # Width follows the prompt's word count: the 4-word prompts select 2
@@ -353,8 +356,10 @@ class TestPrepareInterchangeBatchUnit:
                 "counterfactual_inputs": [_make_trace("yo")],
             },
         ]
-        with pytest.raises(ValueError, match="variable number of tokens"):
-            prepare_interchange_batch(tiny_pipeline, examples, target)
+        batch = prepare_interchange_batch(tiny_pipeline, examples, target)
+        # One unit; example 0 selects two tokens, example 1 selects one.
+        assert [len(ex) for ex in batch.base_positions[0]] == [2, 1]
+        assert [len(ex) for ex in batch.source_positions[0]] == [2, 1]
 
     def test_multitoken_position_with_nonidentity_featurizer_is_allowed(
         self, tiny_pipeline: LMPipeline
@@ -929,11 +934,12 @@ class TestAttentionHeadInterchangeHookOracle:
         assert not torch.allclose(causalab, clean, atol=1e-4)
         torch.testing.assert_close(causalab, manual, atol=1e-4, rtol=1e-3)
 
-    def test_ragged_head_span_still_raises(self, tiny_pipeline: LMPipeline) -> None:
-        """The ragged guard must still fire on the *position* axis of an h.pos
-        unit (regression for the layout-aware fix: the head and position axes are
-        checked separately, so a genuinely ragged position span is still caught
-        while a uniform multi-token one is not)."""
+    def test_ragged_head_span_is_accepted(self, tiny_pipeline: LMPipeline) -> None:
+        """A per-head unit takes a ragged *position* span too.
+
+        The head and position axes are independent: the head is resolved before
+        the gather, so a varying number of positions per example is no different
+        here than on a plain ``pos`` unit."""
 
         def ragged_idx(x: CausalTrace) -> list[int]:
             return [1, 2] if len(x["raw_input"].split()) >= 3 else [1]
@@ -955,8 +961,8 @@ class TestAttentionHeadInterchangeHookOracle:
                 "counterfactual_inputs": [_make_trace("yo")],
             },
         ]
-        with pytest.raises(ValueError, match="variable number of tokens"):
-            prepare_interchange_batch(tiny_pipeline, examples, target)
+        batch = prepare_interchange_batch(tiny_pipeline, examples, target)
+        assert [len(ex) for ex in batch.base_positions[0]] == [2, 1]
 
 
 # --------------------------------------------------------------------------- #

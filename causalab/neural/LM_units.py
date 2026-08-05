@@ -456,13 +456,6 @@ class AttentionHead(AtomicModelUnit):
         )
         return [*prefix_axes, shifted]
 
-    def tensorized_index_groups(self, unit_indices: Any) -> list[Any]:
-        """An ``AttentionHead``'s structure is ``[head_axis, position_axis]``;
-        each axis is stacked into its own index tensor, so each is its own
-        tensorized group. See :meth:`AtomicModelUnit.tensorized_index_groups`.
-        """
-        return list(unit_indices)
-
     def resolve_positions(
         self,
         raw_inputs: Any,

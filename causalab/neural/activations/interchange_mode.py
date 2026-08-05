@@ -68,41 +68,6 @@ def _first_index_shape_mismatch(
     return None
 
 
-def _first_ragged_span(
-    group: Any,
-) -> tuple[int, tuple[tuple[int, ...], Any, Any]] | None:
-    """Return the first batch example in a *group* whose index shape diverges from example 0.
-
-    ``group`` is a batch of per-example locations stacked into one index tensor
-    with a single ``torch.tensor(...)`` call (``[example_0, example_1, ...]``),
-    so every example must contribute the same nested shape. A *ragged* span — 1
-    token for some examples and 2 for others — surfaces as the cryptic
-    ``expected sequence of length N at dim 1`` error from that stack. A
-    *uniform* multi-token span stacks fine and is allowed.
-
-    Returns ``(example_index, mismatch)`` for the first example whose shape
-    differs from example 0 (``mismatch`` is the `_first_index_shape_mismatch`
-    tuple), or ``None`` when every example shares the same shape. Comparing each
-    example against example 0 — rather than flagging any inner list of length
-    > 1 — distinguishes a legitimate uniform span from a genuinely ragged one.
-
-    The caller must pass a single tensorized group. A single-axis ``pos`` unit's
-    whole structure is one group; a multi-axis ``h.pos`` unit's head and position
-    axes are stacked by ``torch.tensor`` *separately* (``gather_neurons`` indexes
-    ``unit_locations_as_list[0]`` and ``[1]``), so each axis is its own group —
-    do NOT pass the combined ``[head_axis, position_axis]`` list here, or the two
-    axes (which legitimately differ in width) would read as ragged.
-    """
-    if not isinstance(group, list) or len(group) < 2:
-        return None
-    first = group[0]
-    for example_index in range(1, len(group)):
-        mismatch = _first_index_shape_mismatch(first, group[example_index])
-        if mismatch is not None:
-            return example_index, mismatch
-    return None
-
-
 # --------------------------------------------------------------------------- #
 #  Trace-engine batch preparation                                             #
 # --------------------------------------------------------------------------- #
@@ -111,9 +76,10 @@ class InterchangeBatch:
     """One batch's tokenized inputs and resolved positions, ready for the engine.
 
     Positions are per unit, in the padded-batch frame, and already validated by
-    :func:`_validate_positions`: the base/counterfactual shapes match and no span
-    is ragged across the batch. Both are caught here rather than deep in a
-    gather, where they surface as a CUDA assertion that poisons the context.
+    :func:`_validate_positions`: within each example the base and counterfactual
+    select the same number of tokens, which is what interchange's pairing needs.
+    Widths may differ *between* examples — positions are indexed as flat
+    ``(example, position)`` pairs, so nothing has to be rectangular.
     """
 
     base_encoding: dict[str, Any]
@@ -129,15 +95,17 @@ def _validate_positions(
     units: Sequence[AtomicModelUnit],
     base_indices: Sequence[Any],
     counterfactual_indices: Sequence[Any],
-    *,
-    role: str = "base token position",
 ) -> None:
-    """Reject shape mismatches and ragged spans before they reach a gather.
+    """Reject a base/counterfactual span mismatch before it reaches a gather.
 
-    Both failures used to surface as a CUDA assertion that poisoned the context;
-    they are cheap to detect here and impossible to diagnose there. The
-    restriction they encode — a uniform, matched span width — is what lets the
-    engine build one rectangular index tensor per unit.
+    Interchange pairs the base's *i*-th selected position with the source's
+    *i*-th, so an example whose two sides select different numbers of tokens has
+    no pairing to apply. That is a property of the operation, not of the
+    indexing, so it stays a hard error — caught here on CPU, where it is
+    diagnosable, rather than as a CUDA assertion that poisons the context.
+
+    Widths that vary *across the batch* are fine: positions are indexed as flat
+    ``(example, position)`` pairs, so nothing has to be rectangular.
     """
     mismatch = _first_index_shape_mismatch(
         list(base_indices), list(counterfactual_indices)
@@ -152,26 +120,6 @@ def _validate_positions(
             f"value string that tokenizes to a different number of tokens than the "
             f"base value. Use single-token values or a fixed single position."
         )
-    for label, all_indices in (
-        (role, base_indices),
-        ("counterfactual token position", counterfactual_indices),
-    ):
-        for unit_idx, unit_indices in enumerate(all_indices):
-            for group in units[unit_idx].tensorized_index_groups(unit_indices):
-                ragged = _first_ragged_span(group)
-                if ragged is not None:
-                    example_index, (_path, len0, len_j) = ragged
-                    raise ValueError(
-                        f"A {label} selects a variable number of "
-                        f"tokens across the batch (unit {unit_idx}: example 0 "
-                        f"selects {len0}, example {example_index} selects {len_j} "
-                        f"at index path {list(_path)}). A unit's per-example "
-                        f"positions are stacked into one index tensor, so every "
-                        f"example must select the same number of tokens. Usual "
-                        f"cause: a value string that tokenizes to a different "
-                        f"number of tokens for different examples. Use a "
-                        f"fixed-width position (e.g. the last token of the value)."
-                    )
 
 
 def prepare_interchange_batch(
@@ -475,25 +423,6 @@ def run_two_pass_path_patching(
                 )
                 for r in receivers
             ]
-            # The receivers bypass prepare_interchange_batch's guards (they are
-            # not interchange groups), so validate them on the same path — a
-            # ragged receiver span would otherwise fail deep in an index build.
-            receiver_indices = [
-                r.index_component(
-                    raw_base,
-                    batch=True,
-                    is_original=True,
-                    attention_mask=batch.base_encoding["attention_mask"],
-                )
-                for r in receivers
-            ]
-            _validate_positions(
-                receivers,
-                receiver_indices,
-                receiver_indices,
-                role="path-patching receiver",
-            )
-
             # PASS 1 — write the sender + restorers, read v* at the receivers.
             sources = collect_group_sources(pipeline, batch)
             write_plans = build_plans(
