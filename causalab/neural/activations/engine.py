@@ -113,22 +113,20 @@ def gather_positions(
 
 def scatter_positions(
     activation: Tensor, positions: Tensor, values: Tensor, head: int | None = None
-) -> Tensor:
-    """Write ``values`` back at ``positions`` (and one head), returning a new tensor.
+) -> None:
+    """Write ``values`` in place at ``positions`` (and one head).
 
-    Out-of-place: advanced indexing yields a copy, so the updated slice has to be
-    written back into a clone. Returning a new tensor also keeps the caller from
-    mutating the live activation before every unit at the site has been applied.
+    In place because ``activation`` is a *view* of the tensor the model is about
+    to consume: every transform in :mod:`causalab.neural.components` returns an
+    alias — a tuple element, a channel slice, an ``unflatten`` — so the write
+    reaches the forward on its own, with nothing to assign back. That also means
+    units sharing a site compose, each one seeing its predecessors' writes.
     """
     rows = torch.arange(activation.shape[0], device=activation.device).unsqueeze(1)
-    updated = activation.clone()
     if head is None:
-        updated[rows, positions] = values.to(updated.dtype)
-        return updated
-    patch = updated[rows, positions]  # [batch, n_positions, n_heads, head_dim]
-    patch[:, :, head] = values.to(patch.dtype)
-    updated[rows, positions] = patch
-    return updated
+        activation[rows, positions] = values.to(activation.dtype)
+    else:
+        activation[rows, positions, head] = values.to(activation.dtype)
 
 
 # --------------------------------------------------------------------------- #
@@ -319,10 +317,7 @@ def _apply(pipeline: Any, plans: Sequence[UnitPlan], device: Any) -> None:
             positions = _as_position_tensor(plan.positions, device)
             selected = gather_positions(activation, positions, plan.head)
             replacement = plan.intervention(selected, plan.source, plan.feature_indices)
-            activation = scatter_positions(
-                activation, positions, replacement, plan.head
-            )
-        site.write(activation)
+            scatter_positions(activation, positions, replacement, plan.head)
 
 
 def collect_unit_activations_under(
@@ -356,6 +351,7 @@ def collect_unit_activations_under(
             activation = site.read()
             # Writes first: a receiver sharing a site with a restorer must read
             # the restored value, which is the whole point of the single pass.
+            # The writes land in place, so the reads below see them.
             for plan in group:
                 if id(plan) not in writes:
                     continue
@@ -364,12 +360,7 @@ def collect_unit_activations_under(
                 replacement = plan.intervention(
                     selected, plan.source, plan.feature_indices
                 )
-                activation = scatter_positions(
-                    activation, positions, replacement, plan.head
-                )
-            wrote = any(id(plan) in writes for plan in group)
-            if wrote:
-                site.write(activation)
+                scatter_positions(activation, positions, replacement, plan.head)
             for plan in group:
                 if id(plan) in writes:
                     continue
