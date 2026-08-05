@@ -14,13 +14,13 @@ shape here breaks localization, subspace training, and baseline reporting.
 The tests below exercise the three public entry points using the real
 (tiny) Llama pipeline from :mod:`tests._helpers.tiny`:
 
-* :func:`~causalab.neural.activations.interchange_mode.prepare_intervenable_inputs`
+* :func:`~causalab.neural.activations.interchange_mode.prepare_interchange_batch`
 * :func:`~causalab.neural.activations.interchange_mode.batched_interchange_intervention`
 * :func:`~causalab.neural.activations.interchange_mode.run_interchange_interventions`
 
 docs/TESTS.md's mocking policy forbids ``MagicMock``\\ -ing our own numerical
 code (the engine, the pipeline, ``AtomicModelUnit``). The legacy
-``test_batched_interchange.py`` / ``test_prepare_intervenable_inputs.py``
+``test_batched_interchange.py`` / ``test_prepare_interchange_batch.py``
 / ``test_run_interchange_intervention.py`` files mocked all of those and
 are removed in the same PR that adds this file.
 """
@@ -44,7 +44,7 @@ from causalab.neural.featurizer import Featurizer
 from causalab.neural.activations.collect import collect_features
 from causalab.neural.activations.interchange_mode import (
     batched_interchange_intervention,
-    prepare_intervenable_inputs,
+    prepare_interchange_batch,
     run_interchange_interventions,
 )
 from causalab.neural.pipeline import LMPipeline
@@ -101,7 +101,7 @@ def _two_examples() -> list[dict[str, Any]]:
     """Two-example fixture with a single counterfactual each.
 
     Two examples (rather than one) is the minimum that lets us exercise the
-    batched-shape contracts on ``prepare_intervenable_inputs`` — single-row
+    batched-shape contracts on ``prepare_interchange_batch`` — single-row
     batches would let an off-by-one bug pass silently.
     """
     return [
@@ -163,12 +163,18 @@ def _manifold_featurizer(d: int) -> Featurizer:
 
 
 # --------------------------------------------------------------------------- #
-#  prepare_intervenable_inputs                                                #
+#  prepare_interchange_batch                                                  #
 # --------------------------------------------------------------------------- #
-class TestPrepareIntervenableInputsUnit:
-    """Builds the ``(base, counterfactuals, inv_locations, feature_indices)``
-    four-tuple consumed by the interchange interventions; wrong shape
-    here breaks every ``analyses/locate/*`` run."""
+class TestPrepareInterchangeBatchUnit:
+    """Builds the :class:`InterchangeBatch` the engine runs on — tokenized
+    inputs plus every unit's resolved base/source positions. A wrong shape here
+    breaks every ``analyses/locate/*`` run.
+
+    This is also where the position guards are pinned. They reject a base/source
+    shape mismatch and a ragged span *before* either reaches a gather, where the
+    failure is a CUDA assertion that poisons the context and cannot be
+    diagnosed.
+    """
 
     pytestmark = pytest.mark.unit
 
@@ -179,59 +185,47 @@ class TestPrepareIntervenableInputsUnit:
         unit = _make_unit(tiny_pipeline)
         target = InterchangeTarget([[unit]])
 
-        base, cfs, inv_locations, feature_indices = prepare_intervenable_inputs(
-            tiny_pipeline, examples, target
-        )
+        batch = prepare_interchange_batch(tiny_pipeline, examples, target)
 
         # base is a tokenized batch dict-like (HF returns ``BatchEncoding``,
         # which is a ``Mapping`` but not a ``dict`` subclass).
-        assert isinstance(base, Mapping)
-        assert "input_ids" in base and "attention_mask" in base
-        # batch dimension = number of examples
-        assert base["input_ids"].shape[0] == len(examples)
+        assert isinstance(batch.base_encoding, Mapping)
+        assert "input_ids" in batch.base_encoding
+        assert "attention_mask" in batch.base_encoding
+        assert batch.base_encoding["input_ids"].shape[0] == len(examples)
 
-        # one counterfactual group → one batched_counterfactual dict-like
-        assert len(cfs) == 1
-        assert isinstance(cfs[0], Mapping)
-        assert "input_ids" in cfs[0]
-        assert cfs[0]["input_ids"].shape[0] == len(examples)
+        # one counterfactual group -> one source encoding
+        assert len(batch.source_encodings) == 1
+        assert isinstance(batch.source_encodings[0], Mapping)
+        assert batch.source_encodings[0]["input_ids"].shape[0] == len(examples)
 
-        # inv_locations contains the source→base mapping
-        assert "sources->base" in inv_locations
-        counterfactual_indices, base_indices = inv_locations["sources->base"]
-        # one entry per model unit (here just one)
-        assert len(counterfactual_indices) == 1
-        assert len(base_indices) == 1
-
-        # feature_indices is shape (num_units, batch_size)
-        assert len(feature_indices) == 1  # num model units
-        assert len(feature_indices[0]) == len(examples)
+        # one entry per model unit on each side
+        assert len(batch.base_positions) == 1
+        assert len(batch.source_positions) == 1
+        assert len(batch.units) == 1
+        assert batch.group_sizes == [1]
+        assert len(batch.feature_indices) == 1
 
     def test_multiple_units_in_single_group(self, tiny_pipeline: LMPipeline) -> None:
-        """Two units sharing one counterfactual input → two entries in
-        ``inv_locations`` and ``feature_indices``, one counterfactual dict."""
+        """Two units sharing one counterfactual input -> two position entries per
+        side and two feature-index slots, but a single source encoding."""
         examples = _two_examples()
         unit_a = _make_unit(tiny_pipeline, layer=0)
         unit_b = _make_unit(tiny_pipeline, layer=1)
         target = InterchangeTarget([[unit_a, unit_b]])
 
-        base, cfs, inv_locations, feature_indices = prepare_intervenable_inputs(
-            tiny_pipeline, examples, target
-        )
+        batch = prepare_interchange_batch(tiny_pipeline, examples, target)
 
-        # Single group, single counterfactual input.
-        assert len(cfs) == 1
-        counterfactual_indices, base_indices = inv_locations["sources->base"]
-        # Two units → two entries in each index list.
-        assert len(counterfactual_indices) == 2
-        assert len(base_indices) == 2
-        assert len(feature_indices) == 2
+        assert len(batch.source_encodings) == 1
+        assert len(batch.base_positions) == 2
+        assert len(batch.source_positions) == 2
+        assert len(batch.feature_indices) == 2
+        assert batch.group_sizes == [2]
 
     def test_feature_indices_propagate_when_set(
         self, tiny_pipeline: LMPipeline
     ) -> None:
-        """If ``unit.get_feature_indices()`` returns a list, every batch
-        slot for that unit gets the same list."""
+        """A unit's ``get_feature_indices()`` reaches the batch verbatim."""
         hidden = tiny_pipeline.model.config.hidden_size
         tp = TokenPosition(lambda _x: [0], tiny_pipeline, id="first_token")
         unit = ResidualStream(
@@ -243,19 +237,17 @@ class TestPrepareIntervenableInputsUnit:
         )
         target = InterchangeTarget([[unit]])
 
-        _, _, _, feature_indices = prepare_intervenable_inputs(
-            tiny_pipeline, _two_examples(), target
-        )
-        # one unit; one feature-index list per example
-        assert feature_indices == [[[0, 1, 2], [0, 1, 2]]]
+        batch = prepare_interchange_batch(tiny_pipeline, _two_examples(), target)
+        # One entry per unit — not replicated per example.
+        assert batch.feature_indices == [[0, 1, 2]]
 
     def test_out_of_bounds_position_raises_clean_error(
         self, tiny_pipeline: LMPipeline
     ) -> None:
         """A position beyond the sequence length raises a catchable ValueError
-        here instead of reaching the gather as a CUDA scatter assertion
-        that poisons the context (#176). Single example ⇒ no padding shift,
-        which is exactly the path the old fast-return left unchecked."""
+        here instead of reaching the gather as a CUDA scatter assertion that
+        poisons the context (#176). Single example => no padding shift, which is
+        exactly the path the old fast-return left unchecked."""
         hidden = tiny_pipeline.model.config.hidden_size
         oob = TokenPosition(lambda _x: [9999], tiny_pipeline, id="oob")
         unit = ResidualStream(
@@ -265,7 +257,7 @@ class TestPrepareIntervenableInputsUnit:
         # The out-of-bounds index comes from the unit's position, not the
         # examples — _two_examples() are ordinary short prompts.
         with pytest.raises(ValueError, match="out of bounds"):
-            prepare_intervenable_inputs(tiny_pipeline, _two_examples(), target)
+            prepare_interchange_batch(tiny_pipeline, _two_examples(), target)
 
     def test_mismatched_base_cf_position_shapes_raise_clean_error(
         self, tiny_pipeline: LMPipeline
@@ -273,15 +265,14 @@ class TestPrepareIntervenableInputsUnit:
         """A token position that selects a *different number* of tokens for the
         base vs. the counterfactual — the multi-token counterfactual-value-string
         shape (#251) — raises a catchable CPU ``ValueError`` here instead of
-        reaching the gather/scatter as a CUDA assertion that poisons the
-        context. Distinct from #176: every index is individually in-bounds, so
-        the per-position bounds check does not fire; only the base/CF shape
-        mismatch does."""
+        reaching the gather/scatter as a CUDA assertion that poisons the context.
+        Distinct from #176: every index is individually in-bounds, so the
+        per-position bounds check does not fire; only the shape mismatch does."""
         hidden = tiny_pipeline.model.config.hidden_size
         # is_original=True (base) selects 2 positions; is_original=False
         # (counterfactual) selects 3 — mirroring a 2-token base value swapped for
         # a 3-token counterfactual value. The indexer receives `is_original`
-        # exactly as the real base/counterfactual passes in prepare_* do.
+        # exactly as the real base/counterfactual passes do.
         tp = TokenPosition(
             lambda _x, is_original: [0, 1] if is_original else [0, 1, 2],
             tiny_pipeline,
@@ -304,44 +295,39 @@ class TestPrepareIntervenableInputsUnit:
             },
         ]
         with pytest.raises(ValueError, match="mismatched shapes"):
-            prepare_intervenable_inputs(tiny_pipeline, examples, target)
+            prepare_interchange_batch(tiny_pipeline, examples, target)
 
     def test_uniform_multitoken_position_is_allowed(
         self, tiny_pipeline: LMPipeline
     ) -> None:
         """A *uniform* multi-token span — every example selects the same number
         of tokens (here positions 0,1 for both base and counterfactual) — with
-        the default identity featurizer is supported, not rejected. The engine stacks
-        a unit's per-example positions into one ``(batch, num_positions)`` tensor
-        and gathers/scatters them simultaneously, and the identity featurizer
-        makes the flattened swap exact. ``prepare_intervenable_inputs`` must build
-        the four-tuple without raising, with two token indices per example."""
+        the default identity featurizer is supported, not rejected. The engine
+        stacks a unit's per-example positions into one ``(batch, num_positions)``
+        tensor and gathers/scatters them simultaneously, and the identity
+        featurizer makes the flattened swap exact."""
         hidden = tiny_pipeline.model.config.hidden_size
         tp = TokenPosition(lambda _x: [0, 1], tiny_pipeline, id="span2")
         unit = ResidualStream(
             layer=0, token_indices=tp, target_output=False, shape=(hidden,)
         )
         target = InterchangeTarget([[unit]])
-        examples = _long_examples()
 
-        _, _, inv_locations, _ = prepare_intervenable_inputs(
-            tiny_pipeline, examples, target
-        )
-        counterfactual_indices, base_indices = inv_locations["sources->base"]
+        batch = prepare_interchange_batch(tiny_pipeline, _long_examples(), target)
         # one unit, two examples, two tokens per example on each side
-        assert len(base_indices) == len(counterfactual_indices) == 1
-        assert [len(ex) for ex in base_indices[0]] == [2, 2]
-        assert [len(ex) for ex in counterfactual_indices[0]] == [2, 2]
+        assert len(batch.base_positions) == len(batch.source_positions) == 1
+        assert [len(ex) for ex in batch.base_positions[0]] == [2, 2]
+        assert [len(ex) for ex in batch.source_positions[0]] == [2, 2]
 
     def test_ragged_span_raises_clean_error(self, tiny_pipeline: LMPipeline) -> None:
         """A token position whose span width *varies across the batch* (2 tokens
         for one example, 1 for another) raises a catchable, actionable
-        ``ValueError`` here instead of reaching the position stack as the
-        cryptic ``expected sequence of length N at dim 1`` error that poisons the
-        context. The indexer keys on the prompt so base and counterfactual agree
-        *per example* (passing the #251 base/CF mismatch guard) yet disagree
-        *across* examples — the residual ragged case the relaxed guard targets.
-        Distinct from #176: positions 0,1 are individually in-bounds."""
+        ``ValueError`` here instead of reaching the position stack as the cryptic
+        ``expected sequence of length N at dim 1`` error. The indexer keys on the
+        prompt so base and counterfactual agree *per example* (passing the #251
+        mismatch guard) yet disagree *across* examples — the residual ragged case
+        the relaxed guard targets. Distinct from #176: positions 0,1 are
+        individually in-bounds."""
         hidden = tiny_pipeline.model.config.hidden_size
 
         # Width follows the prompt's word count: the 4-word prompts select 2
@@ -368,17 +354,16 @@ class TestPrepareIntervenableInputsUnit:
             },
         ]
         with pytest.raises(ValueError, match="variable number of tokens"):
-            prepare_intervenable_inputs(tiny_pipeline, examples, target)
+            prepare_interchange_batch(tiny_pipeline, examples, target)
 
     def test_multitoken_position_with_nonidentity_featurizer_is_allowed(
         self, tiny_pipeline: LMPipeline
     ) -> None:
-        """A uniform multi-token span with a *non-identity* featurizer is no
-        longer rejected: the feature interventions set ``keep_last_dim=True``, so
-        the featurizer is applied per position (its ``d``-sized weights broadcast
-        across the span) rather than to a folded ``num_positions*d`` vector.
-        ``prepare_intervenable_inputs`` must build the four-tuple without raising
-        — the end-to-end broadcast is checked separately in the batched-wrapper
+        """A uniform multi-token span with a *non-identity* featurizer is not
+        rejected: the feature interventions set ``keep_last_dim=True``, so the
+        featurizer is applied per position (its ``d``-sized weights broadcast
+        across the span) rather than to a folded ``num_positions*d`` vector. The
+        end-to-end broadcast is checked separately in the batched-wrapper
         tests."""
         hidden = tiny_pipeline.model.config.hidden_size
         tp = TokenPosition(lambda _x: [0, 1], tiny_pipeline, id="span2")
@@ -391,19 +376,30 @@ class TestPrepareIntervenableInputsUnit:
         )
         target = InterchangeTarget([[unit]])
         # Must not raise.
-        prepare_intervenable_inputs(tiny_pipeline, _long_examples(), target)
+        prepare_interchange_batch(tiny_pipeline, _long_examples(), target)
+
+    def test_fewer_counterfactuals_than_groups_raises(
+        self, tiny_pipeline: LMPipeline
+    ) -> None:
+        """Each group reads its own counterfactual, so a target with more groups
+        than the dataset supplies is a configuration error rather than a silent
+        reuse of one counterfactual for two groups."""
+        unit_a = _make_unit(tiny_pipeline, layer=0)
+        unit_b = _make_unit(tiny_pipeline, layer=1)
+        target = InterchangeTarget([[unit_a], [unit_b]])
+        with pytest.raises(ValueError, match="group"):
+            prepare_interchange_batch(tiny_pipeline, _two_examples(), target)
 
 
-class TestPrepareIntervenableInputsProperty:
-    """Structural invariants on the four-tuple shape."""
+class TestPrepareInterchangeBatchProperty:
+    """Structural invariants on the returned :class:`InterchangeBatch`."""
 
     pytestmark = pytest.mark.property
 
-    def test_counterfactual_count_matches_input_counterfactuals(
+    def test_source_encoding_count_matches_group_count(
         self, tiny_pipeline: LMPipeline
     ) -> None:
-        """``len(batched_counterfactuals)`` mirrors the number of counterfactual
-        inputs per example."""
+        """One source encoding per group."""
         examples: list[dict[str, Any]] = [
             {
                 "input": _make_trace("a"),
@@ -414,19 +410,18 @@ class TestPrepareIntervenableInputsProperty:
                 "counterfactual_inputs": [_make_trace("e"), _make_trace("f")],
             },
         ]
-        # Two units in two groups: one unit per group is needed when
-        # groups carry different counterfactual inputs.
         unit_a = _make_unit(tiny_pipeline, layer=0)
         unit_b = _make_unit(tiny_pipeline, layer=1)
         target = InterchangeTarget([[unit_a], [unit_b]])
 
-        _, cfs, _, _ = prepare_intervenable_inputs(tiny_pipeline, examples, target)
-        assert len(cfs) == len(examples[0]["counterfactual_inputs"])
+        batch = prepare_interchange_batch(tiny_pipeline, examples, target)
+        assert len(batch.source_encodings) == len(list(target))
 
-    def test_feature_indices_length_equals_total_units(
+    def test_per_unit_lists_all_have_one_entry_per_unit(
         self, tiny_pipeline: LMPipeline
     ) -> None:
-        """``len(feature_indices) == sum(len(group) for group in target)``."""
+        """``units``, ``feature_indices`` and both position lists are indexed by
+        the same flattened unit order, so they must agree in length."""
         unit_a = _make_unit(tiny_pipeline, layer=0)
         unit_b = _make_unit(tiny_pipeline, layer=1)
         unit_c = _make_unit(tiny_pipeline, layer=0, target_output=True)
@@ -438,28 +433,23 @@ class TestPrepareIntervenableInputsProperty:
             },
         ]
 
-        _, _, _, feature_indices = prepare_intervenable_inputs(
-            tiny_pipeline, examples, target
-        )
+        batch = prepare_interchange_batch(tiny_pipeline, examples, target)
         expected = sum(len(group) for group in target)
-        assert len(feature_indices) == expected
+        assert len(batch.units) == expected
+        assert len(batch.feature_indices) == expected
+        assert len(batch.base_positions) == expected
+        assert len(batch.source_positions) == expected
+        assert sum(batch.group_sizes) == expected
 
-    def test_none_feature_indices_propagate_per_example(
-        self, tiny_pipeline: LMPipeline
-    ) -> None:
-        """A unit whose ``get_feature_indices()`` is ``None`` produces
-        ``[None, None, ...]`` — one slot per example, all ``None``."""
+    def test_none_feature_indices_propagate(self, tiny_pipeline: LMPipeline) -> None:
+        """A unit whose ``get_feature_indices()`` is ``None`` yields ``None`` —
+        one slot per unit."""
         unit = _make_unit(tiny_pipeline)  # default feature_indices=None
         assert unit.get_feature_indices() is None
         target = InterchangeTarget([[unit]])
 
-        examples = _two_examples()
-        _, _, _, feature_indices = prepare_intervenable_inputs(
-            tiny_pipeline, examples, target
-        )
-
-        assert len(feature_indices) == 1
-        assert feature_indices[0] == [None] * len(examples)
+        batch = prepare_interchange_batch(tiny_pipeline, _two_examples(), target)
+        assert batch.feature_indices == [None]
 
 
 # --------------------------------------------------------------------------- #
@@ -966,7 +956,7 @@ class TestAttentionHeadInterchangeHookOracle:
             },
         ]
         with pytest.raises(ValueError, match="variable number of tokens"):
-            prepare_intervenable_inputs(tiny_pipeline, examples, target)
+            prepare_interchange_batch(tiny_pipeline, examples, target)
 
 
 # --------------------------------------------------------------------------- #

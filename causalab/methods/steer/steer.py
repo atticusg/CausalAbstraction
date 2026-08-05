@@ -104,7 +104,7 @@ def prepare_steering_inputs(
     """
     Prepare base inputs for steering intervention.
 
-    Unlike prepare_intervenable_inputs() in interchange.py, this only
+    Unlike prepare_interchange_batch() in interchange_mode.py, this only
     prepares base inputs (no counterfactuals).
 
     Args:

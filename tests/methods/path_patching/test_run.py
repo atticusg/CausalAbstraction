@@ -419,7 +419,7 @@ class TestMixedForwardPropagation:
 
 class TestReceiverSpanGuard:
     """The two-pass receiver index is spliced into the resolved locations *outside*
-    ``prepare_intervenable_inputs``, so it would bypass the ragged-span guard the
+    ``prepare_interchange_batch``, so it would bypass the ragged-span guard the
     interchange groups get. A uniform multi-token receiver span is fine, but a
     *ragged* one (width varying across the batch) must raise the actionable
     ``ValueError`` rather than reach the gather as the cryptic ``expected

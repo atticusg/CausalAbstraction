@@ -103,158 +103,6 @@ def _first_ragged_span(
     return None
 
 
-def prepare_intervenable_inputs(
-    pipeline: Pipeline,
-    examples: list[CounterfactualExample] | list[LabeledCounterfactualExample],
-    interchange_target: InterchangeTarget,
-) -> tuple[
-    dict[str, Any],
-    list[dict[str, Any]],
-    dict[str, Any],
-    list[list[list[int] | None]],
-]:
-    """
-    Prepare the inputs for the intervenable model.
-
-    This function loads the base and counterfactual inputs, and prepares the indices
-    for the model units.
-
-    Args:
-        pipeline: The pipeline containing the model
-        examples: List of counterfactual examples, each with "input" and
-            "counterfactual_inputs" keys.
-        interchange_target: InterchangeTarget containing the model units to be intervened on.
-            Groups in the target correspond to counterfactual inputs.
-
-    Returns:
-        Tuple of (batched_base, batched_counterfactuals, inv_locations, feature_indices)
-    """
-    # Extract and batch inputs from examples
-    raw_base = [ex["input"] for ex in examples]
-    # Shape: (batch_size, num_counterfactuals) -> (num_counterfactuals, batch_size)
-    # Convert zip tuples to lists for pipeline.load() compatibility
-    raw_counterfactuals = [
-        list(cf_tuple)
-        for cf_tuple in zip(*[ex["counterfactual_inputs"] for ex in examples])
-    ]
-
-    batched_base = pipeline.load(raw_base)
-    batched_counterfactuals = [
-        pipeline.load(batched_counterfactual)
-        for batched_counterfactual in raw_counterfactuals
-    ]
-
-    # Positions returned by `index_component` are in each example's unpadded
-    # tokenization frame. Passing the per-batch `attention_mask` shifts them
-    # into the padded-batch frame (`argmax(attention_mask, dim=1)` per row).
-    # shape: (num_model_units, batch_size, num_component_indices)
-    base_indices = [
-        model_unit.index_component(
-            raw_base,
-            batch=True,
-            is_original=True,
-            attention_mask=batched_base["attention_mask"],
-        )
-        for group in interchange_target
-        for model_unit in group
-    ]
-
-    # shape: (num_model_units, batch_size, num_component_indices)
-    counterfactual_indices = [
-        model_unit.index_component(
-            batched_counterfactual,
-            batch=True,
-            is_original=False,
-            attention_mask=batched_cf["attention_mask"],
-        )
-        for group, batched_counterfactual, batched_cf in zip(
-            interchange_target, raw_counterfactuals, batched_counterfactuals
-        )
-        for model_unit in group
-    ]
-
-    # shape: (num_model_units, batch_size, num_feature_indices)
-    feature_indices = [
-        [model_unit.get_feature_indices() for _ in range(len(raw_base))]
-        for group in interchange_target
-        for model_unit in group
-    ]
-
-    # The engine gathers source (counterfactual) activations and scatters them
-    # onto the base at the paired indices, so the two index structures must share
-    # the same nested shape. A mismatch reaches the CUDA advanced-indexing write
-    # as an out-of-bounds assertion that poisons the context; catch it on CPU
-    # here with an actionable error instead. The per-position bounds check in
-    # `_apply_padding_shift` (#176) only validates individual indices, so a
-    # length mismatch where every index is in-bounds slips past it.
-    mismatch = _first_index_shape_mismatch(base_indices, counterfactual_indices)
-    if mismatch is not None:
-        _path, base_len, cf_len = mismatch
-        raise ValueError(
-            f"Base and counterfactual token positions have mismatched shapes at "
-            f"index path {list(_path)}: base selects {base_len}, counterfactual "
-            f"selects {cf_len}. Interchange pairs positions, so both must select "
-            f"the same number of tokens per example — a mismatch reaches the "
-            f"gather/scatter as a CUDA assertion that poisons the context. Usual "
-            f"cause: a counterfactual value string that tokenizes to a different "
-            f"number of tokens than the base value. Use single-token values or a "
-            f"fixed single position."
-        )
-
-    # Multi-token positions are supported as long as the span is *uniform* across
-    # the batch (every example selects the same number of tokens). A unit's
-    # per-example positions are stacked into one `(batch, num_positions)` tensor
-    # and every position is gathered/scattered simultaneously, and the feature
-    # interventions set `keep_last_dim=True` so the featurizer sees
-    # `(batch, num_positions, d)` and applies per position (its d-sized weights
-    # broadcast across the span). The remaining failure mode is a *ragged* span —
-    # a width that varies across the batch. `torch.tensor` in `gather_neurons`
-    # can't build a rectangular tensor from it and raises the cryptic `expected
-    # sequence of length N at dim 1` error that poisons the context. The base/CF
-    # mismatch check above only compares the two sides element-wise, so a span
-    # that is ragged *within* one side (identically on both) slips past it; catch
-    # it here per unit with an actionable message. Each unit reports how its
-    # index axes are tensorized via `tensorized_index_groups` — a single-axis
-    # `pos` unit is one group, a multi-axis `h.pos` unit splits into head and
-    # position axes (stacked separately) — and we check each group on its own so
-    # the head and position axes' legitimately-different widths are never misread
-    # as ragged.
-    model_units = [model_unit for group in interchange_target for model_unit in group]
-    for label, all_indices in (
-        ("base token position", base_indices),
-        ("counterfactual token position", counterfactual_indices),
-    ):
-        for unit_idx, unit_indices in enumerate(all_indices):
-            # The unit class knows how its index axes are tensorized: a plain
-            # `pos` unit is one group; a multi-axis `h.pos` unit splits into
-            # `[head_axis, position_axis]`. Asking the unit keeps that layout
-            # knowledge on the class instead of re-deriving it from the unit
-            # string here.
-            tensorized_groups = model_units[unit_idx].tensorized_index_groups(
-                unit_indices
-            )
-            for group in tensorized_groups:
-                ragged = _first_ragged_span(group)
-                if ragged is not None:
-                    example_index, (_path, len0, len_j) = ragged
-                    raise ValueError(
-                        f"A {label} selects a variable number of "
-                        f"tokens across the batch (unit {unit_idx}: example 0 "
-                        f"selects {len0}, example {example_index} selects {len_j} "
-                        f"at index path {list(_path)}). Interchange stacks a "
-                        f"unit's per-example positions with `torch.tensor`, so "
-                        f"every example must select the same number of tokens — a "
-                        f"ragged span fails that stack with an `expected "
-                        f"sequence of length N at dim 1` error. Usual cause: a "
-                        f"value string that tokenizes to a "
-                        f"different number of tokens for different examples. Use a "
-                        f"fixed-width position (e.g. the last token of the value)."
-                    )
-
-    inv_locations = {"sources->base": (counterfactual_indices, base_indices)}
-    return batched_base, batched_counterfactuals, inv_locations, feature_indices
-
-
 # --------------------------------------------------------------------------- #
 #  Trace-engine batch preparation                                             #
 # --------------------------------------------------------------------------- #
@@ -262,10 +110,10 @@ def prepare_intervenable_inputs(
 class InterchangeBatch:
     """One batch's tokenized inputs and resolved positions, ready for the engine.
 
-    Positions are per unit, in the padded-batch frame, and already validated: the
-    base/counterfactual shapes match and no span is ragged across the batch (see
-    :func:`prepare_intervenable_inputs` for what those two failures look like and
-    why they must be caught here rather than deep in a gather).
+    Positions are per unit, in the padded-batch frame, and already validated by
+    :func:`_validate_positions`: the base/counterfactual shapes match and no span
+    is ragged across the batch. Both are caught here rather than deep in a
+    gather, where they surface as a CUDA assertion that poisons the context.
     """
 
     base_encoding: dict[str, Any]

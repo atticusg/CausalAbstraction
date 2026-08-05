@@ -37,9 +37,11 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-# nnsight 0.8 is not on PyPI yet; develop against the local checkout. Switch to a
-# plain version pin once 0.8.0 is released.
-nnsight = { path = "../nnsight", editable = true }
+# nnsight 0.8 is not on PyPI yet; track the upstream 0.8 branch. Drop this block
+# once 0.8.0 is released and the version pin above is enough. To develop against
+# a local checkout instead, replace with:
+#   nnsight = { path = "../nnsight", editable = true }
+nnsight = { git = "https://github.com/ndif-team/nnsight.git", branch = "0.8" }
 
 [tool.pytest.ini_options]
 markers = [

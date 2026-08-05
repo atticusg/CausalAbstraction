@@ -121,7 +121,7 @@ def _make_cf_dataset(n: int) -> list[dict[str, Any]]:
     """Build a tiny counterfactual dataset of ``CausalTrace`` examples.
 
     Each example has one base input and one counterfactual input — the
-    minimum shape :func:`prepare_intervenable_inputs` accepts.
+    minimum shape :func:`prepare_interchange_batch` accepts.
     """
     return [
         {

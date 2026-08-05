@@ -37,7 +37,6 @@ from causalab.methods.ablation._spans import (
     unit_position_count,
 )
 from causalab.methods.ablation.reference_vectors import (
-    _single_position_unit,  # pyright: ignore[reportPrivateUsage]
     make_mean_vectors,
     make_zero_vectors,
 )
@@ -137,36 +136,17 @@ def _entry_activation_std(
 
     Collects every gathered (example, position) activation at the entry units and
     returns the scalar std across all of them — the subject-embedding σ ROME
-    scales its corruption noise by. Multi-position ``pos`` spans are collected one
-    position at a time (as in :func:`make_mean_vectors`), bucketed so each
-    gather stays rectangular.
+    scales its corruption noise by. Bucketed by position count so each gather
+    stays rectangular; within a bucket one collect covers every unit and every
+    position it selects.
     """
     units = entry_target.flatten()
     chunks: list[Tensor] = []
 
     for _, sub in group_by_position_count(entry_target, dataset):
-        reference = sub[0]["input"]
-        simple: list[AtomicModelUnit] = []
-        multi: list[tuple[AtomicModelUnit, int]] = []
-        for unit in units:
-            n_pos = unit_position_count(unit, reference)
-            if unit.unit != "h.pos" and n_pos > 1:
-                multi.append((unit, n_pos))
-            else:
-                simple.append(unit)
-
-        if simple:
-            feats = collect_features(sub, pipeline, simple, batch_size=batch_size)
-            assert isinstance(feats, dict)
-            chunks.extend(feats[u.id].float() for u in simple)
-
-        max_n_pos = max((n for _, n in multi), default=0)
-        for k in range(max_n_pos):
-            clones = [_single_position_unit(unit, k) for unit, n in multi if k < n]
-            if clones:
-                feats = collect_features(sub, pipeline, clones, batch_size=batch_size)
-                assert isinstance(feats, dict)
-                chunks.extend(feats[c.id].float() for c in clones)
+        feats = collect_features(sub, pipeline, units, batch_size=batch_size)
+        assert isinstance(feats, dict)
+        chunks.extend(feats[u.id].float() for u in units)
 
     if not chunks:
         raise ValueError(

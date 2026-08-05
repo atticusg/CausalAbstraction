@@ -86,7 +86,7 @@ def _as_position_tensor(positions: Sequence[Sequence[int]], device: Any) -> Tens
 
     Requires a uniform width across the batch — every example must select the
     same number of tokens. A ragged selection cannot form a rectangular index
-    tensor; :func:`causalab.neural.activations.interchange_mode.prepare_intervenable_inputs`
+    tensor; :func:`causalab.neural.activations.interchange_mode.prepare_interchange_batch`
     rejects it up front with an actionable message.
     """
     return torch.as_tensor(positions, dtype=torch.long, device=device)

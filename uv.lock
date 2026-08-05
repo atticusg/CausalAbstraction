@@ -429,7 +429,7 @@ requires-dist = [
     { name = "jupyterlab" },
     { name = "matplotlib" },
     { name = "networkx" },
-    { name = "nnsight", editable = "../nnsight" },
+    { name = "nnsight", git = "https://github.com/ndif-team/nnsight.git?branch=0.8" },
     { name = "numpy" },
     { name = "openai", specifier = ">=1.50.0" },
     { name = "pandas" },
@@ -2797,7 +2797,8 @@ wheels = [
 
 [[package]]
 name = "nnsight"
-source = { editable = "../nnsight" }
+version = "0.7.1.dev52+g5b5700858"
+source = { git = "https://github.com/ndif-team/nnsight.git?branch=0.8#5b57008582f51b67492b35f0305b1f61c26fc830" }
 dependencies = [
     { name = "cloudpickle" },
     { name = "greenlet" },
@@ -2811,31 +2812,6 @@ dependencies = [
     { name = "websocket-client" },
     { name = "zstandard" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "accelerate", marker = "extra == 'dev'" },
-    { name = "cloudpickle" },
-    { name = "diffusers", marker = "extra == 'dev'" },
-    { name = "fastapi", marker = "extra == 'serve'" },
-    { name = "greenlet" },
-    { name = "httpx" },
-    { name = "huggingface-hub" },
-    { name = "nnsight", extras = ["vllm"], marker = "extra == 'serve'" },
-    { name = "pillow", marker = "extra == 'dev'" },
-    { name = "pydantic" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pyyaml" },
-    { name = "torch" },
-    { name = "tqdm" },
-    { name = "transformers" },
-    { name = "triton", marker = "extra == 'vllm'" },
-    { name = "uvicorn", marker = "extra == 'serve'" },
-    { name = "vllm", marker = "extra == 'vllm'" },
-    { name = "websocket-client" },
-    { name = "zstandard" },
-]
-provides-extras = ["dev", "vllm", "serve"]
 
 [[package]]
 name = "nodeenv"
