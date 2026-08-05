@@ -15,6 +15,7 @@ import torch
 import pytest
 
 import causalab.neural.featurizer as F
+from causalab.neural.interventions import build_intervention
 from causalab.methods.trained_subspace.subspace import (
     SubspaceFeaturizer as _SubspaceFeaturizer,
 )
@@ -134,10 +135,9 @@ class TestSteeringIntervention:
         x_base = randn((2, 8), rng)
         steering_vec = randn((2, 8), rng)
 
-        SteeringCls = identity_featurizer.get_steering_intervention()
-        steering = SteeringCls()
+        steering = build_intervention(identity_featurizer, "add")
 
-        out = steering(x_base, steering_vec, subspaces=None)
+        out = steering(x_base, steering_vec)
 
         # With identity featurizer, output should be base + steering
         expected = x_base + steering_vec
@@ -151,10 +151,9 @@ class TestSteeringIntervention:
         x_base = randn((2, 16), rng)
         steering_vec = randn((2, 4), rng)  # In feature space
 
-        SteeringCls = subspace_featurizer.get_steering_intervention()
-        steering = SteeringCls()
+        steering = build_intervention(subspace_featurizer, "add")
 
-        out = steering(x_base, steering_vec, subspaces=None)
+        out = steering(x_base, steering_vec)
 
         # Verify the output has the same shape as input
         assert out.shape == x_base.shape
@@ -184,10 +183,9 @@ class TestSteeringIntervention:
         # Get the original error term
         _, base_error = subspace_featurizer.featurize(x_base)
 
-        SteeringCls = subspace_featurizer.get_steering_intervention()
-        steering = SteeringCls()
+        steering = build_intervention(subspace_featurizer, "add")
 
-        out = steering(x_base, steering_vec, subspaces=None)
+        out = steering(x_base, steering_vec)
 
         # Get the output error term
         _, out_error = subspace_featurizer.featurize(out)
@@ -203,18 +201,20 @@ class TestSteeringIntervention:
         x_base = randn((2, 8), rng)
         steering_vec = torch.zeros(2, 8)
 
-        SteeringCls = identity_featurizer.get_steering_intervention()
-        steering = SteeringCls()
+        steering = build_intervention(identity_featurizer, "add")
 
-        out = steering(x_base, steering_vec, subspaces=None)
+        out = steering(x_base, steering_vec)
 
         assert torch.allclose(out, x_base, atol=1e-6)
 
-    def test_steering_str_includes_id(self, identity_featurizer: F.Featurizer) -> None:
-        """Test that __str__ includes the featurizer ID."""
-        SteeringCls = identity_featurizer.get_steering_intervention()
-        steering = SteeringCls()
-        assert "identity" in str(steering)
+    def test_steering_repr_names_the_mode(
+        self, identity_featurizer: F.Featurizer
+    ) -> None:
+        """The object identifies its mode. The pyvene ``__str__`` that carried
+        the featurizer id is gone with the class factory — an ordinary module's
+        repr names its class."""
+        steering = build_intervention(identity_featurizer, "add")
+        assert "SteeringIntervention" in repr(steering)
 
 
 # --------------------------------------------------------------------------- #
@@ -432,65 +432,42 @@ class TestGetBatchSteeringVectors:
 # --------------------------------------------------------------------------- #
 #  AtomicModelUnit.create_intervention_config tests for steering              #
 # --------------------------------------------------------------------------- #
-class TestCreateSteeringInterventionConfig:
-    """Tests for steering intervention config creation via create_intervention_config."""
+class TestSteeringModeSelection:
+    """``add`` builds a steering intervention over the unit's feature space.
 
-    def test_config_has_required_fields(
+    This replaces two classes: one asserting the shape of the config dict pyvene
+    consumed (``create_intervention_config``), and one asserting that
+    ``Featurizer.get_steering_intervention`` returned a cached *class* — pyvene
+    instantiated intervention classes itself, so the featurizer had to hand it
+    one. Both are gone: a mode is now an ordinary module instance, and each call
+    builds a fresh one so a caller can configure it without affecting others.
+    """
+
+    def test_add_mode_builds_a_steering_intervention(
         self, identity_model_unit: AtomicModelUnit
     ) -> None:
-        """Test that config contains all required fields."""
-        config = identity_model_unit.create_intervention_config(
-            group_key=0, intervention_type="add"
-        )
+        from causalab.neural.interventions import SteeringIntervention
 
-        assert "component" in config
-        assert "unit" in config
-        assert "layer" in config
-        assert "group_key" in config
-        assert "intervention_type" in config
+        intervention = build_intervention(identity_model_unit.featurizer, "add")
+        assert isinstance(intervention, SteeringIntervention)
 
-    def test_config_uses_steering_intervention(
-        self, identity_model_unit: AtomicModelUnit
+    def test_returns_a_configured_instance(
+        self, identity_featurizer: F.Featurizer
     ) -> None:
-        """Test that config uses the steering intervention type."""
-        config = identity_model_unit.create_intervention_config(
-            group_key=0, intervention_type="add"
-        )
+        steering = build_intervention(identity_featurizer, "add")
+        assert isinstance(steering, torch.nn.Module)
+        assert steering._featurizer is identity_featurizer
 
-        # Verify it's a steering intervention class
-        InterventionCls = config["intervention_type"]
-        intervention = InterventionCls()
-        assert "Steering" in str(intervention)
-
-
-# --------------------------------------------------------------------------- #
-#  Featurizer.get_steering_intervention tests                                 #
-# --------------------------------------------------------------------------- #
-class TestFeaturizerGetSteeringIntervention:
-    """Tests for Featurizer.get_steering_intervention method."""
-
-    def test_returns_class(self, identity_featurizer: F.Featurizer) -> None:
-        """Test that get_steering_intervention returns a class."""
-        SteeringCls = identity_featurizer.get_steering_intervention()
-        assert isinstance(SteeringCls, type)
-
-    def test_caches_intervention(self, identity_featurizer: F.Featurizer) -> None:
-        """Test that the intervention is cached."""
-        SteeringCls1 = identity_featurizer.get_steering_intervention()
-        SteeringCls2 = identity_featurizer.get_steering_intervention()
-        assert SteeringCls1 is SteeringCls2
-
-    def test_works_with_subspace_featurizer(
-        self, subspace_featurizer: F.SubspaceFeaturizer
+    def test_each_call_is_a_fresh_object(
+        self, identity_featurizer: F.Featurizer
     ) -> None:
-        """Test that steering works with subspace featurizer."""
-        SteeringCls = subspace_featurizer.get_steering_intervention()
-        steering = SteeringCls()
-        assert steering is not None
+        first = build_intervention(identity_featurizer, "add")
+        second = build_intervention(identity_featurizer, "add")
+        assert first is not second
 
 
 # --------------------------------------------------------------------------- #
-#  Replace intervention class tests                                           #
+#  Replace intervention                                                        #
 # --------------------------------------------------------------------------- #
 class TestReplaceIntervention:
     """Tests for the replace intervention class."""
@@ -502,10 +479,9 @@ class TestReplaceIntervention:
         x_base = randn((2, 8), rng)
         replacement_vec = randn((2, 8), rng)
 
-        ReplaceCls = identity_featurizer.get_replace_intervention()
-        replace = ReplaceCls()
+        replace = build_intervention(identity_featurizer, "replace")
 
-        out = replace(x_base, replacement_vec, subspaces=None)
+        out = replace(x_base, replacement_vec)
 
         # With identity featurizer, output should equal replacement vector
         # (since error term is None/zero for identity featurizer)
@@ -519,10 +495,9 @@ class TestReplaceIntervention:
         x_base = randn((2, 16), rng)
         replacement_vec = randn((2, 4), rng)  # In feature space
 
-        ReplaceCls = subspace_featurizer.get_replace_intervention()
-        replace = ReplaceCls()
+        replace = build_intervention(subspace_featurizer, "replace")
 
-        out = replace(x_base, replacement_vec, subspaces=None)
+        out = replace(x_base, replacement_vec)
 
         # Verify the output has the same shape as input
         assert out.shape == x_base.shape
@@ -545,10 +520,9 @@ class TestReplaceIntervention:
         # Get the original error term
         _, base_error = subspace_featurizer.featurize(x_base)
 
-        ReplaceCls = subspace_featurizer.get_replace_intervention()
-        replace = ReplaceCls()
+        replace = build_intervention(subspace_featurizer, "replace")
 
-        out = replace(x_base, replacement_vec, subspaces=None)
+        out = replace(x_base, replacement_vec)
 
         # Get the output error term
         _, out_error = subspace_featurizer.featurize(out)
@@ -564,10 +538,9 @@ class TestReplaceIntervention:
         x_base = randn((2, 16), rng)
         zero_vec = torch.zeros(2, 4)
 
-        ReplaceCls = subspace_featurizer.get_replace_intervention()
-        replace = ReplaceCls()
+        replace = build_intervention(subspace_featurizer, "replace")
 
-        out = replace(x_base, zero_vec, subspaces=None)
+        out = replace(x_base, zero_vec)
 
         # Verify features are zeroed
         out_features, _ = subspace_featurizer.featurize(out)
@@ -589,146 +562,90 @@ class TestReplaceIntervention:
         x_base = randn((2, 8), rng)
         vec = randn((2, 8), rng)
 
-        SteeringCls = identity_featurizer.get_steering_intervention()
-        ReplaceCls = identity_featurizer.get_replace_intervention()
+        steering = build_intervention(identity_featurizer, "add")
+        replace = build_intervention(identity_featurizer, "replace")
 
-        steering = SteeringCls()
-        replace = ReplaceCls()
-
-        out_steer = steering(x_base, vec, subspaces=None)
-        out_replace = replace(x_base, vec, subspaces=None)
+        out_steer = steering(x_base, vec)
+        out_replace = replace(x_base, vec)
 
         # Steering adds: base + vec
         # Replace replaces: vec
         # They should differ (unless base is zero)
         assert not torch.allclose(out_steer, out_replace, atol=1e-6)
 
-    def test_replace_str_includes_id(self, identity_featurizer: F.Featurizer) -> None:
-        """Test that __str__ includes the featurizer ID."""
-        ReplaceCls = identity_featurizer.get_replace_intervention()
-        replace = ReplaceCls()
-        assert "identity" in str(replace)
-        assert "Replace" in str(replace)
+    def test_repr_names_the_mode(self, identity_featurizer: F.Featurizer) -> None:
+        """The object identifies its mode — the interventions are ordinary
+        modules now, so the repr is torch's rather than a pyvene ``__str__``
+        that had to carry the featurizer id to be identifiable."""
+        replace = build_intervention(identity_featurizer, "replace")
+        assert "ReplaceIntervention" in repr(replace)
 
 
 # --------------------------------------------------------------------------- #
-#  Featurizer.get_replace_intervention tests                                   #
+#  Building a replace intervention                                             #
 # --------------------------------------------------------------------------- #
-class TestFeaturizerGetReplaceIntervention:
-    """Tests for Featurizer.get_replace_intervention method."""
+class TestBuildReplaceIntervention:
+    """``build_intervention(featurizer, "replace")`` construction.
 
-    def test_returns_class(self, identity_featurizer: F.Featurizer) -> None:
-        """Test that get_replace_intervention returns a class."""
-        ReplaceCls = identity_featurizer.get_replace_intervention()
-        assert isinstance(ReplaceCls, type)
+    The old API returned a *class* per featurizer, cached, because pyvene
+    instantiated intervention classes itself. It now returns an ordinary module
+    instance, so each call is a fresh object — which is what lets a caller
+    configure one (a mask's logits, an interpolation's function) without
+    affecting anyone else's.
+    """
 
-    def test_caches_intervention(self, identity_featurizer: F.Featurizer) -> None:
-        """Test that the intervention is cached."""
-        ReplaceCls1 = identity_featurizer.get_replace_intervention()
-        ReplaceCls2 = identity_featurizer.get_replace_intervention()
-        assert ReplaceCls1 is ReplaceCls2
+    def test_returns_a_configured_instance(
+        self, identity_featurizer: F.Featurizer
+    ) -> None:
+        replace = build_intervention(identity_featurizer, "replace")
+        assert isinstance(replace, torch.nn.Module)
+        assert replace._featurizer is identity_featurizer
+
+    def test_each_call_is_a_fresh_object(
+        self, identity_featurizer: F.Featurizer
+    ) -> None:
+        first = build_intervention(identity_featurizer, "replace")
+        second = build_intervention(identity_featurizer, "replace")
+        assert first is not second
 
     def test_works_with_subspace_featurizer(
         self, subspace_featurizer: F.SubspaceFeaturizer
     ) -> None:
         """Test that replace works with subspace featurizer."""
-        ReplaceCls = subspace_featurizer.get_replace_intervention()
-        replace = ReplaceCls()
+        replace = build_intervention(subspace_featurizer, "replace")
         assert replace is not None
 
 
 # --------------------------------------------------------------------------- #
 #  AtomicModelUnit.create_intervention_config tests for replace               #
 # --------------------------------------------------------------------------- #
-class TestCreateReplaceInterventionConfig:
-    """Tests for replace intervention config creation via create_intervention_config."""
+class TestReplaceSiteResolution:
+    """A ``replace`` unit resolves to a real, writable site.
 
-    def test_config_has_required_fields(
+    This replaces tests of ``create_intervention_config``, which asserted the
+    shape of the config dict pyvene consumed (component / unit / layer /
+    group_key / intervention_type). There is no config dict any more — a unit is
+    resolved to a site and paired with an intervention — so the equivalent
+    contract is that both halves come out well-formed.
+    """
+
+    def test_unit_resolves_to_a_site(
+        self, identity_model_unit: AtomicModelUnit, mock_tiny_lm
+    ) -> None:
+        from causalab.neural.components import resolve_site
+
+        site = resolve_site(
+            mock_tiny_lm.nnsight,
+            identity_model_unit.component_type,
+            identity_model_unit.layer,
+        )
+        assert site.key in ("input", "output")
+        assert site.envoy is not None
+
+    def test_replace_mode_builds_a_replace_intervention(
         self, identity_model_unit: AtomicModelUnit
     ) -> None:
-        """Test that config contains all required fields."""
-        config = identity_model_unit.create_intervention_config(
-            group_key=0, intervention_type="replace"
-        )
+        from causalab.neural.interventions import ReplaceIntervention
 
-        assert "component" in config
-        assert "unit" in config
-        assert "layer" in config
-        assert "group_key" in config
-        assert "intervention_type" in config
-
-    def test_config_uses_replace_intervention(
-        self, identity_model_unit: AtomicModelUnit
-    ) -> None:
-        """Test that config uses the replace intervention type."""
-        config = identity_model_unit.create_intervention_config(
-            group_key=0, intervention_type="replace"
-        )
-
-        # Verify it's a replace intervention class
-        InterventionCls = config["intervention_type"]
-        intervention = InterventionCls()
-        assert "Replace" in str(intervention)
-
-
-# --------------------------------------------------------------------------- #
-#  Scale parameter tests                                                       #
-# --------------------------------------------------------------------------- #
-class TestScaleParameter:
-    """Tests for the scale parameter in run_steering_interventions."""
-
-    def test_scale_zero_produces_no_change(
-        self, rng: torch.Generator, identity_featurizer: F.Featurizer
-    ) -> None:
-        """Test that scale=0 effectively disables steering."""
-        x_base = randn((2, 8), rng)
-        steering_vec = randn((2, 8), rng)
-
-        SteeringCls = identity_featurizer.get_steering_intervention()
-        steering = SteeringCls()
-
-        # With scale=0, the steering vector should have no effect
-        out = steering(x_base, steering_vec * 0.0, subspaces=None)
-        assert torch.allclose(out, x_base, atol=1e-6)
-
-    def test_scale_doubles_effect(
-        self, rng: torch.Generator, identity_featurizer: F.Featurizer
-    ) -> None:
-        """Test that scale=2 doubles the steering effect."""
-        x_base = randn((2, 8), rng)
-        steering_vec = randn((2, 8), rng)
-
-        SteeringCls = identity_featurizer.get_steering_intervention()
-        steering = SteeringCls()
-
-        # Output with scale=1
-        out_scale1 = steering(x_base, steering_vec, subspaces=None)
-
-        # Output with scale=2 (simulated by doubling vector)
-        out_scale2 = steering(x_base, steering_vec * 2.0, subspaces=None)
-
-        # The difference from base should be doubled
-        diff_scale1 = out_scale1 - x_base
-        diff_scale2 = out_scale2 - x_base
-        assert torch.allclose(diff_scale2, diff_scale1 * 2.0, atol=1e-5)
-
-    def test_scale_negative_reverses_direction(
-        self, rng: torch.Generator, identity_featurizer: F.Featurizer
-    ) -> None:
-        """Test that negative scale reverses the steering direction."""
-        x_base = randn((2, 8), rng)
-        steering_vec = randn((2, 8), rng)
-
-        SteeringCls = identity_featurizer.get_steering_intervention()
-        steering = SteeringCls()
-
-        # Output with scale=1
-        out_pos = steering(x_base, steering_vec, subspaces=None)
-
-        # Output with scale=-1 (simulated by negating vector)
-        out_neg = steering(x_base, steering_vec * -1.0, subspaces=None)
-
-        # The effects should be opposite (both relative to base)
-        diff_pos = out_pos - x_base
-        diff_neg = out_neg - x_base
-        assert torch.allclose(diff_neg, -diff_pos, atol=1e-5)
+        intervention = build_intervention(identity_model_unit.featurizer, "replace")
+        assert isinstance(intervention, ReplaceIntervention)

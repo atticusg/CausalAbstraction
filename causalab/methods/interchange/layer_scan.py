@@ -216,13 +216,10 @@ def run_centroid_layer_scan(
             "Ensure the intervention_metric resolves to a distribution comparison."
         )
     cmp = comparison_fn
-    from causalab.neural.activations.interchange_mode import (
-        prepare_intervenable_model,
-        delete_intervenable_model,
-        prepare_intervenable_inputs,
+    from causalab.neural.activations.engine import (
+        build_plans,
+        generate_with_interventions,
     )
-
-    from causalab.neural.activations.intervenable_model import device_for_layer
 
     token_seqs = _normalize_var_indices(score_token_ids)
     n_steps = max(len(seq) for seq in token_seqs)
@@ -318,13 +315,11 @@ def run_centroid_layer_scan(
                 if class_counts[c] > 0:
                     centroids[c] /= class_counts[c]
 
-        # For each class, patch its centroid into base examples and score
-        intervenable_model = prepare_intervenable_model(pipeline, target)
-        # Centroids are scattered into the target layer's tensor — they must
-        # live on that layer's device (which may differ across GPUs for
-        # sharded models).
-        target_layers = {u.layer for u in target.flatten()}
-        device = device_for_layer(pipeline, next(iter(target_layers)))
+        # For each class, patch its centroid into base examples and score.
+        # The centroid is a raw activation, so it is written through the units'
+        # featurizer exactly as another run's activation would be.
+        units = target.flatten()
+        device = pipeline.model.device
 
         n_score_tokens = len(token_seqs)
         patched_accum = (
@@ -345,25 +340,31 @@ def run_centroid_layer_scan(
                 batch = base_examples[bi * batch_size : (bi + 1) * batch_size]
                 bs = len(batch)
 
-                batched_base, _, inv_locations, feature_indices = (
-                    prepare_intervenable_inputs(
-                        pipeline,
-                        batch,  # pyright: ignore[reportArgumentType]  # constructed dicts conform to CounterfactualExample TypedDict at runtime
-                        target,
+                raw_base = [ex["input"] for ex in batch]
+                base_encoding = pipeline.load(raw_base)
+                positions = [
+                    unit.resolve_positions(
+                        raw_base,
+                        attention_mask=base_encoding["attention_mask"],
+                        is_original=True,
                     )
+                    for unit in units
+                ]
+                # (batch, 1, hidden): the singleton position axis broadcasts the
+                # same centroid across whatever tokens each unit selects.
+                source = centroid.view(1, 1, -1).expand(bs, 1, -1).to(device)
+                plans = build_plans(
+                    units,
+                    positions,
+                    "interchange",
+                    sources=[source] * len(units),
+                    feature_indices=[u.get_feature_indices() for u in units],
                 )
-                # pyvene expects (batch, seq, dim) — add seq dim
-                source_repr = [centroid.view(1, 1, -1).expand(bs, 1, -1).to(device)]
-
-                gen_kwargs = {"output_scores": True}
-                output = pipeline.intervenable_generate(
-                    intervenable_model,
-                    batched_base,
-                    None,
-                    inv_locations,
-                    feature_indices,  # pyright: ignore[reportArgumentType]  # prepare_intervenable_inputs returns list[list[list[int]|None]]; intervenable_generate's signature expects list[list[int]] | None
-                    source_representations=source_repr,
-                    **gen_kwargs,
+                result = generate_with_interventions(
+                    pipeline, base_encoding, plans, output_scores=True
+                )
+                output = pipeline.format_generation(
+                    result, base_encoding, output_scores=True
                 )
 
                 out_scores = output.get("scores", [])
@@ -392,8 +393,6 @@ def run_centroid_layer_scan(
 
             if cls_kls:
                 kl_per_class.append(sum(cls_kls) / len(cls_kls))
-
-        delete_intervenable_model(intervenable_model)
 
         scores[key] = (
             sum(kl_per_class) / len(kl_per_class) if kl_per_class else float("nan")

@@ -18,7 +18,6 @@ from causalab.neural.LM_units import MLP, AttentionOutput, ResidualStream
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_positions import TokenPosition
 from causalab.neural.units import InterchangeTarget
-from causalab.neural.activations.intervenable_model import prepare_intervenable_model
 from causalab.neural.activations.interchange_mode import (
     batched_interchange_intervention,
     run_interchange_interventions,
@@ -41,11 +40,8 @@ _SOURCE = "a slow lazy old dog sits"
 
 
 def _run_interchange(pipeline: LMPipeline, target: InterchangeTarget) -> torch.Tensor:
-    model = prepare_intervenable_model(
-        pipeline, target, intervention_type="interchange"
-    )
     out = batched_interchange_intervention(
-        pipeline, model, [cf_example(_BASE, _SOURCE)], target, output_scores=True
+        pipeline, [cf_example(_BASE, _SOURCE)], target, output_scores=True
     )
     return out["scores"][0]
 

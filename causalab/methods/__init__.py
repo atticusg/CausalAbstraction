@@ -1,4 +1,4 @@
-"""causalab.methods — compositions over the pyvene surface in ``neural/``.
+"""causalab.methods — compositions over the intervention surface in ``neural/``.
 
 Importing this package registers every concrete ``Featurizer`` subclass so
 that ``causalab.neural.featurizer.Featurizer.from_dict`` can dispatch to them

@@ -22,13 +22,10 @@ import torch
 
 from causalab.neural.LM_units import ResidualStream
 from causalab.neural.featurizer import Featurizer
+from causalab.neural.interventions import build_intervention
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_positions import TokenPosition
 from causalab.neural.units import InterchangeTarget
-from causalab.neural.activations.intervenable_model import (
-    delete_intervenable_model,
-    prepare_intervenable_model,
-)
 from causalab.neural.activations.interchange_mode import (
     batched_interchange_intervention,
 )
@@ -59,14 +56,23 @@ def _mask_target(pipeline: LMPipeline, featurizer: Featurizer) -> InterchangeTar
     return InterchangeTarget([[unit]])
 
 
-def _set_masks(model, mask_logits: torch.Tensor, temp: float, *, train: bool) -> None:
-    """Pin every mask intervention's logits + temperature and train/eval mode."""
-    for v in model.interventions.values():
-        iv = v[0] if isinstance(v, tuple) else v
+def _mask_interventions(
+    target: InterchangeTarget, mask_logits: torch.Tensor, temp: float, *, train: bool
+) -> list:
+    """Mask interventions with logits, temperature and train/eval mode pinned.
+
+    A mask means nothing until it is configured, so the caller builds and
+    configures the objects and hands them to the runner.
+    """
+    interventions = [
+        build_intervention(unit.featurizer, "mask") for unit in target.flatten()
+    ]
+    for intervention in interventions:
         with torch.no_grad():
-            iv.mask.copy_(mask_logits.to(iv.mask.dtype))
-        iv.set_temperature(temp)
-        iv.train(train)
+            intervention.mask.copy_(mask_logits.to(intervention.mask.dtype))
+        intervention.set_temperature(temp)
+        intervention.train(train)
+    return interventions
 
 
 def _run_mask(
@@ -77,10 +83,13 @@ def _run_mask(
     *,
     train: bool,
 ) -> torch.Tensor:
-    model = prepare_intervenable_model(pipeline, target, intervention_type="mask")
-    _set_masks(model, mask_logits, temp, train=train)
     out = batched_interchange_intervention(
-        pipeline, model, [cf_example(_BASE, _SOURCE)], target, output_scores=True
+        pipeline,
+        [cf_example(_BASE, _SOURCE)],
+        target,
+        output_scores=True,
+        mode="mask",
+        interventions=_mask_interventions(target, mask_logits, temp, train=train),
     )
     return out["scores"][0]
 
@@ -205,16 +214,12 @@ class TestMaskSparsityLoss:
         temp = 0.5
         mask_logits = torch.linspace(-3.0, 3.0, hidden)
         target = _mask_target(oracle_pipeline, Featurizer(n_features=hidden))
-        model = prepare_intervenable_model(
-            oracle_pipeline, target, intervention_type="mask"
-        )
-        _set_masks(model, mask_logits, temp, train=True)
-        try:
-            iv = next(iter(model.interventions.values()))
-            iv = iv[0] if isinstance(iv, tuple) else iv
-            loss = iv.get_sparsity_loss()
-        finally:
-            delete_intervenable_model(model)
+        intervention = build_intervention(target.flatten()[0].featurizer, "mask")
+        with torch.no_grad():
+            intervention.mask.copy_(mask_logits.to(intervention.mask.dtype))
+        intervention.set_temperature(temp)
+        intervention.train()
+        loss = intervention.get_sparsity_loss()
 
         expected = torch.norm(torch.sigmoid(mask_logits / temp), p=1)
         torch.testing.assert_close(loss.detach().cpu(), expected, atol=1e-6, rtol=1e-5)

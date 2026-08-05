@@ -42,6 +42,8 @@ from causalab.neural.pipeline import (
     left_pad_position_ids,
     resolve_device,
 )
+from causalab.neural.token_positions import TokenPosition
+from causalab.neural.units import InterchangeTarget
 from tests._helpers.tiny import TINY_RANDOM_MODEL_NAME, tiny_random_model
 
 
@@ -193,7 +195,7 @@ class TestPipelineABCUnit:
     def test_direct_instantiation_raises_typeerror(self) -> None:
         with pytest.raises(TypeError):
             # Abstract methods (_setup_model, load, dump, generate,
-            # intervenable_generate) make direct construction illegal.
+            # format_generation) make direct construction illegal.
             Pipeline("name")  # type: ignore[abstract]
 
     def test_subclass_with_stubs_can_be_constructed(self) -> None:
@@ -214,14 +216,11 @@ class TestPipelineABCUnit:
             def generate(self, prompt: Any) -> dict[str, Any]:  # type: ignore[override]
                 return {}
 
-            def intervenable_generate(  # type: ignore[override]
+            def format_generation(  # type: ignore[override]
                 self,
-                intervenable_model: Any,
-                base: Any,
-                sources: Any,
-                map: Any,  # noqa: A002
-                feature_indices: Any,
-                source_representations: Any = None,
+                result: Any,
+                base_encoding: dict[str, Any],
+                output_scores: bool | int = True,
             ) -> dict[str, Any]:
                 return {}
 
@@ -529,152 +528,79 @@ class TestLMPipelineDumpUnit:
 # --------------------------------------------------------------------------- #
 #  LMPipeline.intervenable_generate                                           #
 # --------------------------------------------------------------------------- #
-class _IntervenableModelStub:
-    """Pyvene-shaped stub recording ``.generate`` call args.
+class TestLMPipelineFormatGenerationUnit:
+    """``LMPipeline.format_generation`` turns a ``generate`` result into the
+    ``{sequences, scores, string}`` dict every analysis consumes.
 
-    Not a mock of internal numerical code: PyVENE is an external glue
-    library, not a causalab numerical primitive, so this is within the
-    create-tests "no mocks of internal numerical code" rule. The
-    real ``IntervenableModel.generate`` returns a tuple whose last element
-    has ``.sequences`` and ``.scores`` (HF-style); we mirror that exactly.
-    """
-
-    def __init__(self, batch_size: int, max_new_tokens: int, vocab_size: int) -> None:
-        self.last_call: dict[str, Any] = {}
-        self._batch_size = batch_size
-        self._max_new_tokens = max_new_tokens
-        self._vocab_size = vocab_size
-
-    def generate(self, base: Any, **kwargs: Any) -> Any:
-        self.last_call = dict(kwargs)
-        self.last_call["base"] = base
-        seqs = torch.zeros(
-            self._batch_size,
-            base["input_ids"].shape[1] + self._max_new_tokens,
-            dtype=torch.long,
-        )
-        scores = [
-            torch.randn(self._batch_size, self._vocab_size)
-            for _ in range(self._max_new_tokens)
-        ]
-        last = SimpleNamespace(sequences=seqs, scores=scores)
-        return (None, last)
-
-
-class TestLMPipelineIntervenableGenerateUnit:
-    """``LMPipeline.intervenable_generate`` is the PyVENE-shaped wrapper
-    every DAS / boundless / grid / pca / dbm / manifold-fitting analysis
-    invokes. Its return contract must match ``generate`` (``sequences``
-    always, ``scores`` when ``output_scores=True``, ``string`` from
-    ``dump``) — drift here silently breaks every intervention experiment.
+    It replaces ``intervenable_generate``, which wrapped pyvene's generate call
+    and owned this same return contract. The contract itself is unchanged, so
+    these are the same assertions aimed at the function that now holds it:
+    ``sequences`` always, ``scores`` only when asked for, ``string`` decoded from
+    the generated region — and the generated region sliced from the prompt's end
+    rather than as the last ``max_new_tokens``, which differs on an early stop.
     """
 
     pytestmark = pytest.mark.unit
 
+    @staticmethod
+    def _generate(pipeline: LMPipeline, text: str = "hello world"):
+        from causalab.neural.activations.engine import model_inputs
+
+        encoding = pipeline.load([_make_trace(text)])
+        with pipeline.nnsight.generate(
+            **model_inputs(encoding),
+            max_new_tokens=pipeline.max_new_tokens,
+            do_sample=False,
+            return_dict_in_generate=True,
+            output_scores=True,
+            pad_token_id=pipeline.tokenizer.pad_token_id,
+        ) as tracer:
+            result = tracer.result.save()
+        return result, encoding
+
     def test_default_keys_include_sequences_scores_string(
         self, tiny_pipeline: LMPipeline
     ) -> None:
-        batch = tiny_pipeline.load([_make_trace("hi")])
-        stub = _IntervenableModelStub(
-            batch_size=1,
-            max_new_tokens=tiny_pipeline.max_new_tokens,
-            vocab_size=tiny_pipeline.model.config.vocab_size,
-        )
-        out = tiny_pipeline.intervenable_generate(
-            intervenable_model=stub,  # type: ignore[arg-type]
-            base=batch,
-            sources=None,
-            map={"sources->base": ([[0]], [[0]])},
-            feature_indices=[[0]],
-        )
-        assert set(out.keys()) == {"sequences", "scores", "string"}
-
-    def test_passes_unit_locations_and_subspaces(
-        self, tiny_pipeline: LMPipeline
-    ) -> None:
-        batch = tiny_pipeline.load([_make_trace("hi")])
-        stub = _IntervenableModelStub(
-            batch_size=1,
-            max_new_tokens=tiny_pipeline.max_new_tokens,
-            vocab_size=tiny_pipeline.model.config.vocab_size,
-        )
-        location_map = {"sources->base": ([[0]], [[0]])}
-        feature_indices = [[1, 2]]
-        tiny_pipeline.intervenable_generate(
-            intervenable_model=stub,  # type: ignore[arg-type]
-            base=batch,
-            sources=None,
-            map=location_map,
-            feature_indices=feature_indices,
-        )
-        assert stub.last_call["unit_locations"] == location_map
-        assert stub.last_call["subspaces"] == feature_indices
-
-    def test_intervene_on_prompt_default_true(self, tiny_pipeline: LMPipeline) -> None:
-        batch = tiny_pipeline.load([_make_trace("hi")])
-        stub = _IntervenableModelStub(
-            batch_size=1,
-            max_new_tokens=tiny_pipeline.max_new_tokens,
-            vocab_size=tiny_pipeline.model.config.vocab_size,
-        )
-        tiny_pipeline.intervenable_generate(
-            intervenable_model=stub,  # type: ignore[arg-type]
-            base=batch,
-            sources=None,
-            map={"sources->base": ([[0]], [[0]])},
-            feature_indices=[[0]],
-        )
-        assert stub.last_call["intervene_on_prompt"] is True
-        assert stub.last_call["do_sample"] is False
-
-    def test_source_representations_passed_through(
-        self, tiny_pipeline: LMPipeline
-    ) -> None:
-        # Cross-model patching path: sources=None and pre-computed
-        # source_representations.
-        batch = tiny_pipeline.load([_make_trace("hi")])
-        stub = _IntervenableModelStub(
-            batch_size=1,
-            max_new_tokens=tiny_pipeline.max_new_tokens,
-            vocab_size=tiny_pipeline.model.config.vocab_size,
-        )
-        reps = [torch.randn(1, 4)]
-        tiny_pipeline.intervenable_generate(
-            intervenable_model=stub,  # type: ignore[arg-type]
-            base=batch,
-            sources=None,
-            map={"sources->base": ([[0]], [[0]])},
-            feature_indices=[[0]],
-            source_representations=reps,
-        )
-        assert stub.last_call["source_representations"] is reps
-        assert stub.last_call["sources"] is None
+        result, encoding = self._generate(tiny_pipeline)
+        out = tiny_pipeline.format_generation(result, encoding)
+        assert set(out) == {"sequences", "scores", "string"}
 
     def test_output_scores_false_drops_scores_key(
         self, tiny_pipeline: LMPipeline
     ) -> None:
-        batch = tiny_pipeline.load([_make_trace("hi")])
-        stub = _IntervenableModelStub(
-            batch_size=1,
-            max_new_tokens=tiny_pipeline.max_new_tokens,
-            vocab_size=tiny_pipeline.model.config.vocab_size,
-        )
-        out = tiny_pipeline.intervenable_generate(
-            intervenable_model=stub,  # type: ignore[arg-type]
-            base=batch,
-            sources=None,
-            map={"sources->base": ([[0]], [[0]])},
-            feature_indices=[[0]],
-            output_scores=False,
-        )
+        result, encoding = self._generate(tiny_pipeline)
+        out = tiny_pipeline.format_generation(result, encoding, output_scores=False)
         assert "scores" not in out
         assert "sequences" in out
-        assert "string" in out
+
+    def test_sequences_hold_only_the_generated_region(
+        self, tiny_pipeline: LMPipeline
+    ) -> None:
+        """The prompt must not leak into the output. Slicing the last
+        ``max_new_tokens`` instead of from the prompt's end reaches back into the
+        prompt whenever generation stops early."""
+        result, encoding = self._generate(tiny_pipeline)
+        out = tiny_pipeline.format_generation(result, encoding)
+        assert out["sequences"].shape == (1, tiny_pipeline.max_new_tokens)
+        prompt_len = encoding["input_ids"].shape[1]
+        expected = result.sequences[:, prompt_len:].cpu()
+        assert torch.equal(
+            out["sequences"], expected[:, : tiny_pipeline.max_new_tokens]
+        )
+
+    def test_results_are_on_cpu(self, tiny_pipeline: LMPipeline) -> None:
+        result, encoding = self._generate(tiny_pipeline)
+        out = tiny_pipeline.format_generation(result, encoding)
+        assert out["sequences"].device.type == "cpu"
+        for step in out["scores"]:
+            assert step.device.type == "cpu"
+
+    def test_string_matches_decoded_sequences(self, tiny_pipeline: LMPipeline) -> None:
+        result, encoding = self._generate(tiny_pipeline)
+        out = tiny_pipeline.format_generation(result, encoding)
+        assert out["string"] == tiny_pipeline.dump(out["sequences"], is_logits=False)
 
 
-# --------------------------------------------------------------------------- #
-#  LMPipeline.compute_outputs                                                 #
-# --------------------------------------------------------------------------- #
 class TestLMPipelineComputeOutputsUnit:
     """``LMPipeline.compute_outputs`` runs the base + counterfactual halves
     of a ``list[CounterfactualExample]`` through ``generate`` without
@@ -803,21 +729,26 @@ class TestLMPipelineProperty:
         monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
         assert resolve_device(explicit) == explicit
 
-    def test_intervenable_generate_keys_subset_of_generate_keys(
+    def test_intervened_generation_keys_subset_of_generate_keys(
         self, tiny_pipeline: LMPipeline
     ) -> None:
-        batch = tiny_pipeline.load([_make_trace("hi")])
-        stub = _IntervenableModelStub(
-            batch_size=1,
-            max_new_tokens=tiny_pipeline.max_new_tokens,
-            vocab_size=tiny_pipeline.model.config.vocab_size,
+        """An intervened run returns the same keys a plain one does, so every
+        scorer downstream reads either without branching."""
+        from causalab.neural.LM_units import ResidualStream
+        from causalab.neural.activations.interchange_mode import (
+            batched_interchange_intervention,
         )
-        out = tiny_pipeline.intervenable_generate(
-            intervenable_model=stub,  # type: ignore[arg-type]
-            base=batch,
-            sources=None,
-            map={"sources->base": ([[0]], [[0]])},
-            feature_indices=[[0]],
+
+        unit = ResidualStream(
+            layer=0,
+            token_indices=TokenPosition(lambda _x: [0], tiny_pipeline, id="first"),
+            target_output=True,
+            shape=(tiny_pipeline.model.config.hidden_size,),
+        )
+        out = batched_interchange_intervention(
+            tiny_pipeline,
+            [_cf_example("hi there", "yo there")],
+            InterchangeTarget([[unit]]),
         )
         assert set(out.keys()) <= {"scores", "sequences", "string"}
 

@@ -339,24 +339,30 @@ class TestAtomicModelUnitUnit:
         "intervention_type",
         ["collect", "interchange", "mask", "add", "replace", "interpolation"],
     )
-    def test_create_intervention_config_known_types(
+    def test_every_mode_builds_over_the_unit_featurizer(
         self, intervention_type: str
     ) -> None:
-        feat = Featurizer(n_features=4)  # n_features required for ``mask``
-        u = self._make_unit(featurizer=feat)
-        cfg = u.create_intervention_config(
-            group_key="grp", intervention_type=intervention_type
-        )
-        assert cfg["component"] == "block_input"
-        assert cfg["unit"] == "pos"
-        assert cfg["layer"] == 0
-        assert cfg["group_key"] == "grp"
-        assert callable(cfg["intervention_type"])
+        """Each mode is buildable over a unit's feature space.
 
-    def test_create_intervention_config_unknown_raises(self) -> None:
-        u = self._make_unit()
-        with pytest.raises(ValueError, match="Unknown intervention type"):
-            u.create_intervention_config(group_key="grp", intervention_type="bogus")
+        This replaces ``create_intervention_config``, which emitted the dict
+        pyvene consumed (component / unit / layer / group_key /
+        intervention_type-as-a-class). A unit no longer carries any backbone
+        config: the engine resolves it to a site and pairs it with an
+        intervention, so what a unit must still support is exactly this.
+        """
+        from causalab.neural.interventions import build_intervention
+
+        feat = Featurizer(n_features=4)  # n_features required for ``mask``
+        unit = self._make_unit(featurizer=feat)
+        intervention = build_intervention(unit.featurizer, intervention_type)
+        assert intervention._featurizer is feat
+
+    def test_unknown_mode_raises(self) -> None:
+        from causalab.neural.interventions import build_intervention
+
+        unit = self._make_unit()
+        with pytest.raises(ValueError, match="Unknown intervention mode"):
+            build_intervention(unit.featurizer, "bogus")
 
 
 class TestAtomicModelUnitProperty:

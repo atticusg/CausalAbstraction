@@ -12,6 +12,8 @@ from __future__ import annotations
 import pytest
 import torch
 
+from causalab.neural.interventions import build_intervention
+
 from causalab.methods.standardize import StandardizeFeaturizer
 from causalab.methods.trained_subspace.subspace import SubspaceFeaturizer
 from causalab.neural.featurizer import ComposedFeaturizer, Featurizer
@@ -147,10 +149,9 @@ class TestComposedFeaturizerInterventionUnit:
         standardize = StandardizeFeaturizer(torch.zeros(4), torch.ones(4))
         composed = sub >> standardize
 
-        Interchange = composed.get_interchange_intervention()
-        inter = Interchange()
+        inter = build_intervention(composed, "interchange")
 
-        out = inter(x_base, x_src, subspaces=None)
+        out = inter(x_base, x_src)
 
         f_src, _ = composed.featurize(x_src)
         _, base_errors = composed.featurize(x_base)
@@ -166,8 +167,7 @@ class TestComposedFeaturizerInterventionUnit:
         standardize = StandardizeFeaturizer(torch.zeros(4), torch.ones(4))
         composed = sub >> standardize
 
-        Steering = composed.get_steering_intervention()
-        steer = Steering()
+        steer = build_intervention(composed, "add")
 
         out = steer(x, steering_vec)
 

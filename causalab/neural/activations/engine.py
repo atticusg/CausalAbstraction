@@ -273,7 +273,6 @@ def collect_unit_activations(
     in forward order — both required by the interleaver, neither visible to
     callers, who get their results back in the order they asked.
     """
-    pipeline.ensure_instrumented()
     device = pipeline.model.device
     results: list[Tensor | None] = [None] * len(plans)
     index_of = {id(plan): i for i, plan in enumerate(plans)}
@@ -343,7 +342,6 @@ def collect_unit_activations_under(
 
     Returns the read plans' activations in ``read_plans`` order.
     """
-    pipeline.ensure_instrumented()
     device = pipeline.model.device
     results: list[Tensor | None] = [None] * len(read_plans)
     read_index = {id(plan): i for i, plan in enumerate(read_plans)}
@@ -403,7 +401,6 @@ def generate_with_interventions(
     every decode step is a different experiment; it would wrap the body in
     ``tracer.iter``.
     """
-    pipeline.ensure_instrumented()
     device = pipeline.model.device
     defaults: dict[str, Any] = {
         "max_new_tokens": pipeline.max_new_tokens,
@@ -431,7 +428,6 @@ def forward_with_interventions(
     returned logits backpropagates into any learnable featurizer or mask the
     plans carry.
     """
-    pipeline.ensure_instrumented()
     device = pipeline.model.device
     with pipeline.nnsight.trace(**model_inputs(base_encoding)):
         _apply(pipeline, plans, device)

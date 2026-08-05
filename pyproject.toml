@@ -14,7 +14,6 @@ dependencies = [
     "matplotlib",
     "pandas",
     "numpy",
-    "pyvene",
     "scikit-learn",
     "ipywidgets",
     "jupyterlab",
@@ -38,7 +37,6 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-pyvene = { git = "https://github.com/stanfordnlp/pyvene.git", branch = "main" }
 # nnsight 0.8 is not on PyPI yet; develop against the local checkout. Switch to a
 # plain version pin once 0.8.0 is released.
 nnsight = { path = "../nnsight", editable = true }

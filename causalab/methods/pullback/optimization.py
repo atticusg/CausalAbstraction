@@ -21,9 +21,16 @@ from causalab.methods.distances import (
     _DIFFERENTIABLE_METRICS,
 )
 from causalab.methods.steer.collect import collect_grid_distributions
-from causalab.neural.activations.interchange_mode import prepare_intervenable_inputs
+from causalab.neural.activations.engine import (
+    build_interventions,
+    build_plans,
+    forward_with_interventions,
+)
+from causalab.neural.activations.interchange_mode import (
+    collect_group_sources,
+    prepare_interchange_batch,
+)
 from causalab.neural.activations.interpolate import set_interventions_interpolation
-from causalab.neural.pipeline import ensure_position_ids
 
 logger = logging.getLogger(__name__)
 
@@ -84,13 +91,12 @@ class _ForceLastTokenLogits:
     On 2048-ctx 8B Llama this drops ~1 GB per forward (the per-position vocab
     tensor) — material savings during pullback's per-timestep autograd graph.
     The pullback loss only ever reads ``logits[:, -1, :]``, so the change is
-    semantically identical. Pyvene's ``IntervenableModel`` doesn't pass model
-    kwargs through, so we patch the inner module's ``forward`` directly.
+    semantically identical. The kwarg cannot ride in on the trace call, so the
+    module's ``forward`` is patched directly for the duration of optimization.
     """
 
-    def __init__(self, intervenable_model):
-        # Walk to the actual HF model (pyvene wraps it).
-        self._target = getattr(intervenable_model, "model", intervenable_model)
+    def __init__(self, model):
+        self._target = model
         self._orig = None
 
     def __enter__(self):
@@ -687,10 +693,10 @@ def path_recapitulation_metrics(
 
 def _compute_trajectory_loss(
     v_interior: Tensor,
-    intervenable_model,
+    pipeline,
     batched_base: dict[str, Tensor],
-    batched_sources: list[dict[str, Tensor]],
-    inv_locations: dict[str, tuple],
+    plans: list,
+    interventions: list,
     feature_indices: list[list],
     var_indices: Tensor | list[list[int]],
     interior_target_AW1: Tensor,
@@ -705,11 +711,12 @@ def _compute_trajectory_loss(
     norm_reg_weight: float = 0.0,
     base_metric: str = "hellinger",
 ) -> tuple[Tensor, list[float]]:
-    """Compute loss over all interior timesteps using pyvene interventions.
+    """Compute loss over all interior timesteps.
 
-    Uses intervenable_model() for differentiable forward passes that go through
-    FeatureInterpolateIntervention, which preserves the base activation's
-    residual via inverse_featurizer(f_out, base_err).
+    Each timestep is a differentiable forward through an interpolation
+    intervention, which preserves the base activation's residual via
+    ``inverse_featurizer(f_out, base_err)`` — so gradients reach the optimized
+    trajectory while the orthogonal complement of each sample stays its own.
 
     When path_length_weight > 0, adds a regularization term penalizing the
     total Euclidean path length in embedding space.
@@ -720,10 +727,6 @@ def _compute_trajectory_loss(
     n_interior = v_interior.shape[0]
     total = torch.tensor(0.0, device=device, requires_grad=True)
     per_step = []
-
-    # Plain (non-generate) forwards below: supply position_ids once so a left-padded
-    # batch is not mis-encoded on absolute-position models (see ensure_position_ids).
-    batched_base = ensure_position_ids(batched_base)
 
     for t_idx in range(n_interior):
         target_point = v_interior[t_idx]  # (k_eff,) — carries gradient
@@ -746,13 +749,8 @@ def _compute_trajectory_loss(
                 return torch.cat([opt, f_base[..., k_eff:]], dim=-1)
             return opt
 
-        set_interventions_interpolation(intervenable_model, replace_fn)
-        _, cf_output = intervenable_model(
-            batched_base,
-            batched_sources,
-            unit_locations=inv_locations,
-            subspaces=feature_indices,
-        )
+        set_interventions_interpolation(interventions, replace_fn)
+        cf_output = forward_with_interventions(pipeline, batched_base, plans)
         logits_BV = cf_output.logits[:, -1, :]  # last token logits
         B = logits_BV.shape[0]
 
@@ -790,7 +788,6 @@ def run_pair_optimization(
     pair_groups: dict[tuple[int, int], list[int]],
     filtered_samples: list[dict],
     pipeline,
-    intervenable_model,
     interchange_target,
     k: int,
     var_indices: Tensor | list[list[int]],
@@ -885,9 +882,20 @@ def run_pair_optimization(
             for s in pair_samples
         ]
 
-        # Use prepare_intervenable_inputs for position mapping
-        batched_base, batched_sources, inv_locations, feature_indices = (
-            prepare_intervenable_inputs(pipeline, cf_examples, interchange_target)
+        # Resolve positions, then read each unit's own activation as the source:
+        # base and counterfactual are the same input here, so the "interchange"
+        # is a self-intervention whose blend the optimizer drives.
+        batch = prepare_interchange_batch(pipeline, cf_examples, interchange_target)
+        batched_base = batch.base_encoding
+        sources = collect_group_sources(pipeline, batch)
+        interventions = build_interventions(batch.units, "interpolation")
+        plans = build_plans(
+            batch.units,
+            batch.base_positions,
+            "interpolation",
+            sources=sources,
+            feature_indices=batch.feature_indices,
+            interventions=interventions,
         )
 
         # Geodesic paths and centroids are already (W+1) with 'other' bin
@@ -1017,11 +1025,10 @@ def run_pair_optimization(
                     v_interior = tps_path() if tps_path is not None else v_params_ref
                     return _compute_trajectory_loss(
                         v_interior,
-                        intervenable_model,
+                        pipeline,
                         batched_base,
-                        batched_sources,
-                        inv_locations,
-                        feature_indices,
+                        plans,
+                        interventions,
                         var_indices,
                         interior_target_AW1,
                         N_pair,
@@ -1048,7 +1055,7 @@ def run_pair_optimization(
             # the duration of optimization. The loss only ever reads the last
             # token's logits, so this is semantically a no-op while saving
             # ~1 GB per forward at 2048-ctx.
-            with _ForceLastTokenLogits(intervenable_model):
+            with _ForceLastTokenLogits(pipeline.model):
                 if optimizer_cfg.name == "basin_hopping":
                     bh_cfg = {
                         "n_hops": optimizer_cfg.basin_hopping.n_hops,

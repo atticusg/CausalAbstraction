@@ -120,7 +120,7 @@ For the practical how-to-run reference — the `scripts/run_exp.sh` wrapper (bas
 
 ## 3. Layering rule (neural/ vs methods/ vs analyses/)
 
-`neural/` mirrors the pyvene API surface — pyvene intervention modes (`collect`, `replace`, `interchange`, `interpolate`, `mask`, `noise`, etc.), hook plumbing, the `IntervenableModel` wrapper, and the base `Featurizer` interface. Nothing else.
+`neural/` is the intervention backbone — the nnsight-backed engine and the vocabulary it consumes: *where* to intervene (`AtomicModelUnit`, component→`Site` resolution), *what* to write there (the intervention modes: `collect`, `replace`, `interchange`, `interpolation`, `mask`, `noise`, `add`), the base `Featurizer` interface, and the LM I/O pipeline. Nothing else.
 
 `methods/` holds mechanistic interpretability **tools** — reusable primitives and compositions of `neural/` primitives:
 - featurizer subclasses (rotation for DAS, SAE encoders, PCA, UMAP, spline/flow manifolds, noise, standardize)
@@ -244,7 +244,7 @@ Practical consequence: `neural/` stays small and boring; `methods/` stays a libr
 - `causalab/analyses/path_steering/main.py:1211, 1221, 1515, 1533` — `hellinger_pca` readers
 - `causalab/methods/spline/belief_fit.py:61` — `torch.load(weights_only=False)` (PR follow-up)
 - `causalab/analyses/pullback/main.py:471, 492, 580, 833` — `torch.load(weights_only=False)`
-- `causalab/neural/units.py:269` — `torch.load(weights_only=False)`
+- `causalab/neural/units.py` — `torch.load(weights_only=False)`
 
 
 ## 5. Config notes

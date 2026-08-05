@@ -80,9 +80,9 @@ def _shift_row(
         raise ValueError(
             f"Position {oob} is out of bounds for padded length {padded_len} "
             f"(example {ex_idx}, per-row shift {shift}). Token-position indices "
-            "must fall within the sequence; an out-of-bounds index reaches "
-            "pyvene's gather/scatter as a CUDA assertion that poisons the "
-            "context. Common causes: a position computed for a differently-"
+            "must fall within the sequence; an out-of-bounds index would "
+            "otherwise reach the model's activation as a silent wrong-token "
+            "read. Common causes: a position computed for a differently-"
             "shaped input (e.g. a base position reused on a shorter "
             "counterfactual, #176), or — when `pipeline.max_length` is set — "
             "an indexer returning positions already in the padded frame so the "
@@ -490,8 +490,8 @@ class AtomicModelUnit:
         into the padded-batch frame: ``argmax(attention_mask, dim=1)`` gives the
         per-row offset (``0`` for right-padding, ``padded_len - unpadded_len``
         for left-padding). Without this shift, downstream consumers that index
-        into the padded tensor (pyvene, ``_collect_activations_single_batch``)
-        land on the wrong absolute token for rows shorter than the batch max.
+        into the padded tensor land on the wrong absolute token for rows
+        shorter than the batch max.
 
         Required for batched-multi calls. ``batch=True`` with ``len(input) > 1``
         means ``pipeline.load`` may pad shorter rows — the only configuration
@@ -590,9 +590,8 @@ class AtomicModelUnit:
         The bounds check in ``_shift_row`` runs even when no shift is needed
         (no left-padding, e.g. a ``batch_size=1`` call): a position computed
         for a differently-shaped input — such as a base position reused on a
-        shorter counterfactual (#176) — would otherwise pass straight through
-        to pyvene's gather and trip a CUDA scatter assertion that poisons the
-        context. Raising here turns that into a catchable ``ValueError``.
+        shorter counterfactual (#176) — would otherwise read the wrong token
+        silently. Raising here turns that into a catchable ``ValueError``.
         """
         per_row_shift = torch.argmax(attention_mask.int(), dim=1).tolist()
         padded_len = int(attention_mask.shape[1])
@@ -628,48 +627,10 @@ class AtomicModelUnit:
         if self.feature_indices is not None:
             self.set_feature_indices(self.feature_indices)
 
-    # ------------------------ PyVENE helpers -------------------------- #
+    # ------------------------ Index helpers --------------------------- #
     def is_static(self) -> bool:
         """Return whether this unit uses static indices."""
         return self._static_indices
-
-    def create_intervention_config(
-        self, group_key: str | int, intervention_type: str, noise_seed: int = 0
-    ) -> dict[str, Any]:
-        """Return PyVENE config dict for this unit + featurizer.
-
-        ``noise_seed`` is used only for ``intervention_type == "noise"`` (it
-        selects the seeded additive-Gaussian intervention so a draw is
-        reproducible per (site, seed)); it is ignored for every other type.
-        """
-        config: dict[str, Any] = {
-            "component": self.component_type,
-            "unit": self.unit,
-            "layer": self.layer,
-            "group_key": group_key,
-        }
-        if intervention_type == "interchange":
-            config["intervention_type"] = self.featurizer.get_interchange_intervention()
-        elif intervention_type == "collect":
-            config["intervention_type"] = self.featurizer.get_collect_intervention()
-        elif intervention_type == "mask":
-            config["intervention_type"] = self.featurizer.get_mask_intervention()
-        elif intervention_type == "add":
-            config["intervention_type"] = self.featurizer.get_steering_intervention()
-        elif intervention_type == "replace":
-            config["intervention_type"] = self.featurizer.get_replace_intervention()
-        elif intervention_type == "interpolation":
-            config["intervention_type"] = (
-                self.featurizer.get_interpolation_intervention()
-            )
-        elif intervention_type == "noise":
-            config["intervention_type"] = self.featurizer.get_noise_intervention(
-                seed=noise_seed
-            )
-        else:
-            raise ValueError(f"Unknown intervention type '{intervention_type}'.")
-
-        return config
 
     def __repr__(self) -> str:
         return f"AtomicModelUnit(id='{self.id}')"

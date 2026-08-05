@@ -1,7 +1,6 @@
 """Low-level activation caching and modification."""
 
 from .collect import collect_source_representations
-from .intervenable_model import prepare_intervenable_model, delete_intervenable_model
 from .targets import (
     build_residual_stream_targets,
     build_attention_head_targets,
@@ -13,8 +12,6 @@ from .targets import (
 
 __all__ = [
     "collect_source_representations",
-    "prepare_intervenable_model",
-    "delete_intervenable_model",
     "build_residual_stream_targets",
     "build_attention_head_targets",
     "build_attention_output_targets",

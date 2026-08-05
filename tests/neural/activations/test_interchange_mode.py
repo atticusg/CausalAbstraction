@@ -42,9 +42,6 @@ from causalab.neural.LM_units import (
 )
 from causalab.neural.featurizer import Featurizer
 from causalab.neural.activations.collect import collect_features
-from causalab.neural.activations.intervenable_model import (
-    prepare_intervenable_model,
-)
 from causalab.neural.activations.interchange_mode import (
     batched_interchange_intervention,
     prepare_intervenable_inputs,
@@ -480,14 +477,10 @@ class TestBatchedInterchangeInterventionUnit:
     ) -> None:
         unit = _make_unit(tiny_pipeline)
         target = InterchangeTarget([[unit]])
-        intervenable = prepare_intervenable_model(
-            tiny_pipeline, target, intervention_type="interchange"
-        )
         examples = _two_examples()
 
         output = batched_interchange_intervention(
             tiny_pipeline,
-            intervenable,
             examples,
             target,
             output_scores=False,
@@ -520,12 +513,8 @@ class TestBatchedInterchangeInterventionUnit:
             layer=0, token_indices=tp_span, target_output=False, shape=(hidden,)
         )
         target_span = InterchangeTarget([[unit_span]])
-        intervenable_span = prepare_intervenable_model(
-            tiny_pipeline, target_span, intervention_type="interchange"
-        )
         out_span = batched_interchange_intervention(
             tiny_pipeline,
-            intervenable_span,
             examples,
             target_span,
             output_scores=False,
@@ -544,12 +533,8 @@ class TestBatchedInterchangeInterventionUnit:
             layer=0, token_indices=tp_one, target_output=False, shape=(hidden,)
         )
         target_one = InterchangeTarget([[unit_one]])
-        intervenable_one = prepare_intervenable_model(
-            tiny_pipeline, target_one, intervention_type="interchange"
-        )
         out_one = batched_interchange_intervention(
             tiny_pipeline,
-            intervenable_one,
             examples,
             target_one,
             output_scores=False,
@@ -575,12 +560,8 @@ class TestBatchedInterchangeInterventionUnit:
             featurizer=_diag_featurizer(hidden),
         )
         target = InterchangeTarget([[unit]])
-        intervenable = prepare_intervenable_model(
-            tiny_pipeline, target, intervention_type="interchange"
-        )
         output = batched_interchange_intervention(
             tiny_pipeline,
-            intervenable,
             _long_examples(),
             target,
             output_scores=False,
@@ -611,13 +592,9 @@ class TestBatchedInterchangeInterventionUnit:
             featurizer=_manifold_featurizer(hidden),
         )
         target = InterchangeTarget([[unit]])
-        intervenable = prepare_intervenable_model(
-            tiny_pipeline, target, intervention_type="interchange"
-        )
         examples = _long_examples()
         output = batched_interchange_intervention(
             tiny_pipeline,
-            intervenable,
             examples,
             target,
             output_scores=False,
@@ -630,13 +607,9 @@ class TestBatchedInterchangeInterventionUnit:
     ) -> None:
         unit = _make_unit(tiny_pipeline)
         target = InterchangeTarget([[unit]])
-        intervenable = prepare_intervenable_model(
-            tiny_pipeline, target, intervention_type="interchange"
-        )
 
         output = batched_interchange_intervention(
             tiny_pipeline,
-            intervenable,
             _two_examples(),
             target,
             output_scores=True,
@@ -651,31 +624,18 @@ class TestBatchedInterchangeInterventionUnit:
     def test_cross_model_patching_with_same_source_pipeline(
         self, tiny_pipeline: LMPipeline
     ) -> None:
-        """``source_pipeline`` branch: passing a non-``None`` source pipeline
-        triggers :func:`collect_source_representations` and nulls out
-        ``batched_counterfactuals`` before calling pyvene. With the same
-        pipeline on both sides the call must still return well-formed
-        output."""
+        """``source_pipeline`` branch: the sources are read from that pipeline
+        rather than the target's. With the same pipeline on both sides the call
+        must still return well-formed output."""
         unit_target = _make_unit(tiny_pipeline)
         target_target = InterchangeTarget([[unit_target]])
-        intervenable_target = prepare_intervenable_model(
-            tiny_pipeline, target_target, intervention_type="interchange"
-        )
-
-        unit_source = _make_unit(tiny_pipeline)
-        target_source = InterchangeTarget([[unit_source]])
-        intervenable_source = prepare_intervenable_model(
-            tiny_pipeline, target_source, intervention_type="collect"
-        )
 
         output = batched_interchange_intervention(
             tiny_pipeline,
-            intervenable_target,
             _two_examples(),
             target_target,
             output_scores=False,
             source_pipeline=tiny_pipeline,
-            source_intervenable_model=intervenable_source,
         )
         assert "sequences" in output
         assert output["sequences"].device.type == "cpu"
@@ -694,13 +654,9 @@ class TestBatchedInterchangeInterventionProperty:
         observable is that ``output['sequences']`` is on CPU."""
         unit = _make_unit(tiny_pipeline)
         target = InterchangeTarget([[unit]])
-        intervenable = prepare_intervenable_model(
-            tiny_pipeline, target, intervention_type="interchange"
-        )
 
         output = batched_interchange_intervention(
             tiny_pipeline,
-            intervenable,
             _two_examples(),
             target,
             output_scores=True,
@@ -721,37 +677,21 @@ class TestBatchedInterchangeInterventionProperty:
         unit_target = _make_unit(tiny_pipeline)
         target_target = InterchangeTarget([[unit_target]])
 
-        # Build a fresh source-side IntervenableModel — pyvene attaches
-        # hooks per-instance, so we can't reuse a single one for both
-        # branches.
-        unit_source = _make_unit(tiny_pipeline)
-        target_source = InterchangeTarget([[unit_source]])
-
-        intervenable_a = prepare_intervenable_model(
-            tiny_pipeline, target_target, intervention_type="interchange"
-        )
         out_vanilla = batched_interchange_intervention(
             tiny_pipeline,
-            intervenable_a,
             examples,
             target_target,
             output_scores=False,
         )
-
-        intervenable_b = prepare_intervenable_model(
-            tiny_pipeline, target_target, intervention_type="interchange"
-        )
-        intervenable_source = prepare_intervenable_model(
-            tiny_pipeline, target_source, intervention_type="collect"
-        )
+        # Cross-model patching with the *same* pipeline as the source must be a
+        # no-op relative to the ordinary path: the sources are read from the same
+        # model, so the only difference is which pipeline tokenized them.
         out_cross = batched_interchange_intervention(
             tiny_pipeline,
-            intervenable_b,
             examples,
             target_target,
             output_scores=False,
             source_pipeline=tiny_pipeline,
-            source_intervenable_model=intervenable_source,
         )
 
         assert torch.equal(out_vanilla["sequences"], out_cross["sequences"])
@@ -800,12 +740,8 @@ class TestMultiTokenInterchangeHookOracle:
             shape=(tiny_pipeline.model.config.hidden_size,),
         )
         target = InterchangeTarget([[unit]])
-        intervenable = prepare_intervenable_model(
-            tiny_pipeline, target, intervention_type="interchange"
-        )
         out = batched_interchange_intervention(
             tiny_pipeline,
-            intervenable,
             [
                 {
                     "input": _make_trace(self._BASE),
@@ -869,12 +805,8 @@ class TestMultiTokenInterchangeHookOracle:
             feature_indices=list(range(k)),
         )
         target = InterchangeTarget([[unit]])
-        intervenable = prepare_intervenable_model(
-            tiny_pipeline, target, intervention_type="interchange"
-        )
         out = batched_interchange_intervention(
             tiny_pipeline,
-            intervenable,
             [
                 {
                     "input": _make_trace(self._BASE),
@@ -930,12 +862,8 @@ class TestAttentionHeadInterchangeHookOracle:
             shape=(d_head,),
         )
         target = InterchangeTarget([[unit]])
-        intervenable = prepare_intervenable_model(
-            tiny_pipeline, target, intervention_type="interchange"
-        )
         out = batched_interchange_intervention(
             tiny_pipeline,
-            intervenable,
             [
                 {
                     "input": _make_trace(self._BASE),
@@ -1116,12 +1044,8 @@ class TestInterventionCapabilityOracles:
 
         unit = build(layer, self._tp(tiny_pipeline), d)
         target = InterchangeTarget([[unit]])
-        intervenable = prepare_intervenable_model(
-            tiny_pipeline, target, intervention_type="interchange"
-        )
         out = batched_interchange_intervention(
             tiny_pipeline,
-            intervenable,
             [
                 {
                     "input": _make_trace(self._BASE),

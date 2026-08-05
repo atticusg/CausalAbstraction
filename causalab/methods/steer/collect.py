@@ -24,7 +24,7 @@ from causalab.methods.metric import (
     class_probabilities,
     scores_to_joint_probs as _scores_to_joint_probs,
 )
-from causalab.neural.activations.intervenable_model import device_for_layer
+from causalab.neural.components import device_for_layer
 
 
 # ---------------------------------------------------------------------------

@@ -30,7 +30,6 @@ from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_positions import TokenPosition, get_last_token_index
 from causalab.neural.units import InterchangeTarget
 from causalab.neural.activations.collect import collect_features
-from causalab.neural.activations.intervenable_model import prepare_intervenable_model
 from causalab.neural.activations.interchange_mode import (
     batched_interchange_intervention,
 )
@@ -191,13 +190,8 @@ class TestHeadQueryReceiverHookOracle:
             tiny_pipeline, base_inputs, q_proj, "out", edit
         )
         clean = next_token_logits(tiny_pipeline, base_inputs)
-
-        model = prepare_intervenable_model(
-            tiny_pipeline, target, intervention_type="interchange"
-        )
         out = batched_interchange_intervention(
             tiny_pipeline,
-            model,
             [cf_example(_BASE, _SOURCE)],
             target,
             output_scores=True,

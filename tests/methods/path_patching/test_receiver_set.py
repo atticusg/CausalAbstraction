@@ -38,14 +38,10 @@ from causalab.methods.path_patching.targets import (
     deepest_receiver,
     sender_reaches_any,
 )
-from causalab.neural.activations.intervenable_model import (
-    delete_intervenable_model,
-    prepare_intervenable_model,
-)
+from causalab.neural.activations.engine import build_interventions
 from causalab.neural.activations.targets import build_attention_head_targets
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_positions import TokenPosition, get_last_token_index
-from causalab.neural.units import InterchangeTarget
 
 
 def _trace(text: str) -> CausalTrace:
@@ -180,7 +176,9 @@ class TestPass2Grouping:
 
     pytestmark = pytest.mark.unit
 
-    def test_one_group_per_receiver(self, mock_tiny_lm: LMPipeline) -> None:
+    def test_one_intervention_per_receiver(self, mock_tiny_lm: LMPipeline) -> None:
+        """Each receiver gets its own intervention, so PASS 2 injects one v* per
+        receiver rather than sharing one across them."""
         pos = _last_token(mock_tiny_lm)
         receivers = [
             build_receiver_unit(
@@ -191,15 +189,9 @@ class TestPass2Grouping:
             )
             for h in (0, 1)
         ]
-        model = prepare_intervenable_model(
-            mock_tiny_lm,
-            InterchangeTarget([[r] for r in receivers]),
-            intervention_type="interchange",
-        )
-        try:
-            assert len(model._intervention_group) == len(receivers)
-        finally:
-            delete_intervenable_model(model)
+        interventions = build_interventions(receivers, "interchange")
+        assert len(interventions) == len(receivers)
+        assert len({id(i) for i in interventions}) == len(receivers)
 
 
 class TestDeepestReceiver:

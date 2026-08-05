@@ -1,7 +1,7 @@
 """
 data_utils.py
 =============
-Shared utilities for pyvene-based interventions.
+Shared post-processing for intervention outputs.
 
 Provides common functions for output processing and data loading used by
 both interchange and steering intervention modules.

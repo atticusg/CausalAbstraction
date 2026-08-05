@@ -41,6 +41,7 @@ __all__ = [
     "component_width",
     "head_layout",
     "is_head_component",
+    "device_for_layer",
     "UnsupportedComponent",
 ]
 
@@ -425,6 +426,32 @@ def component_width(config: Any, component_type: str) -> int:
         )
         return int(intermediate or 4 * hidden)
     return hidden
+
+
+def device_for_layer(pipeline: Any, layer: int) -> Any:
+    """The device a given transformer layer lives on.
+
+    For a model loaded with ``device_map="auto"`` different layers can sit on
+    different GPUs, and a tensor that participates in an operation at that layer
+    — a steering vector, a featurizer's weights — must be on the same one. For a
+    single-device model this is just ``model.device``.
+
+    The intervention engine no longer needs this: it combines values with
+    activations the trace already produced, so they inherit the right device.
+    It remains for code that *pre-builds* a tensor for a specific layer.
+    """
+    import torch
+
+    model = pipeline.model
+    device_map = getattr(model, "hf_device_map", None)
+    if device_map is None:
+        return model.device
+    path = f"model.layers.{layer}"
+    while path:
+        if path in device_map:
+            return torch.device(device_map[path])
+        path = path.rsplit(".", 1)[0] if "." in path else ""
+    return torch.device(next(iter(device_map.values())))
 
 
 def is_head_component(component_type: str) -> bool:

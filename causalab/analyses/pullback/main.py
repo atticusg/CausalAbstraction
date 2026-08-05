@@ -30,7 +30,7 @@ from causalab.io.pipelines import (
     find_activation_manifold_dirs,
     load_subspace_metadata,
 )
-from causalab.neural.activations.intervenable_model import device_for_layer
+from causalab.neural.components import device_for_layer
 from causalab.io.nested_artifacts import load_nested, save_nested
 from causalab.io.plots.figure_format import resolve_figure_format_from_analysis
 from causalab.io.plots.plot_utils import resolve_task_colormap
@@ -731,17 +731,12 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 len(precomputed_comparisons),
             )
 
-            # FeatureInterpolateIntervention preserves base_err — needed for differentiable optim.
-            from causalab.neural.activations.intervenable_model import (
-                prepare_intervenable_model,
-                delete_intervenable_model,
-            )
-
-            intervenable_model = prepare_intervenable_model(
-                pipeline, interchange_target, intervention_type="interpolation"
-            )
-            intervenable_model.disable_model_gradients()
-            intervenable_model.eval()
+            # Only the optimized trajectory carries gradient; the model is frozen.
+            # The interpolation intervention preserves each sample's base error,
+            # which is what makes the pullback differentiable in embedding space
+            # without perturbing the orthogonal complement.
+            pipeline.model.requires_grad_(False)
+            pipeline.model.eval()
 
             if emb_n_steps != belief_n_steps:
                 emb_t_values = torch.linspace(0, 1, emb_n_steps)
@@ -786,7 +781,6 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                     pair_groups=pair_groups,
                     filtered_samples=filtered_samples,
                     pipeline=pipeline,
-                    intervenable_model=intervenable_model,
                     interchange_target=interchange_target,
                     k=k,
                     var_indices=var_indices,
@@ -813,8 +807,6 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 if summary is not None:
                     summary_by_kopt[label] = summary
                 results_by_kopt[label] = results
-
-            delete_intervenable_model(intervenable_model)
 
         # Persist metrics + cache. Runs in both branches so replot_only also
         # rewrites path_recapitulation_*.json from cached paths.

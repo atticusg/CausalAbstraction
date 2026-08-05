@@ -1,5 +1,5 @@
 """
-pytest unit-tests for the FeatureInterpolateIntervention class.
+pytest unit-tests for the interpolation intervention.
 
 Tests use SubspaceFeaturizer and random tensors — no real model required.
 
@@ -15,6 +15,7 @@ import torch
 import pytest
 
 import causalab.neural.featurizer as F
+from causalab.neural.interventions import build_intervention
 from causalab.methods.trained_subspace.subspace import (
     SubspaceFeaturizer as _SubspaceFeaturizer,
 )
@@ -59,9 +60,8 @@ def lossy_subspace_featurizer() -> F.SubspaceFeaturizer:
 
 
 def make_intervention(featurizer: F.Featurizer) -> Any:
-    """Instantiate a FeatureInterpolateIntervention from the given featurizer."""
-    cls = featurizer.get_interpolation_intervention()
-    return cls()
+    """An interpolation intervention over the given feature space."""
+    return build_intervention(featurizer, "interpolation")
 
 
 # --------------------------------------------------------------------------- #

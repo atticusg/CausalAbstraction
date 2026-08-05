@@ -221,7 +221,7 @@ class AttentionOutput(AtomicModelUnit):
     """Whole attention-block output at *layer* (all heads), for path-patching restoration.
 
     Distinct from :class:`AttentionHead` (a single head's value stream): this targets
-    pyvene's ``attention_output`` component — the full attention sublayer output (all
+    the ``attention_output`` component — the full attention sublayer output (all
     heads jointly) that is written back into the residual stream. The merged output is
     already ``hidden_size``-wide, so this unit is GQA-correct without per-head handling.
 
@@ -247,7 +247,7 @@ class AttentionOutput(AtomicModelUnit):
         shape: tuple[int, ...] | None = None,
         feature_indices: list[int] | None = None,
     ) -> None:
-        component_type = "attention_output"  # pyvene whole-block attention output
+        component_type = "attention_output"  # whole-block attention output
         self.token_indices = token_indices
         tok_id = (
             token_indices.id
@@ -458,8 +458,8 @@ class AttentionHead(AtomicModelUnit):
 
     def tensorized_index_groups(self, unit_indices: Any) -> list[Any]:
         """An ``AttentionHead``'s structure is ``[head_axis, position_axis]``;
-        pyvene stacks each axis with its own ``torch.tensor`` call, so each axis
-        is its own tensorized group. See :meth:`AtomicModelUnit.tensorized_index_groups`.
+        each axis is stacked into its own index tensor, so each is its own
+        tensorized group. See :meth:`AtomicModelUnit.tensorized_index_groups`.
         """
         return list(unit_indices)
 
@@ -483,7 +483,7 @@ class AttentionHead(AtomicModelUnit):
 
 
 class AttentionHeadValue(AttentionHead):
-    """A single head's *value vector* (pyvene ``head_value_output``) at (*layer*, *head*).
+    """A single head's *value vector* (``head_value_output``) at (*layer*, *head*).
 
     The per-head value activation ``v_h = W_V^h · x`` *before* attention weighting —
     distinct from :class:`AttentionHead` (``head_attention_value_output``: the head's
@@ -494,9 +494,9 @@ class AttentionHeadValue(AttentionHead):
     edge (the TransformerLens / Goldowsky-Dill "v" receiver): collecting ``v_h`` under
     the path-restricted forward and re-injecting it isolates the information reaching
     head ``h`` through its value path, while its attention pattern (from the clean q/k)
-    and the other heads are left untouched. Note pyvene 0.1.8 exposes no per-head value
-    *input* hook for Llama/GPT-2, so the value vector is the granularity at which this
-    edge is realizable (see ``docs/PATH_PATCHING.md``).
+    and the other heads are left untouched. Note the model exposes no per-head value
+    *input* — ``v_proj`` reads the whole residual — so the value vector is the
+    granularity at which this edge is realizable.
 
     Under grouped-query attention the value vector is **shared** across a KV group, so
     this unit is addressed in KV-head space and re-injecting it reaches every query head
@@ -504,7 +504,7 @@ class AttentionHeadValue(AttentionHead):
     query→KV-group mapping lives in
     :func:`causalab.methods.path_patching.targets.build_receiver_unit`.
 
-    Reuses :class:`AttentionHead`'s ``h.pos`` indexing wholesale; only the pyvene
+    Reuses :class:`AttentionHead`'s ``h.pos`` indexing wholesale; only the
     component and the diagnostic id differ.
     """
 
@@ -529,8 +529,8 @@ class AttentionHeadValue(AttentionHead):
         )
         # Retarget from head_attention_value_output (the sender component) to the
         # per-head value vector. component_type/id are plain attributes on
-        # AtomicModelUnit, read lazily by create_intervention_config, so resetting
-        # them post-init is sufficient — the h.pos unit and indexing are inherited.
+        # AtomicModelUnit, read lazily when the unit is resolved to a site, so
+        # resetting them post-init is enough — indexing is inherited.
         self.component_type = "head_value_output"
         tok_id = (
             token_indices.id
@@ -541,7 +541,7 @@ class AttentionHeadValue(AttentionHead):
 
 
 class AttentionHeadQuery(AttentionHead):
-    """A single head's *query vector* (pyvene ``head_query_output``) at (*layer*, *head*).
+    """A single head's *query vector* (``head_query_output``) at (*layer*, *head*).
 
     The per-head query activation ``q_h = W_Q^h · x`` — the exact query-path mirror
     of :class:`AttentionHeadValue`'s value-path receiver. Path patching uses this as
@@ -550,16 +550,16 @@ class AttentionHeadQuery(AttentionHead):
     reaching head ``h`` through its *query* (which determines where the head looks),
     leaving its keys, values, and the other heads untouched.
 
-    As for the value vector, pyvene 0.1.8 exposes no per-head query *input* hook for
-    Llama/GPT-2, so the query vector ``q_h`` (post-projection, pre-attention) is the
-    granularity at which this edge is realizable. Unlike the value vector, the query
+    As for the value vector, there is no per-head query *input* to read, so the
+    query vector ``q_h`` (post-projection, pre-attention) is the granularity at
+    which this edge is realizable. Unlike the value vector, the query
     vector is **per-query-head** even under grouped-query attention (only k/v are
     shared across a KV group), so this unit is addressed directly in query-head space
     with no query→KV-group remap — contrast :class:`AttentionHeadValue`, whose KV-head
     mapping lives in
     :func:`causalab.methods.path_patching.targets.build_receiver_unit`.
 
-    Reuses :class:`AttentionHead`'s ``h.pos`` indexing wholesale; only the pyvene
+    Reuses :class:`AttentionHead`'s ``h.pos`` indexing wholesale; only the
     component and the diagnostic id differ.
     """
 
@@ -584,8 +584,8 @@ class AttentionHeadQuery(AttentionHead):
         )
         # Retarget from head_attention_value_output (the sender component) to the
         # per-head query vector. component_type/id are plain attributes on
-        # AtomicModelUnit, read lazily by create_intervention_config, so resetting
-        # them post-init is sufficient — the h.pos unit and indexing are inherited.
+        # AtomicModelUnit, read lazily when the unit is resolved to a site, so
+        # resetting them post-init is enough — indexing is inherited.
         self.component_type = "head_query_output"
         tok_id = (
             token_indices.id

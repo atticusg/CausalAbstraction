@@ -1,16 +1,14 @@
-"""Intervention modes: the plain-torch modes must equal the pyvene ones they replace.
+"""Intervention modes — what gets written at a site.
 
-``causalab.neural.interventions`` replaces the seven
-``build_feature_*_intervention`` factories in ``causalab.neural.featurizer``,
-which synthesized pyvene ``TrainableIntervention`` subclasses at runtime. The
-first class below runs both implementations on the same inputs and asserts they
-agree — the migration's behavioural contract for what gets *written* at a site,
-independent of how the site is hooked.
+``causalab.neural.interventions`` replaced the seven
+``build_feature_*_intervention`` factories that synthesized pyvene
+``TrainableIntervention`` subclasses at runtime. During the migration a parity
+class ran both implementations on the same inputs and asserted they agreed; it
+was deleted with the builders it compared against.
 
-**That class is scheduled for deletion**: it imports the pyvene builders, so it
-goes when they do. The classes after it test the new modes on their own terms
-(error preservation, feature selection, the noise stream, mask semantics) and are
-the permanent coverage.
+What remains covers the modes on their own terms: error preservation (the
+property that makes a subspace result interpretable), feature selection, the
+noise stream's reproducibility, and the mask's train/eval semantics.
 """
 
 from __future__ import annotations
@@ -19,16 +17,7 @@ import pytest
 import torch
 
 from causalab.methods.trained_subspace.subspace import SubspaceFeaturizer
-from causalab.neural.featurizer import (
-    Featurizer,
-    build_feature_collect_intervention,
-    build_feature_interchange_intervention,
-    build_feature_interpolation_intervention,
-    build_feature_mask_intervention,
-    build_feature_noise_intervention,
-    build_feature_replace_intervention,
-    build_feature_steering_intervention,
-)
+from causalab.neural.featurizer import Featurizer
 from causalab.neural.interventions import build_intervention
 
 pytestmark = pytest.mark.unit
@@ -51,103 +40,6 @@ def _identity_featurizer(n_features: int = D) -> Featurizer:
 def _inputs(seed: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
     torch.manual_seed(seed)
     return torch.randn(BATCH, POS, D), torch.randn(BATCH, POS, D)
-
-
-# --------------------------------------------------------------------------- #
-#  Migration parity — delete with the pyvene builders                          #
-# --------------------------------------------------------------------------- #
-class TestMatchesPyveneIntervention:
-    """Old and new must write the same tensor. Temporary: see the module docstring."""
-
-    def test_interchange(self) -> None:
-        featurizer = _rotation_featurizer()
-        base, source = _inputs()
-        old = build_feature_interchange_intervention(
-            featurizer.featurizer, featurizer.inverse_featurizer, featurizer.id
-        )(embed_dim=D)
-        new = build_intervention(featurizer, "interchange")
-        torch.testing.assert_close(new(base, source), old(base, source))
-
-    def test_collect(self) -> None:
-        featurizer = _rotation_featurizer()
-        base, _ = _inputs()
-        old = build_feature_collect_intervention(featurizer.featurizer, featurizer.id)(
-            embed_dim=D
-        )
-        new = build_intervention(featurizer, "collect")
-        torch.testing.assert_close(new(base), old(base))
-
-    def test_steering(self) -> None:
-        featurizer = _rotation_featurizer()
-        base, _ = _inputs()
-        vector = torch.randn(K)
-        old = build_feature_steering_intervention(
-            featurizer.featurizer, featurizer.inverse_featurizer, featurizer.id
-        )(embed_dim=D)
-        new = build_intervention(featurizer, "add")
-        torch.testing.assert_close(new(base, vector), old(base, vector))
-
-    def test_replace(self) -> None:
-        featurizer = _rotation_featurizer()
-        base, _ = _inputs()
-        vector = torch.randn(K)
-        old = build_feature_replace_intervention(
-            featurizer.featurizer, featurizer.inverse_featurizer, featurizer.id
-        )(embed_dim=D)
-        new = build_intervention(featurizer, "replace")
-        torch.testing.assert_close(new(base, vector), old(base, vector))
-
-    def test_noise_same_seed_gives_same_draw(self) -> None:
-        featurizer = _rotation_featurizer()
-        base, _ = _inputs()
-        scale = torch.tensor(0.5)
-        old = build_feature_noise_intervention(
-            featurizer.featurizer, featurizer.inverse_featurizer, featurizer.id, 7
-        )(embed_dim=D)
-        new = build_intervention(featurizer, "noise", seed=7)
-        torch.testing.assert_close(new(base, scale), old(base, scale))
-
-    def test_interpolation(self) -> None:
-        featurizer = _rotation_featurizer()
-        base, source = _inputs()
-
-        def lerp(f_base: torch.Tensor, f_src: torch.Tensor, alpha: float):
-            return (1 - alpha) * f_base + alpha * f_src
-
-        old = build_feature_interpolation_intervention(
-            featurizer.featurizer, featurizer.inverse_featurizer, featurizer.id
-        )(embed_dim=D)
-        old.set_interpolation(lerp, alpha=0.25)
-        new = build_intervention(featurizer, "interpolation")
-        new.set_interpolation(lerp, alpha=0.25)
-        torch.testing.assert_close(new(base, source), old(base, source))
-
-    @pytest.mark.parametrize("tie_masks", [False, True])
-    @pytest.mark.parametrize("training", [False, True])
-    def test_mask(self, tie_masks: bool, training: bool) -> None:
-        featurizer = _identity_featurizer()
-        base, source = _inputs()
-        old = build_feature_mask_intervention(
-            featurizer.featurizer,
-            featurizer.inverse_featurizer,
-            D,
-            featurizer.id,
-            tie_masks,
-        )(embed_dim=D)
-        new = build_intervention(featurizer, "mask", tie_masks=tie_masks)
-
-        torch.manual_seed(1)
-        weights = torch.randn(1 if tie_masks else D)
-        with torch.no_grad():
-            old.mask.copy_(weights)
-            new.mask.copy_(weights)
-        old.set_temperature(0.3)
-        new.set_temperature(0.3)
-        old.train(training)
-        new.train(training)
-
-        torch.testing.assert_close(new(base, source), old(base, source))
-        torch.testing.assert_close(new.get_sparsity_loss(), old.get_sparsity_loss())
 
 
 # --------------------------------------------------------------------------- #
@@ -285,3 +177,78 @@ class TestUnknownMode:
     def test_unknown_mode_lists_the_known_ones(self) -> None:
         with pytest.raises(ValueError, match="Unknown intervention mode"):
             build_intervention(_identity_featurizer(), "teleport")
+
+
+class TestModeSemantics:
+    """Each mode's algebra, checked in an identity feature space where the
+    expected value is exact rather than approximate."""
+
+    def test_steering_adds(self) -> None:
+        featurizer = _identity_featurizer()
+        base, _ = _inputs()
+        vector = torch.randn(D)
+        out = build_intervention(featurizer, "add")(base, vector)
+        torch.testing.assert_close(out, base + vector)
+
+    def test_replace_discards_the_base_features(self) -> None:
+        """The base features are gone entirely — unlike steering, which adds.
+
+        The result keeps the *replacement's* shape rather than the base's: a
+        broadcastable vector stays a vector and is broadcast when the engine
+        scatters it back at the unit's positions.
+        """
+        featurizer = _identity_featurizer()
+        base, _ = _inputs()
+        vector = torch.randn(D)
+        out = build_intervention(featurizer, "replace")(base, vector)
+        torch.testing.assert_close(out, vector)
+        # Broadcasting into a base-shaped slot is what the engine relies on.
+        torch.testing.assert_close(
+            torch.empty_like(base).copy_(out), vector.expand(base.shape)
+        )
+
+    def test_replace_with_zero_ablates_only_the_feature_space(self) -> None:
+        """Zero-replacement in a rank-K subspace is the ablation primitive: the
+        subspace's contribution goes to zero, the complement survives."""
+        featurizer = _rotation_featurizer()
+        base, _ = _inputs()
+        out = build_intervention(featurizer, "replace")(base, torch.zeros(K))
+        f_out, _ = featurizer.featurize(out)
+        torch.testing.assert_close(f_out, torch.zeros_like(f_out), atol=1e-5, rtol=1e-4)
+        _f_base, base_error = featurizer.featurize(base)
+        torch.testing.assert_close(out, base_error, atol=1e-5, rtol=1e-4)
+
+    def test_interpolation_endpoints(self) -> None:
+        featurizer = _identity_featurizer()
+        base, source = _inputs()
+
+        def lerp(f_base, f_src, alpha):
+            return (1 - alpha) * f_base + alpha * f_src
+
+        intervention = build_intervention(featurizer, "interpolation")
+        intervention.set_interpolation(lerp, alpha=0.0)
+        torch.testing.assert_close(intervention(base, source), base)
+        intervention.set_interpolation(lerp, alpha=1.0)
+        torch.testing.assert_close(intervention(base, source), source)
+
+    def test_interpolation_without_a_function_is_rejected(self) -> None:
+        """Running with no function set would silently mean *something*; it must
+        say so instead."""
+        intervention = build_intervention(_identity_featurizer(), "interpolation")
+        base, source = _inputs()
+        with pytest.raises(ValueError, match="Interpolation function not set"):
+            intervention(base, source)
+
+    def test_mask_sparsity_loss_is_l1_of_the_soft_gate(self) -> None:
+        intervention = build_intervention(_identity_featurizer(), "mask")
+        with torch.no_grad():
+            intervention.mask.copy_(torch.linspace(-3.0, 3.0, D))
+        intervention.set_temperature(0.5)
+        expected = torch.norm(torch.sigmoid(intervention.mask / 0.5), p=1)
+        torch.testing.assert_close(intervention.get_sparsity_loss(), expected)
+
+    def test_mask_without_a_temperature_is_rejected(self) -> None:
+        intervention = build_intervention(_identity_featurizer(), "mask")
+        base, source = _inputs()
+        with pytest.raises(ValueError, match="temperature"):
+            intervention(base, source)

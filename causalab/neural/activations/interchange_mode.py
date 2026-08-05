@@ -3,11 +3,9 @@ interchange.py
 ==============
 Core utilities for running interchange intervention experiments.
 
-This module provides functions for running interventions on neural networks using
-the pyvene library. It focuses on interchange interventions where activations are
-swapped between base and counterfactual inputs.
-
-For training intervention models, see train.py.
+Interchange interventions swap activations between base and counterfactual
+inputs. For training intervention models, see
+``causalab/methods/trained_subspace/train.py``.
 """
 
 from __future__ import annotations
@@ -19,7 +17,6 @@ from typing import Any, Sequence
 import torch
 from torch import Tensor
 from tqdm import tqdm
-from pyvene import IntervenableModel  # type: ignore[import-untyped]
 
 from causalab.causal.counterfactual_dataset import (
     CounterfactualExample,
@@ -33,10 +30,6 @@ from causalab.neural.activations.engine import (
     collect_unit_activations_under,
     generate_with_interventions,
 )
-from causalab.neural.activations.intervenable_model import (
-    delete_intervenable_model,
-)
-from causalab.neural.activations.collect import collect_source_representations
 from causalab.neural.activations.data_utils import (
     convert_to_top_k,
     move_outputs_to_cpu,
@@ -455,93 +448,25 @@ def collect_group_sources(
 
 def batched_interchange_intervention(
     pipeline: Pipeline,
-    intervenable_model: IntervenableModel,
-    examples: list[CounterfactualExample],
-    interchange_target: InterchangeTarget,
-    output_scores: bool | int = True,
-    source_pipeline: Pipeline | None = None,
-    source_intervenable_model: IntervenableModel | None = None,
-) -> dict[str, Any]:
-    """
-    Perform interchange interventions on batched inputs using an intervenable model.
-
-    This function executes the core intervention logic by:
-    1. Preparing the base and counterfactual inputs for intervention
-    2. Running the model with interventions at specified locations
-    3. Moving tensors back to CPU to free GPU memory
-
-    Args:
-        pipeline: Target pipeline where interventions are applied
-        intervenable_model: PyVENE model with preset intervention locations
-        examples: List of counterfactual examples
-        interchange_target: InterchangeTarget containing model components to intervene on
-        output_scores: Whether to include scores in output dictionary (default: True)
-        source_pipeline: If provided, collect activations from this pipeline instead
-            of the target pipeline. Enables cross-model patching.
-        source_intervenable_model: Optional pre-created intervenable model for the source
-            pipeline. If provided with source_pipeline, this model will be reused for
-            collecting activations instead of creating a new one per batch.
-
-    Returns:
-        dict: Dictionary with 'sequences' and optionally 'scores' keys
-    """
-    try:
-        # Prepare inputs for intervention (using target pipeline for base)
-        batched_base, batched_counterfactuals, inv_locations, feature_indices = (
-            prepare_intervenable_inputs(pipeline, examples, interchange_target)
-        )
-
-        # Collect source representations if using cross-model patching
-        source_representations = None
-        if source_pipeline is not None:
-            source_representations = collect_source_representations(
-                source_pipeline,
-                examples,
-                interchange_target,
-            )
-            # When using cross-model patching, we don't pass counterfactuals to pyvene
-            # because we're using pre-collected source_representations instead
-            batched_counterfactuals = None
-
-        # Execute the intervention via the pipeline
-        gen_kwargs = {"output_scores": output_scores}
-        output = pipeline.intervenable_generate(
-            intervenable_model,
-            batched_base,
-            batched_counterfactuals,
-            inv_locations,
-            feature_indices,
-            source_representations=source_representations,
-            **gen_kwargs,
-        )
-
-        # Move tensors to CPU to free GPU memory
-        if batched_counterfactuals is not None:
-            for batched in [batched_base] + batched_counterfactuals:
-                for k, v in batched.items():
-                    batched[k] = v.cpu()
-        else:
-            for k, v in batched_base.items():
-                batched_base[k] = v.cpu()
-
-        return output
-    finally:
-        delete_intervenable_model(intervenable_model)
-
-
-def interchange_batch(
-    pipeline: Pipeline,
     examples: list[CounterfactualExample] | list[LabeledCounterfactualExample],
     interchange_target: InterchangeTarget,
     output_scores: bool | int = True,
     source_pipeline: Pipeline | None = None,
+    mode: str = "interchange",
+    interventions: Sequence[Any] | None = None,
 ) -> dict[str, Any]:
-    """Swap each unit's source activation into the base run, for one batch.
+    """Write each unit's source activation into the base run, for one batch.
 
     Two forwards per counterfactual group plus one generation: the sources are
     read first (from ``source_pipeline`` when patching across models), then
     written into the base's prefill. See :mod:`causalab.neural.activations.engine`
     for why the sources are a separate pass rather than a batched invoke.
+
+    ``mode`` selects how the source is combined with the base — ``interchange``
+    replaces, ``mask`` gates between them. ``interventions`` supplies prebuilt
+    intervention objects, which a stateful mode needs: a mask's gates mean
+    nothing until its logits and temperature are set, so its caller must hold
+    the objects it configured.
     """
     batch = prepare_interchange_batch(
         pipeline, examples, interchange_target, source_pipeline
@@ -550,9 +475,10 @@ def interchange_batch(
     plans = build_plans(
         batch.units,
         batch.base_positions,
-        "interchange",
+        mode,
         sources=sources,
         feature_indices=batch.feature_indices,
+        interventions=interventions,
     )
     result = generate_with_interventions(
         pipeline, batch.base_encoding, plans, output_scores=bool(output_scores)
@@ -608,7 +534,7 @@ def run_interchange_interventions(
         examples = counterfactual_dataset[start : start + batch_size]
         with torch.no_grad():  # Disable gradient tracking for inference
             all_outputs.append(
-                interchange_batch(
+                batched_interchange_intervention(
                     pipeline,
                     examples,
                     interchange_target,

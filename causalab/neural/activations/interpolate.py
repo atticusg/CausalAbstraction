@@ -3,9 +3,8 @@ interpolate.py
 ==============
 Core utilities for running interpolation intervention experiments.
 
-This module provides functions for running interventions on neural networks using
-the pyvene library. It focuses on interpolation interventions where activations
-are computed as an arbitrary function of base and source featurized activations:
+Interpolation interventions compute the patched activation as an arbitrary
+function of the base and source featurized activations:
 
     new_act = inverse_featurizer(f(f_base, f_src, **params), base_err)
 

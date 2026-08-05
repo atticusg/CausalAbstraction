@@ -25,14 +25,13 @@ from causalab.methods.path_patching.targets import (
     build_receiver_unit,
     build_restorer_set,
 )
-from causalab.neural.activations.intervenable_model import (
-    delete_intervenable_model,
-    prepare_mixed_intervenable_model,
+from causalab.neural.activations.engine import (
+    build_plans,
+    collect_unit_activations_under,
 )
 from causalab.neural.activations.targets import build_attention_head_targets
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_positions import TokenPosition, get_last_token_index
-from causalab.neural.units import InterchangeTarget
 
 
 def _trace(text: str) -> CausalTrace:
@@ -364,46 +363,51 @@ class TestMixedForwardPropagation:
             mock_tiny_lm, ReceiverSpec(kind="mlp_input", layer=1, token_position=pos)
         )
         assert receiver is not None
-        model = prepare_mixed_intervenable_model(
-            mock_tiny_lm, InterchangeTarget([[sender]]), [receiver]
-        )
         ds = _dataset()
         raw_base = [ex["input"] for ex in ds]
         raw_src = [ex["counterfactual_inputs"][0] for ex in ds]
         base_in = mock_tiny_lm.load(raw_base)
         src_in = mock_tiny_lm.load(raw_src)
-        s_idx = sender.index_component(
-            raw_src,
-            batch=True,
-            is_original=False,
-            attention_mask=src_in["attention_mask"],
-        )
-        b_idx = sender.index_component(
-            raw_base,
-            batch=True,
-            is_original=True,
-            attention_mask=base_in["attention_mask"],
-        )
-        r_idx = receiver.index_component(
-            raw_base,
-            batch=True,
-            is_original=True,
-            attention_mask=base_in["attention_mask"],
-        )
-        try:
-            with torch.no_grad():
-                v_source = model(
-                    base_in,
-                    sources=[src_in, None],
-                    unit_locations={"sources->base": ([s_idx, r_idx], [b_idx, r_idx])},
-                )[0][1][0]
-                v_base = model(
-                    base_in,
-                    sources=[base_in, None],
-                    unit_locations={"sources->base": ([b_idx, r_idx], [b_idx, r_idx])},
-                )[0][1][0]
-        finally:
-            delete_intervenable_model(model)
+
+        def positions(unit, raw, encoding, is_original):
+            return unit.resolve_positions(
+                raw, attention_mask=encoding["attention_mask"], is_original=is_original
+            )
+
+        sender_base = positions(sender, raw_base, base_in, True)
+        sender_src = positions(sender, raw_src, src_in, False)
+        receiver_pos = positions(receiver, raw_base, base_in, True)
+        read_plans = build_plans([receiver], [receiver_pos], "collect", raw=True)
+
+        with torch.no_grad():
+            [sender_from_src] = collect_unit_activations_under(
+                mock_tiny_lm,
+                src_in,
+                [],
+                build_plans([sender], [sender_src], "collect", raw=True),
+            )
+            [sender_from_base] = collect_unit_activations_under(
+                mock_tiny_lm,
+                base_in,
+                [],
+                build_plans([sender], [sender_base], "collect", raw=True),
+            )
+            [v_source] = collect_unit_activations_under(
+                mock_tiny_lm,
+                base_in,
+                build_plans(
+                    [sender], [sender_base], "interchange", sources=[sender_from_src]
+                ),
+                read_plans,
+            )
+            [v_base] = collect_unit_activations_under(
+                mock_tiny_lm,
+                base_in,
+                build_plans(
+                    [sender], [sender_base], "interchange", sources=[sender_from_base]
+                ),
+                read_plans,
+            )
         assert not torch.allclose(v_source, v_base)
 
 

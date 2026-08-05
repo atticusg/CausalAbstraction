@@ -10,7 +10,6 @@ import torch
 from torch import Tensor
 from transformers import AutoTokenizer, PreTrainedModel
 from nnsight import TransformersModel  # type: ignore[import-untyped]
-from pyvene import IntervenableModel  # type: ignore[import-untyped]
 from causalab.causal.counterfactual_dataset import CounterfactualExample
 from causalab.causal.trace import CausalTrace
 from tqdm import tqdm
@@ -52,19 +51,12 @@ def ensure_position_ids(inputs: dict[str, Tensor]) -> dict[str, Tensor]:
     Rotary models are immune (RoPE is relative; a uniform left-pad shift cancels),
     so this is a no-op for them.
 
-    For plain (non-generate) forwards, call this directly. The two generate paths
-    handle it as follows (see ``LMPipeline.intervenable_generate``):
-
-    * **Multi-step** ``generate`` / ``intervenable_generate`` number their own
-      per-step ``position_ids``; feeding them a prompt-shaped ``position_ids`` is
-      wrong across decode steps — measured to shift GPT-2 multi-step logits by ~0.26
-      — so they are left alone. This is also why ``load`` does not emit
-      ``position_ids`` by default (its output feeds both paths).
-    * **Single-step** ``intervenable_generate`` (``max_new_tokens == 1`` — the
-      path-patching case) has only the prompt prefill forward, so a prompt-shaped
-      ``position_ids`` is exactly correct; ``intervenable_generate`` applies this to
-      its base (and, always, to its source-collection forwards) internally. Callers
-      of that path need not wrap inputs themselves.
+    Call this for a plain forward you drive yourself. The intervention engine
+    does not need it — nnsight derives mask-based ``position_ids`` for any
+    left-padded text batch — and ``generate`` numbers its own per-step positions,
+    so a prompt-shaped ``position_ids`` must not be forced on it (it cannot
+    extend across decode steps; measured to shift GPT-2 multi-step logits by
+    ~0.26). That is why ``load`` does not emit ``position_ids`` by default.
 
     No-op if ``position_ids`` is already present (e.g. the pipeline was built with
     ``position_ids=True``) or if there is no ``attention_mask`` to derive from.
@@ -212,15 +204,18 @@ class Pipeline(ABC):
         pass
 
     @abstractmethod
-    def intervenable_generate(
+    def format_generation(
         self,
-        intervenable_model: IntervenableModel,
-        base: Any,
-        sources: Any,
-        map: Any,  # noqa: A002 – intentional name
-        feature_indices: Any,
-        source_representations: Any = None,
+        result: Any,
+        base_encoding: dict[str, Any],
+        output_scores: bool | int = True,
     ) -> Dict[str, Any]:
+        """A backbone ``generate`` result -> the dict every scorer consumes.
+
+        Decoding the generated region is pipeline-specific (which tokens are the
+        completion, how they decode), so the intervention engine hands the raw
+        result back here rather than interpreting it.
+        """
         pass
 
 
@@ -513,9 +508,8 @@ class LMPipeline(Pipeline):
             # prompt-shaped position_ids unconditionally would regress multi-step
             # decoding on absolute-position models (measured ~0.26 logit shift on
             # GPT-2), so we leave it off here; plain-forward sites opt in via
-            # ensure_position_ids, and single-step intervenable_generate applies it
-            # internally. Same left-pad convention either way; set in place so enc
-            # stays a BatchEncoding.
+            # ensure_position_ids. Same left-pad convention either way; set in
+            # place so enc stays a BatchEncoding.
             enc["position_ids"] = left_pad_position_ids(enc["attention_mask"])
         # Pop offset_mapping if present - it's a list of tuples, not a tensor
         offset_mapping = enc.pop("offset_mapping", None)
@@ -673,87 +667,6 @@ class LMPipeline(Pipeline):
     # Intervention generation
     # ------------------------------------------------------------------
 
-    def intervenable_generate(
-        self,
-        intervenable_model: IntervenableModel,
-        base: dict[str, Tensor],
-        sources: list[dict[str, Tensor]] | None,
-        map: dict[str, Any],
-        feature_indices: list[list[int]] | None,
-        source_representations: list[Tensor] | None = None,
-        **gen_kwargs: Any,
-    ) -> dict[str, Any]:
-        """
-        Generate with interventions applied.
-
-        Args:
-            intervenable_model: PyVENE model with preset intervention locations
-            base: Tokenized base inputs
-            sources: Tokenized counterfactual inputs. Can be None if source_representations
-                is provided (cross-model patching case).
-            map: Unit locations mapping {"sources->base": (source_indices, base_indices)}
-            feature_indices: Feature subspace indices for each unit
-            source_representations: Pre-collected activations to use instead of computing
-                from sources. When provided, sources should be None. This enables cross-model
-                patching where activations are collected from a different model.
-                Format: List of tensors, one per intervention location.
-            **gen_kwargs: Additional generation kwargs
-        """
-        defaults = dict(
-            unit_locations=map,
-            subspaces=feature_indices,
-            max_new_tokens=self.max_new_tokens,
-            pad_token_id=self.tokenizer.pad_token_id,
-            return_dict_in_generate=True,
-            output_scores=True,
-            intervene_on_prompt=True,
-            do_sample=False,
-            use_cache=True,
-        )
-        defaults.update(gen_kwargs)
-        # Left-pad position_ids for absolute-position models (GPT-2 et al.); no-op on
-        # RoPE or when position_ids is already present. pyvene runs each source as a
-        # plain collection forward (`self.model(**source)`) and the base as the
-        # generate prefill (`self.model.generate(**base)`) — neither carries
-        # position_ids otherwise, so a left-padded row is numbered from the pad tokens
-        # and every activation in it is corrupted.
-        #   * Sources are plain forwards: always safe to fix.
-        #   * Base is the prefill. For single-step decoding (max_new_tokens == 1 — the
-        #     path-patching case) the prefill is the ONLY forward, so a prompt-shaped
-        #     position_ids is exactly correct. For multi-step we must NOT pin it (it
-        #     can't extend across decode steps — measured ~0.26 GPT-2 logit drift), so
-        #     leave multi-step base alone and let generate number its own steps.
-        if sources is not None:
-            sources = [
-                ensure_position_ids(s) if s is not None else None for s in sources
-            ]
-        if defaults["max_new_tokens"] == 1:
-            base = ensure_position_ids(base)
-        with torch.no_grad():
-            # pyvene type stubs are incomplete - source_representations accepts list or dict
-            out = intervenable_model.generate(
-                base,
-                sources=sources,
-                source_representations=source_representations,  # type: ignore[reportArgumentType]
-                **defaults,  # type: ignore[reportArgumentType]
-            )  # type: ignore[reportOptionalMemberAccess]
-
-        # Return dictionary like HuggingFace models. Slice the generated tokens
-        # from the prompt end (not the last max_new_tokens) so an early EOS stop
-        # doesn't leak trailing prompt tokens into the decoded string — see
-        # _generated_tokens.
-        prompt_len = base["input_ids"].shape[1]
-        sequences = self._generated_tokens(out[-1].sequences, prompt_len).detach().cpu()
-        result = {"sequences": sequences}
-
-        if gen_kwargs.get("output_scores", True):
-            scores = [s.detach().cpu() for s in (out[-1].scores or [])]
-            result["scores"] = scores
-
-        result["string"] = self.dump(sequences, is_logits=False)
-
-        return result
-
     # ------------------------------------------------------------------
     # Batch processing
     # ------------------------------------------------------------------
@@ -860,27 +773,6 @@ class LMPipeline(Pipeline):
     # ------------------------------------------------------------------
     # Convenience
     # ------------------------------------------------------------------
-
-    def ensure_instrumented(self) -> None:
-        """Re-install nnsight's forward hooks if something removed them.
-
-        pyvene's ``IntervenableModel`` teardown clears *every* forward hook on the
-        module tree, not only the ones it registered — so any pyvene run in the
-        same process leaves nnsight's interleaver hooks stripped, and the next
-        trace fails to serve ``.input`` (``OutOfOrderError``). While both
-        backbones coexist during the nnsight migration, the trace engine calls
-        this before each run.
-
-        Cheap when nothing is wrong: it checks one module for its hooks and only
-        walks the tree when they are missing. Delete this once pyvene is gone —
-        nothing else removes hooks behind nnsight's back.
-        """
-        envoys = [self.nnsight, *self.nnsight.modules()]
-        probe = envoys[-1]
-        if probe._module._forward_pre_hooks:
-            return
-        for envoy in envoys:
-            envoy.interleaver.instrument(envoy)
 
     def get_num_layers(self) -> int:
         return int(self.model.config.num_hidden_layers)
