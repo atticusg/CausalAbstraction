@@ -256,6 +256,7 @@ def batched_steering_intervention(
     unit_devices: torch.device | dict[str, torch.device],
     interventions: Sequence[FeatureIntervention],
     output_scores: bool | int = True,
+    every_step: bool = False,
 ) -> dict[str, Any]:
     """
     Perform a steering intervention on a single batch.
@@ -295,7 +296,11 @@ def batched_steering_intervention(
         units, positions, "", sources=sources, interventions=interventions
     )
     result = generate_with_interventions(
-        pipeline, base_encoding, plans, output_scores=bool(output_scores)
+        pipeline,
+        base_encoding,
+        plans,
+        every_step=every_step,
+        output_scores=bool(output_scores),
     )
     return pipeline.format_generation(result, base_encoding, output_scores)
 
@@ -311,6 +316,7 @@ def run_steering_interventions(
     scale: float = 1.0,
     type_by_unit: dict[str, str] | None = None,
     noise_seed: int = 0,
+    every_step: bool = False,
 ) -> dict[str, list[Any]]:
     """
     Run steering interventions on a dataset.
@@ -420,6 +426,7 @@ def run_steering_interventions(
                 device,
                 interventions,
                 output_scores=output_scores,
+                every_step=every_step,
             )
             all_outputs.append(output_dict)
 

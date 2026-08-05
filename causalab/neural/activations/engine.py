@@ -37,7 +37,7 @@ would raise ``OutOfOrderError``.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterable, NamedTuple, Sequence
 
 import torch
@@ -317,12 +317,18 @@ def collect_unit_activations(
     Each site is read once even when several units share it, and sites are read
     in forward order — both required by the interleaver, neither visible to
     callers, who get their results back in the order they asked.
+
+    Unless ``return_logits``, the forward is cut short once the deepest requested
+    site has been read: nothing above it can change a value already collected.
+    Collecting from an early layer of a deep model therefore costs an early-layer
+    forward rather than a full one. With ``return_logits`` the run has to reach
+    the head, so it plays out in full.
     """
     device = pipeline.model.device
     results: list[Tensor | None] = [None] * len(plans)
     index_of = {id(plan): i for i, plan in enumerate(plans)}
 
-    with pipeline.nnsight.trace(**model_inputs(encoding)):
+    with pipeline.nnsight.trace(**model_inputs(encoding)) as tracer:
         for _key, group in _grouped_in_forward_order(plans):
             site = resolve_site(
                 pipeline.nnsight, group[0].unit.component_type, group[0].unit.layer
@@ -338,6 +344,11 @@ def collect_unit_activations(
                     selected, None, plan.feature_indices
                 ).save()
         logits = pipeline.nnsight.output.logits.save() if return_logits else None
+        if not return_logits:
+            # Every save above is already registered, and the groups were walked
+            # in forward order, so the deepest site has been read. Nothing after
+            # this line runs.
+            tracer.stop()
 
     collected = [r for r in results if r is not None]
     if len(collected) != len(plans):  # pragma: no cover - defensive
@@ -393,7 +404,7 @@ def collect_unit_activations_under(
     combined = [*write_plans, *read_plans]
     writes = {id(plan) for plan in write_plans}
 
-    with pipeline.nnsight.trace(**model_inputs(encoding)):
+    with pipeline.nnsight.trace(**model_inputs(encoding)) as tracer:
         for _key, group in _grouped_in_forward_order(combined):
             site = resolve_site(
                 pipeline.nnsight, group[0].unit.component_type, group[0].unit.layer
@@ -423,6 +434,9 @@ def collect_unit_activations_under(
                 results[read_index[id(plan)]] = plan.intervention(
                     selected, None, plan.feature_indices
                 ).save()
+        # Only the receivers' values leave this function, and the deepest site
+        # has now been visited, so the rest of the forward cannot change them.
+        tracer.stop()
 
     collected = [r for r in results if r is not None]
     if len(collected) != len(read_plans):  # pragma: no cover - defensive
@@ -432,18 +446,44 @@ def collect_unit_activations_under(
     return collected
 
 
+def _decode_step_plans(plans: Sequence[UnitPlan]) -> list[UnitPlan]:
+    """The same plans, retargeted at a decode step's single new token.
+
+    A unit's positions were resolved against the prompt, and with ``use_cache``
+    a decode step's activation holds only the token just produced — sequence
+    length 1 — so a prompt position is out of range there. Every plan therefore
+    addresses position 0, the one position that exists.
+
+    Only modes whose source does not depend on a position can be carried over
+    this way: a steering direction or a fixed replacement vector means the same
+    thing at any token. An interchange source was gathered *at* particular prompt
+    positions and has no reading at a token that did not exist yet, which is why
+    :func:`generate_with_interventions` only offers this to the steering path.
+    """
+    return [
+        replace(plan, positions=[[0] for _ in plan.positions]) for plan in plans
+    ]
+
+
 def generate_with_interventions(
     pipeline: Any,
     base_encoding: dict[str, Any],
     plans: Sequence[UnitPlan],
+    *,
+    every_step: bool = False,
     **gen_kwargs: Any,
 ) -> Any:
-    """Generate from ``base_encoding`` with every plan applied to the prefill.
+    """Generate from ``base_encoding`` with every plan applied.
 
-    Interventions land on each site's *first* occurrence — the prompt prefill —
-    matching the ``intervene_on_prompt`` behaviour callers rely on. Reapplying at
-    every decode step is a different experiment; it would wrap the body in
-    ``tracer.iter``.
+    By default interventions land on each site's *first* occurrence — the prompt
+    prefill — matching the ``intervene_on_prompt`` behaviour callers rely on.
+
+    ``every_step`` additionally re-applies them to each token the model
+    generates, which is what "keep the steering on" or "run the whole generation
+    with this head ablated" means. The prefill uses each unit's resolved
+    positions; every step after it uses the single new token (see
+    :func:`_decode_step_plans`). The loop is bounded rather than ``tracer.all()``
+    because an unbounded one would discard ``tracer.result``.
     """
     device = pipeline.model.device
     defaults: dict[str, Any] = {
@@ -455,8 +495,13 @@ def generate_with_interventions(
         "use_cache": True,
     }
     defaults.update(gen_kwargs)
+    steps = int(defaults["max_new_tokens"])
     with pipeline.nnsight.generate(**model_inputs(base_encoding), **defaults) as tracer:
         _apply(pipeline, plans, device)
+        if every_step and steps > 1:
+            step_plans = _decode_step_plans(plans)
+            for _ in tracer.iter[1:steps]:
+                _apply(pipeline, step_plans, device)
         result = tracer.result.save()
     return result
 
