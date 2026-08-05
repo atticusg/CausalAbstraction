@@ -17,6 +17,7 @@ supports:
 from __future__ import annotations
 
 import pytest
+import torch
 
 from causalab.neural.pipeline import LMPipeline
 from tests._helpers.tiny import TINY_RANDOM_MODEL_NAME
@@ -30,6 +31,11 @@ def gqa_pipeline() -> LMPipeline:
     config = AutoConfig.from_pretrained(TINY_RANDOM_MODEL_NAME)
     assert config.num_attention_heads % 2 == 0
     config.num_key_value_heads = config.num_attention_heads // 2
+    # Seed the random init. Without this the weights depend on whatever RNG
+    # state exists when this session-scoped fixture is first built — i.e. on
+    # which tests ran before it — and any oracle asserting "the intervention
+    # changed the logits by more than atol" becomes intermittently vacuous.
+    torch.manual_seed(0)
     model = LlamaForCausalLM(config)  # random init — CPU equivalence only
     model.eval()
     return LMPipeline(model_or_name=model, max_new_tokens=1, padding_side="left")

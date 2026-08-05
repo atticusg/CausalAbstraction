@@ -9,6 +9,7 @@ value-receiver mapping. Random weights, CPU — smoke-only, like ``mock_tiny_lm`
 from __future__ import annotations
 
 import pytest
+import torch
 
 from causalab.neural.pipeline import LMPipeline
 from tests._helpers.tiny import TINY_RANDOM_MODEL_NAME, tiny_random_gpt2_model
@@ -41,6 +42,7 @@ def gqa_tiny_lm() -> LMPipeline:
     # model object can be handed straight to LMPipeline.
     assert config.num_attention_heads % 2 == 0
     config.num_key_value_heads = config.num_attention_heads // 2
+    torch.manual_seed(0)  # see the note in tests/neural/activations/conftest.py
     model = LlamaForCausalLM(config)  # random init — smoke-only
     model.eval()
     return LMPipeline(model_or_name=model, max_new_tokens=3)
@@ -66,6 +68,7 @@ def gqa_decoupled_head_dim_lm() -> LMPipeline:
     # Decouple: head_dim != hidden // n_head (default would be 16 // 4 == 4).
     config.head_dim = (config.hidden_size // config.num_attention_heads) + 2
     assert config.head_dim != config.hidden_size // config.num_attention_heads
+    torch.manual_seed(0)  # see the note in tests/neural/activations/conftest.py
     model = LlamaForCausalLM(config)  # random init — smoke-only
     model.eval()
     return LMPipeline(model_or_name=model, max_new_tokens=3)

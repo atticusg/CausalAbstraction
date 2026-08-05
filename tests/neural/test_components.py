@@ -86,6 +86,7 @@ def _gqa_model() -> Any:
         max_position_embeddings=64,
     )
     torch.manual_seed(0)
+    torch.manual_seed(0)  # see the note in tests/neural/activations/conftest.py
     return LlamaForCausalLM(config).eval()
 
 

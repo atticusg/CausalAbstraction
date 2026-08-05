@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, NamedTuple, Sequence
 
 import torch
 from torch import Tensor
@@ -58,6 +58,9 @@ __all__ = [
     "UnitPlan",
     "build_plans",
     "build_interventions",
+    "FlatIndex",
+    "align_per_example",
+    "flat_index",
     "gather_positions",
     "scatter_positions",
     "collect_unit_activations",
@@ -81,49 +84,96 @@ def model_inputs(encoding: dict[str, Any]) -> dict[str, Tensor]:
 # --------------------------------------------------------------------------- #
 #  Position indexing                                                           #
 # --------------------------------------------------------------------------- #
-def _as_position_tensor(positions: Sequence[Sequence[int]], device: Any) -> Tensor:
-    """``[batch, n_positions]`` index tensor from per-example position lists.
+class FlatIndex(NamedTuple):
+    """Every selected ``(example, position)`` pair, flattened into one axis.
 
-    Requires a uniform width across the batch — every example must select the
-    same number of tokens. A ragged selection cannot form a rectangular index
-    tensor; :func:`causalab.neural.activations.interchange_mode.prepare_interchange_batch`
-    rejects it up front with an actionable message.
+    A *rectangular* ``[batch, n_positions]`` index cannot represent a span whose
+    width varies across the batch — ``torch.as_tensor`` on a ragged nested list
+    raises. Naming each pair individually removes that restriction: an example
+    selecting three tokens simply contributes three pairs.
+
+    ``counts`` records how many pairs each example contributed, which is what
+    lets a *per-example* value (a steering vector, a replacement) be expanded to
+    line up with the flattened rows — see :func:`align_per_example`.
     """
-    return torch.as_tensor(positions, dtype=torch.long, device=device)
+
+    rows: Tensor  #: ``[total_positions]`` — which example each pair belongs to
+    cols: Tensor  #: ``[total_positions]`` — which token within that example
+    counts: Tensor  #: ``[batch]`` — positions selected per example
+
+
+def flat_index(positions: Sequence[Sequence[int]], device: Any) -> FlatIndex:
+    """Flatten per-example position lists into ``(row, col)`` pairs.
+
+    On a uniform span this selects exactly what a rectangular
+    ``[batch, n_positions]`` index selected, in the same order, so it is a
+    drop-in for the rectangular path rather than a different one.
+    """
+    rows = [i for i, per_example in enumerate(positions) for _ in per_example]
+    cols = [p for per_example in positions for p in per_example]
+    counts = [len(per_example) for per_example in positions]
+    return FlatIndex(
+        rows=torch.as_tensor(rows, dtype=torch.long, device=device),
+        cols=torch.as_tensor(cols, dtype=torch.long, device=device),
+        counts=torch.as_tensor(counts, dtype=torch.long, device=device),
+    )
+
+
+def align_per_example(value: Tensor, index: FlatIndex) -> Tensor:
+    """Repeat a per-example ``value`` so it lines up with the flattened rows.
+
+    A steering vector is one value per example, but the activation it is applied
+    to is now one row per *position*. An example selecting three tokens needs its
+    vector three times. Values already carrying one row per position (an
+    interchange source, gathered through the same index) are returned unchanged.
+    """
+    total = index.rows.shape[0]
+    if value.ndim == 3:
+        # A source carrying its own position axis: either one row per selected
+        # position already, or the singleton axis that used to broadcast.
+        if value.shape[0] * value.shape[1] == total:
+            return value.reshape(-1, value.shape[-1])
+        if value.shape[1] == 1:
+            value = value.squeeze(1)
+    if value.shape[0] == total:
+        return value
+    return value.repeat_interleave(index.counts.to(value.device), dim=0)
 
 
 def gather_positions(
-    activation: Tensor, positions: Tensor, head: int | None = None
+    activation: Tensor, index: FlatIndex, head: int | None = None
 ) -> Tensor:
-    """Select ``positions`` (and optionally one head) from a ``[batch, seq, ...]`` activation.
+    """Select every ``(example, position)`` pair (and optionally one head).
 
-    Returns ``[batch, n_positions, width]``, where width is the hidden size or —
-    for a per-head site, whose activation is ``[batch, seq, n_heads, head_dim]`` —
-    the head dimension.
+    Returns ``[total_positions, width]``, where width is the hidden size or — for
+    a per-head site, whose activation is ``[batch, seq, n_heads, head_dim]`` —
+    the head dimension. One row per selected token, so a batch whose examples
+    select different numbers of tokens is representable.
     """
-    rows = torch.arange(activation.shape[0], device=activation.device).unsqueeze(1)
-    selected = activation[rows, positions]
+    selected = activation[index.rows, index.cols]
     if head is not None:
-        selected = selected[:, :, head]
+        selected = selected[:, head]
     return selected
 
 
 def scatter_positions(
-    activation: Tensor, positions: Tensor, values: Tensor, head: int | None = None
+    activation: Tensor, index: FlatIndex, values: Tensor, head: int | None = None
 ) -> None:
-    """Write ``values`` in place at ``positions`` (and one head).
+    """Write ``values`` in place at every selected pair (and one head).
 
     In place because ``activation`` is a *view* of the tensor the model is about
     to consume: every transform in :mod:`causalab.neural.components` returns an
     alias — a tuple element, a channel slice, an ``unflatten`` — so the write
     reaches the forward on its own, with nothing to assign back. That also means
     units sharing a site compose, each one seeing its predecessors' writes.
+
+    Each pair is named once, so there are no duplicate targets and no ordering
+    question about which write wins.
     """
-    rows = torch.arange(activation.shape[0], device=activation.device).unsqueeze(1)
     if head is None:
-        activation[rows, positions] = values.to(activation.dtype)
+        activation[index.rows, index.cols] = values.to(activation.dtype)
     else:
-        activation[rows, positions, head] = values.to(activation.dtype)
+        activation[index.rows, index.cols, head] = values.to(activation.dtype)
 
 
 # --------------------------------------------------------------------------- #
@@ -281,7 +331,7 @@ def collect_unit_activations(
             for plan in group:
                 selected = gather_positions(
                     activation,
-                    _as_position_tensor(plan.positions, device),
+                    flat_index(plan.positions, device),
                     plan.head,
                 )
                 results[index_of[id(plan)]] = plan.intervention(
@@ -311,10 +361,13 @@ def _apply(pipeline: Any, plans: Sequence[UnitPlan], device: Any) -> None:
         )
         activation = site.read()
         for plan in group:
-            positions = _as_position_tensor(plan.positions, device)
-            selected = gather_positions(activation, positions, plan.head)
-            replacement = plan.intervention(selected, plan.source, plan.feature_indices)
-            scatter_positions(activation, positions, replacement, plan.head)
+            index = flat_index(plan.positions, device)
+            selected = gather_positions(activation, index, plan.head)
+            source = (
+                None if plan.source is None else align_per_example(plan.source, index)
+            )
+            replacement = plan.intervention(selected, source, plan.feature_indices)
+            scatter_positions(activation, index, replacement, plan.head)
 
 
 def collect_unit_activations_under(
@@ -352,17 +405,20 @@ def collect_unit_activations_under(
             for plan in group:
                 if id(plan) not in writes:
                     continue
-                positions = _as_position_tensor(plan.positions, device)
-                selected = gather_positions(activation, positions, plan.head)
-                replacement = plan.intervention(
-                    selected, plan.source, plan.feature_indices
+                index = flat_index(plan.positions, device)
+                selected = gather_positions(activation, index, plan.head)
+                source = (
+                    None
+                    if plan.source is None
+                    else align_per_example(plan.source, index)
                 )
-                scatter_positions(activation, positions, replacement, plan.head)
+                replacement = plan.intervention(selected, source, plan.feature_indices)
+                scatter_positions(activation, index, replacement, plan.head)
             for plan in group:
                 if id(plan) in writes:
                     continue
                 selected = gather_positions(
-                    activation, _as_position_tensor(plan.positions, device), plan.head
+                    activation, flat_index(plan.positions, device), plan.head
                 )
                 results[read_index[id(plan)]] = plan.intervention(
                     selected, None, plan.feature_indices
