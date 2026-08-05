@@ -52,7 +52,7 @@ def gqa_decoupled_head_dim_lm() -> LMPipeline:
     ``hidden_size // num_attention_heads``.
 
     The default tiny stub (and ``gqa_tiny_lm``) keep ``head_dim == hidden // n_head``,
-    so the value-receiver's ``shape=(head_dim,)`` slice and pyvene's per-KV-head
+    so the value-receiver's ``shape=(head_dim,)`` slice and the per-KV-head
     ``head_value_output`` split are only ever exercised in the coupled regime. Modern
     decoder-only models (e.g. Qwen3) set ``head_dim`` independently, so this fixture
     pins that the head-value path uses ``config.head_dim`` — not ``hidden // n_head`` —

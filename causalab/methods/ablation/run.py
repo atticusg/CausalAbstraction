@@ -1,6 +1,6 @@
 """Run component ablation and score the behavioral accuracy drop.
 
-Ablation is a pyvene ``replace`` intervention that overwrites a component's
+Ablation is a ``replace`` intervention that overwrites a component's
 output with a fixed reference vector (see :mod:`reference_vectors`), then
 generates and grades. This reuses the head-capable steering primitive
 (``run_steering_interventions(mode="replace")``) rather than a parallel
@@ -16,7 +16,7 @@ Entry points, mirroring ``methods/interchange/layer_scan.py``:
   single-metric variants are thin wrappers over these).
 
 The reference vectors carry the zero-vs-mean choice; there is deliberately no
-``mode`` flag here (the pyvene op is always ``replace``).
+``mode`` flag here (the op is always ``replace``).
 """
 
 from __future__ import annotations
@@ -132,7 +132,7 @@ def run_ablation(
 
     ``vectors`` maps each unit id in ``target`` to its reference vector (zeros
     for zero-ablation, corpus mean for mean-ablation). For all-position spans the
-    dataset is length-bucketed so each pyvene gather stays rectangular; the
+    dataset is length-bucketed so each gather stays rectangular; the
     per-bucket outputs are stitched back into the original dataset order so the
     return value can be scored directly against ``dataset``.
     """

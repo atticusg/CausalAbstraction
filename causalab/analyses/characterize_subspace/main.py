@@ -99,7 +99,7 @@ def _load_step1_texts(step1_dataset: str) -> tuple[str, list[str]]:
 def _load_hf_model(model_name: str, *, device: str | None, dtype: str | None) -> Any:
     """Load a raw HF model + tokenizer for activation collection.
 
-    Bypasses ``causalab.io.pipelines.load_pipeline`` because the IntervenableModel
+    Bypasses ``causalab.io.pipelines.load_pipeline`` because the intervened
     wrapper is task-bound and unnecessary for the residual-stream forward
     pass this analysis needs.
     """

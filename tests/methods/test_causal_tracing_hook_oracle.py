@@ -14,7 +14,7 @@ The noise draw is a backbone internal, so this pins the RNG-independent
   overwrites whatever the corruption produced);
 * the mixed run is reproducible at a fixed seed.
 
-See ``docs/PYVENE_HOOK_COVERAGE.md``.
+See ``docs/HOOK_ORACLES.md``.
 """
 
 from __future__ import annotations

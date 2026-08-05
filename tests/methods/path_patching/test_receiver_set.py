@@ -8,9 +8,9 @@ invariants the feature rests on rather than circuit identity:
 * **Degeneracy** — a 1-element set reproduces the single-receiver run exactly.
 * **Order-invariance** — the collected ``v*`` order matches the injected order, so
   a 2-element set scores identically regardless of receiver order (the runtime
-  guard on pyvene's ``sorted_keys`` = config-add-order contract).
+  guard on the collect-order = config-add-order contract).
 
-plus the structural guards: one pyvene group per receiver, the deepest-receiver
+plus the structural guards: one group per receiver, the deepest-receiver
 restorer/reachability rule, and the set preconditions (shared token position,
 internal-only).
 """
@@ -135,7 +135,7 @@ class TestOrderInvariance:
     """The same receiver list drives PASS-1 collect and PASS-2 inject, so the
     collected ``v*`` order matches the injected order regardless of how the set is
     listed: ``{A, B}`` and ``{B, A}`` must score identically. This is the runtime
-    guard on pyvene's collect-order ↔ sorted_keys contract."""
+    guard on the collect-order ↔ sorted-keys contract."""
 
     pytestmark = pytest.mark.property
 
@@ -170,8 +170,8 @@ class TestOrderInvariance:
 
 
 class TestPass2Grouping:
-    """PASS 2 puts each receiver in its own pyvene group, so the model has one
-    intervention group per receiver — pyvene's _input_validation needs one source
+    """PASS 2 puts each receiver in its own group, so the model has one
+    intervention group per receiver — the batch validation needs one source
     representation per group, and PASS 2 injects one v* per receiver."""
 
     pytestmark = pytest.mark.unit

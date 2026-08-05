@@ -1,9 +1,9 @@
 """Hook oracle for collect ordering + featurized/head collection (GH #380).
 
 ``collect_features`` reads activations at a list of units in one forward and
-returns ``{unit.id: (n_samples, n_features)}``. Two pyvene contracts underpin it:
+returns ``{unit.id: (n_samples, n_features)}``. Two contracts underpin it:
 
-* **Ordering.** pyvene returns one tensor per unit in *config-add* order
+* **Ordering.** the engine returns one tensor per unit in *config-add* order
   (``sorted_keys``); ``collect.py`` maps ``activations[i] → model_units[i]`` by
   position. If that order were wrong, each unit's dict entry would hold another
   unit's activation. We collect three units at *distinct* sites/positions and
@@ -13,8 +13,8 @@ returns ``{unit.id: (n_samples, n_features)}``. Two pyvene contracts underpin it
   featurizer (``f_base`` is what comes back) and addresses per-head value
   outputs the same way an intervention does.
 
-All ground truths are hand-rolled forward hooks — no pyvene. See
-``docs/PYVENE_HOOK_COVERAGE.md``.
+All ground truths are hand-rolled forward hooks — no engine. See
+``docs/HOOK_ORACLES.md``.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ class TestCollectHookOracle:
     ) -> None:
         """Three units at distinct (component, layer, position) sites. Each unit's
         collected activation must equal the hook capture at *its own* site — which
-        only holds if pyvene returns activations in config-add order."""
+        only holds if activations come back in config-add order."""
         hidden = oracle_pipeline.model.config.hidden_size
         u0 = ResidualStream(
             layer=0,

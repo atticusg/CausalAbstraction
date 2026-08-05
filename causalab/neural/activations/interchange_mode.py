@@ -45,9 +45,9 @@ def _first_index_shape_mismatch(
     """Return the first point where two nested index structures diverge in shape.
 
     Interchange pairs base and counterfactual (source) positions element-wise, so
-    pyvene's gather/scatter requires their nested list shapes to match exactly.
-    Walks ``base`` and ``cf`` in parallel and returns ``(path, base_len, cf_len)``
-    at the first list whose lengths differ (or where one side is a list and the
+    the gather and the scatter index the same nested shape and it must match on
+    both sides exactly. Walks ``base`` and ``cf`` in parallel and returns
+    ``(path, base_len, cf_len)`` at the first list whose lengths differ (or where one side is a list and the
     other a scalar index); returns ``None`` when the shapes match. Generic over
     nesting depth, so it covers both the single-axis ``ResidualStream`` layout
     (per-example list of position lists) and the multi-axis ``AttentionHead``
@@ -73,12 +73,12 @@ def _first_ragged_span(
 ) -> tuple[int, tuple[tuple[int, ...], Any, Any]] | None:
     """Return the first batch example in a *group* whose index shape diverges from example 0.
 
-    ``group`` is a batch of per-example locations that pyvene stacks with a
-    single ``torch.tensor(...)`` call (``[example_0, example_1, ...]``), so every
-    example must contribute the same nested shape. A *ragged* span — 1 token for
-    some examples and 2 for others — surfaces as the cryptic ``expected sequence
-    of length N at dim 1`` error that poisons the context. A *uniform*
-    multi-token span stacks fine and is allowed.
+    ``group`` is a batch of per-example locations stacked into one index tensor
+    with a single ``torch.tensor(...)`` call (``[example_0, example_1, ...]``),
+    so every example must contribute the same nested shape. A *ragged* span — 1
+    token for some examples and 2 for others — surfaces as the cryptic
+    ``expected sequence of length N at dim 1`` error from that stack. A
+    *uniform* multi-token span stacks fine and is allowed.
 
     Returns ``(example_index, mismatch)`` for the first example whose shape
     differs from example 0 (``mismatch`` is the `_first_index_shape_mismatch`
@@ -180,11 +180,11 @@ def prepare_intervenable_inputs(
         for model_unit in group
     ]
 
-    # pyvene gathers source (counterfactual) activations and scatters them onto
-    # the base at the paired indices, so the two index structures must share the
-    # same nested shape. A mismatch reaches the CUDA gather/scatter as an
-    # out-of-bounds assertion that poisons the context; catch it on CPU here with
-    # an actionable error instead. The per-position bounds check in
+    # The engine gathers source (counterfactual) activations and scatters them
+    # onto the base at the paired indices, so the two index structures must share
+    # the same nested shape. A mismatch reaches the CUDA advanced-indexing write
+    # as an out-of-bounds assertion that poisons the context; catch it on CPU
+    # here with an actionable error instead. The per-position bounds check in
     # `_apply_padding_shift` (#176) only validates individual indices, so a
     # length mismatch where every index is in-bounds slips past it.
     mismatch = _first_index_shape_mismatch(base_indices, counterfactual_indices)
@@ -194,7 +194,7 @@ def prepare_intervenable_inputs(
             f"Base and counterfactual token positions have mismatched shapes at "
             f"index path {list(_path)}: base selects {base_len}, counterfactual "
             f"selects {cf_len}. Interchange pairs positions, so both must select "
-            f"the same number of tokens per example — a mismatch reaches pyvene's "
+            f"the same number of tokens per example — a mismatch reaches the "
             f"gather/scatter as a CUDA assertion that poisons the context. Usual "
             f"cause: a counterfactual value string that tokenizes to a different "
             f"number of tokens than the base value. Use single-token values or a "
@@ -202,9 +202,9 @@ def prepare_intervenable_inputs(
         )
 
     # Multi-token positions are supported as long as the span is *uniform* across
-    # the batch (every example selects the same number of tokens). pyvene stacks a
-    # unit's per-example positions into one `(batch, num_positions)` tensor and
-    # gathers/scatters every position simultaneously, and the feature
+    # the batch (every example selects the same number of tokens). A unit's
+    # per-example positions are stacked into one `(batch, num_positions)` tensor
+    # and every position is gathered/scattered simultaneously, and the feature
     # interventions set `keep_last_dim=True` so the featurizer sees
     # `(batch, num_positions, d)` and applies per position (its d-sized weights
     # broadcast across the span). The remaining failure mode is a *ragged* span —
@@ -213,8 +213,8 @@ def prepare_intervenable_inputs(
     # sequence of length N at dim 1` error that poisons the context. The base/CF
     # mismatch check above only compares the two sides element-wise, so a span
     # that is ragged *within* one side (identically on both) slips past it; catch
-    # it here per unit with an actionable message. Each unit reports how pyvene
-    # tensorizes its index axes via `tensorized_index_groups` — a single-axis
+    # it here per unit with an actionable message. Each unit reports how its
+    # index axes are tensorized via `tensorized_index_groups` — a single-axis
     # `pos` unit is one group, a multi-axis `h.pos` unit splits into head and
     # position axes (stacked separately) — and we check each group on its own so
     # the head and position axes' legitimately-different widths are never misread
@@ -225,7 +225,7 @@ def prepare_intervenable_inputs(
         ("counterfactual token position", counterfactual_indices),
     ):
         for unit_idx, unit_indices in enumerate(all_indices):
-            # The unit class knows how pyvene tensorizes its index axes: a plain
+            # The unit class knows how its index axes are tensorized: a plain
             # `pos` unit is one group; a multi-axis `h.pos` unit splits into
             # `[head_axis, position_axis]`. Asking the unit keeps that layout
             # knowledge on the class instead of re-deriving it from the unit
@@ -244,9 +244,9 @@ def prepare_intervenable_inputs(
                         f"at index path {list(_path)}). Interchange stacks a "
                         f"unit's per-example positions with `torch.tensor`, so "
                         f"every example must select the same number of tokens — a "
-                        f"ragged span reaches pyvene's gather as an `expected "
-                        f"sequence of length N at dim 1` error that poisons the "
-                        f"context. Usual cause: a value string that tokenizes to a "
+                        f"ragged span fails that stack with an `expected "
+                        f"sequence of length N at dim 1` error. Usual cause: a "
+                        f"value string that tokenizes to a "
                         f"different number of tokens for different examples. Use a "
                         f"fixed-width position (e.g. the last token of the value)."
                     )
@@ -425,8 +425,7 @@ def collect_group_sources(
 ) -> list[Tensor]:
     """Read every unit's source activation, one forward per counterfactual group.
 
-    Groups are separate forwards because each has its own counterfactual input —
-    the same reason the pyvene backbone ran one collection pass per source.
+    Groups are separate forwards because each has its own counterfactual input.
 
     Read ``raw``: the interchange intervention featurizes the source itself, so
     reading through the unit's featurizer here would apply it twice.

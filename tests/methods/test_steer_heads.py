@@ -4,11 +4,11 @@ These cover the Step-1 enabling change in ``causalab.methods.steer.steer`` that
 lets ``run_steering_interventions`` (and therefore zero/mean ablation) target:
 
 * attention-head (``h.pos``) units — the source must be the 4-D ``(b, h, s, d)``
-  tensor pyvene gathers, not the 3-D ``(b, 1, d)`` the legacy code always built;
+  tensor the gather produces, not the 3-D ``(b, 1, d)`` the legacy code always built;
 * multi-position spans on ``pos`` units (e.g. ``get_all_tokens``) — the source
   must be ``(b, n_pos, d)``.
 
-Both previously raised inside pyvene's ``do_intervention`` / ``bhsd_to_bs_hd``.
+Both previously raised inside the old backbone's reshaping helpers.
 We exercise the real tiny-random Llama pipeline (per docs/TESTS.md, our own
 numerical code is never mocked) and assert that zero-*replace* ablation actually
 perturbs the output logits relative to the un-intervened forward pass — using
@@ -60,7 +60,7 @@ def _trace(text: str) -> CausalTrace:
 def _dataset() -> list[dict[str, Any]]:
     """Two equal-token-length prompts.
 
-    Equal length keeps the all-position pyvene gather rectangular without the
+    Equal length keeps the all-position gather rectangular without the
     length-bucketing that the ablation method (Step 2) layers on top — these
     tests isolate the steering primitive itself.
     """

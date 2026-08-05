@@ -7,7 +7,7 @@ inverse featurizer. The randomness is drawn *inside* the intervention from a
 per-instance generator seeded at construction.
 
 Unlike interchange/replace, the noise draw order is an internal of the backbone
-(pyvene today, nnsight tomorrow), so a byte-for-byte hook oracle would couple the
+(it changed once already, from pyvene to nnsight), so a byte-for-byte hook oracle would couple the
 test to that internal. Instead this pins the *backbone-agnostic* contract that
 any backbone must honour:
 
@@ -17,7 +17,7 @@ any backbone must honour:
   generator) gives byte-identical logits across runs;
 * **seed-sensitive** — a different seed gives different logits.
 
-See ``docs/PYVENE_HOOK_COVERAGE.md`` for the coverage map.
+See ``docs/HOOK_ORACLES.md`` for the coverage map.
 """
 
 from __future__ import annotations

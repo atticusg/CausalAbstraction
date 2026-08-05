@@ -1,7 +1,7 @@
 """Intervention modes — what gets written at a site.
 
 ``causalab.neural.interventions`` replaced the seven
-``build_feature_*_intervention`` factories that synthesized pyvene
+``build_feature_*_intervention`` factories that synthesized pyvene-era
 ``TrainableIntervention`` subclasses at runtime. During the migration a parity
 class ran both implementations on the same inputs and asserted they agreed; it
 was deleted with the builders it compared against.

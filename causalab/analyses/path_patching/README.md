@@ -6,8 +6,8 @@ For each `(layer, head)` sender it patches the head's output from a counterfactu
 source while freezing every other path (the component families named by `restore`)
 to the clean base — this is path patching, not a plain activation patch — and
 measures the edge's **direct effect** on the logit difference (`base − patched`).
-The result is a (layer × head) direct-effect heatmap: this is the IOI Fig. 3 /
-pyvene-tutorial head sweep, and name-mover heads score large-positive.
+The result is a (layer × head) direct-effect heatmap: this is the IOI Fig. 3
+head sweep, and name-mover heads score large-positive.
 
 By default the receiver is the output logits (one intervened forward per cell).
 An internal receiver — a head's query/value input, an MLP input, or a residual

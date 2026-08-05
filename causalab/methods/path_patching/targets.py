@@ -1,6 +1,6 @@
 """Path-patching target construction for a sender → receiver edge.
 
-Builds the pyvene grouping path patching needs: group 0 is the **sender** (which
+Builds the grouping path patching needs: group 0 is the **sender** (which
 reads the *source* input) and group 1 is the **restorer set** (which reads the
 *base* input, freezing other paths to their clean value). The hard correctness
 rule lives here — restorers are only ``attention_output`` / ``mlp_output``
@@ -20,8 +20,8 @@ The restorer set *is the estimand definition*, exposed via ``restore``:
 
 * ``("attention", "mlp")`` (default) — freeze every attention **and** MLP output
   above the sender. The only surviving sender→logits route is the bare residual
-  stream, so this measures a strict residual-to-output direct effect (the pyvene
-  IOI-tutorial ``path_patching_config``).
+  stream, so this measures a strict residual-to-output direct effect (the IOI
+  tutorial's path-patching configuration).
 * ``("attention",)`` — freeze only other attention outputs; MLPs (and LayerNorm)
   recompute. This is the Wang et al. (2022) §3.1 direct effect: the sender's
   contribution may flow through residual + MLPs, just not through other attention
@@ -44,6 +44,7 @@ from causalab.neural.LM_units import (
     MLP,
     ResidualStream,
 )
+from causalab.neural.components import head_layout
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_positions import TokenPosition
 from causalab.neural.units import AtomicModelUnit, ComponentIndexer, InterchangeTarget
@@ -65,11 +66,11 @@ class ReceiverSpec:
       intervened forward (there is nothing downstream of the output to strip), so
       this never needs the collect/inject machinery.
     * ``head_value_input`` — a head's value path at ``(layer, head)``, realized as
-      its per-head value vector (pyvene ``head_value_output``; see
+      its per-head value vector (component ``head_value_output``; see
       :class:`~causalab.neural.LM_units.AttentionHeadValue`). The canonical "v of
       head h" receiver.
     * ``head_query_input`` — a head's query path at ``(layer, head)``, realized as
-      its per-head query vector (pyvene ``head_query_output``; see
+      its per-head query vector (component ``head_query_output``; see
       :class:`~causalab.neural.LM_units.AttentionHeadQuery`). The "q of head h"
       receiver — the Fig. 4 S-Inhibition → Name-Mover *query* edge. Read at the
       same depth as the value receiver (``2·layer``); the query vector is
@@ -117,7 +118,7 @@ def build_receiver_unit(
 
     Returns ``None`` for ``kind='output'`` (the degenerate single-forward case has
     no receiver unit — the metric is read straight off the logits). For internal
-    receivers the unit's component is the read-point pyvene exposes:
+    receivers the unit's component is the read point:
     ``head_value_output`` (per-head value vector), ``head_query_output`` (per-head
     query vector), ``mlp_input``, or the residual ``block_output`` / ``block_input``.
     """
@@ -135,26 +136,12 @@ def build_receiver_unit(
                 f"head_value_input receiver head={receiver.head} is out of range "
                 f"0..{n_head - 1} (num_attention_heads={n_head})."
             )
-        head_dim = getattr(config, "head_dim", None) or (hidden // n_head)
-        # pyvene 0.1.8's head_value_output realizes the per-head value vector at width
-        # `hidden_size // num_attention_heads` (it infers the head dim from the head
-        # count, not config.head_dim). When head_dim is decoupled from that ratio
-        # (e.g. Qwen3), PASS 1 collects a `hidden // n_head`-wide vector that cannot be
-        # injected into the true `head_dim`-wide slot in PASS 2 — pyvene raises a deep
-        # broadcast error mid-forward. Guard it here, at the construction chokepoint
-        # both the runner and the analysis route through, with an actionable message.
-        # (The common coupled case, head_dim == hidden // n_head, is unaffected.)
-        if head_dim != hidden // n_head:
-            raise NotImplementedError(
-                f"head_value_input receiver needs head_dim == hidden_size // "
-                f"num_attention_heads, but head_dim={head_dim} and hidden_size // "
-                f"num_attention_heads={hidden // n_head}. pyvene 0.1.8's "
-                f"head_value_output slices the value vector at the hidden // n_head "
-                f"width, so a model with a decoupled head_dim (e.g. Qwen3) is "
-                f"unsupported for the value receiver. Use a residual or mlp_input "
-                f"receiver instead."
-            )
-        # pyvene's head_value_output is indexed in KV-head space (it splits v_proj by
+        # The per-head value vector's width is `config.head_dim`, which need not
+        # equal `hidden_size // num_attention_heads` (Qwen3 and friends decouple
+        # the two). Reading the width off the config rather than the head count is
+        # what makes the decoupled case work — see `neural.components.head_layout`.
+        _n_q, _n_kv, head_dim = head_layout(config)
+        # `head_value_output` is indexed in KV-head space (v_proj splits by
         # num_key_value_heads). Under grouped-/multi-query attention (n_kv < n_head)
         # each value vector is *shared* by a group of query heads, so the receiver's
         # query head maps to its KV group `head // (n_head // n_kv)`. On non-GQA
@@ -174,11 +161,11 @@ def build_receiver_unit(
                 f"head_query_input receiver head={receiver.head} is out of range "
                 f"0..{n_head - 1} (num_attention_heads={n_head})."
             )
-        # pyvene's head_query_output is indexed in query-head space (it splits q_proj
-        # by num_attention_heads). Queries are per-query-head even under GQA — only
+        # `head_query_output` is indexed in query-head space (q_proj splits by
+        # num_attention_heads). Queries are per-query-head even under GQA — only
         # k/v are shared across a KV group — so the receiver's head maps to itself
         # with no KV-group remap (contrast head_value_input above).
-        head_dim = getattr(config, "head_dim", None) or (hidden // n_head)
+        _n_q, _n_kv, head_dim = head_layout(config)
         return AttentionHeadQuery(
             receiver.layer, receiver.head, receiver.token_position, shape=(head_dim,)
         )
@@ -410,7 +397,7 @@ def build_path_patching_target(
 
     Returns ``InterchangeTarget([[sender], [*restorers]])`` — group 0 is the
     sender (it reads the *source* input), group 1 is the restorer set (it reads
-    the *base* input). This is the two-group pyvene path-patching config: for
+    the *base* input). This is the two-group path-patching layout: for
     ``receiver = output`` the direct effect on the logits is read from a single
     intervened forward; for an internal receiver this same grouping drives PASS 1
     of the two-pass runner (the receiver is collected alongside it). When there

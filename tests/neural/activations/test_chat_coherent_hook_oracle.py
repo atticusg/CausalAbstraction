@@ -11,16 +11,16 @@ handled uniformly; what this adds over the CPU suites is the real architecture +
 real tokenizer at scale.
 
 This is intentionally a *faithful* port of the CPU oracles (same logic, GPU
-float32 tolerances) — it is meant to **surface** any place where pyvene's
-addressing or causalab's plumbing breaks on the decoupled-``head_dim`` GQA
-backbone, not to paper over it. The per-head value/query receivers are the
-documented risk (``docs/PATH_PATCHING.md §0.5``: pyvene 0.1.8 ``head_value_output``
-assumes ``head_dim == hidden / n_head``).
+float32 tolerances) — it is meant to **surface** any place where causalab's
+addressing or plumbing breaks on the decoupled-``head_dim`` GQA backbone, not to
+paper over it. The per-head value/query receivers are the sharpest case: their
+width must follow ``config.head_dim`` (128 here) rather than
+``hidden // n_head`` (80), and k/v must be addressed in KV-head space.
 
 GPU-only (``@pytest.mark.golden``, the sole GPU tier — see ``docs/TESTS.md``);
 deselected on the CPU ``test`` job, run on the nightly GPU runner. Loaded in
 float32 for a clean equivalence signal (these are equivalence contracts, not the
-bf16 value pins ``test_goldens.py`` owns). See ``docs/PYVENE_HOOK_COVERAGE.md``.
+bf16 value pins ``test_goldens.py`` owns). See ``docs/HOOK_ORACLES.md``.
 """
 
 from __future__ import annotations
@@ -80,8 +80,8 @@ _SOURCE = "Q: What color is fresh grass? A:"
 # Real finding surfaced by this harness (GH #380): pyvene 0.1.8's per-head
 # accessors (head_value_output / head_query_output / head_attention_value_output)
 # assumed head_dim == hidden / n_head. Qwen3-4B *decouples* head_dim (128) from
-# hidden / n_head (2560/32 = 80), so pyvene returned 80-wide slices instead of the
-# true 128 — a genuinely wrong activation (#386). causalab refused per-head ops on
+# hidden / n_head (2560/32 = 80), so the old backbone returned 80-wide slices
+# instead of the true 128 — a genuinely wrong activation (#386). causalab refused per-head ops on
 # such models rather than report one, and the tests below were xfail(strict=True)
 # pending the backbone migration.
 #
@@ -715,9 +715,9 @@ class TestCausalTracingGolden:
 class TestHeadReceiversGolden:
     def test_head_value_matches_vproj_kv_slice(self, chat_coherent_pipeline) -> None:
         """Per-head value receiver vs. the v_proj KV slice. Qwen3-4B has a
-        *decoupled* head_dim (128 ≠ hidden/n_head=80), the case pyvene 0.1.8's
-        head_value_output is documented not to support — so this is expected to
-        surface a real discrepancy if pyvene mis-addresses."""
+        *decoupled* head_dim (128 ≠ hidden/n_head=80) — the configuration the
+        pyvene backbone could not address at all (#386), so this surfaces a real
+        discrepancy if the engine gets the per-head width wrong."""
         pipe = chat_coherent_pipeline
         d = head_dim(pipe)
         v_proj = pipe.model.model.layers[_MID].self_attn.v_proj

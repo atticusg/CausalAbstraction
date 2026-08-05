@@ -213,8 +213,8 @@ GPT2 = Family(
     mlp="mlp",
     act="act",
     o_proj="c_proj",
-    # pyvene reads GPT-2's attention_output at `resid_dropout`'s OUTPUT, not the
-    # attention module's — the sublayer output as it enters the residual stream.
+    # GPT-2's attention_output is read at `resid_dropout`'s OUTPUT, not the
+    # attention module's: the sublayer output as it enters the residual stream.
     attn_out=("attn", "resid_dropout"),
     fused_qkv="c_attn",
     q_proj=None,
@@ -399,9 +399,9 @@ def resolve_site(nnsight_model: Any, component_type: str, layer: int) -> Site:
         raise UnsupportedComponent(
             "`head_attention_value_input` names no real read point: the per-head "
             "attention output is only exposed on the *input* side of the output "
-            "projection, which is `head_attention_value_output`. pyvene had no "
-            "such component either, so `AttentionHead(target_output=False)` was "
-            "never runnable. Use `target_output=True`."
+            "projection, which is `head_attention_value_output`. "
+            "`AttentionHead(target_output=False)` therefore has no read point. "
+            "Use `target_output=True`."
         )
 
     raise UnsupportedComponent(
@@ -413,8 +413,9 @@ def resolve_site(nnsight_model: Any, component_type: str, layer: int) -> Site:
 def component_width(config: Any, component_type: str) -> int:
     """Feature width of ``component_type`` — the last dimension of its activation.
 
-    Mirrors pyvene's dimension table, except per-head components report
-    ``config.head_dim`` rather than ``hidden_size // num_attention_heads``.
+    Per-head components report ``config.head_dim`` — *not*
+    ``hidden_size // num_attention_heads``, which the two need not agree on
+    (see :func:`head_layout`).
     """
     hidden = int(getattr(config, "hidden_size", None) or config.n_embd)
     _n_q, _n_kv, head_dim = head_layout(config)

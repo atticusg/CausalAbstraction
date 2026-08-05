@@ -304,8 +304,8 @@ def build_attention_output_targets(
     """
     Build InterchangeTargets for whole-attention-sublayer interventions.
 
-    Targets pyvene's ``attention_output`` component — the full attention
-    sublayer output (all heads jointly) written back into the residual stream.
+    Targets the ``attention_output`` component — the full attention sublayer
+    output (all heads jointly) written back into the residual stream.
     This is the layer-level analogue of :func:`build_attention_head_targets`
     (which targets a single head's value stream) and mirrors
     :func:`build_mlp_targets` in shape and grouping. The merged sublayer output is

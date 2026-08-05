@@ -4,8 +4,8 @@
 For each ``(layer, head)`` the head's output is patched from the counterfactual
 source while every other path selected by ``restore`` is frozen to the clean base
 (path patching), and the edge's direct effect on the logit difference between a
-correct and a distractor token is measured. This is the IOI Fig. 3 /
-pyvene-tutorial head sweep — one intervened forward per cell. The reported grid
+correct and a distractor token is measured. This is the IOI Fig. 3 head
+sweep — one intervened forward per cell. The reported grid
 value is the direct effect (base minus patched logit difference); name-mover
 heads score large-positive.
 

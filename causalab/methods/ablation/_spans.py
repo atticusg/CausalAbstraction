@@ -1,6 +1,6 @@
 """Position-count bucketing for ablation spans.
 
-pyvene gathers a *rectangular* ``(b, [h,] n_pos, d)`` tensor, so every example
+The gather produces a *rectangular* ``(b, [h,] n_pos, d)`` tensor, so every example
 in a batch must expose the same number of intervened positions. Single-position
 spans (e.g. a named ``last_token``) satisfy this trivially; all-position spans
 (``get_all_tokens``) do not — examples of different token length yield different
@@ -30,8 +30,8 @@ def unit_position_count(unit: AtomicModelUnit, example_input: Any) -> int:
     position list directly. ``attention_mask=None`` keeps indices in the
     example's own unpadded frame, which is all we need for counting.
     """
-    # index_component's return shape is unit-type dependent (pyvene-shaped nested
-    # lists), so it's typed broadly; treat as Any for the structural indexing.
+    # index_component's return shape is unit-type dependent (nested lists whose
+    # depth varies), so it's typed broadly; treat as Any for the structural indexing.
     idx: Any = unit.index_component(example_input, batch=False, attention_mask=None)
     if unit.unit == "h.pos":
         return len(idx[1][0])

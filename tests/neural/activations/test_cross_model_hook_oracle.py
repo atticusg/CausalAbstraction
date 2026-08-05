@@ -1,7 +1,7 @@
 """Hook oracle for cross-model patching (``source_representations``) — GH #380.
 
 Cross-model patching collects activations from a *source* pipeline and injects
-them (via pyvene's ``source_representations``) into a *target* pipeline's base
+them (as explicit source representations) into a *target* pipeline's base
 run, instead of running the counterfactual through the target. The contract:
 the value written into the target is the *source model's* activation at the
 counterfactual, gathered at the source's tokenization.

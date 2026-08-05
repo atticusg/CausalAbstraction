@@ -1,4 +1,4 @@
-"""Fixtures for the pyvene hook-oracle suites (GH #380).
+"""Fixtures for the hook-oracle suites (GH #380).
 
 The oracle tests are equivalence/invariance contracts that must hold across model
 families, not just one architecture. ``oracle_pipeline`` parametrises every suite

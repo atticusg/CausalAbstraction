@@ -63,7 +63,7 @@ def _n_features(unit: AtomicModelUnit) -> int:
 
 
 def corruption_intervention_type(kind: CorruptionKind) -> str:
-    """The pyvene intervention type a corruption kind applies at the entry site.
+    """The intervention type a corruption kind applies at the entry site.
 
     ``noise`` uses the dynamic, per-position ``noise`` intervention; ``zero`` and
     ``mean`` overwrite with a fixed vector via ``replace``.
@@ -138,8 +138,8 @@ def _entry_activation_std(
     Collects every gathered (example, position) activation at the entry units and
     returns the scalar std across all of them — the subject-embedding σ ROME
     scales its corruption noise by. Multi-position ``pos`` spans are collected one
-    position at a time (the pyvene 3-D collect bug worked around in
-    :func:`make_mean_vectors`), bucketed so each gather stays rectangular.
+    position at a time (as in :func:`make_mean_vectors`), bucketed so each
+    gather stays rectangular.
     """
     units = entry_target.flatten()
     chunks: list[Tensor] = []

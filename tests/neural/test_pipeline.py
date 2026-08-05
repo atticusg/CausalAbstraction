@@ -4,9 +4,9 @@
 layer and HuggingFace: it loads the tokenizer/model on the resolved device,
 turns a ``list[CausalTrace]`` into batched ``input_ids`` / ``attention_mask``
 / optionally ``position_ids`` (``load``), runs greedy generation that always
-returns a ``{scores, sequences, string}`` dict (``generate``), and runs
-PyVENE interventions with the same return contract
-(``intervenable_generate``). Every analysis under
+returns a ``{scores, sequences, string}`` dict (``generate``), and formats an
+intervened generation with the same return contract
+(``format_generation``). Every analysis under
 ``causalab/analyses/subspace/*``, the manifold fitting pipeline, the
 metric/filter methods, the flow/pca trainers, ``io/pipelines.py``, and the
 runner smoke tier all instantiate ``LMPipeline`` — if ``load`` returns
@@ -340,8 +340,8 @@ class TestLMPipelineInitUnit:
 class TestLMPipelineLoadUnit:
     """``LMPipeline.load`` is the only place ``CausalTrace`` →
     ``tokenizer(...)`` conversion happens — its return dict is what the
-    PyVENE intervention pipeline (and ``analyses/manifold/*``) feed
-    directly into ``model.generate`` or ``intervenable_model.generate``.
+    intervention engine (and ``analyses/manifold/*``) feed directly into
+    ``model.generate`` or an intervened trace.
     """
 
     pytestmark = pytest.mark.unit
@@ -453,7 +453,7 @@ class TestLMPipelineGenerateUnit:
 # --------------------------------------------------------------------------- #
 class TestLMPipelineDumpUnit:
     """``LMPipeline.dump`` decodes whatever ``generate`` /
-    ``intervenable_generate`` produced (logits-3D, ids-2D, dict, list /
+    the intervened generation produced (logits-3D, ids-2D, dict, list /
     tuple) into a string or list of strings. Every analysis that prints
     "prediction" lines goes through here.
     """
@@ -526,13 +526,13 @@ class TestLMPipelineDumpUnit:
 
 
 # --------------------------------------------------------------------------- #
-#  LMPipeline.intervenable_generate                                           #
+#  LMPipeline.format_generation                                               #
 # --------------------------------------------------------------------------- #
 class TestLMPipelineFormatGenerationUnit:
     """``LMPipeline.format_generation`` turns a ``generate`` result into the
     ``{sequences, scores, string}`` dict every analysis consumes.
 
-    It replaces ``intervenable_generate``, which wrapped pyvene's generate call
+    It replaces ``intervenable_generate``, which wrapped the old backbone's generate call
     and owned this same return contract. The contract itself is unchanged, so
     these are the same assertions aimed at the function that now holds it:
     ``sequences`` always, ``scores`` only when asked for, ``string`` decoded from

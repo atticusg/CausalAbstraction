@@ -10,7 +10,7 @@ An internal-receiver path patch needs two passes:
 * **PASS 2** re-runs the clean base with the receiver replaced by ``v*``, isolating
   the sender→receiver edge effect.
 
-This file pins both halves with hand-rolled hooks (no pyvene):
+This file pins both halves with hand-rolled hooks (no engine):
 
 * ``TestForwardOrderContract`` proves the firing-order assumption directly: an
   upstream edit is visible to a downstream capture in one forward, and a
@@ -19,7 +19,7 @@ This file pins both halves with hand-rolled hooks (no pyvene):
   internal receiver, no restorers) by collecting ``v*`` under a sender edit and
   injecting it on the clean base.
 
-See ``docs/PYVENE_HOOK_COVERAGE.md``.
+See ``docs/HOOK_ORACLES.md``.
 """
 
 from __future__ import annotations

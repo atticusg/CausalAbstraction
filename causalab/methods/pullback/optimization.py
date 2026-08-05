@@ -805,9 +805,9 @@ def run_pair_optimization(
 ) -> dict[tuple[int, int], dict]:
     """Run optimization for all selected pairs.
 
-    Uses pyvene's IntervenableModel for differentiable forward passes through
-    FeatureInterpolateIntervention, which preserves the base activation's
-    residual via inverse_featurizer(f_out, base_err).
+    Runs differentiable forward passes through the ``interpolate`` intervention,
+    which preserves the base activation's residual via
+    ``inverse_featurizer(f_out, base_err)``.
 
     Comparison path distributions (geometric, linear) are passed in via
     precomputed_comparisons, collected separately with the full featurizer.
@@ -872,7 +872,7 @@ def run_pair_optimization(
             N_pair,
         )
 
-        # Build self-intervention examples for pyvene (source == base)
+        # Build self-intervention examples (source == base)
         pair_samples = [filtered_samples[n] for n in sample_indices]
         cf_examples = [
             {"input": s["input"], "counterfactual_inputs": [s["input"]]}

@@ -9,10 +9,8 @@ model with those interventions applied.
 
 Structure — and why it is two passes, not one
 ---------------------------------------------
-Sources are read in their own forward, then written into the base's run. That
-mirrors what the pyvene backbone did (each source was a plain collection forward;
-the base was the generation prefill), so activations and logits match it exactly.
-The alternative — putting base and sources in one batched trace and handing
+Sources are read in their own forward, then written into the base's run. The
+alternative — putting base and sources in one batched trace and handing
 values across with ``tracer.barrier`` — also works, but it needs one barrier
 round per site with every source's read fenced behind the rounds for the sites
 before it; hoisting a read drives the model past a site the base has not written
@@ -20,14 +18,13 @@ yet. Two passes needs no barriers at all, and cross-model patching (sources from
 a *different* model) and steering (no source pass at all) fall out of the same
 code path.
 
-What this replaces
-------------------
-``prepare_intervenable_model`` / ``delete_intervenable_model`` and the pyvene
-``IntervenableModel`` lifecycle. There is no model to build or tear down: an
-intervention exists only for the duration of a trace, so the per-batch
-build-hooks / move-to-CPU / ``gc.collect()`` / ``empty_cache()`` cycle is gone,
-along with the sharded-model device bookkeeping that existed to place pyvene's
-index tensors.
+No intervention lifecycle
+-------------------------
+There is no intervened model to build or tear down: an intervention exists only
+for the duration of a trace. Nothing here allocates per-batch hooks, moves a
+model to CPU, or calls ``gc.collect()`` / ``empty_cache()`` between batches, and
+index tensors follow the activation they index rather than needing their own
+device bookkeeping on a sharded model.
 
 Ordering contract
 -----------------
@@ -209,8 +206,8 @@ def build_plans(
 
     ``type_by_unit`` overrides ``mode`` per unit, which is how a single pass mixes
     modes — causal tracing corrupts the entry site with ``noise`` while restoring
-    another with ``replace``. Unlike the pyvene backbone, mixing costs nothing
-    here: each unit simply carries a different intervention object.
+    another with ``replace``. Mixing costs nothing: each unit simply carries a
+    different intervention object.
 
     ``raw=True`` ignores each unit's featurizer and works in activation space.
     Use it when reading the *sources* of an interchange: the interchange

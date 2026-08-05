@@ -3,13 +3,13 @@
 Path patching perturbs a sender component from a counterfactual input while
 freezing every other path to its clean-base value, so only the direct
 sender→receiver residual channel carries the perturbation. It is the
-direct-effect specialization of causalab's interchange intervention (see
-``docs/PATH_PATCHING.md``).
+direct-effect specialization of causalab's interchange intervention; see
+``causalab/analyses/path_patching/README.md`` for the analysis that drives it.
 
 Receivers:
 
-* ``output`` (default) — the **direct effect on the logits** (the IOI Fig. 3 /
-  pyvene-tutorial head sweep), read from a single intervened forward.
+* ``output`` (default) — the **direct effect on the logits** (the IOI Fig. 3
+  head sweep), read from a single intervened forward.
 * internal receivers — ``head_value_input`` (a head's value vector),
   ``mlp_input``, ``residual`` — measured by the two-pass collect/inject runner.
 

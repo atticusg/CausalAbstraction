@@ -26,6 +26,14 @@ The **Required for** column names the `causalab/` subdirs whose modules must rea
 
 ## Conventions
 
+### Hook oracles
+
+The intervention engine's correctness rests on a set of tests whose ground truth
+is re-implemented with raw PyTorch forward hooks, independent of the engine. They
+are what let the backbone be swapped (pyvene → nnsight) with confidence. See
+[`docs/HOOK_ORACLES.md`](HOOK_ORACLES.md) for the coverage map and the rules for
+adding one.
+
 ### Mocking policy
 
 1. **Tiny real over mocks.** Use the smallest real implementations: `tiny_random_model()` instead of mocking a neural network, tiny datasets, ...

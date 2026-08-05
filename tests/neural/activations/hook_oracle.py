@@ -1,26 +1,26 @@
 """Backbone-independent PyTorch-hook oracles for causalab's intervention engine.
 
-causalab's intervention engine is currently backed by ``pyvene`` (see
-``causalab/neural/activations/``). The helpers here re-implement the *ground
-truth* of every intervention — collect, interchange, replace, steer, noise,
-mask, interpolation, cross-model patching, two-pass path patching — using only
-raw ``torch.nn.Module.register_forward_hook`` / ``register_forward_pre_hook``.
-They never touch pyvene.
+The helpers here re-implement the *ground truth* of every intervention —
+collect, interchange, replace, steer, noise, mask, interpolation, cross-model
+patching, two-pass path patching — using only raw
+``torch.nn.Module.register_forward_hook`` / ``register_forward_pre_hook``. They
+import nothing from ``causalab/neural/activations/``: that is what makes them a
+ground truth rather than the engine checked against itself.
 
 A test built on these helpers asserts a behavioural contract on causalab's
 *public wrappers* (``run_interchange_interventions``, ``collect_features``,
-``run_steering_interventions``, …), not on pyvene's internals. So the contract
-survives a backbone swap: when pyvene is replaced by nnsight (GH #380), the same
-oracle tests re-run unchanged and verify the new backbone reproduces the same
-activations and logits. The pyvene→hook→test coverage map lives in
-``docs/PYVENE_HOOK_COVERAGE.md``.
+``run_steering_interventions``, …), never on engine internals. So the contract
+survives a backbone swap: when the pyvene backbone was replaced by nnsight
+(GH #380) these oracles re-ran unchanged and were the acceptance gate for the
+swap. The behaviour→oracle→test coverage map lives in ``docs/HOOK_ORACLES.md``.
 
 Design notes
 ------------
 * Oracles run on the tiny-random CPU pipelines (``tiny_pipeline`` /
   ``tiny_gpt2_pipeline`` from ``tests/neural/conftest.py``); no GPU, no coherent
   English needed — these are equivalence/invariance contracts, not value pins.
-* The hook resolvers below mirror pyvene's llama/gpt2 component→module table:
+* The hook resolvers below independently restate the llama/gpt2
+  component→module mapping (the engine's lives in ``neural/components.py``):
   ``block_output``→``layers[L]`` output, ``block_input``→``layers[L]`` input,
   ``mlp_output``→``layers[L].mlp`` output, ``attention_output``→
   ``layers[L].self_attn`` output, and ``head_attention_value_output`` head ``H``→
@@ -261,11 +261,11 @@ def hidden_of(out: Any) -> torch.Tensor:
 
 
 # --------------------------------------------------------------------------- #
-#  Capture — read an activation with our own hook, no pyvene                   #
+#  Capture — read an activation with our own hook, no engine                   #
 # --------------------------------------------------------------------------- #
 def capture_residual(pipeline: LMPipeline, layer: int, inputs: Mapping) -> torch.Tensor:
     """Residual stream after ``layer`` for ``inputs``, grabbed via our own
-    forward hook — no pyvene involved."""
+    forward hook — no engine involved."""
     grabbed: dict[str, torch.Tensor] = {}
 
     def hook(_module, _inp, out):
@@ -287,7 +287,7 @@ def capture_component(
     pipeline: LMPipeline, module: torch.nn.Module, kind: HookKind, inputs: Mapping
 ) -> torch.Tensor:
     """Activation at ``module`` (its output if ``kind=='out'``, else its input)
-    for ``inputs`` — grabbed with our own hook, no pyvene."""
+    for ``inputs`` — grabbed with our own hook, no engine."""
     grabbed: dict[str, torch.Tensor] = {}
 
     if kind == "out":
@@ -466,7 +466,7 @@ def capture_with_edits(
     are active. Because hooks fire in forward order, the captured value reflects
     every *upstream* edit already applied — this is how two-pass path patching's
     PASS 1 reads a receiver's value under an upstream sender+restorer
-    intervention (no pyvene)."""
+    intervention (no engine)."""
     grabbed: dict[str, torch.Tensor] = {}
 
     if capture_kind == "out":

@@ -4,7 +4,7 @@ pytest unit-tests for the interpolation intervention.
 Tests use SubspaceFeaturizer and random tensors — no real model required.
 
 Run with:
-    pytest -q tests/test_pyvene_core/test_interpolate.py
+    pytest -q tests/methods/test_interpolate.py
 """
 
 from __future__ import annotations

@@ -199,7 +199,7 @@ class TestReferenceVectorShapes:
         self, mock_tiny_lm: LMPipeline
     ) -> None:
         """All-tokens span over a variable-length dataset must collect via
-        length-bucketing (a single ragged batch would raise in pyvene's gather)."""
+        length-bucketing (a single ragged batch would raise in the gather)."""
         head_dim = mock_tiny_lm.model.config.hidden_size // (
             mock_tiny_lm.model.config.num_attention_heads
         )
@@ -224,8 +224,8 @@ class TestReferenceVectorNumerics:
         self, mock_tiny_lm: LMPipeline
     ) -> None:
         """A multi-position MLP span mean must equal averaging its per-position
-        means. ``pos`` units can't be collected over >1 position in one pyvene
-        pass (it mangles the 3-D gather), so ``make_mean_vectors`` slices the span
+        means. ``pos`` units are collected one position at a time, so
+        ``make_mean_vectors`` slices the span
         into single-position collects; this pins that the slice-and-average is
         numerically the same as the (working) single-position path — a value pin
         on the aggregation math, so it lives in the numerical_unit tier."""
@@ -257,7 +257,7 @@ class TestReferenceVectorNumerics:
         """Same multi-position slice-and-average guarantee for the new
         ``attention_output`` unit. ``AttentionOutput`` is a ``pos`` unit, so a
         >1-token span hits ``make_mean_vectors``' single-position-at-a-time
-        workaround for the pyvene 3-D-gather bug; pin that the workaround is
+        the per-position path; pin that it is
         numerically equivalent to per-position means for this unit type too (the
         latent risk flagged for span ablations)."""
         dataset = _equal_length_dataset()  # equal length -> one bucket, fixed n_pos
@@ -359,7 +359,7 @@ class TestAblationScanAndCombo:
         behaviour (drop > 0).
 
         We assert behaviour *changes*, not that a joint drop dominates the single
-        drops: ``FeatureReplaceIntervention`` preserves each component's
+        drops: ``ReplaceIntervention`` preserves each component's
         orthogonal error term, so zero-ablation is not fully destructive and the
         drop is not monotone in the set of ablated units — especially on the
         random-weight stub, where one head can flip more outputs than all heads

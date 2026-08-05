@@ -6,19 +6,18 @@ primitives that feed every featurizer learner (``methods/pca``,
 analysis. ``collect_features`` produces a ``{unit_id -> (n_samples, hidden)}``
 dict on CPU; ``collect_source_representations`` / ``collect_batch_representations``
 produce the per-location source tensors that ``neural/activations/interchange_mode.py``
-and ``methods/metric.py`` pass to pyvene as ``source_representations`` during
-cross-model patching; ``collect_class_centroids`` packages a ``collect_features``
+and ``methods/metric.py`` inject as source representations during cross-model
+patching; ``collect_class_centroids`` packages a ``collect_features``
 call plus a per-value reduction used by path-steering visualization.
 
 If any of these returns the wrong shape, ordering, or device, every
 downstream interchange / featurizer training run silently consumes corrupted
 activations — so this module is the canonical place to pin those contracts.
 
-The *unit* classes keep the historical mocked-pyvene scaffolding (they exist
-to assert envelope reshape / dict-keying / log-message behaviour, not numerics).
-The *property* classes use the real ``tiny_pipeline`` fixture from
-``tests/neural/conftest.py`` so the pyvene envelope shape is exercised
-end-to-end against a real (tiny) ``IntervenableModel``.
+The *unit* classes assert envelope reshape / dict-keying / log-message
+behaviour, not numerics. The *property* classes use the real ``tiny_pipeline``
+fixture from ``tests/neural/conftest.py`` so the shapes are exercised end-to-end
+against a real (tiny) model.
 """
 
 from __future__ import annotations
@@ -99,7 +98,7 @@ class TestCollectFeaturesUnit:
     ``analyses/{activation_manifold, subspace, path_steering}`` analyses all
     consume its ``{unit.id -> (n_samples, hidden)}`` output on CPU.
 
-    These ran against a mocked pyvene ``IntervenableModel`` until the nnsight
+    These ran against a mocked ``IntervenableModel`` until the nnsight
     migration removed the object they mocked. They now run on the real tiny
     pipeline, which is both closer to docs/TESTS.md's mocking policy and
     strictly more informative — a mocked backbone could not have caught a
@@ -215,7 +214,7 @@ class TestCollectPaddingCorrectness:
     RoPE ``tiny_pipeline`` cannot fail it.
 
     This replaces a mock that asserted a ``position_ids`` tensor was handed to
-    pyvene's forward. The backbone now derives them itself, so the contract worth
+    the backbone's forward. The engine now derives them itself, so the contract worth
     pinning is the observable one: batching must not change the numbers.
     """
 
@@ -280,9 +279,9 @@ def _make_residual_unit_at_token(
 
 
 class TestCollectFeaturesProperty:
-    """Tier-property invariants for ``collect_features`` on a real (tiny) ``IntervenableModel``.
+    """Tier-property invariants for ``collect_features`` on a real (tiny) model.
 
-    These tests exercise pyvene's
+    These tests exercise the engine's
     ``((base_outputs, collected_activations), cf_outputs)`` envelope
     end-to-end against ``tests/neural/conftest.py::tiny_pipeline`` — the same
     shape contract the production runners hit. ``collect_features`` now pins
@@ -548,8 +547,8 @@ class TestCollectBatchRepresentationsUnit:
 class TestCollectBatchRepresentationsProperty:
     """Length-and-ordering invariants for ``collect_batch_representations``.
 
-    The returned ``list[Tensor]`` is consumed positionally by pyvene against
-    ``intervenable_model.sorted_keys``. The two property assertions below pin
+    The returned ``list[Tensor]`` is consumed positionally against
+    the units' config-add order. The two property assertions below pin
     that contract end-to-end on the real (tiny) pipeline.
     """
 

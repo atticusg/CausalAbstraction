@@ -1,16 +1,15 @@
 """Component resolution: does ``resolve_site`` point at the right activation?
 
-``causalab.neural.components`` replaces pyvene's ``*_type_to_module_mapping``
-tables. Every component type must resolve to the *same* activation pyvene named,
-on both module-tree families causalab supports, or every downstream method
-(collect / interchange / steer / ablate / path-patch) silently moves.
+Every component type must resolve to the activation its name promises, on every
+module-tree family causalab supports, or every downstream method (collect /
+interchange / steer / ablate / path-patch) silently moves.
 
 Ground truth is raw ``register_forward_hook`` / ``register_forward_pre_hook`` on
-the module pyvene named, with the same reshaping applied by hand — no pyvene, no
-nnsight. So these tests keep their meaning after pyvene is removed, and they are
-not satisfied by both paths being wrong in the same way.
+the module named, with the same reshaping applied by hand — no engine, no
+nnsight. So these tests are not satisfied by both paths being wrong in the same
+way, and they outlived the backbone they were written under.
 
-Two things pyvene got wrong that are asserted here as *correct*:
+Two things the pyvene backbone got wrong are asserted here as *correct*:
 
 * per-head widths follow ``config.head_dim`` (#386), and
 * k/v heads are addressed in KV space under grouped-query attention,
@@ -72,7 +71,7 @@ def _gqa_model() -> Any:
     """A Llama whose ``head_dim`` is decoupled from ``hidden // n_head``, with GQA.
 
     ``head_dim=8`` while ``hidden_size // num_attention_heads == 4``, and
-    ``num_key_value_heads=2 < num_attention_heads=4``. pyvene realizes every
+    ``num_key_value_heads=2 < num_attention_heads=4``. The pyvene backbone realized every
     per-head component at the 4-wide ratio, so on this model it returns
     wrong-width vectors — which is why causalab refused it outright (#386).
     """
@@ -109,14 +108,14 @@ def pipelines() -> dict[str, LMPipeline]:
 
 
 # --------------------------------------------------------------------------- #
-#  Oracle — the module pyvene named, hooked by hand                            #
+#  Oracle — the named module, hooked by hand                                   #
 # --------------------------------------------------------------------------- #
 def _is_gpt2(model: Any) -> bool:
     return hasattr(model, "transformer") and hasattr(model.transformer, "h")
 
 
 def _oracle_module_and_kind(model: Any, component: str) -> tuple[Any, str]:
-    """``(module, 'in'|'out')`` — pyvene's anchor point for ``component``."""
+    """``(module, 'in'|'out')`` — the anchor point for ``component``."""
     if _is_gpt2(model):
         block = model.transformer.h[LAYER]
         table = {
@@ -215,7 +214,7 @@ def _oracle_activation(pipeline: LMPipeline, component: str, enc: dict) -> torch
 #  Tests                                                                       #
 # --------------------------------------------------------------------------- #
 class TestResolveSiteReads:
-    """``Site.read()`` must return the activation pyvene's table named."""
+    """``Site.read()`` must return the activation the component name promises."""
 
     @pytest.mark.parametrize("family", ["llama", "gpt2", "gqa"])
     @pytest.mark.parametrize("component", COMPONENTS)
@@ -242,7 +241,7 @@ class TestResolveSiteReads:
     ) -> None:
         """The head axis is ``config.head_dim`` wide, not ``hidden // n_head``.
 
-        On the ``gqa`` fixture those two differ (8 vs 4); pyvene used the ratio,
+        On the ``gqa`` fixture those two differ (8 vs 4); the pyvene backbone used the ratio,
         which is the silent wrong-width read behind #386.
         """
         pipeline = pipelines[family]
@@ -340,9 +339,9 @@ class TestUnsupported:
         self, pipelines: dict[str, LMPipeline]
     ) -> None:
         """`AttentionHead(target_output=False)` names a read point that does not
-        exist; pyvene had no such component either. Fail with an explanation
-        rather than resolving to something plausible-but-wrong."""
-        with pytest.raises(UnsupportedComponent, match="never runnable"):
+        exist. Fail with an explanation — and name the component that *does*
+        work — rather than resolving to something plausible-but-wrong."""
+        with pytest.raises(UnsupportedComponent, match="head_attention_value_output"):
             resolve_site(pipelines["llama"].nnsight, "head_attention_value_input", 0)
 
     def test_unknown_component_lists_the_known_ones(

@@ -5,7 +5,7 @@ through the wrapped HF model, extracts activations at the configured
 (layer, site), projects them through the loaded subspace, and assembles
 :class:`WebtextEvidence` with quantile bins and top-/bottom-k spans.
 
-Uses the HuggingFace model directly rather than the IntervenableModel path
+Uses the HuggingFace model directly rather than the intervention path
 (``causalab.neural.activations.collect``) because that one is task-bound,
 and webtext has no task.
 

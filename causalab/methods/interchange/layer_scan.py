@@ -267,7 +267,7 @@ def run_centroid_layer_scan(
         # Project features through featurizer before averaging, so centroids
         # are computed in the subspace (e.g. PCA) rather than raw activation
         # space.  This avoids noise from discarded dimensions biasing the mean.
-        # Then inverse-project back to raw space for pyvene patching.
+        # Then inverse-project back to raw space for patching.
         units = target.flatten()
         featurizer = units[0].featurizer if units else None
         if featurizer is not None and hasattr(featurizer, "featurizer"):

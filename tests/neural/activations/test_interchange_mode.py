@@ -1,11 +1,11 @@
 """Direct tests for ``causalab.neural.activations.interchange_mode``.
 
-This module is the pyvene-backed engine that runs interchange interventions
-on an :class:`~causalab.neural.pipeline.LMPipeline`. It batches
+This module runs interchange interventions on an
+:class:`~causalab.neural.pipeline.LMPipeline`. It batches
 ``CounterfactualExample`` lists, resolves base / counterfactual component
-indices via :class:`~causalab.neural.units.InterchangeTarget`, calls
-``pipeline.intervenable_generate``, and aggregates per-batch outputs
-(``sequences`` and optional ``scores`` / top-k) back onto CPU. Every
+indices via :class:`~causalab.neural.units.InterchangeTarget`, runs the
+intervened generation, and aggregates per-batch outputs (``sequences`` and
+optional ``scores`` / top-k) back onto CPU. Every
 ``analyses/locate/*`` flow (via ``methods/interchange/single_pair.py``), the
 baseline reporter (via ``methods/metric.py``), and subspace training (via
 ``methods/trained_subspace/train.py``) depend on it — so a wrong return
@@ -19,7 +19,7 @@ The tests below exercise the three public entry points using the real
 * :func:`~causalab.neural.activations.interchange_mode.run_interchange_interventions`
 
 docs/TESTS.md's mocking policy forbids ``MagicMock``\\ -ing our own numerical
-code (pyvene wrapper, pipeline, ``AtomicModelUnit``). The legacy
+code (the engine, the pipeline, ``AtomicModelUnit``). The legacy
 ``test_batched_interchange.py`` / ``test_prepare_intervenable_inputs.py``
 / ``test_run_interchange_intervention.py`` files mocked all of those and
 are removed in the same PR that adds this file.
@@ -52,8 +52,8 @@ from causalab.neural.token_positions import TokenPosition
 from causalab.neural.units import InterchangeTarget
 from causalab.methods.steer.steer import run_steering_interventions
 
-# The pyvene-independent hook oracles and shared featurizer/trace builders now
-# live in hook_oracle.py so every pyvene-coverage test file shares one ground
+# The backbone-independent hook oracles and shared featurizer/trace builders now
+# live in hook_oracle.py so every oracle test file shares one ground
 # truth (GH #380). Imported under their original private names to keep the call
 # sites in this file unchanged.
 from tests.neural.activations.hook_oracle import (
@@ -167,7 +167,7 @@ def _manifold_featurizer(d: int) -> Featurizer:
 # --------------------------------------------------------------------------- #
 class TestPrepareIntervenableInputsUnit:
     """Builds the ``(base, counterfactuals, inv_locations, feature_indices)``
-    four-tuple consumed by pyvene's interchange interventions; wrong shape
+    four-tuple consumed by the interchange interventions; wrong shape
     here breaks every ``analyses/locate/*`` run."""
 
     pytestmark = pytest.mark.unit
@@ -196,7 +196,7 @@ class TestPrepareIntervenableInputsUnit:
         assert "input_ids" in cfs[0]
         assert cfs[0]["input_ids"].shape[0] == len(examples)
 
-        # inv_locations contains the pyvene-shaped source→base mapping
+        # inv_locations contains the source→base mapping
         assert "sources->base" in inv_locations
         counterfactual_indices, base_indices = inv_locations["sources->base"]
         # one entry per model unit (here just one)
@@ -253,7 +253,7 @@ class TestPrepareIntervenableInputsUnit:
         self, tiny_pipeline: LMPipeline
     ) -> None:
         """A position beyond the sequence length raises a catchable ValueError
-        here instead of reaching pyvene's gather as a CUDA scatter assertion
+        here instead of reaching the gather as a CUDA scatter assertion
         that poisons the context (#176). Single example ⇒ no padding shift,
         which is exactly the path the old fast-return left unchecked."""
         hidden = tiny_pipeline.model.config.hidden_size
@@ -273,7 +273,7 @@ class TestPrepareIntervenableInputsUnit:
         """A token position that selects a *different number* of tokens for the
         base vs. the counterfactual — the multi-token counterfactual-value-string
         shape (#251) — raises a catchable CPU ``ValueError`` here instead of
-        reaching pyvene's gather/scatter as a CUDA assertion that poisons the
+        reaching the gather/scatter as a CUDA assertion that poisons the
         context. Distinct from #176: every index is individually in-bounds, so
         the per-position bounds check does not fire; only the base/CF shape
         mismatch does."""
@@ -311,7 +311,7 @@ class TestPrepareIntervenableInputsUnit:
     ) -> None:
         """A *uniform* multi-token span — every example selects the same number
         of tokens (here positions 0,1 for both base and counterfactual) — with
-        the default identity featurizer is supported, not rejected. pyvene stacks
+        the default identity featurizer is supported, not rejected. The engine stacks
         a unit's per-example positions into one ``(batch, num_positions)`` tensor
         and gathers/scatters them simultaneously, and the identity featurizer
         makes the flattened swap exact. ``prepare_intervenable_inputs`` must build
@@ -336,7 +336,7 @@ class TestPrepareIntervenableInputsUnit:
     def test_ragged_span_raises_clean_error(self, tiny_pipeline: LMPipeline) -> None:
         """A token position whose span width *varies across the batch* (2 tokens
         for one example, 1 for another) raises a catchable, actionable
-        ``ValueError`` here instead of reaching pyvene's ``gather_neurons`` as the
+        ``ValueError`` here instead of reaching the position stack as the
         cryptic ``expected sequence of length N at dim 1`` error that poisons the
         context. The indexer keys on the prompt so base and counterfactual agree
         *per example* (passing the #251 base/CF mismatch guard) yet disagree
@@ -414,7 +414,7 @@ class TestPrepareIntervenableInputsProperty:
                 "counterfactual_inputs": [_make_trace("e"), _make_trace("f")],
             },
         ]
-        # Two units in two groups: pyvene needs one unit per group when
+        # Two units in two groups: one unit per group is needed when
         # groups carry different counterfactual inputs.
         unit_a = _make_unit(tiny_pipeline, layer=0)
         unit_b = _make_unit(tiny_pipeline, layer=1)
@@ -493,14 +493,14 @@ class TestBatchedInterchangeInterventionUnit:
         assert seqs.device.type == "cpu"
         # max_new_tokens=1 → exactly one new token per example
         assert seqs.shape == (len(examples), 1)
-        # 'string' is always added by intervenable_generate's dump call
+        # 'string' is always added by format_generation's dump call
         assert "string" in output
 
     def test_uniform_multitoken_interchange_runs_end_to_end(
         self, tiny_pipeline: LMPipeline
     ) -> None:
         """A uniform multi-token span (positions 0,1) runs all the way through
-        pyvene's gather/scatter and returns well-formed sequences — the
+        the gather/scatter and returns well-formed sequences — the
         regression that proves multi-token interchange works, not merely that the
         guard changed. Patching two positions must also produce a *different*
         result than patching only the last of those positions, confirming both
@@ -546,7 +546,7 @@ class TestBatchedInterchangeInterventionUnit:
     ) -> None:
         """A multi-token span with a *dimension-sensitive* featurizer runs
         end-to-end. The featurizer asserts its input's last dim is ``d``, so the
-        run only succeeds if pyvene hands it ``(b, num_pos, d)`` and applies it
+        run only succeeds if the featurizer is handed ``(b, num_pos, d)`` and applied
         per position (``keep_last_dim=True``) instead of folding the span into a
         ``num_pos*d`` vector — the regression that proves trainable featurizers
         work with multi-token spans, not just identity ones."""
@@ -702,9 +702,9 @@ class TestBatchedInterchangeInterventionProperty:
 # --------------------------------------------------------------------------- #
 class TestMultiTokenInterchangeHookOracle:
     """Verify multi-token interchange against a ground truth computed with our
-    own forward hooks — independent of pyvene's gather/scatter. We capture the
+    own forward hooks — independent of the engine's gather/scatter. We capture the
     source residual stream, overwrite the base's span positions by hand, and
-    read the resulting next-token logits; causalab's pyvene-backed interchange
+    read the resulting next-token logits; causalab's interchange
     must reproduce those logits. Intervening on layer 0 (so the patch propagates
     through the rest of the network to the final position) keeps the comparison
     non-trivial — and we assert the intervention actually moves the logits off
@@ -826,11 +826,11 @@ class TestMultiTokenInterchangeHookOracle:
 #  Attention-head (h.pos, 4-D) interchange vs. an independent hook oracle     #
 # --------------------------------------------------------------------------- #
 class TestAttentionHeadInterchangeHookOracle:
-    """Attention-head interchange exercises pyvene's 4-D ``h.pos`` path, which
+    """Attention-head interchange exercises the 4-D ``h.pos`` path, which
     ``keep_last_dim=True`` also affects (it skips the head-fold ``bhsd_to_bs_hd``)
     and which the rest of the suite only covers for construction/IDs — never an
     actual interchange run. These verify head interchange against a ground truth
-    built with our own forward_pre_hook on ``o_proj`` (no pyvene), with a
+    built with our own forward_pre_hook on ``o_proj`` (no engine), with a
     *multi-token* span so the head-axis vs. position-axis ragged-guard handling
     is exercised too."""
 
@@ -974,7 +974,7 @@ class TestAttentionHeadInterchangeHookOracle:
 # --------------------------------------------------------------------------- #
 class TestInterventionCapabilityOracles:
     """Basic coverage of causalab's intervention range, each checked against a
-    hand-rolled hook on the exact module pyvene taps (no pyvene in the oracle).
+    hand-rolled hook on the exact module the engine taps (no engine in the oracle).
     Covers the *where* axis (interchange on block input/output, MLP output, whole
     attention output) and the *what* axis (collect / read, additive steering,
     replace / zero-ablation). Single position, identity featurizer, layer 0 so

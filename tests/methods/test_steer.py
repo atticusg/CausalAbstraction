@@ -4,7 +4,7 @@ pytest unit-tests for steer.py
 Tests steering interventions with both Identity and Subspace featurizers.
 
 Run with:
-    pytest -q tests/test_pyvene_core/test_steer.py
+    pytest -q tests/methods/test_steer.py
 """
 
 from __future__ import annotations
@@ -210,7 +210,7 @@ class TestSteeringIntervention:
     def test_steering_repr_names_the_mode(
         self, identity_featurizer: F.Featurizer
     ) -> None:
-        """The object identifies its mode. The pyvene ``__str__`` that carried
+        """The object identifies its mode. The legacy ``__str__`` that carried
         the featurizer id is gone with the class factory — an ordinary module's
         repr names its class."""
         steering = build_intervention(identity_featurizer, "add")
@@ -430,15 +430,15 @@ class TestGetBatchSteeringVectors:
 
 
 # --------------------------------------------------------------------------- #
-#  AtomicModelUnit.create_intervention_config tests for steering              #
+#  Steering-mode selection on an AtomicModelUnit                              #
 # --------------------------------------------------------------------------- #
 class TestSteeringModeSelection:
     """``add`` builds a steering intervention over the unit's feature space.
 
-    This replaces two classes: one asserting the shape of the config dict pyvene
-    consumed (``create_intervention_config``), and one asserting that
-    ``Featurizer.get_steering_intervention`` returned a cached *class* — pyvene
-    instantiated intervention classes itself, so the featurizer had to hand it
+    This replaces two classes: one asserting the shape of the config dict the
+    pyvene backbone consumed (``create_intervention_config``), and one asserting
+    that ``Featurizer.get_steering_intervention`` returned a cached *class* —
+    that backbone instantiated intervention classes itself, so the featurizer had to hand it
     one. Both are gone: a mode is now an ordinary module instance, and each call
     builds a fresh one so a caller can configure it without affecting others.
     """
@@ -575,7 +575,7 @@ class TestReplaceIntervention:
 
     def test_repr_names_the_mode(self, identity_featurizer: F.Featurizer) -> None:
         """The object identifies its mode — the interventions are ordinary
-        modules now, so the repr is torch's rather than a pyvene ``__str__``
+        modules now, so the repr is torch's rather than a hand-written ``__str__``
         that had to carry the featurizer id to be identifiable."""
         replace = build_intervention(identity_featurizer, "replace")
         assert "ReplaceIntervention" in repr(replace)
@@ -587,8 +587,8 @@ class TestReplaceIntervention:
 class TestBuildReplaceIntervention:
     """``build_intervention(featurizer, "replace")`` construction.
 
-    The old API returned a *class* per featurizer, cached, because pyvene
-    instantiated intervention classes itself. It now returns an ordinary module
+    The old API returned a *class* per featurizer, cached, because the pyvene
+    backbone instantiated intervention classes itself. It now returns an ordinary module
     instance, so each call is a fresh object — which is what lets a caller
     configure one (a mask's logits, an interpolation's function) without
     affecting anyone else's.
@@ -617,13 +617,13 @@ class TestBuildReplaceIntervention:
 
 
 # --------------------------------------------------------------------------- #
-#  AtomicModelUnit.create_intervention_config tests for replace               #
+#  Replace-mode site resolution on an AtomicModelUnit                         #
 # --------------------------------------------------------------------------- #
 class TestReplaceSiteResolution:
     """A ``replace`` unit resolves to a real, writable site.
 
     This replaces tests of ``create_intervention_config``, which asserted the
-    shape of the config dict pyvene consumed (component / unit / layer /
+    shape of the config dict the old backbone consumed (component / unit / layer /
     group_key / intervention_type). There is no config dict any more — a unit is
     resolved to a site and paired with an intervention — so the equivalent
     contract is that both halves come out well-formed.

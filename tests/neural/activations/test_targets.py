@@ -444,7 +444,7 @@ class TestBuildAttentionOutputTargetsUnit:
     """``build_attention_output_targets`` keys (layer, pos.id) → whole-sublayer
     ``InterchangeTarget``.
 
-    Mirrors :func:`build_mlp_targets` in shape and grouping but targets pyvene's
+    Mirrors :func:`build_mlp_targets` in shape and grouping but targets the
     ``attention_output`` component (all heads jointly). The merged output is
     ``hidden_size``-wide, so the unit shape must be ``(hidden_size,)`` regardless
     of head count — getting this wrong mis-sizes the ablation reference vector.

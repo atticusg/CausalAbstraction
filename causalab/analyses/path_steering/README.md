@@ -53,7 +53,7 @@ former name, **`evaluate`**.)
    viz: 3D paths · belief-space · dual_manifold · (receptive_field, opt-in)
 ```
 
-Each path point is a `pyvene` interchange intervention: it replaces only the
+Each path point is an interchange intervention: it replaces only the
 featurizer's projection of the residual stream (the manifold coordinate) and
 keeps the orthogonal complement intact, so the collected distribution reflects a
 real model forward at that coordinate. The `geometric` mode walks the geodesic in

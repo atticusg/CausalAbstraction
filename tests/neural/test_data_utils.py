@@ -1,6 +1,6 @@
 """Direct tests for ``causalab.neural.activations.data_utils``.
 
-These helpers run *after* every pyvene-driven intervention pass — i.e. after
+These helpers run *after* every intervention pass — i.e. after
 ``run_interchange_interventions`` (``interchange_mode.py``), ``interpolate.py``,
 and ``methods/steer/steer.py`` produce batched HuggingFace outputs on GPU. The
 public surface is two functions:

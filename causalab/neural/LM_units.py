@@ -235,7 +235,7 @@ class AttentionOutput(AtomicModelUnit):
       perturbed sender's contribution cannot reach downstream components through this
       layer's attention. Never restore ``block_output`` instead — that bundles the
       residual stream carrying the sender's direct contribution and would erase the very
-      path being measured (see ``docs/PATH_PATCHING.md`` §4).
+      path being measured.
     """
 
     def __init__(

@@ -46,8 +46,8 @@ def _positions_in_bounds(
 ) -> tuple[List[TokenPosition], List[str], int, int]:
     """Keep only positions the base *and* counterfactual can both supply.
 
-    The trace patches ``"sources->base"`` — pyvene gathers the counterfactual
-    (source) residual at position ``p`` and writes it into the base at ``p``.
+    The trace patches ``"sources->base"`` — the counterfactual (source) residual
+    at position ``p`` is gathered and written into the base at ``p``.
     ``get_list_of_each_token`` builds positions whose index ``p`` is fixed to the
     *base* tokenization and ignores its input, so when the counterfactual
     tokenizes shorter than the base, ``p`` exceeds the counterfactual's length

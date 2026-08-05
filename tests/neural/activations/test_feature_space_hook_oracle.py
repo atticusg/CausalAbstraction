@@ -18,8 +18,8 @@ with a full rotation (``base_err = None``). This file adds:
   remainder from the base — a different activation than overwriting all ``d``
   dims, so the test pins that the error term is honoured.
 
-All ground truths are hand-rolled forward hooks — no pyvene. See
-``docs/PYVENE_HOOK_COVERAGE.md``.
+All ground truths are hand-rolled forward hooks — no engine. See
+``docs/HOOK_ORACLES.md``.
 """
 
 from __future__ import annotations

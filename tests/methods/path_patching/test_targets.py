@@ -174,7 +174,7 @@ class TestReceiverUnit:
             ReceiverSpec(kind="head_value_input", layer=1, head=0, token_position=pos),
         )
         assert unit is not None
-        # The per-head value vector — pyvene's only realizable "v of head h" hook.
+        # The per-head value vector — the only realizable "v of head h" read point.
         assert unit.component_type == "head_value_output"
         assert unit.unit == "h.pos"
 
@@ -201,7 +201,7 @@ class TestReceiverUnit:
             ReceiverSpec(kind="head_query_input", layer=1, head=0, token_position=pos),
         )
         assert unit is not None
-        # The per-head query vector — pyvene's only realizable "q of head h" hook.
+        # The per-head query vector — the only realizable "q of head h" read point.
         assert unit.component_type == "head_query_output"
         assert unit.unit == "h.pos"
 
@@ -247,7 +247,7 @@ class TestReceiverUnit:
     def test_gqa_query_head_maps_to_kv_group(self, gqa_tiny_lm: LMPipeline) -> None:
         # On GQA the value vector is shared per KV group, so a query head maps to
         # `head // (n_head // n_kv)`. The AttentionHeadValue unit must address that
-        # KV-head index (pyvene's head_value_output is in KV-head space).
+        # KV-head index (head_value_output is in KV-head space).
         cfg = gqa_tiny_lm.model.config
         n_head, n_kv = cfg.num_attention_heads, cfg.num_key_value_heads
         assert n_kv < n_head  # fixture really is grouped-query
@@ -264,24 +264,44 @@ class TestReceiverUnit:
             assert unit.component_type == "head_value_output"
             assert unit.head == qh // group  # KV-group index, not the query head
 
-    def test_decoupled_head_dim_value_receiver_unsupported(
+    def test_decoupled_head_dim_value_receiver_uses_config_head_dim(
         self, gqa_decoupled_head_dim_lm: LMPipeline
     ) -> None:
-        # pyvene 0.1.8's head_value_output slices the value vector at hidden // n_head,
-        # so a model whose head_dim is decoupled from that ratio cannot realize a value
-        # receiver (PASS 1 collects a hidden//n_head-wide vector that won't inject into
-        # the true head_dim-wide slot). build_receiver_unit must surface that as an
-        # actionable NotImplementedError, not let the two-pass fail deep in pyvene.
+        """The value receiver's width follows ``config.head_dim``, not
+        ``hidden // n_head``.
+
+        Getting this wrong is silent in the common coupled case and fatal when the
+        two differ: PASS 1 would collect a ``hidden // n_head``-wide vector that
+        cannot be injected into the true ``head_dim``-wide slot in PASS 2. The
+        decoupled config was unsupported outright before the nnsight migration
+        (#386); this pins that it now resolves to the right width.
+        """
+        cfg = gqa_decoupled_head_dim_lm.model.config
+        ratio = cfg.hidden_size // cfg.num_attention_heads
+        assert cfg.head_dim != ratio  # the fixture is genuinely decoupled
+        pos = _last_token(gqa_decoupled_head_dim_lm)
+        unit = build_receiver_unit(
+            gqa_decoupled_head_dim_lm,
+            ReceiverSpec(kind="head_value_input", layer=1, head=0, token_position=pos),
+        )
+        assert unit is not None
+        assert unit.component_type == "head_value_output"
+        assert unit.shape == (cfg.head_dim,)
+
+    def test_decoupled_head_dim_query_receiver_uses_config_head_dim(
+        self, gqa_decoupled_head_dim_lm: LMPipeline
+    ) -> None:
         cfg = gqa_decoupled_head_dim_lm.model.config
         assert cfg.head_dim != cfg.hidden_size // cfg.num_attention_heads
         pos = _last_token(gqa_decoupled_head_dim_lm)
-        with pytest.raises(NotImplementedError, match="decoupled head_dim"):
-            build_receiver_unit(
-                gqa_decoupled_head_dim_lm,
-                ReceiverSpec(
-                    kind="head_value_input", layer=1, head=0, token_position=pos
-                ),
-            )
+        unit = build_receiver_unit(
+            gqa_decoupled_head_dim_lm,
+            ReceiverSpec(kind="head_query_input", layer=1, head=1, token_position=pos),
+        )
+        assert unit is not None
+        assert unit.component_type == "head_query_output"
+        assert unit.shape == (cfg.head_dim,)
+        assert unit.head == 1  # queries are per-query-head: no KV-group remap
 
     def test_residual_point_selects_block_component(
         self, mock_tiny_lm: LMPipeline

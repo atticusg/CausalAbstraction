@@ -1,10 +1,10 @@
 """Reference vectors for component ablation.
 
 Ablation overwrites a component's output with a fixed reference vector via a
-pyvene ``replace`` intervention. Two references are supported:
+``replace`` intervention. Two references are supported:
 
 * **zero** — drop the feature contribution entirely (the orthogonal/error term
-  of the featurizer is still preserved by ``FeatureReplaceIntervention``).
+  of the featurizer is still preserved by ``ReplaceIntervention``).
 * **mean** — replace with the corpus-average activation, the standard
   "mean-ablation" baseline that removes the component's *variation* while
   keeping its average effect.
@@ -83,10 +83,8 @@ def make_mean_vectors(
     global mean, not a mean-of-bucket-means.
 
     **Multi-position ``pos`` units** (``ResidualStream`` / ``MLP`` over a span of
-    >1 token) are collected one position at a time: pyvene's collect path mangles
-    the 3-D ``(b, n_pos, d)`` gather for ``pos`` units (it works for the 4-D head
-    gather), so a single multi-position collect raises in ``b_sd_to_bsd``. Slicing
-    the span into single-position collects and summing the rows is equivalent —
+    >1 token) are collected one position at a time. Slicing the span into
+    single-position collects and summing the rows is equivalent —
     the mean is over the same (example, position) set either way — and sidesteps
     the bug. Single-position ``pos`` units and attention heads (any span) collect
     in one pass as before.

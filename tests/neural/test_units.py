@@ -1,14 +1,14 @@
 """Direct tests for ``causalab.neural.units``.
 
 This module declares the core "where + what" intervention primitives that the
-pyvene-backed interchange / collect / steer pipelines consume downstream:
+the interchange / collect / steer pipelines consume downstream:
 
 * :class:`ComponentIndexer` wraps a per-input position-lookup callable (e.g.
   IOI / MCQA token positions) so the same indexer works in single-input and
   batched modes, with optional ``is_original`` plumbing.
 * :class:`AtomicModelUnit` pairs a ``(layer, component_type, indices, unit)``
   location with a :class:`Featurizer` and an optional ``feature_indices``
-  slice. ``create_intervention_config`` is the bridge into pyvene's
+  slice. ``create_intervention_config`` was the bridge into the pyvene backbone's
   intervention-class registry.
 * :class:`InterchangeTarget` groups units into the
   ``List[List[AtomicModelUnit]]`` shape every interchange / DAS / PCA /
@@ -16,8 +16,8 @@ pyvene-backed interchange / collect / steer pipelines consume downstream:
   ``units_metadata.json`` + ``featurizers.safetensors`` save/load round-trip.
 
 If bounds-checking on ``set_feature_indices``, the static-vs-dynamic indexer
-dispatch, the ``create_intervention_config`` enum mapping, or the JSON +
-safetensors round-trip silently return wrong values, every interchange /
+dispatch, the intervention-mode selection, or the JSON + safetensors
+round-trip silently return wrong values, every interchange /
 DAS / PCA / steering analysis that imports these symbols silently corrupts
 its outputs.
 
@@ -345,7 +345,7 @@ class TestAtomicModelUnitUnit:
         """Each mode is buildable over a unit's feature space.
 
         This replaces ``create_intervention_config``, which emitted the dict
-        pyvene consumed (component / unit / layer / group_key /
+        the pyvene backbone consumed (component / unit / layer / group_key /
         intervention_type-as-a-class). A unit no longer carries any backbone
         config: the engine resolves it to a site and pairs it with an
         intervention, so what a unit must still support is exactly this.
@@ -420,7 +420,7 @@ def _make_named_unit(unit_id: str, **kwargs) -> AtomicModelUnit:
 
 class TestInterchangeTargetUnit:
     """:class:`InterchangeTarget` groups units into the
-    ``List[List[AtomicModelUnit]]`` shape required by the pyvene interchange
+    ``List[List[AtomicModelUnit]]`` shape required by the interchange
     pipeline and the consolidated save/load format."""
 
     pytestmark = pytest.mark.unit

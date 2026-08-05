@@ -3,10 +3,10 @@
 ``run_interpolation_interventions`` patches an arbitrary function of the base and
 source *featurized* activations into the model:
 ``new_act = inverse_featurizer(fn(f_base, f_src, **params), base_err)``. This file
-pins that behaviour against a hand-rolled forward-hook ground truth — no pyvene —
-so the contract survives the pyvene→nnsight swap. See
+pins that behaviour against a hand-rolled forward-hook ground truth — no engine —
+so the contract survived the pyvene→nnsight swap. See
 ``tests/neural/activations/hook_oracle.py`` for the oracle primitives and
-``docs/PYVENE_HOOK_COVERAGE.md`` for the full coverage map.
+``docs/HOOK_ORACLES.md`` for the full coverage map.
 
 Linear interpolation ``(1-α)·f_base + α·f_src`` is the canonical case: at ``α=0``
 it is the identity (clean run), at ``α=1`` it reduces to interchange (full swap),

@@ -422,7 +422,7 @@ class AtomicModelUnit:
         Parameters
         ----------
         layer :
-            Layer number in the *IntervenableModel*.
+            Layer number in the model.
         component_type :
             E.g. 'block_input', 'mlp', 'head_attention_value_output', etc.
         indices_func :
@@ -540,14 +540,14 @@ class AtomicModelUnit:
         return None
 
     def tensorized_index_groups(self, unit_indices: Any) -> list[Any]:
-        """Split a unit's per-batch index structure into the groups pyvene
-        stacks *separately* with ``torch.tensor`` in ``gather_neurons``.
+        """Split a unit's per-batch index structure into the groups that are
+        stacked *separately* into index tensors before the gather/scatter.
 
         A plain single-axis ``pos`` unit's whole structure is stacked by one
         ``torch.tensor`` call, so it is a single group. Multi-axis units (e.g.
         :class:`AttentionHead`, whose structure is ``[head_axis, position_axis]``
-        and which pyvene indexes as ``unit_locations_as_list[0]`` / ``[1]``)
-        override this to return one group per axis. The ragged-span guard checks
+        and which indexes the head and position axes separately) override this
+        to return one group per axis. The ragged-span guard checks
         each group independently so the head and position axes — which
         legitimately differ in width — are never compared against each other.
         """

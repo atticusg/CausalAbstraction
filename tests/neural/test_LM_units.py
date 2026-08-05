@@ -3,7 +3,7 @@
 ``ResidualStream``, ``MLP`` and ``AttentionHead`` bind the generic
 ``AtomicModelUnit`` / ``Featurizer`` / ``ComponentIndexer`` abstractions
 from ``causalab.neural.units`` to language-model-shaped activations.
-Downstream, ``InterchangeTarget``, ``prepare_intervenable_model``,
+Downstream, ``InterchangeTarget``, ``prepare_interchange_batch``,
 ``batched_interchange_intervention``, and the analysis-side mask plots
 (``io/visualizations.py``) address these units by their ``id`` string and
 their ``component_type``. The contracts pinned here — featurizer identity,

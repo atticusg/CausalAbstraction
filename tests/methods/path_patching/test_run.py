@@ -231,30 +231,36 @@ class TestTwoPassReceivers:
         assert set(scores.keys()) == set(senders.keys())
         assert all(torch.isfinite(torch.tensor(v)) for v in scores.values())
 
-    def test_decoupled_head_dim_value_scan_raises(
+    def test_decoupled_head_dim_value_scan_runs(
         self, gqa_decoupled_head_dim_lm: LMPipeline
     ) -> None:
-        """A head_value_input scan on a model whose head_dim is decoupled from
-        hidden // n_head must surface the unsupported-config guard at the user-facing
-        runner (pyvene 0.1.8 can't realize the decoupled value receiver), rather than
-        fail deep in pyvene mid-scan."""
+        """A ``head_value_input`` scan runs end to end when ``head_dim`` is
+        decoupled from ``hidden // n_head``.
+
+        This whole configuration was unsupported before the nnsight migration
+        (#386) — the two-pass collected a ``hidden // n_head``-wide value vector
+        that could not be injected into the true ``head_dim``-wide slot. Both
+        passes now size the slot from ``config.head_dim``, so the scan completes
+        and produces a finite score per cell.
+        """
         cfg = gqa_decoupled_head_dim_lm.model.config
         assert cfg.head_dim != cfg.hidden_size // cfg.num_attention_heads
         pos = _last_token(gqa_decoupled_head_dim_lm)
         targets = build_attention_head_targets(gqa_decoupled_head_dim_lm, [0], [0], pos)
         senders = {key: t.flatten()[0] for key, t in targets.items()}
-        with pytest.raises(NotImplementedError, match="decoupled head_dim"):
-            run_path_patching_scan(
-                gqa_decoupled_head_dim_lm,
-                _dataset(),
-                senders,
-                metric=_first_logit_metric(),
-                receiver=ReceiverSpec(
-                    kind="head_value_input", layer=1, head=0, token_position=pos
-                ),
-                restore=("attention", "mlp"),
-                batch_size=2,
-            )
+        scores = run_path_patching_scan(
+            gqa_decoupled_head_dim_lm,
+            _dataset(),
+            senders,
+            metric=_first_logit_metric(),
+            receiver=ReceiverSpec(
+                kind="head_value_input", layer=1, head=0, token_position=pos
+            ),
+            restore=("attention", "mlp"),
+            batch_size=2,
+        )
+        assert set(scores.keys()) == set(senders.keys())
+        assert all(torch.isfinite(torch.tensor(v)) for v in scores.values())
 
     def test_run_path_patching_internal_returns_scores(
         self, mock_tiny_lm: LMPipeline
@@ -412,11 +418,11 @@ class TestMixedForwardPropagation:
 
 
 class TestReceiverSpanGuard:
-    """The two-pass receiver index is spliced into the pyvene locations *outside*
+    """The two-pass receiver index is spliced into the resolved locations *outside*
     ``prepare_intervenable_inputs``, so it would bypass the ragged-span guard the
     interchange groups get. A uniform multi-token receiver span is fine, but a
     *ragged* one (width varying across the batch) must raise the actionable
-    ``ValueError`` rather than reach pyvene's gather as the cryptic ``expected
+    ``ValueError`` rather than reach the gather as the cryptic ``expected
     sequence of length N`` error (latent today: every receiver reads at the last
     token, a uniform single-token span)."""
 
@@ -546,7 +552,7 @@ class TestLeftPadGenerateParity:
     def test_two_pass_receiver_bs_parity(
         self, pipeline_fixture: str, request: pytest.FixtureRequest
     ) -> None:
-        """Covers PASS 2 (inject v* via intervenable_generate) and PASS 1's
+        """Covers PASS 2 (inject v* on the intervened forward) and PASS 1's
         source-collection forward on a left-padded mixed-length batch."""
         pipeline = request.getfixturevalue(pipeline_fixture)
         dataset = _mixed_length_dataset()

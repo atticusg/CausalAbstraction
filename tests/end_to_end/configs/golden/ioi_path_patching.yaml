@@ -2,7 +2,7 @@
 # Golden-tier path-patching head sweep: IOI direct-effect-on-logits on GPT-2 small.
 #
 # This is the paper-faithful IOI replication that path patching exists for (Wang
-# et al. 2022 §3.1 / pyvene IOI tutorial), pinned as a value golden. It mirrors
+# et al. 2022 §3.1 / the IOI tutorial), pinned as a value golden. It mirrors
 # configs/runners/IOI/ioi_gpt2_path_patching.yaml verbatim — full (layer x head)
 # sweep on GPT-2 small, ABC corruption, restore=[attention] (MLPs/LayerNorm
 # recompute), logit diff = IO vs the repeated subject (name_C).

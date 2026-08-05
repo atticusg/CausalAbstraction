@@ -7,7 +7,7 @@ a configured token span, generates, grades the output against the task's
 (`drop = base_accuracy − ablated_accuracy`) as a (layer × head) or
 (layer × position) heatmap. Explicit unit **combos** can be ablated jointly.
 
-Ablation is a pyvene `replace` intervention (zeros, or the corpus-mean
+Ablation is a `replace` intervention (zeros, or the corpus-mean
 activation) — the same units/featurizer machinery as interchange, so
 subspace/feature-index ablation can layer on later. It does not perform greedy
 circuit search.
@@ -52,7 +52,7 @@ visualization:
   collected over the **train** split.
 - **`span`** — `all` ablates every token position; a list of names ablates the
   union of those named task positions (resolved via `task.create_token_positions`).
-  All-position spans are length-bucketed internally so the pyvene gather stays
+  All-position spans are length-bucketed internally so the gather stays
   rectangular.
 - **`combos`** — joint ablations scored as a single drop, in addition to the grid.
 - **`complement_keep`** — list of layers to *keep*; every other grid layer is

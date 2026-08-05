@@ -7,7 +7,7 @@ the serialization hooks defined here.
 
 This module covers the base wrapper, the identity modules, and the
 :class:`ComposedFeaturizer`, without depending on ``causalab.methods``. What to
-*do* in a feature space moved to ``causalab.neural.interventions`` when pyvene
+*do* in a feature space moved to ``causalab.neural.interventions`` when the pyvene backbone
 was replaced, and is tested in ``tests/neural/test_interventions.py``; tests
 that need a concrete subclass live in ``tests/methods/``.
 """

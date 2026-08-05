@@ -6,7 +6,7 @@ contract — full residual swap and a component (MLP) swap — across model fami
 via the parametrised ``oracle_pipeline`` fixture (Llama / GPT-2 / grouped-query
 Llama), so the gather/scatter and component→module mapping are verified on a
 fused-QKV, absolute-position GPT-2 module tree as well as the separate-QKV RoPE
-Llama tree. See ``docs/PYVENE_HOOK_COVERAGE.md``.
+Llama tree. See ``docs/HOOK_ORACLES.md``.
 """
 
 from __future__ import annotations

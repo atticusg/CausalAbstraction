@@ -34,14 +34,14 @@ No downstream analysis consumes pullback's outputs — it is a terminal diagnost
   │  For each (ci, cj) pair:                │
   │    init h(t)  →  optimize via           │
   │    L-BFGS / Adam / NEB / basin-hopping  │
-  │    with FeatureInterpolateIntervention  │
+  │    with an interpolate intervention     │
   │    loss = d(model(h(t_i)), p(t_i))²     │
   └─────────────────────────────────────────┘
                     v
               h(t) ∈ R^k   for t ∈ [0, 1]
 ```
 
-The Phase 2 forward pass uses pyvene's `IntervenableModel` with `FeatureInterpolateIntervention`: at each timestep the intervention replaces only the k-dim PCA projection of the residual stream and keeps the orthogonal complement intact, so gradients flow back to `h(t)` through a real model forward.
+The Phase 2 forward pass applies an `interpolate` intervention: at each timestep the intervention replaces only the k-dim PCA projection of the residual stream and keeps the orthogonal complement intact, so gradients flow back to `h(t)` through a real model forward.
 
 Two reference paths are evaluated alongside the optimized one: **`geometric`** (geodesic on the trained activation manifold, decoded with the full featurizer) and **`linear`** (straight line in PCA space). Geometric distributions are collected with the full PCA→standardize→manifold featurizer; linear distributions and the optimization itself use the PCA-only featurizer.
 

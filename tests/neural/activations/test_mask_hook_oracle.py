@@ -8,11 +8,11 @@ the base and source featurized activations:
 through the inverse featurizer.
 
 These tests pin that blend against a hand-rolled forward-hook ground truth — no
-pyvene — by setting the mask logits and temperature explicitly. The identity
+the engine — by setting the mask logits and temperature explicitly. The identity
 featurizer makes the feature-space gate a raw-activation gate; a rotation
 featurizer proves the gate is applied in feature space (and reconstructed). The
 sparsity regulariser ``‖σ(mask/τ)‖₁`` is pinned as a pure function. See
-``docs/PYVENE_HOOK_COVERAGE.md``.
+``docs/HOOK_ORACLES.md``.
 """
 
 from __future__ import annotations

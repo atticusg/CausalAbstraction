@@ -7,12 +7,12 @@ small window of layers at a site) and asks how much behaviour returns
 (sufficiency / mediation).
 
 The corruption and the restoration are applied together in a **single** forward
-pass. For ``zero``/``mean`` corruption every site is a pyvene ``replace`` (one
+pass. For ``zero``/``mean`` corruption every site is a ``replace`` (one
 homogeneous pass). For ``noise`` corruption the entry uses the dynamic, seeded
 ``noise`` intervention (independent per-token Gaussian, so it spans the whole
 multi-token subject) while the restored site uses ``replace`` — a *mixed* model,
-expressed through ``run_steering_interventions``'s ``type_by_unit`` map. pyvene
-fires the hooks in forward order, so the layer ``-1`` corruption is written
+expressed through ``run_steering_interventions``'s ``type_by_unit`` map. Sites
+are visited in forward order, so the layer ``-1`` corruption is written
 before any layer ``>= 0`` restore reads it, and the restored site's clean value
 propagates through an already-corrupted network — no two-pass collect/inject.
 
@@ -93,8 +93,8 @@ def run_causal_trace(
     corruption vectors / noise scales, per-example clean restore values).
     ``type_by_unit`` (from :func:`_type_map`) makes the entry ``noise`` and the
     restore ``replace`` for noise corruption; ``None`` runs everything as
-    ``replace``. All-position entry spans are length-bucketed so each pyvene
-    gather stays rectangular, with per-example vectors reindexed per bucket and
+    ``replace``. All-position entry spans are length-bucketed so each gather
+    stays rectangular, with per-example vectors reindexed per bucket and
     the outputs stitched back into dataset order for direct scoring.
 
     Each bucket is one ``run_steering_interventions`` call, which builds its own

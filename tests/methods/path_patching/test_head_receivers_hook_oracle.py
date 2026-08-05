@@ -1,13 +1,13 @@
 """Hook oracle for per-head value/query receivers + GQA addressing (GH #380).
 
 Path patching reads internal receivers at per-head *value* and *query* vectors
-(pyvene ``head_value_output`` / ``head_query_output``), the pre-attention
+(components ``head_value_output`` / ``head_query_output``), the pre-attention
 projections ``v_h = W_V^h·x`` / ``q_h = W_Q^h·x``. The value vector is the
 documented, RoPE-free receiver, and under grouped-query attention it is addressed
 in **KV-head space** (one vector per KV head, width ``head_dim``).
 
 These tests pin that addressing against a hand-rolled capture of ``v_proj``'s
-output sliced per head — no pyvene:
+output sliced per head — no engine:
 
 * on the coupled tiny Llama (``n_kv == n_heads``) each head's collected value
   equals its ``v_proj`` slice;
@@ -15,9 +15,9 @@ output sliced per head — no pyvene:
   (``head ∈ {0,1}``), each matching the corresponding ``v_proj`` KV slice — so the
   receiver lives in KV-head space, not query-head space.
 
-The query→KV-group *query-head* remap (a causalab routing concern, not a pyvene
-primitive) lives in ``path_patching.targets`` and is covered by
-``test_targets.py``. See ``docs/PYVENE_HOOK_COVERAGE.md``.
+The query→KV-group *query-head* remap (a causalab routing concern, not a
+component primitive) lives in ``path_patching.targets`` and is covered by
+``test_targets.py``. See ``docs/HOOK_ORACLES.md``.
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ def _head_dim(pipeline: LMPipeline) -> int:
 
 def _capture_vproj_output(pipeline: LMPipeline, layer: int, inputs) -> torch.Tensor:
     """The ``v_proj`` output (concatenated per-KV-head value vectors), grabbed via
-    our own forward hook — no pyvene."""
+    our own forward hook — no engine."""
     grabbed: dict[str, torch.Tensor] = {}
     v_proj = pipeline.model.model.layers[layer].self_attn.v_proj
 
@@ -102,7 +102,9 @@ class TestHeadValueReceiverHookOracle:
         for head in range(n_heads):
             expected = v_out[:, _POS, head * d_head : (head + 1) * d_head]
             collected = _collect_head_value(tiny_pipeline, head)
-            torch.testing.assert_close(collected, expected, atol=1e-5, rtol=1e-4)
+            torch.testing.assert_close(
+                collected.cpu(), expected.cpu(), atol=1e-5, rtol=1e-4
+            )
 
     def test_value_addressed_in_kv_space_under_gqa(
         self, gqa_tiny_lm: LMPipeline
@@ -120,8 +122,41 @@ class TestHeadValueReceiverHookOracle:
         collected = [_collect_head_value(gqa_tiny_lm, kv) for kv in range(n_kv)]
         for kv in range(n_kv):
             expected = v_out[:, _POS, kv * d_head : (kv + 1) * d_head]
-            torch.testing.assert_close(collected[kv], expected, atol=1e-5, rtol=1e-4)
-        assert not torch.allclose(collected[0], collected[1], atol=1e-4)
+            torch.testing.assert_close(
+                collected[kv].cpu(), expected.cpu(), atol=1e-5, rtol=1e-4
+            )
+        assert not torch.allclose(collected[0].cpu(), collected[1].cpu(), atol=1e-4)
+
+    def test_value_width_follows_config_head_dim(
+        self, gqa_decoupled_head_dim_lm: LMPipeline
+    ) -> None:
+        """``head_dim != hidden // n_head``: the value receiver slices at the
+        *config* head_dim.
+
+        The two agree on most models, so a receiver that derives its width from the
+        head count passes everywhere else and silently reads the wrong channels
+        here. Slicing ``v_proj``'s output by hand at ``config.head_dim`` is the
+        ground truth; the ``hidden // n_head`` width is checked to be a genuinely
+        different (and wrong) answer, so the test cannot pass by coincidence.
+        """
+        cfg = gqa_decoupled_head_dim_lm.model.config
+        d_head = _head_dim(gqa_decoupled_head_dim_lm)
+        ratio = cfg.hidden_size // cfg.num_attention_heads
+        n_kv = cfg.num_key_value_heads
+        assert d_head != ratio and n_kv < cfg.num_attention_heads
+        v_out = _capture_vproj_output(
+            gqa_decoupled_head_dim_lm,
+            _LAYER,
+            gqa_decoupled_head_dim_lm.load([make_trace(_BASE)]),
+        )
+        assert v_out.shape[-1] == n_kv * d_head  # v_proj really is head_dim-wide
+        for kv in range(n_kv):
+            expected = v_out[:, _POS, kv * d_head : (kv + 1) * d_head]
+            collected = _collect_head_value(gqa_decoupled_head_dim_lm, kv)
+            assert collected.shape[-1] == d_head
+            torch.testing.assert_close(
+                collected.cpu(), expected.cpu(), atol=1e-5, rtol=1e-4
+            )
 
 
 def _q_proj(pipeline: LMPipeline, layer: int) -> torch.nn.Module:
@@ -139,7 +174,7 @@ class TestHeadQueryReceiverHookOracle:
     """The per-head *query* receiver (``head_query_output``) — the query-path mirror
     of the value receiver, used by path patching's ``head_query_input`` edge.
     Unlike the value vector it is per-query-head even under GQA (only k/v are
-    shared), and pyvene exposes it at the pre-RoPE ``q_proj`` output. This receiver
+    shared), and it is exposed at the pre-RoPE ``q_proj`` output. This receiver
     was previously untested anywhere (GH #380)."""
 
     pytestmark = pytest.mark.property
@@ -158,7 +193,9 @@ class TestHeadQueryReceiverHookOracle:
         for head in range(n_heads):
             expected = q_out[:, _POS, head * d_head : (head + 1) * d_head]
             collected = _collect_head_query(tiny_pipeline, head)
-            torch.testing.assert_close(collected, expected, atol=1e-5, rtol=1e-4)
+            torch.testing.assert_close(
+                collected.cpu(), expected.cpu(), atol=1e-5, rtol=1e-4
+            )
 
     def test_query_interchange_matches_hook(self, tiny_pipeline: LMPipeline) -> None:
         """A full query-vector swap at the last token reproduces a hand-rolled
@@ -199,8 +236,8 @@ class TestHeadQueryReceiverHookOracle:
         causalab = out["scores"][0]
         # A single head's query swap moves the logits only slightly on a random
         # model (~1e-4), but the hand-rolled swap is a genuine, non-vacuous edit
-        # vs clean, and pyvene must reproduce it far more tightly than that edit's
-        # size — so a no-op pyvene intervention (causalab == clean, i.e. ~1e-4 off
+        # vs clean, and the engine must reproduce it far more tightly than that
+        # edit's size — so a no-op intervention (causalab == clean, i.e. ~1e-4 off
         # `manual`) is caught by the tight `atol=1e-5, rtol=0` equivalence.
         assert not torch.allclose(manual, clean, atol=1e-5)
         torch.testing.assert_close(causalab, manual, atol=1e-5, rtol=0)

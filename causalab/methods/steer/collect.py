@@ -199,9 +199,9 @@ def collect_grid_distributions(
 
     Args:
         grid_points: (G, d) intrinsic coordinates — passed directly to
-            replace_fn, NOT decoded here. The intervention pipeline's
-            FeatureInterpolateIntervention already applies inverse_featurizer
-            which includes manifold decode + un-standardization.
+            replace_fn, NOT decoded here. The interpolate intervention already
+            applies inverse_featurizer, which includes manifold decode +
+            un-standardization.
         average: If True (default), return (G, W_cats) averaged over samples.
             If False, return (G, N, W_cats) per-sample distributions.
         full_vocab_softmax: If True, softmax over full vocabulary before
@@ -266,9 +266,11 @@ def collect_grid_distributions(
             output_scores=True,
         )
 
-        # Restore featurizer modules to the GPU of the layer they hook into.
-        # delete_intervenable_model moves shared sub-modules to CPU as a side-effect;
-        # for sharded models we route each unit to its own layer's device.
+        # Keep each featurizer on the device of the layer it hooks into. This
+        # was originally repair work: the old backbone's teardown moved shared
+        # sub-modules to CPU. Nothing moves them now, so on a single-device model
+        # this is a no-op; it still matters on a sharded model, where a featurizer
+        # built elsewhere has to be routed to its own layer's device.
         for group in interchange_target:
             for unit in group:
                 unit_device = device_for_layer(pipeline, unit.layer)

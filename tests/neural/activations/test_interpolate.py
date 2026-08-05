@@ -1,7 +1,7 @@
 """Direct tests for ``causalab.neural.activations.interpolate``.
 
-This module drives **interpolation-style** pyvene interventions: given a
-featurizer-aware :class:`IntervenableModel`, it pushes a user-supplied
+This module drives **interpolation-style** interventions: given a set of
+featurizer-aware interventions, it pushes a user-supplied
 ``fn(f_base, f_src, **params)`` onto every intervention instance and runs
 batched generation, replacing activations with
 ``inverse_featurizer(fn(...), base_err)``. At ``alpha=1`` this collapses to
@@ -15,12 +15,11 @@ move outputs to CPU, every downstream path-steering / pullback analysis
 writes corrupted activation/logit artifacts.
 
 Tests are laid out as one unit class and one property class per public
-symbol. The *unit* classes keep mocked
-pyvene scaffolding (they assert wiring / dispatch, not numerics). The
+symbol. The *unit* classes assert wiring / dispatch, not numerics. The
 *property* class uses the real ``tiny_pipeline`` fixture from
-``tests/neural/conftest.py`` so the pyvene envelope is exercised end-to-end
-against a real (tiny) :class:`IntervenableModel` — mirroring the canonical
-pattern in ``tests/neural/activations/test_collect.py``.
+``tests/neural/conftest.py`` so the whole path is exercised end-to-end against
+a real (tiny) model — mirroring the canonical pattern in
+``tests/neural/activations/test_collect.py``.
 """
 
 from __future__ import annotations
@@ -52,13 +51,13 @@ MODULE = "causalab.neural.activations.interpolate"
 #  Local helpers (unit tier)                                                  #
 # --------------------------------------------------------------------------- #
 class _FakeIntervention:
-    """Minimal stand-in for a pyvene intervention exposing ``set_interpolation``.
+    """Minimal stand-in for an intervention exposing ``set_interpolation``.
 
     Mirrors the contract of
-    :class:`causalab.neural.featurizer.FeatureInterpolateIntervention`'s
+    :class:`causalab.neural.interventions.InterpolationIntervention`'s
     ``set_interpolation(fn, **params)`` hook used by the source under test:
     the unit test for :func:`set_interventions_interpolation` only needs the
-    hook to be observable, not a real pyvene module.
+    hook to be observable, not a real intervention module.
     """
 
     def __init__(self) -> None:
@@ -72,18 +71,11 @@ class _FakeIntervention:
         self.set_calls += 1
 
 
-class _BarePyveneStub:
-    """A pyvene intervention without ``set_interpolation`` — must be skipped silently."""
+class _BareInterventionStub:
+    """An intervention without ``set_interpolation`` — must be skipped silently."""
 
     def __init__(self) -> None:
         self.touched = False
-
-
-def _make_fake_intervenable_model(interventions: dict[str, Any]) -> Any:
-    """Return an object exposing ``.interventions`` mirroring pyvene's surface."""
-    model = MagicMock()
-    model.interventions = interventions
-    return model
 
 
 def _make_test_dataset(n: int = 3) -> list[Any]:
@@ -157,7 +149,7 @@ class TestSetInterventionsInterpolationUnit:
     the kwargs or skips an intervention, the model runs with stale or no
     interpolation and produces silently-wrong activations.
 
-    It takes a plain sequence of interventions; the pyvene-era tuple-unwrapping
+    It takes a plain sequence of interventions; the legacy tuple-unwrapping
     branch is gone, because there is no intervention dict whose values might be
     ``(module, ...)`` tuples any more.
     """
@@ -183,7 +175,9 @@ class TestSetInterventionsInterpolationUnit:
         """A mixed run (interpolation at one site, another mode elsewhere) must
         not crash on the sites that take no interpolation function."""
         inter = _FakeIntervention()
-        set_interventions_interpolation([inter, _BarePyveneStub()], _lerp, alpha=0.1)
+        set_interventions_interpolation(
+            [inter, _BareInterventionStub()], _lerp, alpha=0.1
+        )
         assert inter.set_calls == 1
 
     def test_calling_twice_replaces_rather_than_stacks(self) -> None:
@@ -197,15 +191,16 @@ class TestSetInterventionsInterpolationUnit:
 class TestBatchedInterpolationInterventionUnit:
     """One batch: read the sources, blend, generate.
 
-    These ran against a mocked pyvene ``IntervenableModel`` and asserted its
+    These once ran against a mocked ``IntervenableModel`` and asserted its
     lifecycle (constructed with ``intervention_type="interpolation"``, deleted
     afterwards). The nnsight engine has no such object — an intervention lives
     only for a trace — so the assertions are re-aimed at the behaviour that
     actually matters: the blend the caller asked for is the blend applied, and
     the returned dict has the documented shape.
 
-    ``docs/PATH_PATCHING.md``-style numerical equivalence lives in
-    ``test_interpolation_hook_oracle.py``; this class covers the wiring.
+    Numerical equivalence against a hook oracle lives in
+    ``test_interpolation_hook_oracle.py``; this class covers the wiring. See
+    ``docs/HOOK_ORACLES.md``.
     """
 
     pytestmark = pytest.mark.unit
@@ -513,18 +508,18 @@ class TestSweepInterpolationInterventionsUnit:
 #  Property tier — end-to-end against tiny_pipeline                           #
 # --------------------------------------------------------------------------- #
 class TestInterpolationProperty:
-    """End-to-end invariants on the real (tiny) :class:`IntervenableModel`.
+    """End-to-end invariants on the real (tiny) model.
 
     These tests drive ``run_interpolation_interventions`` /
     ``sweep_interpolation_interventions`` end-to-end against
     ``tests/neural/conftest.py::tiny_pipeline``, exercising the same
-    ``prepare_intervenable_model`` → ``prepare_intervenable_inputs`` →
-    ``intervenable_generate`` → ``convert_to_top_k`` → ``move_outputs_to_cpu``
+    ``prepare_interchange_batch`` → the intervened generation →
+    ``convert_to_top_k`` → ``move_outputs_to_cpu``
     path that production callers (``methods/steer/collect``,
     ``methods/pullback/optimization``) hit. They mirror the canonical pattern
     established by ``tests/neural/activations/test_collect.py``.
 
-    None of these tests mock internal numerical helpers — only real pyvene
+    None of these tests mock internal numerical helpers — only real
     primitives run.
     """
 
@@ -624,7 +619,7 @@ class TestInterpolationProperty:
         concatenated sequences end-to-end on the tiny pipeline.
 
         Determinism comes from ``do_sample=False`` in
-        :meth:`LMPipeline.intervenable_generate`.
+        :meth:`LMPipeline.format_generation`.
         """
         unit = _make_residual_unit(tiny_pipeline, layer=0)
         target_small = InterchangeTarget([[unit]])
@@ -643,7 +638,7 @@ class TestInterpolationProperty:
             output_scores=False,
         )
 
-        # Rebuild target+unit to avoid any in-place pyvene state carrying over.
+        # Rebuild target+unit to avoid any in-place state carrying over.
         unit_big = _make_residual_unit(tiny_pipeline, layer=0)
         target_big = InterchangeTarget([[unit_big]])
         out_large = run_interpolation_interventions(

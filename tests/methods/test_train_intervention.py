@@ -2,10 +2,10 @@
 
 ``_run_training_loop`` optimizes an intervention while the base model stays
 frozen. It used to be tested entirely through mocks — a mocked
-``IntervenableModel`` whose ``interventions`` dict held a ``MagicMock``, a mocked
+``IntervenableModel`` whose ``interventions`` dict held a ``MagicMock`` — a mocked
 ``AdamW``, a mocked scheduler, and a mocked loss function — so it asserted that
-pyvene was wired up, never that anything was learned. With pyvene gone there is
-no such object to mock, and the loop is cheap enough to just run: a tiny random
+the backbone was wired up, never that anything was learned. There is no such
+object to mock any more, and the loop is cheap enough to just run: a tiny random
 Llama, a rank-2 rotation, a handful of steps.
 
 So these assert the properties that make the loop a training loop:

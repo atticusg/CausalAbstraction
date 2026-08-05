@@ -8,8 +8,8 @@ Two regimes, dispatched on the receiver:
   residual stream, or residual + MLPs), so the metric is read straight from a
   single intervened forward via the fully-tested
   :func:`run_interchange_interventions`. The caller passes an ordinary
-  ``(base, source)`` counterfactual dataset and the runner arranges the two pyvene
-  sources so the sender reads the source and the restorers read the base.
+  ``(base, source)`` counterfactual dataset and the runner arranges the two
+  source groups so the sender reads the source and the restorers read the base.
 
 * **internal receiver** (``head_value_input`` / ``mlp_input`` / ``residual``) — the
   sender's perturbation also reaches the output through routes that *bypass* the
@@ -328,7 +328,7 @@ def _build_receiver_units(
     ``build_receiver_unit`` remaps a ``head_value_input`` query head to its KV group
     (``targets.build_receiver_unit``), so two distinct query heads in the same group
     collapse to the *same* value unit — patching the set would then place two
-    collect/inject sites on one slot (a double-count / pyvene key collision). Reject
+    collect/inject sites on one slot (a double-count). Reject
     that (and a plain duplicate spec) with an actionable error rather than misbehave
     silently. ``head_query_input`` has no remap, so query sets are unaffected.
     """
