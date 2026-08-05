@@ -697,7 +697,6 @@ def _compute_trajectory_loss(
     batched_base: dict[str, Tensor],
     plans: list,
     interventions: list,
-    feature_indices: list[list],
     var_indices: Tensor | list[list[int]],
     interior_target_AW1: Tensor,
     N_pair: int,
