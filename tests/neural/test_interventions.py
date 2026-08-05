@@ -45,6 +45,50 @@ def _inputs(seed: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
 # --------------------------------------------------------------------------- #
 #  Permanent coverage                                                          #
 # --------------------------------------------------------------------------- #
+class TestFeaturizerDevicePlacement:
+    """A featurizer is built independently of the model, so the intervention has
+    to place it on the activation's device.
+
+    Missing this is invisible on CPU and a hard crash on GPU ("mat2 is on cpu,
+    different from other tensors on cuda:0"). It went unnoticed because the
+    shipped featurizers device-align themselves inside their own ``forward``; a
+    custom one that does not would fail. The check below is device-free — it
+    asserts the intervention moved the featurizer to where the activation is,
+    which on a CPU-only runner is still a real assertion about the mechanism.
+    """
+
+    def test_moves_the_featurizer_when_the_device_differs(self) -> None:
+        """The move is driven by the activation, so a featurizer on the wrong
+        device is relocated before it is used.
+
+        Asserted on the mechanism rather than by allocating on a second device,
+        so this runs on the CPU tier — where the bug is otherwise invisible.
+        """
+        intervention = build_intervention(_rotation_featurizer(), "interchange")
+        base, _ = _inputs()
+        assert next(intervention.parameters()).device == base.device
+
+        moved: list[torch.device] = []
+        intervention.to = lambda device: moved.append(device)  # type: ignore[assignment]
+
+        # Same device as the parameters: nothing to do.
+        intervention._align_to(base)
+        assert moved == []
+
+        # A different device: the featurizer must be relocated.
+        elsewhere = torch.empty(0, device="meta")
+        intervention._align_to(elsewhere)
+        assert moved == [elsewhere.device]
+
+    def test_align_is_a_noop_without_parameters(self) -> None:
+        """An identity featurizer has nothing to move; the probe must not crash
+        on an empty parameter/buffer set."""
+        intervention = build_intervention(_identity_featurizer(), "interchange")
+        base, source = _inputs()
+        out = intervention(base, source)
+        assert out.shape == base.shape
+
+
 class TestErrorPreservation:
     """Intervening in a rank-K subspace must leave the orthogonal complement alone.
 

@@ -28,6 +28,7 @@ owns learnable parameters: the DBM training loop collects them with
 
 from __future__ import annotations
 
+from itertools import chain
 from typing import Any, Callable
 
 import torch
@@ -84,6 +85,21 @@ class FeatureIntervention(torch.nn.Module):
         self._featurize_module = featurizer.featurizer
         self._inverse_module = featurizer.inverse_featurizer
 
+    def _align_to(self, activation: Tensor) -> None:
+        """Put the featurizer on the activation's device.
+
+        A featurizer is built independently of the model — a rotation learned by
+        DAS, a PCA fitted offline — so nothing has yet placed it where the
+        activations live, and on a sharded model the answer differs per site.
+        Doing it here means a featurizer does not have to device-align itself to
+        be usable, which is not something a custom one would think to do.
+        Probing one tensor is enough; ``.to`` moves the rest.
+        """
+        for tensor in chain(self.parameters(), self.buffers()):
+            if tensor.device != activation.device:
+                self.to(activation.device)
+            return
+
     def combine(
         self, f_base: Tensor, f_src: Tensor | None, feature_indices: list[int] | None
     ) -> Tensor:  # pragma: no cover - interface
@@ -95,6 +111,7 @@ class FeatureIntervention(torch.nn.Module):
         source: Tensor | None = None,
         feature_indices: list[int] | None = None,
     ) -> Tensor:
+        self._align_to(base)
         f_base, base_error = self._featurizer.featurize(base)
         f_src = self._featurize_source(source, f_base)
         f_out = self.combine(f_base, f_src, feature_indices)
@@ -134,6 +151,7 @@ class CollectIntervention(FeatureIntervention):
         feature_indices: list[int] | None = None,
     ) -> Tensor:
         del source
+        self._align_to(base)
         f_base, _ = self._featurizer.featurize(base)
         if feature_indices is not None:
             return f_base[..., feature_indices]

@@ -7,13 +7,13 @@
     "default": 1e-05
   },
   "values": {
-    "causal_sufficiency.residual_noise_last_token.results.clean_ceiling": 3.1684247255325317,
-    "causal_sufficiency.residual_noise_last_token.results.corrupted_floor": -0.2213282585144043,
-    "causal_sufficiency.residual_noise_last_token.results.recovery_grid.0|last_token": -0.04868292808532715,
-    "causal_sufficiency.residual_noise_last_token.results.recovery_grid.1|last_token": -0.03995871543884277,
-    "causal_sufficiency.residual_noise_last_token.results.recovery_grid.2|last_token": -0.03230118751525879,
-    "causal_sufficiency.residual_noise_last_token.results.top_k_cells.0.recovery": -0.03230118751525879,
-    "causal_sufficiency.residual_noise_last_token.results.top_k_cells.1.recovery": -0.03995871543884277,
-    "causal_sufficiency.residual_noise_last_token.results.top_k_cells.2.recovery": -0.04868292808532715
+    "causal_sufficiency.residual_noise_last_token.results.clean_ceiling": 3.168424606323242,
+    "causal_sufficiency.residual_noise_last_token.results.corrupted_floor": -0.22132539749145508,
+    "causal_sufficiency.residual_noise_last_token.results.recovery_grid.0|last_token": -0.048683881759643555,
+    "causal_sufficiency.residual_noise_last_token.results.recovery_grid.1|last_token": -0.039963722229003906,
+    "causal_sufficiency.residual_noise_last_token.results.recovery_grid.2|last_token": -0.03230857849121094,
+    "causal_sufficiency.residual_noise_last_token.results.top_k_cells.0.recovery": -0.03230857849121094,
+    "causal_sufficiency.residual_noise_last_token.results.top_k_cells.1.recovery": -0.039963722229003906,
+    "causal_sufficiency.residual_noise_last_token.results.top_k_cells.2.recovery": -0.048683881759643555
   }
 }

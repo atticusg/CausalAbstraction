@@ -9,27 +9,27 @@
     "default": 1e-05
   },
   "values": {
-    "accuracy.accuracy": 0.9795918367346939,
-    "accuracy.correct": 48,
-    "accuracy.prob_accuracy": 0.9645608082005032,
+    "accuracy.accuracy": 0.9591836734693877,
+    "accuracy.correct": 47,
+    "accuracy.prob_accuracy": 0.9642329389450368,
     "accuracy.total": 49,
-    "baseline.per_class_output_dists.dists.first": 9.576580850989558e-06,
-    "baseline.per_class_output_dists.dists.last": 5.058555416326271e-06,
-    "baseline.per_class_output_dists.dists.mean": 1.1684427363434224e-06,
+    "baseline.per_class_output_dists.dists.first": 9.283964573114645e-06,
+    "baseline.per_class_output_dists.dists.last": 5.260218131297734e-06,
+    "baseline.per_class_output_dists.dists.mean": 1.148314595411648e-06,
     "baseline.per_class_output_dists.dists.shape": [
       7,
       7
     ],
-    "baseline.per_class_output_dists.dists.std": 3.85579278372461e-06,
-    "baseline.per_class_output_dists.sha256": "486a6b7c83bab03e95236954c82e717fbec5714859a07a0a78cb63507fcc5df4",
-    "full_output_dists.first": 5.6756337097566695e-14,
-    "full_output_dists.last": 4.809836059133529e-18,
+    "baseline.per_class_output_dists.dists.std": 3.7658674045815133e-06,
+    "baseline.per_class_output_dists.sha256": "88bdda6645d607cf34ab4a36d409d3baa1183dcd776176af56ce0380b723a125",
+    "full_output_dists.first": 4.1523855615890545e-14,
+    "full_output_dists.last": 3.1069001001213694e-18,
     "full_output_dists.mean": 6.581718480447307e-06,
-    "full_output_dists.sha256": "f6839b49f1aeef4b0960acc6c6b1b4ede9a5698cf0effef06d33bb67990e5b22",
+    "full_output_dists.sha256": "ff06128d4bbafc614ebea7143b31e3cd7ac1c94c3515d1e8e7206a5e07ab73ab",
     "full_output_dists.shape": [
       49,
       151936
     ],
-    "full_output_dists.std": 0.0025372866075485945
+    "full_output_dists.std": 0.002541244262829423
   }
 }
