@@ -31,7 +31,6 @@ from causalab.methods.causal_tracing import (
     run_corrupted_floor,
 )
 from causalab.methods.causal_tracing.vectors import _entry_activation_std
-from causalab.methods.ablation._spans import group_by_position_count
 from causalab.methods.metric import InterchangeMetric, compute_base_outputs
 from causalab.neural.activations.targets import build_residual_stream_targets
 from causalab.neural.pipeline import LMPipeline
@@ -317,16 +316,25 @@ class TestSeededNoise:
 
 
 # --------------------------------------------------------------------------- #
-class TestBucketReuse:
-    """The intervenable model is built once and reused across length buckets
-    (a perf fix), with the noise RNG reset at each bucket boundary so the noise
-    stream restarts per bucket exactly as a fresh per-bucket model did."""
+class TestNoiseStreamOverMixedLengths:
+    """Seeded noise over a dataset whose examples select different numbers of
+    positions.
+
+    An all-tokens entry span used to force the dataset into one bucket per
+    length, each bucket its own call and so its own restart of the noise stream —
+    which meant two disjoint groups of examples were handed the *same* draws.
+    Spans may now be ragged, so the dataset runs as one stream.
+
+    What causal tracing needs is that grid cells are comparable: each cell is its
+    own call and replays the same stream for the same dataset. That is what these
+    pin, rather than the bucket-order invariance that only existed because of the
+    bucketing.
+    """
 
     pytestmark = pytest.mark.numerical_unit
 
-    # Length-3 and length-6 prompts under the tiny-random Llama tokenizer (probed
-    # directly); an all-tokens entry span over a mixed-length dataset forces
-    # ``group_by_position_count`` to split it into one bucket per length.
+    # Length-3 and length-6 prompts under the tiny-random Llama tokenizer, so an
+    # all-tokens span selects a different number of positions per example.
     _L3 = ["hello world", "red sky", "a cat"]
     _L6 = ["the quick brown fox", "one two three four five"]
 
@@ -352,28 +360,31 @@ class TestBucketReuse:
             noise_seed=seed,
             output_scores=False,
         )["string"]
-        # ``string`` is nested per batch; stitching keeps dataset order, so flatten
-        # the batch wrapper to one generation per example, then key by prompt.
         flat = [gen for batch in out for gen in batch]
         return {t: s for t, s in zip(texts, flat)}
 
-    def test_mixed_length_dataset_forces_multiple_buckets(
-        self, mock_tiny_lm: LMPipeline
-    ) -> None:
-        """Sanity: the mixed-length dataset really does bucket (else the reuse
-        path below is never exercised)."""
-        dataset = _dataset(self._L3 + self._L6)
-        span = _all_tokens(mock_tiny_lm, dataset)
-        target = _entry_target(mock_tiny_lm, span)
-        buckets = group_by_position_count(target, dataset)
-        assert len(buckets) == 2
+    def test_mixed_lengths_run_in_one_pass(self, mock_tiny_lm: LMPipeline) -> None:
+        """Every example is generated for, in dataset order, despite the span
+        selecting a different number of positions for each length group."""
+        texts = self._L3 + self._L6
+        out = self._noise_outputs(mock_tiny_lm, texts, seed=7)
+        assert list(out) == texts
+        assert all(isinstance(v, str) for v in out.values())
 
-    def test_noise_independent_of_bucket_order(self, mock_tiny_lm: LMPipeline) -> None:
-        """Reordering whole length-groups swaps the bucket *processing* order
-        while preserving each example's order *within* its bucket. With the
-        per-bucket RNG reset, every example's noised output is unchanged; if the
-        reused model leaked RNG state across buckets, the bucket processed second
-        would shift. This pins the reset that keeps the perf fix numerics-neutral."""
-        order_36 = self._noise_outputs(mock_tiny_lm, self._L3 + self._L6, seed=7)
-        order_63 = self._noise_outputs(mock_tiny_lm, self._L6 + self._L3, seed=7)
-        assert order_36 == order_63
+    def test_same_seed_and_order_reproduces(self, mock_tiny_lm: LMPipeline) -> None:
+        """The property grid cells rely on: a cell re-run with the same seed over
+        the same dataset replays the same noise, so two cells differ only by
+        where they restore."""
+        texts = self._L3 + self._L6
+        first = self._noise_outputs(mock_tiny_lm, texts, seed=7)
+        again = self._noise_outputs(mock_tiny_lm, texts, seed=7)
+        assert first == again
+
+    def test_a_different_seed_changes_the_noise(self, mock_tiny_lm: LMPipeline) -> None:
+        """Non-vacuity for the test above: the outputs are seed-dependent, so
+        reproducing them means the stream replayed rather than the noise having
+        no effect at all."""
+        texts = self._L3 + self._L6
+        assert self._noise_outputs(mock_tiny_lm, texts, seed=7) != self._noise_outputs(
+            mock_tiny_lm, texts, seed=8
+        )

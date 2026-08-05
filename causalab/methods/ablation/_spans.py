@@ -1,23 +1,20 @@
-"""Position-count bucketing for ablation spans.
+"""How many token positions a unit selects for one example.
 
-The gather produces a *rectangular* ``(b, [h,] n_pos, d)`` tensor, so every example
-in a batch must expose the same number of intervened positions. Single-position
-spans (e.g. a named ``last_token``) satisfy this trivially; all-position spans
-(``get_all_tokens``) do not — examples of different token length yield different
-position counts and the gather (``torch.gather`` / ``torch.tensor`` on a ragged
-index list) raises. These helpers group a dataset into equal-position-count
-buckets so each bucket runs as one rectangular batch.
+This used to also bucket a dataset into equal-position-count groups, because the
+gather produced a rectangular ``(b, [h,] n_pos, d)`` tensor and every example in
+a batch had to expose the same number of positions. Positions are now indexed
+per selected token, so a batch may mix widths and the bucketing is gone.
 
-Both ``run.py`` (intervention) and ``reference_vectors.py`` (mean collection)
-hit the same rectangular-gather constraint, so the bucketing lives here.
+The count itself is still needed: per-example *replace* collection reads one
+activation row per example, so it has to reject a span that resolves to more
+than one token.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from causalab.causal.counterfactual_dataset import CounterfactualExample
-from causalab.neural.units import AtomicModelUnit, InterchangeTarget
+from causalab.neural.units import AtomicModelUnit
 
 
 def unit_position_count(unit: AtomicModelUnit, example_input: Any) -> int:
@@ -36,28 +33,3 @@ def unit_position_count(unit: AtomicModelUnit, example_input: Any) -> int:
     if unit.unit == "h.pos":
         return len(idx[1][0])
     return len(idx)
-
-
-def example_bucket_key(
-    target: InterchangeTarget, example: CounterfactualExample
-) -> tuple[int, ...]:
-    """Per-unit position counts for one example, in ``flatten()`` order."""
-    return tuple(
-        unit_position_count(unit, example["input"]) for unit in target.flatten()
-    )
-
-
-def group_by_position_count(
-    target: InterchangeTarget, dataset: list[CounterfactualExample]
-) -> list[tuple[list[int], list[CounterfactualExample]]]:
-    """Group dataset indices by equal per-unit position counts.
-
-    Returns a list of ``(original_indices, sub_dataset)`` buckets. When every
-    example shares one key — the common case for single-position spans, or any
-    span over an equal-length dataset — the result is a single bucket spanning
-    the whole dataset in original order, so callers can skip reassembly.
-    """
-    buckets: dict[tuple[int, ...], list[int]] = {}
-    for i, example in enumerate(dataset):
-        buckets.setdefault(example_bucket_key(target, example), []).append(i)
-    return [(indices, [dataset[i] for i in indices]) for indices in buckets.values()]

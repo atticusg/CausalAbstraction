@@ -32,10 +32,7 @@ import torch
 from torch import Tensor
 
 from causalab.causal.counterfactual_dataset import CounterfactualExample
-from causalab.methods.ablation._spans import (
-    group_by_position_count,
-    unit_position_count,
-)
+from causalab.methods.ablation._spans import unit_position_count
 from causalab.methods.ablation.reference_vectors import (
     make_mean_vectors,
     make_zero_vectors,
@@ -136,17 +133,15 @@ def _entry_activation_std(
 
     Collects every gathered (example, position) activation at the entry units and
     returns the scalar std across all of them — the subject-embedding σ ROME
-    scales its corruption noise by. Bucketed by position count so each gather
-    stays rectangular; within a bucket one collect covers every unit and every
-    position it selects.
+    scales its corruption noise by. One collect covers every unit and every
+    position it selects, whatever each example's span width.
     """
     units = entry_target.flatten()
     chunks: list[Tensor] = []
 
-    for _, sub in group_by_position_count(entry_target, dataset):
-        feats = collect_features(sub, pipeline, units, batch_size=batch_size)
-        assert isinstance(feats, dict)
-        chunks.extend(feats[u.id].float() for u in units)
+    feats = collect_features(dataset, pipeline, units, batch_size=batch_size)
+    assert isinstance(feats, dict)
+    chunks.extend(feats[u.id].float() for u in units)
 
     if not chunks:
         raise ValueError(

@@ -27,14 +27,11 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-import torch
 from torch import Tensor
 from tqdm import tqdm
 
 from causalab.causal.causal_model import CausalModel
 from causalab.causal.counterfactual_dataset import CounterfactualExample
-from causalab.methods.ablation._spans import group_by_position_count
-from causalab.methods.ablation.run import _stitch_bucket_outputs
 from causalab.methods.metric import InterchangeMetric, score_intervention_outputs
 from causalab.methods.steer.steer import run_steering_interventions
 from causalab.neural.units import AtomicModelUnit, InterchangeTarget
@@ -58,23 +55,6 @@ def _type_map(
     return type_map
 
 
-def _slice_vectors(vectors: dict[str, Tensor], indices: list[int]) -> dict[str, Tensor]:
-    """Reindex per-example vectors to a bucket's original dataset positions.
-
-    ``run_steering_interventions`` slices per-example ``(n, d)`` tensors by batch
-    offset in the order it receives the dataset. When an all-position entry span
-    forces length-bucketing (which reorders examples), the per-example clean
-    restore vectors must be reordered to match the bucket — broadcast ``(d,)``
-    vectors (zero/mean corruption, noise scales) are position-independent and
-    pass through unchanged.
-    """
-    idx = torch.tensor(indices)
-    return {
-        unit_id: (vec[idx] if vec.ndim == 2 else vec)
-        for unit_id, vec in vectors.items()
-    }
-
-
 def run_causal_trace(
     pipeline: Any,
     dataset: list[CounterfactualExample],
@@ -93,47 +73,26 @@ def run_causal_trace(
     corruption vectors / noise scales, per-example clean restore values).
     ``type_by_unit`` (from :func:`_type_map`) makes the entry ``noise`` and the
     restore ``replace`` for noise corruption; ``None`` runs everything as
-    ``replace``. All-position entry spans are length-bucketed so each gather
-    stays rectangular, with per-example vectors reindexed per bucket and
-    the outputs stitched back into dataset order for direct scoring.
+    ``replace``.
 
-    Each bucket is one ``run_steering_interventions`` call, which builds its own
-    interventions — so every bucket's noise stream starts from ``noise_seed``
-    while advancing across the batches *within* a bucket. That is the property
-    that makes grid cells comparable, and it now falls out of the call structure
-    rather than needing a model to be built once and its RNG reset by hand at
-    each boundary.
+    The whole dataset is one ``run_steering_interventions`` call, so a cell's
+    noise stream starts from ``noise_seed`` and advances once across every batch.
+    That is what makes grid cells comparable: each cell is its own call and so
+    replays the same stream. An all-position entry span no longer needs the
+    dataset regrouped by length, which also removes the surprise that two
+    disjoint groups of examples used to be handed the *same* noise draws.
     """
-    buckets = group_by_position_count(target, dataset)
-
-    if len(buckets) == 1:
-        return run_steering_interventions(
-            pipeline,
-            dataset,
-            target,
-            vectors,
-            batch_size=batch_size,
-            output_scores=output_scores,
-            mode="replace",
-            type_by_unit=type_by_unit,
-            noise_seed=noise_seed,
-        )
-
-    bucket_outputs = [
-        run_steering_interventions(
-            pipeline,
-            sub_dataset,
-            target,
-            _slice_vectors(vectors, indices),
-            batch_size=batch_size,
-            output_scores=output_scores,
-            mode="replace",
-            type_by_unit=type_by_unit,
-            noise_seed=noise_seed,
-        )
-        for indices, sub_dataset in buckets
-    ]
-    return _stitch_bucket_outputs(buckets, bucket_outputs, len(dataset))
+    return run_steering_interventions(
+        pipeline,
+        dataset,
+        target,
+        vectors,
+        batch_size=batch_size,
+        output_scores=output_scores,
+        mode="replace",
+        type_by_unit=type_by_unit,
+        noise_seed=noise_seed,
+    )
 
 
 def run_corrupted_floor(

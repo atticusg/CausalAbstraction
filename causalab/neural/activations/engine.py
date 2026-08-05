@@ -460,9 +460,7 @@ def _decode_step_plans(plans: Sequence[UnitPlan]) -> list[UnitPlan]:
     positions and has no reading at a token that did not exist yet, which is why
     :func:`generate_with_interventions` only offers this to the steering path.
     """
-    return [
-        replace(plan, positions=[[0] for _ in plan.positions]) for plan in plans
-    ]
+    return [replace(plan, positions=[[0] for _ in plan.positions]) for plan in plans]
 
 
 def generate_with_interventions(

@@ -24,13 +24,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import torch
 from torch import Tensor
 from tqdm import tqdm
 
 from causalab.causal.causal_model import CausalModel
 from causalab.causal.counterfactual_dataset import CounterfactualExample
-from causalab.methods.ablation._spans import group_by_position_count
 from causalab.methods.metric import InterchangeMetric, score_intervention_outputs
 from causalab.methods.steer.steer import run_steering_interventions
 from causalab.neural.pipeline import LMPipeline
@@ -75,50 +73,6 @@ def _flatten_run_outputs(
     return strings, sequences, scores_per_example
 
 
-def _stitch_bucket_outputs(
-    buckets: list[tuple[list[int], list[CounterfactualExample]]],
-    bucket_outputs: list[dict[str, list[Any]]],
-    n_examples: int,
-) -> dict[str, list[Any]]:
-    """Reassemble per-bucket outputs into one synthetic batch in dataset order.
-
-    Each bucket was run on a sub-dataset (a subset of examples in arbitrary
-    order); to let callers score against the *original* dataset, we scatter each
-    bucket's per-example outputs back to their original positions and wrap the
-    whole thing as a single batch — the shape ``score_intervention_outputs``
-    flattens example-for-example.
-    """
-    string_by_idx: list[str | None] = [None] * n_examples
-    seq_by_idx: list[Any] = [None] * n_examples
-    scores_by_idx: list[list[Tensor] | None] = [None] * n_examples
-
-    for (indices, _), outputs in zip(buckets, bucket_outputs):
-        strings, sequences, scores_per_example = _flatten_run_outputs(outputs)
-        for local, original in enumerate(indices):
-            string_by_idx[original] = strings[local]
-            if sequences:
-                seq_by_idx[original] = sequences[local]
-            if scores_per_example is not None:
-                scores_by_idx[original] = scores_per_example[local]
-
-    result: dict[str, list[Any]] = {
-        "string": [string_by_idx],
-        "sequences": [seq_by_idx],
-    }
-
-    if all(s is not None for s in scores_by_idx):
-        # Equal generation length is expected (fixed max_new_tokens); guard with
-        # the min so an early-stopped example can't index past a shorter row.
-        n_tokens = min(len(s) for s in scores_by_idx)  # type: ignore[arg-type]
-        batch_scores = [
-            torch.stack([scores_by_idx[i][t] for i in range(n_examples)], dim=0)  # type: ignore[index]
-            for t in range(n_tokens)
-        ]
-        result["scores"] = [batch_scores]
-
-    return result
-
-
 def run_ablation(
     pipeline: LMPipeline,
     dataset: list[CounterfactualExample],
@@ -131,39 +85,21 @@ def run_ablation(
     """Ablate ``target`` over ``dataset`` and return raw generation outputs.
 
     ``vectors`` maps each unit id in ``target`` to its reference vector (zeros
-    for zero-ablation, corpus mean for mean-ablation). For all-position spans the
-    dataset is length-bucketed so each gather stays rectangular; the
-    per-bucket outputs are stitched back into the original dataset order so the
-    return value can be scored directly against ``dataset``.
+    for zero-ablation, corpus mean for mean-ablation). The whole dataset runs as
+    one stream in its original order, so the return value scores directly against
+    ``dataset`` — an all-position span over examples of differing length needs no
+    regrouping, because positions are indexed per selected token rather than as a
+    rectangle.
     """
-    buckets = group_by_position_count(target, dataset)
-
-    if len(buckets) == 1:
-        # Single-position spans, or any span over equal-length data: one
-        # rectangular batch stream, native ordering — no reassembly needed.
-        return run_steering_interventions(
-            pipeline,
-            dataset,
-            target,
-            vectors,
-            batch_size=batch_size,
-            output_scores=output_scores,
-            mode="replace",
-        )
-
-    bucket_outputs = [
-        run_steering_interventions(
-            pipeline,
-            sub_dataset,
-            target,
-            vectors,
-            batch_size=batch_size,
-            output_scores=output_scores,
-            mode="replace",
-        )
-        for _, sub_dataset in buckets
-    ]
-    return _stitch_bucket_outputs(buckets, bucket_outputs, len(dataset))
+    return run_steering_interventions(
+        pipeline,
+        dataset,
+        target,
+        vectors,
+        batch_size=batch_size,
+        output_scores=output_scores,
+        mode="replace",
+    )
 
 
 def _score_all_metrics(
