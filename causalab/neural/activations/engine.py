@@ -13,12 +13,12 @@ Sources are read in their own forward, then written into the base's run. That
 mirrors what the pyvene backbone did (each source was a plain collection forward;
 the base was the generation prefill), so activations and logits match it exactly.
 The alternative — putting base and sources in one batched trace and handing
-values across with ``tracer.barrier`` — also works and was verified during the
-migration spike, but it needs sites visited in forward order with *two* barrier
-rounds each (all-read, sync, base-writes, sync) or a later source pushes the
-model past a site the base has not written yet. Two passes needs no barriers at
-all, and cross-model patching (sources from a *different* model) and steering
-(no source pass at all) fall out of the same code path.
+values across with ``tracer.barrier`` — also works, but it needs one barrier
+round per site with every source's read fenced behind the rounds for the sites
+before it; hoisting a read drives the model past a site the base has not written
+yet. Two passes needs no barriers at all, and cross-model patching (sources from
+a *different* model) and steering (no source pass at all) fall out of the same
+code path.
 
 What this replaces
 ------------------
