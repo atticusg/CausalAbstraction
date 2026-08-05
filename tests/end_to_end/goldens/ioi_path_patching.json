@@ -4,7 +4,7 @@
   "runner": "golden/ioi_path_patching",
   "seed": 0,
   "tolerance": {
-    "default": 1e-05
+    "default": 0.0001
   },
   "values": {
     "path_patching.abc_True.results.effect_grid.0|0": 0.0001112818717956543,

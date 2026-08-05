@@ -17,9 +17,26 @@
 #
 # extract_values() pins every finite float leaf of path_patching/<...>/results.json
 # — i.e. the full effect_grid (per (layer,head) direct effect) plus the top_k cell
-# effects. GPU bootstrap pins deterministic:false; per-key tolerances carry the
-# (negligible, same-runner) kernel-drift signal. See docs/TESTS.md "Golden JSON
+# effects. GPU bootstrap pins deterministic:false. See docs/TESTS.md "Golden JSON
 # contract" and docs/PATH_PATCHING.md §9 (worked IOI example).
+#
+# Tolerance is 1e-4, not the 1e-5 default, because 1e-5 is below this pipeline's
+# float32 noise floor. Measured drifts against the stored values, all with the
+# circuit structure fully intact (9.9 still the top name mover, 10.7 the top
+# negative one):
+#
+#   different GPU, same code ......... up to 9.95e-6   <- 0.5% under the old 1e-5
+#   different intervention backbone ... up to 6.56e-6
+#   both together .................... up to 1.18e-5   <- over it
+#
+# So the old bound was passing on luck, and any change in the order the same
+# float32 arithmetic happens to be performed trips it. 1e-4 keeps ~8x margin over
+# the worst observed drift while staying far below anything that would change a
+# head's role: the name movers score 0.5-2.5, four orders of magnitude above it.
+# The near-zero cells (median |effect| 2.5e-3) are the "this head does nothing"
+# finding, which 1e-4 does not blur. The sibling path-patching goldens
+# (ioi_path_patching_receiver_set, ioi_path_patching_residual) already carry 1e-3
+# for the same reason; this one was the outlier still on the default.
 defaults:
 - /base
 - /task: IOI
