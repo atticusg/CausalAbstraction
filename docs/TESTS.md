@@ -109,8 +109,18 @@ A runner-scope, full-pipeline, real-model end-to-end pin under `tests/end_to_end
    }
    ```
 
-5. **Comparison.** `extract_values` walks the whole output tree — baseline `accuracy.json` metrics plus every `*.safetensors` as a `.sha256` and per-tensor `mean/std/first/last/shape` (non-finite reductions dropped, only `shape` anchors them). Each value must reproduce within its `tolerance`: a flat `{key: tolerance}` map, missing keys → `default` (`1e-5`); `accuracy.accuracy` → `0` (exact ratio), `accuracy.prob_accuracy` → `1e-4` (BLAS/CUDA drift), reductions → `1e-5`. Absolute, not relative (`tests/end_to_end/test_goldens.py:72`).
-6. **Determinism is not a gate on GPU.** All goldens run on GPU (non-deterministic), so `.sha256` is logged for completeness but not asserted in practice.
+5. **Comparison.** `extract_values` walks the whole output tree — baseline `accuracy.json` metrics plus every `*.safetensors` as a `.sha256` and per-tensor `mean/std/first/last/shape` (non-finite reductions dropped, only `shape` anchors them). Each value must reproduce within its `tolerance`: a flat `{key: tolerance}` map, missing keys → `default` (`1e-5`); `accuracy.prob_accuracy` → `1e-4` (BLAS/CUDA drift), reductions → `1e-5`. Absolute, not relative (`tests/end_to_end/test_goldens.py:72`). Two families of key carry a wider tolerance for reasons that are not drift — see [Two things a golden must not pin exactly](#two-things-a-golden-must-not-pin-exactly).
+6. **Determinism is not a gate on GPU.** All goldens run on GPU (non-deterministic), so `.sha256` is logged for completeness but not asserted in practice (`test_goldens.py` skips `.sha256` keys whenever `deterministic` is false).
+
+##### Two things a golden must not pin exactly
+
+Both were found by a golden going red for a reason that was not a regression. Neither is fixed by re-recording — a re-record just moves the failure to the next run or the next machine.
+
+- **Accuracy is a step function.** `accuracy.accuracy` is `correct / N`, so a single example sitting near the decision boundary flips it by exactly `1/N` when float arithmetic differs — a different GPU, a different BLAS. That is not a capability change. Accuracy-valued keys therefore carry a tolerance of `1/N`, and `accuracy.correct` a tolerance of `1`: one example may move, more may not. `prob_accuracy` is continuous and keeps its own tighter tolerance.
+
+- **A trained parameter is only defined up to its optimization trajectory.** `weekdays_subspace` trains a DAS rotation, and GPU training is not bit-reproducible (matmul-backward reduction order varies between runs). Two consecutive identical runs disagreed on 16 keys, then agreed exactly. The rotation's own values therefore carry a tolerance of 20% of their recorded magnitude, floored at `1e-3` — enough to catch a sign flip, an order-of-magnitude shift, or a NaN, and deliberately not enough to catch drift in a quantity that has no single correct value. Scores and accuracies computed *from* the rotation stay strict.
+
+  If such a key flakes again, the fix is not a wider tolerance — it is that raw learned weights should not be value-pinned at all, and the scores alone should carry the golden.
 7. **Updating goldens.** `tests/end_to_end/update_goldens.py` prints a rich diff and refuses to write without `--i-have-reviewed-the-diff`:
 
    ```bash

@@ -4,6 +4,8 @@
   "runner": "golden/weekdays_ablation_mlp",
   "seed": 0,
   "tolerance": {
+    "ablation.mlp_mean_last_token.results.base_accuracy": 0.02040816326530612,
+    "ablation.mlp_mean_last_token.results.complement.ablated_accuracy": 0.02040816326530612,
     "default": 1e-05
   },
   "values": {

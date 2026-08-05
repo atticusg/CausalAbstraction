@@ -4,7 +4,8 @@
   "runner": "golden/weekdays",
   "seed": 0,
   "tolerance": {
-    "accuracy.accuracy": 0,
+    "accuracy.accuracy": 0.02040816326530612,
+    "accuracy.correct": 1,
     "accuracy.prob_accuracy": 0.0001,
     "default": 1e-05
   },

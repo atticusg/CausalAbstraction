@@ -4,7 +4,11 @@
   "runner": "golden/weekdays_path_steering",
   "seed": 0,
   "tolerance": {
-    "default": 1e-05
+    "accuracy.accuracy": 0.02040816326530612,
+    "accuracy.correct": 1,
+    "default": 1e-05,
+    "locate.interchange.result.results.base_accuracy": 0.02040816326530612,
+    "locate.interchange.results.base_accuracy": 0.02040816326530612
   },
   "values": {
     "accuracy.accuracy": 0.9591836734693877,

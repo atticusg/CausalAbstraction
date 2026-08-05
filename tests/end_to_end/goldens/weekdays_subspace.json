@@ -4,7 +4,11 @@
   "runner": "golden/weekdays_subspace",
   "seed": 0,
   "tolerance": {
+    "accuracy.accuracy": 0.02040816326530612,
+    "accuracy.correct": 1,
     "default": 1e-05,
+    "locate.interchange.result.results.base_accuracy": 0.02040816326530612,
+    "locate.interchange.results.base_accuracy": 0.02040816326530612,
     "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/featurizer_state_dict/rotate.parametrizations.weight.0.base.first": 0.001,
     "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/featurizer_state_dict/rotate.parametrizations.weight.0.base.last": 0.004635432735,
     "subspace.das_k8.das.result.das.models.single.featurizers.ResidualStream(Layer-1,block_output,Token-last_token)/featurizer_state_dict/rotate.parametrizations.weight.0.base.mean": 0.001,

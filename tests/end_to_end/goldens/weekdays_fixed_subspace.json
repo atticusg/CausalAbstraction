@@ -4,6 +4,8 @@
   "runner": "golden/weekdays_fixed_subspace",
   "seed": 0,
   "tolerance": {
+    "accuracy.accuracy": 0.02040816326530612,
+    "accuracy.correct": 1,
     "default": 1e-05,
     "subspace.fixed_k8.fixed.result.results.full_cell_score": 3.0,
     "subspace.fixed_k8.fixed.result.results.score_ratio": 0.2,

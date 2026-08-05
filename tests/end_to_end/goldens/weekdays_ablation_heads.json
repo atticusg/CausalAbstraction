@@ -4,6 +4,8 @@
   "runner": "golden/weekdays_ablation_heads",
   "seed": 0,
   "tolerance": {
+    "ablation.attention_head_zero_all.results.base_accuracy": 0.02040816326530612,
+    "ablation.attention_head_zero_all.results.combos.0.ablated_accuracy": 0.02040816326530612,
     "default": 1e-05
   },
   "values": {
