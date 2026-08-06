@@ -87,7 +87,7 @@ intervention *object*. See `activations/engine.py` for the execution model.
 
 | File | Role |
 |------|------|
-| `engine.py` | the execution core — `build_plans`, `build_interventions`, `collect_unit_activations`, `collect_unit_activations_under`, `generate_with_interventions`, `forward_with_interventions`, `gather_positions` / `scatter_positions` |
+| `engine.py` | the execution core — `build_plans`, `build_interventions`, `collect_unit_activations`, `collect_unit_activations_under`, `generate_with_interventions`, `forward_with_interventions`, and the position primitives `FlatIndex` / `flat_index` / `align_per_example` / `gather_positions` / `scatter_positions` |
 | `targets.py` | build `InterchangeTarget`s per component type — `build_residual_stream_targets`, `build_attention_head_targets`, `build_attention_output_targets`, `build_mlp_targets` — plus `detect_component_type_from_targets`, `extract_grid_dimensions_from_targets` |
 | `collect.py` | collect activations / features — `collect_features`, `collect_source_representations`, `collect_class_centroids` |
 | `interchange_mode.py` | activation swapping base↔counterfactual — `prepare_interchange_batch`, `collect_group_sources`, `batched_interchange_intervention`, `run_interchange_interventions`, `run_two_pass_path_patching` |
@@ -201,10 +201,16 @@ LMPipeline(model)                     # 0  load model + tokenizer
 - **Cross-model patching** — pass `source_pipeline=` to read sources from a
   different model.
 
-Positions must select the **same number of tokens for every example in a batch**
-and the same number on the base and counterfactual sides. A ragged or mismatched
-selection is rejected up front by `prepare_interchange_batch` with an actionable
-message.
+Within an example, the base and counterfactual must select the **same number of
+tokens** — interchange pairs the base's *i*-th position with the source's *i*-th,
+so unequal counts have no pairing. `prepare_interchange_batch` rejects a mismatch
+up front with an actionable message.
+
+Widths may differ *between* examples: positions are indexed as flat
+`(example, position)` pairs, so a value that tokenizes to two tokens for one
+example and one for another is fine. Selecting *nothing* for an example is
+refused — that example would be left un-intervened and then scored beside the
+rest, which is a wrong number rather than a crash.
 
 ### 5. Post-process outputs
 

@@ -52,8 +52,8 @@ visualization:
   collected over the **train** split.
 - **`span`** — `all` ablates every token position; a list of names ablates the
   union of those named task positions (resolved via `task.create_token_positions`).
-  All-position spans are length-bucketed internally so the gather stays
-  rectangular.
+  Examples of different length simply select different numbers of positions; the
+  batch does not have to be regrouped.
 - **`combos`** — joint ablations scored as a single drop, in addition to the grid.
 - **`complement_keep`** — list of layers to *keep*; every other grid layer is
   ablated jointly (a sufficiency check). `null` skips it.
