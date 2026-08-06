@@ -31,6 +31,8 @@ from causalab.neural.components import (
     component_width,
     head_layout,
     resolve_site,
+    _FORWARD_RANK,
+    forward_order,
 )
 from causalab.neural.pipeline import LMPipeline
 from tests._helpers.tiny import (
@@ -361,3 +363,60 @@ def _trace(text: str):
         },
         inputs={"raw_input": text},
     )
+
+
+class TestForwardOrderIsTotal:
+    """Sites must sort into the order the forward actually reaches them.
+
+    The interleaver serves each module location once, in forward order, so the
+    engine sorts its sites by ``(layer, _FORWARD_RANK[component_type])`` and
+    walks them in that order. If two component types share a rank the sort is
+    decided by however the caller happened to list their units — and a caller
+    who lists the value stream before the query stream then asks the model to go
+    backwards, which raises ``OutOfOrderError`` from inside the trace.
+
+    q / k / v used to share one rank, so collecting a value unit and a query unit
+    together worked or failed depending on the order they were passed in.
+    """
+
+    def test_qkv_ranks_follow_the_order_attention_computes_them(self) -> None:
+        q = forward_order(0, "query_output")
+        k = forward_order(0, "key_output")
+        v = forward_order(0, "value_output")
+        assert q < k < v
+        # the per-head views sit at the same depth as the stream they read
+        assert forward_order(0, "head_query_output") == q
+        assert forward_order(0, "head_key_output") == k
+        assert forward_order(0, "head_value_output") == v
+
+    def test_every_component_type_has_a_distinct_rank_per_stream(self) -> None:
+        """No two *different* streams may tie. Types that tie are exactly the
+        pairs naming the same activation at different granularity (the whole
+        stream and its per-head view), which is a genuine shared depth."""
+        by_rank: dict[int, set[str]] = {}
+        for name, rank in _FORWARD_RANK.items():
+            by_rank.setdefault(rank, set()).add(name)
+        for rank, names in by_rank.items():
+            stripped = {n.removeprefix("head_") for n in names}
+            assert len(stripped) == 1, (
+                f"rank {rank} is shared by unrelated component types {sorted(names)}; "
+                "sites that tie are ordered by caller input order, not forward order"
+            )
+
+    def test_ordering_is_strictly_increasing_through_a_block(self) -> None:
+        """Sanity on the whole table: a block's sites step forward monotonically."""
+        walk = [
+            "block_input",
+            "attention_input",
+            "query_output",
+            "key_output",
+            "value_output",
+            "attention_value_output",
+            "attention_output",
+            "mlp_input",
+            "mlp_activation",
+            "mlp_output",
+            "block_output",
+        ]
+        ranks = [forward_order(0, name) for name in walk]
+        assert ranks == sorted(ranks) and len(set(ranks)) == len(ranks)

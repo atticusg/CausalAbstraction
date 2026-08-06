@@ -19,6 +19,7 @@ So these assert the properties that make the loop a training loop:
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import pytest
@@ -30,6 +31,7 @@ from causalab.methods.trained_subspace.train import (
     _run_training_loop as run_training_loop,  # pyright: ignore[reportPrivateUsage]
 )
 from causalab.neural.LM_units import ResidualStream
+from causalab.neural.activations.engine import build_interventions
 from causalab.neural.featurizer import Featurizer
 from causalab.neural.token_positions import TokenPosition
 from causalab.neural.units import InterchangeTarget
@@ -392,6 +394,108 @@ class TestNoTrainableParameters:
             run_training_loop(
                 pipeline=mock_tiny_lm,
                 interchange_target=_target(mock_tiny_lm, lambda _h: Featurizer()),
+                counterfactual_dataset=dataset,
+                intervention_type="interchange",
+                config=_config(),
+                loss_and_metric_fn=_loss_fn(),
+            )
+
+
+class TestSharedFeaturizerIsNotTrainedTwice:
+    """Units may share one featurizer; the optimizer must still see it once.
+
+    Tying a single subspace across several layers is a deliberate pattern —
+    ``Featurizer.tie_masks`` says as much for masks. Each unit gets its own
+    intervention object wrapping that shared featurizer, and ``parameters()``
+    deduplicates within a module but cannot across two, so collecting naively
+    yields the same tensor twice.
+
+    Torch does not reject that: it warns about duplicates in a parameter group
+    and then steps the tensor once per occurrence, so the rotation trains at
+    double the configured learning rate. Silent, and easy to lose in a training
+    log — hence a test rather than a comment.
+    """
+
+    pytestmark = pytest.mark.unit
+
+    def test_duplicate_parameters_would_double_the_step(self) -> None:
+        """Pin the torch behaviour the deduplication exists to avoid, so this
+        test explains itself if the fix is ever removed."""
+        once = torch.nn.Parameter(torch.zeros(3))
+        twice = torch.nn.Parameter(torch.zeros(3))
+        once.grad, twice.grad = torch.ones(3), torch.ones(3)
+        torch.optim.AdamW([once], lr=0.1).step()
+        with pytest.warns(UserWarning, match="duplicate parameters"):
+            opt = torch.optim.AdamW([twice, twice], lr=0.1)
+        opt.step()
+        # Not an exact doubling — the second step sees updated Adam moments — but
+        # unmistakably a second step rather than rounding.
+        ratio = (twice.data.abs() / once.data.abs()).mean().item()
+        assert 1.5 < ratio < 2.5, ratio
+
+    def test_shared_featurizer_yields_one_parameter_set(
+        self, mock_tiny_lm: Any
+    ) -> None:
+        hidden = mock_tiny_lm.model.config.hidden_size
+        shared = SubspaceFeaturizer(shape=(hidden, 3), trainable=True, id="shared")
+        position = _last_token(mock_tiny_lm)
+        units = [
+            ResidualStream(
+                layer=layer,
+                token_indices=position,
+                target_output=True,
+                shape=(hidden,),
+                featurizer=shared,
+            )
+            for layer in (0, 1)
+        ]
+        interventions = build_interventions(units, "interchange")
+
+        naive = [p for i in interventions for p in i.parameters() if p.requires_grad]
+        seen: set[int] = set()
+        deduped = [
+            p
+            for i in interventions
+            for p in i.parameters()
+            if p.requires_grad and not (id(p) in seen or seen.add(id(p)))
+        ]
+        # The naive collection really does repeat it — otherwise this proves nothing.
+        assert len(naive) > len(deduped)
+        assert len({id(p) for p in deduped}) == len(deduped)
+
+    def test_training_loop_does_not_hand_the_optimizer_a_duplicate(
+        self, mock_tiny_lm: Any, dataset: list[dict[str, Any]]
+    ) -> None:
+        """The production path, not just the pattern.
+
+        The two tests above establish that duplicates exist and that torch
+        double-steps them; this one drives the real loop with a shared featurizer
+        and asserts the duplicate never reaches the optimizer. Torch's own
+        ``UserWarning`` is the oracle, so removing the deduplication fails this
+        test even though the loop would still run and still appear to train.
+        """
+        hidden = mock_tiny_lm.model.config.hidden_size
+        shared = SubspaceFeaturizer(shape=(hidden, RANK), trainable=True, id="shared")
+        position = _last_token(mock_tiny_lm)
+        target = InterchangeTarget(
+            [
+                [
+                    ResidualStream(
+                        layer=layer,
+                        token_indices=position,
+                        target_output=True,
+                        shape=(hidden,),
+                        featurizer=shared,
+                    )
+                    for layer in (0, 1)
+                ]
+            ]
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            run_training_loop(
+                pipeline=mock_tiny_lm,
+                interchange_target=target,
                 counterfactual_dataset=dataset,
                 intervention_type="interchange",
                 config=_config(),

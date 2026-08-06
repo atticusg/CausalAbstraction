@@ -109,3 +109,82 @@ class TestSteeringDuringGeneration:
         prefill_only = _run(mock_tiny_lm, 8.0, every_step=False)
         every_step = _run(mock_tiny_lm, 8.0, every_step=True)
         torch.testing.assert_close(prefill_only, every_step, atol=0, rtol=0)
+
+
+class TestEveryStepRejectsPositionBoundSources:
+    """Carrying an intervention into generation is only meaningful for some modes.
+
+    A steering direction or a fixed replacement vector is a point in feature
+    space: it means the same thing at any token, so re-applying it to one the
+    model just wrote is well defined. An interchange source is a *reading* taken
+    from another run at particular prompt positions, and a token that did not
+    exist when it was gathered has no counterpart among them.
+
+    Left unguarded this failed in two ways, both bad. A multi-position span died
+    inside the scatter with a bare shape mismatch naming no cause; a
+    single-position one succeeded silently and applied a prompt activation to a
+    generated token.
+    """
+
+    def _plans(self, pipeline, mode: str, source):
+        from causalab.neural.LM_units import ResidualStream
+        from causalab.neural.activations.engine import build_plans
+        from causalab.neural.token_positions import TokenPosition
+
+        hidden = pipeline.model.config.hidden_size
+        unit = ResidualStream(
+            layer=0,
+            token_indices=TokenPosition(lambda _x: [1], pipeline, id="p1"),
+            target_output=True,
+            shape=(hidden,),
+        )
+        return build_plans([unit], [[[1]]], mode, sources=[source])
+
+    def test_interchange_is_refused(self, mock_tiny_lm: LMPipeline) -> None:
+        from causalab.neural.activations.engine import generate_with_interventions
+
+        hidden = mock_tiny_lm.model.config.hidden_size
+        plans = self._plans(mock_tiny_lm, "interchange", torch.zeros(1, hidden))
+        encoding = mock_tiny_lm.load([make_trace(_PROMPT)])
+        with pytest.raises(ValueError, match="read at prompt positions"):
+            generate_with_interventions(mock_tiny_lm, encoding, plans, every_step=True)
+
+    def test_the_message_names_the_mode_and_unit(
+        self, mock_tiny_lm: LMPipeline
+    ) -> None:
+        from causalab.neural.activations.engine import generate_with_interventions
+
+        hidden = mock_tiny_lm.model.config.hidden_size
+        plans = self._plans(mock_tiny_lm, "interchange", torch.zeros(1, hidden))
+        encoding = mock_tiny_lm.load([make_trace(_PROMPT)])
+        with pytest.raises(ValueError, match="InterchangeIntervention"):
+            generate_with_interventions(mock_tiny_lm, encoding, plans, every_step=True)
+
+    def test_interchange_still_runs_on_the_prompt(
+        self, mock_tiny_lm: LMPipeline
+    ) -> None:
+        """The guard is about carrying the source forward, not about interchange:
+        the default path must be untouched."""
+        from causalab.neural.activations.engine import generate_with_interventions
+
+        hidden = mock_tiny_lm.model.config.hidden_size
+        plans = self._plans(mock_tiny_lm, "interchange", torch.zeros(1, hidden))
+        encoding = mock_tiny_lm.load([make_trace(_PROMPT)])
+        out = generate_with_interventions(mock_tiny_lm, encoding, plans)
+        assert out.sequences.shape[0] == 1
+
+    @pytest.mark.parametrize("mode", ["add", "replace"])
+    def test_positionless_modes_are_allowed(
+        self, mock_tiny_lm: LMPipeline, mode: str
+    ) -> None:
+        """Steering (``add``) and replace carry over, and must not be caught
+        by the guard — otherwise it would block the feature it was written for."""
+        from causalab.neural.activations.engine import generate_with_interventions
+
+        hidden = mock_tiny_lm.model.config.hidden_size
+        plans = self._plans(mock_tiny_lm, mode, torch.zeros(1, 1, hidden))
+        encoding = mock_tiny_lm.load([make_trace(_PROMPT)])
+        out = generate_with_interventions(
+            mock_tiny_lm, encoding, plans, every_step=True
+        )
+        assert out.sequences.shape[0] == 1

@@ -20,7 +20,7 @@ Shared helpers live in [`tests/neural/activations/hook_oracle.py`](../tests/neur
 |---|---|---|
 | Collect: ordering, featurized + per-head collection | `tests/neural/activations/test_collect_hook_oracle.py` | 9 |
 | Interchange, across model families | `tests/neural/activations/test_interchange_hook_oracle.py` | 18 |
-| Interchange, exhaustive (spans, heads, featurizers, groups) | `tests/neural/activations/test_interchange_mode.py` | 42 |
+| Interchange, exhaustive (spans, heads, featurizers, groups) | `tests/neural/activations/test_interchange_mode.py` | 43 |
 | Feature-space replace/steer + error preservation | `tests/neural/activations/test_feature_space_hook_oracle.py` | 9 |
 | Interpolation (arbitrary `fn(f_base, f_src)`) | `tests/neural/activations/test_interpolation_hook_oracle.py` | 12 |
 | Differentiable binary mask (DBM) | `tests/neural/activations/test_mask_hook_oracle.py` | 15 |
@@ -29,7 +29,8 @@ Shared helpers live in [`tests/neural/activations/hook_oracle.py`](../tests/neur
 | Path patching, two-pass | `tests/methods/path_patching/test_two_pass_hook_oracle.py` | 6 |
 | Path patching, per-head value/query receivers + GQA | `tests/methods/path_patching/test_head_receivers_hook_oracle.py` | 5 |
 | Gradients through an intervention (forward **and** grad) | `tests/neural/test_gradients.py` | 4 |
-| Component resolution, all types x 3 families | `tests/neural/test_components.py` | 71 |
+| Ragged spans (a batch mixing span widths) | `tests/neural/activations/test_ragged_span_hook_oracle.py` | 4 |
+| Component resolution + forward ordering, all types x 3 families | `tests/neural/test_components.py` | 74 |
 | **Everything above, on the real model** | `tests/neural/activations/test_chat_coherent_hook_oracle.py` | 29 |
 
 Counts are collected tests, so a suite parametrized over the three model

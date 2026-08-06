@@ -128,16 +128,21 @@ def align_per_example(value: Tensor, index: FlatIndex) -> Tensor:
     interchange source, gathered through the same index) are returned unchanged.
     """
     total = index.rows.shape[0]
+    counts = index.counts.to(value.device)
     if value.ndim == 3:
-        # A source carrying its own position axis: either one row per selected
-        # position already, or the singleton axis that used to broadcast.
-        if value.shape[0] * value.shape[1] == total:
-            return value.reshape(-1, value.shape[-1])
         if value.shape[1] == 1:
-            value = value.squeeze(1)
+            # (batch, 1, width): one value per example. Always repeated by that
+            # example's count — never read as one-row-per-position, even when the
+            # two happen to have the same length. They agree only while every
+            # example selects exactly one token; with counts like (2, 0) the
+            # readings differ and the wrong one silently hands example 1's vector
+            # to example 0.
+            return value.squeeze(1).repeat_interleave(counts, dim=0)
+        # (batch, n_positions, width): already one row per selected position.
+        return value.reshape(-1, value.shape[-1])
     if value.shape[0] == total:
-        return value
-    return value.repeat_interleave(index.counts.to(value.device), dim=0)
+        return value  # one row per position (an interchange source, say)
+    return value.repeat_interleave(counts, dim=0)
 
 
 def gather_positions(
@@ -167,8 +172,10 @@ def scatter_positions(
     reaches the forward on its own, with nothing to assign back. That also means
     units sharing a site compose, each one seeing its predecessors' writes.
 
-    Each pair is named once, so there are no duplicate targets and no ordering
-    question about which write wins.
+    A unit that selects the same token twice names that pair twice, and advanced
+    indexing resolves the repeat last-write-wins. That is only reachable from a
+    token position that returns a duplicate index, which is a caller bug rather
+    than something this can sensibly average.
     """
     if head is None:
         activation[index.rows, index.cols] = values.to(activation.dtype)
@@ -240,6 +247,35 @@ def build_interventions(
     return interventions
 
 
+def _reject_empty_selections(
+    units: Sequence[AtomicModelUnit],
+    positions: Sequence[Sequence[Sequence[int]]],
+) -> None:
+    """Refuse a unit that selects no tokens at all for some example.
+
+    Spans may now differ in width across a batch, and an empty one is a width
+    like any other as far as the indexing is concerned — that example simply
+    contributes no rows and is left untouched. It then gets scored beside
+    examples that *were* intervened on, which is a wrong result rather than a
+    crash, so it is worth refusing.
+
+    An empty selection almost always means a token position found nothing — a
+    value string absent from the prompt, say. Before spans could be ragged this
+    surfaced as the uniform-width guard firing; that guard is gone, so the check
+    lives here.
+    """
+    for unit, per_example in zip(units, positions):
+        empty = [i for i, selected in enumerate(per_example) if len(selected) == 0]
+        if empty:
+            raise ValueError(
+                f"Unit {unit.id!r} selects no token positions for example(s) "
+                f"{empty[:5]}{'...' if len(empty) > 5 else ''}. Those examples "
+                f"would be left un-intervened and then scored alongside the rest. "
+                f"Usual cause: a token position that matched nothing — check the "
+                f"value string appears in those prompts."
+            )
+
+
 def build_plans(
     units: Iterable[AtomicModelUnit],
     positions: Sequence[Sequence[Sequence[int]]],
@@ -271,6 +307,7 @@ def build_plans(
     across batches (``noise``, ``mask``).
     """
     units = list(units)
+    _reject_empty_selections(units, positions)
     if interventions is None:
         interventions = build_interventions(
             units, mode, type_by_unit=type_by_unit, noise_seed=noise_seed, raw=raw
@@ -463,6 +500,36 @@ def _decode_step_plans(plans: Sequence[UnitPlan]) -> list[UnitPlan]:
     return [replace(plan, positions=[[0] for _ in plan.positions]) for plan in plans]
 
 
+def _reject_position_bound_sources(plans: Sequence[UnitPlan]) -> None:
+    """Refuse to carry an intervention into generation when its source is bound
+    to prompt positions.
+
+    Interchange and interpolation read their source from another run *at* the
+    positions the unit selects. A token the model has just produced has no such
+    reading, so re-applying one is not a conservative choice — it is a different,
+    unnamed operation. Caught here because the alternatives are both bad: a
+    multi-position span dies inside the scatter with a bare shape mismatch, and a
+    single-position one succeeds silently while meaning nothing.
+    """
+    offenders = [
+        plan
+        for plan in plans
+        if plan.source is not None and not plan.intervention.source_is_positionless
+    ]
+    if offenders:
+        names = ", ".join(sorted({p.unit.id for p in offenders}))
+        modes = ", ".join(sorted({type(p.intervention).__name__ for p in offenders}))
+        raise ValueError(
+            f"every_step=True cannot be used with a source read at prompt "
+            f"positions ({modes}; unit(s): {names}). Those sources were gathered "
+            f"at particular tokens of another run, and a token generated later "
+            f"has no counterpart among them. Steering and replacement carry over "
+            f"because their source is a feature-space vector rather than a "
+            f"reading — use one of those, or leave every_step=False to intervene "
+            f"on the prompt only."
+        )
+
+
 def generate_with_interventions(
     pipeline: Any,
     base_encoding: dict[str, Any],
@@ -494,6 +561,8 @@ def generate_with_interventions(
     }
     defaults.update(gen_kwargs)
     steps = int(defaults["max_new_tokens"])
+    if every_step:
+        _reject_position_bound_sources(plans)
     with pipeline.nnsight.generate(**model_inputs(base_encoding), **defaults) as tracer:
         _apply(pipeline, plans, device)
         if every_step and steps > 1:

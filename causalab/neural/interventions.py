@@ -74,6 +74,15 @@ class FeatureIntervention(torch.nn.Module):
     #: Whether this mode consumes a ``source`` value.
     needs_source: bool = True
 
+    #: Whether the source still means something at a token the prompt never
+    #: contained. A steering direction or a fixed replacement vector does — it is
+    #: a point in feature space, not a reading of anything. A source gathered
+    #: from another run *at particular positions* does not: there is no such
+    #: reading for a token that did not exist when it was collected. Only the
+    #: former can be carried into a generation step (see
+    #: :func:`~causalab.neural.activations.engine.generate_with_interventions`).
+    source_is_positionless: bool = False
+
     def __init__(self, featurizer: Any) -> None:
         super().__init__()
         self._featurizer = featurizer
@@ -170,6 +179,8 @@ class SteeringIntervention(FeatureIntervention):
     another run's activation), so it is not featurized on the way in.
     """
 
+    source_is_positionless = True
+
     def _featurize_source(self, source: Tensor | None, f_base: Tensor) -> Tensor | None:
         return source
 
@@ -188,6 +199,8 @@ class ReplaceIntervention(FeatureIntervention):
     error is still preserved, so replacing with zeros ablates the feature-space
     contribution while leaving the orthogonal component intact.
     """
+
+    source_is_positionless = True
 
     def _featurize_source(self, source: Tensor | None, f_base: Tensor) -> Tensor | None:
         return source
@@ -212,6 +225,8 @@ class NoiseIntervention(FeatureIntervention):
     ``batch_size``. A fresh instance with the same seed reproduces the sequence,
     which is what makes a sweep's grid cells comparable.
     """
+
+    source_is_positionless = True
 
     def __init__(self, featurizer: Any, seed: int = 0) -> None:
         super().__init__(featurizer)

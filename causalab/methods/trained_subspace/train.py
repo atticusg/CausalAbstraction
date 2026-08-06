@@ -409,12 +409,20 @@ def _run_training_loop(
     # A mask intervention owns its parameters directly; a learned featurizer
     # (DAS's rotation) owns them through the modules the intervention wraps, and
     # both are reachable from the intervention's `parameters()`.
-    optimizer_params = [
-        parameter
-        for intervention in interventions
-        for parameter in intervention.parameters()
-        if parameter.requires_grad
-    ]
+    #
+    # Deduplicated by identity, because units may *share* a featurizer — tying one
+    # subspace across several layers is a deliberate pattern, and `tie_masks` says
+    # so for masks. `Module.parameters()` dedups within one module but cannot
+    # across two, so a shared tensor would otherwise be handed to the optimizer
+    # twice and stepped twice: torch only warns about duplicates in a group, and
+    # the parameter then trains at double the configured learning rate.
+    seen: set[int] = set()
+    optimizer_params = []
+    for intervention in interventions:
+        for parameter in intervention.parameters():
+            if parameter.requires_grad and id(parameter) not in seen:
+                seen.add(id(parameter))
+                optimizer_params.append(parameter)
     if not optimizer_params:
         raise ValueError(
             f"No trainable parameters found for intervention_type="
