@@ -138,8 +138,21 @@ def align_per_example(value: Tensor, index: FlatIndex) -> Tensor:
             # readings differ and the wrong one silently hands example 1's vector
             # to example 0.
             return value.squeeze(1).repeat_interleave(counts, dim=0)
-        # (batch, n_positions, width): already one row per selected position.
-        return value.reshape(-1, value.shape[-1])
+        # (batch, n_positions, width): one row per selected position already —
+        # but only if every example really did select `n_positions` of them.
+        # Flattening a rectangle onto a ragged index silently re-attributes rows
+        # across example boundaries: with counts (1, 3) and a (2, 2, w) value,
+        # row 1 belongs to example 1 while the rectangle hands it example 0's
+        # second vector. The totals match, so nothing downstream notices.
+        width = value.shape[-1]
+        if int(counts.min()) != value.shape[1] or int(counts.max()) != value.shape[1]:
+            raise ValueError(
+                f"A source shaped {tuple(value.shape)} carries {value.shape[1]} "
+                f"positions for every example, but the units select "
+                f"{counts.tolist()}. Give one row per selected position "
+                f"({index.rows.shape[0]} of them) or one value per example."
+            )
+        return value.reshape(-1, width)
     if value.shape[0] == total:
         return value  # one row per position (an interchange source, say)
     return value.repeat_interleave(counts, dim=0)
@@ -157,6 +170,13 @@ def gather_positions(
     """
     selected = activation[index.rows, index.cols]
     if head is not None:
+        if selected.ndim < 3:
+            raise ValueError(
+                f"head={head} was requested but this site's activation has no "
+                f"head axis (gathered shape {tuple(selected.shape)}). Indexing "
+                f"it would return one scalar per position rather than a head's "
+                f"vector."
+            )
         selected = selected[:, head]
     return selected
 
@@ -177,6 +197,16 @@ def scatter_positions(
     token position that returns a duplicate index, which is a caller bug rather
     than something this can sensibly average.
     """
+    # Advanced-index assignment broadcasts, so a value with too few rows would
+    # be written to every selected position instead of raising — one row
+    # silently becoming the answer everywhere.
+    expected = index.rows.shape[0]
+    if values.shape[0] != expected:
+        raise ValueError(
+            f"Expected one row per selected position ({expected}), got "
+            f"{tuple(values.shape)}. A shorter value would broadcast and "
+            f"overwrite every position with the same vector."
+        )
     if head is None:
         activation[index.rows, index.cols] = values.to(activation.dtype)
     else:

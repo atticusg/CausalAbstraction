@@ -333,6 +333,44 @@ def _initialize_featurizers(
                 )
 
 
+def _check_rotations_survived(interchange_target: InterchangeTarget) -> None:
+    """Refuse to return a DAS run whose rotation collapsed during training.
+
+    A trained subspace is only meaningful while its rotation stays orthonormal.
+    If it degenerates the featurizer sends every activation to zero, the whole
+    activation lands in the reconstruction error, and every interchange becomes a
+    no-op — which does not raise. It reports as a *null result*: "this subspace
+    carries no causal signal". That is the worst way for training to fail,
+    because the output is a plausible scientific finding.
+
+    Checked here rather than trusting any one cause, so a collapse from an
+    optimizer setting, a scheduler, or a future change in the parametrization is
+    caught the same way.
+    """
+    for unit in interchange_target.flatten():
+        featurizer = getattr(unit.featurizer, "featurizer", None)
+        rotate = getattr(featurizer, "rotate", None)
+        weight = getattr(rotate, "weight", None)
+        if weight is None:
+            continue
+        matrix = weight.detach()
+        if matrix.numel() == 0:
+            continue
+        gram = matrix.T @ matrix
+        identity = torch.eye(gram.shape[0], device=gram.device, dtype=gram.dtype)
+        drift = (gram - identity).abs().max().item()
+        if drift > 1e-3:
+            raise RuntimeError(
+                f"The rotation for unit {unit.id!r} is no longer orthonormal "
+                f"after training (max |WᵀW - I| = {drift:.3g}"
+                f"{'; it collapsed to zero' if matrix.abs().max().item() == 0 else ''}"
+                f"). A degenerate rotation maps every activation to zero, so "
+                f"every interchange silently becomes a no-op and the run would "
+                f"report no causal effect. Check that the optimizer applies no "
+                f"weight decay to the rotation."
+            )
+
+
 def _run_training_loop(
     pipeline: Pipeline,
     interchange_target: InterchangeTarget,
@@ -431,6 +469,16 @@ def _run_training_loop(
             f"the mask can be built."
         )
 
+    # weight_decay=0 is load-bearing, not a default worth tuning. A DAS rotation
+    # is held orthonormal by `torch.nn.utils.parametrizations.orthogonal`, whose
+    # householder map ends in `Q * X.diagonal().int()`. That truncation only
+    # yields an orthonormal matrix while the underlying diagonal keeps magnitude
+    # >= 1, and the diagonal receives no gradient — so nothing pushes it, but any
+    # decay pulls it below 1, where `.int()` rounds it to 0 and the corresponding
+    # columns of the rotation become exactly zero. The featurizer then maps every
+    # activation to zero, the reconstruction error becomes the whole activation,
+    # and each interchange is a no-op that reports as a clean null result.
+    # `_check_rotations_survived` below catches that however it arises.
     optimizer = torch.optim.AdamW(
         optimizer_params, lr=config["init_lr"], weight_decay=0
     )
@@ -599,6 +647,8 @@ def _run_training_loop(
 
             # Update model unit
             model_unit.set_feature_indices(indices)
+
+    _check_rotations_survived(interchange_target)
 
     summary = f"Trained intervention for {str(interchange_target)[:200]}"
     summary += "\nFinal metrics: " + " ".join(

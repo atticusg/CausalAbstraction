@@ -51,9 +51,14 @@ __all__ = [
 def _select(f_base: Tensor, f_src: Tensor, feature_indices: list[int] | None) -> Tensor:
     """``f_src`` where ``feature_indices`` selects, ``f_base`` elsewhere.
 
-    ``None`` (or an empty selection meaning "no restriction") swaps the whole
-    feature vector. This is the plain-torch equivalent of pyvene's ``subspaces``
-    argument and its ``_do_intervention_by_swap`` dispatch.
+    ``None`` means no restriction and swaps the whole feature vector. An *empty*
+    list is the opposite — it selects nothing, so the base is returned unchanged.
+    The two are not interchangeable: a tied mask uses ``[]`` to say "this unit is
+    fully dropped", and reading it as "no restriction" would swap everything
+    instead of nothing.
+
+    This is the plain-torch equivalent of pyvene's ``subspaces`` argument and its
+    ``_do_intervention_by_swap`` dispatch.
     """
     if feature_indices is None:
         return f_src
@@ -242,11 +247,13 @@ class NoiseIntervention(FeatureIntervention):
         return generator
 
     def reset_noise_rng(self) -> None:
-        """Restart the noise stream from ``seed``.
+        """Restart the corruption stream at the seed.
 
-        Used when one intervention is reused across independent groups of
-        examples (the length buckets of a causal-trace cell) so each group sees
-        the stream a freshly built intervention would have given.
+        Not needed by anything in causalab: a caller that wants a fresh stream
+        builds a fresh intervention, which is what every runner does — each
+        causal-tracing grid cell is its own ``run_steering_interventions`` call
+        and so replays the same draws, which is what makes cells comparable.
+        Kept for a caller driving an intervention directly across several runs.
         """
         self._generators.clear()
 

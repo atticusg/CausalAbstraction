@@ -28,6 +28,7 @@ import torch
 from causalab.causal.trace import CausalTrace, Mechanism
 from causalab.methods.trained_subspace.subspace import SubspaceFeaturizer
 from causalab.methods.trained_subspace.train import (
+    _check_rotations_survived,  # pyright: ignore[reportPrivateUsage]
     _run_training_loop as run_training_loop,  # pyright: ignore[reportPrivateUsage]
 )
 from causalab.neural.LM_units import ResidualStream
@@ -501,3 +502,66 @@ class TestSharedFeaturizerIsNotTrainedTwice:
                 config=_config(),
                 loss_and_metric_fn=_loss_fn(),
             )
+
+
+class TestRotationCollapseIsCaught:
+    """A DAS rotation that degenerates must fail the run, not return a null result.
+
+    The parametrization holding the rotation orthonormal ends in
+    ``Q * X.diagonal().int()``. That truncation only produces an orthonormal
+    matrix while the underlying diagonal keeps magnitude >= 1; the diagonal gets
+    no gradient, so nothing pushes it, but *any* weight decay pulls it under 1,
+    where ``.int()`` rounds it to zero and the rotation's columns become exactly
+    zero.
+
+    Nothing raises when that happens. The featurizer maps every activation to
+    zero, the whole activation lands in the reconstruction error, and each
+    interchange becomes a no-op — so the run completes and reports that the
+    subspace carries no causal signal. A false negative shaped exactly like a
+    finding, which is why this is checked rather than left to a comment on the
+    optimizer.
+    """
+
+    pytestmark = pytest.mark.unit
+
+    def test_weight_decay_really_does_collapse_the_rotation(self) -> None:
+        """Pin the torch behaviour the guard exists for, so the guard explains
+        itself if anyone doubts it is needed."""
+        torch.manual_seed(0)
+        featurizer = SubspaceFeaturizer(shape=(16, RANK), trainable=True)
+        params = [p for p in featurizer.featurizer.parameters() if p.requires_grad]
+        optimizer = torch.optim.AdamW(params, lr=1e-2, weight_decay=0.01)
+        for _ in range(50):
+            features, _ = featurizer.featurize(torch.randn(8, 16))
+            loss = (features**2).mean()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+        weight = featurizer.featurizer.rotate.weight.detach()
+        assert float(weight.abs().max()) == 0.0, "expected the collapse to reproduce"
+
+    def test_a_collapsed_rotation_raises_rather_than_reporting_nothing(
+        self, mock_tiny_lm: Any
+    ) -> None:
+        target = _das_target(mock_tiny_lm)
+        # Collapse it the way decay does: shrink the *underlying* parameter's
+        # diagonal below 1, where the parametrization's `.int()` truncates it to
+        # zero. Zeroing `rotate.weight` directly would not persist — it is a
+        # parametrized property recomputed from `original` on every access, which
+        # is exactly why the collapse is invisible until you look at the matrix
+        # the featurizer actually uses.
+        for unit in target.flatten():
+            with torch.no_grad():
+                unit.featurizer.featurizer.rotate.parametrizations.weight.original.mul_(
+                    0.01
+                )
+        assert (
+            float(target.flatten()[0].featurizer.featurizer.rotate.weight.abs().max())
+            == 0.0
+        ), "the collapse should have zeroed the effective rotation"
+        with pytest.raises(RuntimeError, match="no longer orthonormal"):
+            _check_rotations_survived(target)
+
+    def test_a_healthy_rotation_passes(self, mock_tiny_lm: Any) -> None:
+        """The guard must not fire on an ordinary trained subspace."""
+        _check_rotations_survived(_das_target(mock_tiny_lm))

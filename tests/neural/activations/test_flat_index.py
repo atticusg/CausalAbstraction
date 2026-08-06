@@ -167,14 +167,71 @@ class TestAlignPerExample:
         source = torch.randn(3, WIDTH)
         torch.testing.assert_close(align_per_example(source, index), source)
 
-    def test_a_source_with_its_own_position_axis_flattens(self) -> None:
-        """``(batch, n_positions, width)`` is already one row per pair, just not
-        flattened yet."""
+    def test_a_rectangular_source_flattens_when_it_matches_the_counts(self) -> None:
+        """``(batch, n_positions, width)`` is already one row per pair — provided
+        every example really did select ``n_positions``."""
         index = flat_index([[1, 2], [3, 4]], device="cpu")
         source = torch.randn(2, 2, WIDTH)
         torch.testing.assert_close(
             align_per_example(source, index), source.reshape(4, WIDTH)
         )
+
+    def test_a_rectangular_source_is_refused_on_a_ragged_index(self) -> None:
+        """The shape that looks safe and is not.
+
+        With counts ``(1, 3)`` a ``(2, 2, w)`` source has the right *total*, so
+        flattening it produces a correctly-shaped result — in which row 1 belongs
+        to example 1 but carries example 0's second vector. Nothing downstream
+        can detect that, so it is refused here.
+
+        An earlier version of this file asserted the flatten was always correct,
+        which documented the bug as the contract.
+        """
+        index = flat_index([[0], [1, 2, 3]], device="cpu")
+        with pytest.raises(ValueError, match="positions for every example"):
+            align_per_example(torch.randn(2, 2, WIDTH), index)
+
+
+class TestScatterRejectsAnUnderLengthValue:
+    """Advanced-index assignment broadcasts, which is the wrong default here.
+
+    A value with fewer rows than the index has pairs would be written to *every*
+    selected position — one vector silently becoming the answer everywhere,
+    which reads as a suspiciously uniform result rather than as an error.
+    """
+
+    def test_a_single_vector_does_not_broadcast_over_every_position(self) -> None:
+        activation = torch.zeros(2, 5, WIDTH)
+        index = flat_index([[1, 2], [3]], device="cpu")
+        with pytest.raises(ValueError, match="one row per selected position"):
+            scatter_positions(activation, index, torch.full((WIDTH,), 7.0))
+
+    def test_a_correctly_shaped_value_still_writes(self) -> None:
+        activation = torch.zeros(2, 5, WIDTH)
+        index = flat_index([[1, 2], [3]], device="cpu")
+        scatter_positions(
+            activation,
+            index,
+            torch.arange(3 * WIDTH, dtype=torch.float32).reshape(3, WIDTH),
+        )
+        assert (activation[0, 1] != 0).any() and (activation[1, 3] != 0).any()
+
+
+class TestHeadIndexNeedsAHeadAxis:
+    def test_asking_for_a_head_on_a_plain_site_is_refused(self) -> None:
+        """Indexing a head on a ``[batch, seq, hidden]`` activation returns one
+        scalar per position instead of a head's vector — a wrong shape that is
+        still a valid tensor."""
+        index = flat_index([[1], [2]], device="cpu")
+        with pytest.raises(ValueError, match="no head axis"):
+            gather_positions(torch.randn(2, 5, WIDTH), index, head=1)
+
+    def test_a_per_head_site_gathers_that_head(self) -> None:
+        index = flat_index([[1], [2]], device="cpu")
+        activation = torch.randn(2, 5, 3, WIDTH)
+        got = gather_positions(activation, index, head=1)
+        assert got.shape == (2, WIDTH)
+        torch.testing.assert_close(got[0], activation[0, 1, 1])
 
 
 class TestEmptySelectionIsRefused:

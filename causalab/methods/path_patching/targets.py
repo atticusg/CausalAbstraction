@@ -27,9 +27,21 @@ The restorer set *is the estimand definition*, exposed via ``restore``:
   contribution may flow through residual + MLPs, just not through other attention
   heads.
 
-(Caveat vs the paper: the whole-block ``attention_output`` restorer does not
-freeze the *sender layer's other heads* — a small over-inclusion of same-layer
-attention paths.)
+Both descriptions assume the sender writes at the **readout token**, which is
+what ``receiver="output"`` reads. Restorers for an output receiver are placed at
+the sender's own position (see :func:`build_restorer_set`), and for a last-token
+sender that is the whole story — causal masking means no later position can carry
+the perturbation onward. Move the sender to an earlier token (``token_position:
+name_C``, the Fig. 5 edge) and it is not: attention heads *at the readout token*
+are then unfrozen, so the perturbation reaches the logits through them and the
+number is no longer a residual-to-output direct effect. Pair an earlier sender
+with an internal receiver (``head_query_input`` / ``head_value_input``), which
+freezes and reads at that position.
+
+The whole-block ``attention_output`` restorer does not freeze the sender layer's
+*other heads*, but that is not an over-inclusion: same-layer heads read the
+layer's input residual, which a per-head sender does not write, and ``o_proj`` is
+linear — so their contributions are unchanged either way.
 """
 
 from __future__ import annotations
