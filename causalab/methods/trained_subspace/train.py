@@ -333,6 +333,27 @@ def _initialize_featurizers(
                 )
 
 
+def _rotation_modules(module: Any) -> list[Any]:
+    """Every rotation reachable from a featurizer module, composed or not.
+
+    A ``ComposedFeaturizer`` holds its stages in ``.stages``, so a rotation
+    inside ``standardize >> subspace`` is not an attribute of the outer module.
+    Looking only at the top level would skip exactly the featurizers a real DAS
+    run tends to use.
+    """
+    found: list[Any] = []
+    stack = [module]
+    while stack:
+        current = stack.pop()
+        if current is None:
+            continue
+        rotate = getattr(current, "rotate", None)
+        if rotate is not None and getattr(rotate, "weight", None) is not None:
+            found.append(rotate)
+        stack.extend(getattr(current, "stages", []) or [])
+    return found
+
+
 def _check_rotations_survived(interchange_target: InterchangeTarget) -> None:
     """Refuse to return a DAS run whose rotation collapsed during training.
 
@@ -348,27 +369,36 @@ def _check_rotations_survived(interchange_target: InterchangeTarget) -> None:
     caught the same way.
     """
     for unit in interchange_target.flatten():
-        featurizer = getattr(unit.featurizer, "featurizer", None)
-        rotate = getattr(featurizer, "rotate", None)
-        weight = getattr(rotate, "weight", None)
-        if weight is None:
-            continue
-        matrix = weight.detach()
-        if matrix.numel() == 0:
-            continue
-        gram = matrix.T @ matrix
-        identity = torch.eye(gram.shape[0], device=gram.device, dtype=gram.dtype)
-        drift = (gram - identity).abs().max().item()
-        if drift > 1e-3:
-            raise RuntimeError(
-                f"The rotation for unit {unit.id!r} is no longer orthonormal "
-                f"after training (max |WᵀW - I| = {drift:.3g}"
-                f"{'; it collapsed to zero' if matrix.abs().max().item() == 0 else ''}"
-                f"). A degenerate rotation maps every activation to zero, so "
-                f"every interchange silently becomes a no-op and the run would "
-                f"report no causal effect. Check that the optimizer applies no "
-                f"weight decay to the rotation."
+        module = getattr(unit.featurizer, "featurizer", None)
+        # A composed featurizer keeps its stages in `.stages`, so the rotation is
+        # not directly on the module — walking in is what makes the check apply
+        # to `standardize >> subspace`, the shape a real DAS run often takes.
+        for candidate in _rotation_modules(module):
+            matrix = candidate.weight.detach()
+            if matrix.numel() == 0:
+                continue
+            gram = matrix.T @ matrix
+            identity = torch.eye(gram.shape[0], device=gram.device, dtype=gram.dtype)
+            drift = (gram - identity).abs().max().item()
+            # A square rotation is held by torch's matrix_exp map rather than the
+            # householder one, and its float32 drift grows with width (~4.6e-4 at
+            # hidden 4096). Scale the bound so a full-rank run on a large model
+            # is not aborted after training merely for being wide.
+            bound = (
+                1e-3
+                if matrix.shape[0] != matrix.shape[1]
+                else 1e-3 * max(1.0, matrix.shape[0] / 1024)
             )
+            if drift > bound:
+                collapsed = matrix.abs().max().item() == 0
+                raise RuntimeError(
+                    f"The rotation for unit {unit.id!r} is no longer orthonormal "
+                    f"after training (max |WᵀW - I| = {drift:.3g}"
+                    f"{'; it collapsed to zero' if collapsed else ''}). A "
+                    f"degenerate rotation maps every activation to zero, so every "
+                    f"interchange silently becomes a no-op and the run would "
+                    f"report no causal effect rather than fail."
+                )
 
 
 def _run_training_loop(

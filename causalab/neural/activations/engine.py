@@ -200,16 +200,28 @@ def scatter_positions(
     # Advanced-index assignment broadcasts, so a value with too few rows would
     # be written to every selected position instead of raising — one row
     # silently becoming the answer everywhere.
-    expected = index.rows.shape[0]
-    if values.shape[0] != expected:
+    # Compare the whole target shape, not just its first axis: a value of shape
+    # (width,) has `shape[0] == width`, which coincides with the pair count
+    # whenever a unit selects as many positions as the site is wide — and then
+    # broadcasts one vector over every position while passing a dim-0 check.
+    target = activation[index.rows, index.cols]
+    if head is not None:
+        target = target[:, head]
+    if values.shape != target.shape:
         raise ValueError(
-            f"Expected one row per selected position ({expected}), got "
-            f"{tuple(values.shape)}. A shorter value would broadcast and "
-            f"overwrite every position with the same vector."
+            f"Expected values shaped {tuple(target.shape)} — one row per "
+            f"selected position — got {tuple(values.shape)}. A mismatched value "
+            f"would broadcast and overwrite every position with the same vector."
         )
     if head is None:
         activation[index.rows, index.cols] = values.to(activation.dtype)
     else:
+        if activation.ndim < 4:
+            raise ValueError(
+                f"head={head} was requested but this site's activation has no "
+                f"head axis (shape {tuple(activation.shape)}); the write would "
+                f"land on channel {head} instead."
+            )
         activation[index.rows, index.cols, head] = values.to(activation.dtype)
 
 
@@ -337,7 +349,15 @@ def build_plans(
     across batches (``noise``, ``mask``).
     """
     units = list(units)
-    _reject_empty_selections(units, positions)
+    # Only a *write* is harmed by an empty selection — that example is left
+    # un-intervened and then scored beside the rest. A read just contributes no
+    # rows, which is a legitimate way to collect "wherever X occurs" over a
+    # corpus where some prompts lack X.
+    writes = mode != "collect" and (
+        type_by_unit is None or any(v != "collect" for v in type_by_unit.values())
+    )
+    if writes:
+        _reject_empty_selections(units, positions)
     if interventions is None:
         interventions = build_interventions(
             units, mode, type_by_unit=type_by_unit, noise_seed=noise_seed, raw=raw

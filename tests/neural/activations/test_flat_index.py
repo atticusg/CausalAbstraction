@@ -258,19 +258,36 @@ class TestEmptySelectionIsRefused:
         )
         return [unit], [positions]
 
-    def test_an_example_selecting_nothing_raises(self, mock_tiny_lm) -> None:
+    def test_an_example_selecting_nothing_raises_for_a_write(
+        self, mock_tiny_lm
+    ) -> None:
         from causalab.neural.activations.engine import build_plans
 
         units, positions = self._unit_and_positions(mock_tiny_lm, [[1, 2], []])
         with pytest.raises(ValueError, match="selects no token positions"):
-            build_plans(units, positions, "collect")
+            build_plans(units, positions, "interchange")
 
     def test_the_message_names_the_offending_examples(self, mock_tiny_lm) -> None:
         from causalab.neural.activations.engine import build_plans
 
         units, positions = self._unit_and_positions(mock_tiny_lm, [[1], [], [2], []])
         with pytest.raises(ValueError, match=r"\[1, 3\]"):
-            build_plans(units, positions, "collect")
+            build_plans(units, positions, "interchange")
+
+    def test_a_read_may_select_nothing(self, mock_tiny_lm) -> None:
+        """Collection is not harmed by an empty selection — that example simply
+        contributes no rows, which is how you collect "wherever X occurs" over a
+        corpus where some prompts do not contain X.
+
+        Only a *write* leaves an example un-intervened and then scored beside the
+        rest, so only a write is refused. An earlier version of this guard fired
+        on reads too, and all three of these tests used ``collect`` — so they
+        agreed with the guard rather than checking it.
+        """
+        from causalab.neural.activations.engine import build_plans
+
+        units, positions = self._unit_and_positions(mock_tiny_lm, [[1, 2], []])
+        assert len(build_plans(units, positions, "collect")) == 1
 
     def test_a_ragged_but_non_empty_batch_is_still_fine(self, mock_tiny_lm) -> None:
         """The guard must reject *empty*, not *ragged* — those were the same
@@ -278,4 +295,4 @@ class TestEmptySelectionIsRefused:
         from causalab.neural.activations.engine import build_plans
 
         units, positions = self._unit_and_positions(mock_tiny_lm, [[1, 2], [3]])
-        assert len(build_plans(units, positions, "collect")) == 1
+        assert len(build_plans(units, positions, "interchange")) == 1
