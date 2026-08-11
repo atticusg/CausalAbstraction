@@ -1,12 +1,5 @@
 # Neural
 
-[
-  Conventions for this doc: 
-  - Primitives from this module should always be highlighted as code, eg.: `causalab.neural` first defines an intervention `Plan`.
-  - Write concise and only information relevant to this specific paragraph.
-
-]
-
 `causalab.neural` owns the direct interface to neural network internals and provides seven intervention modes. Everything here answers *where* to intervene, *how* to read from or intervene on the activation space.
 
 ## Quickstart
