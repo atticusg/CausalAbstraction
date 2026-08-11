@@ -9,27 +9,27 @@
     "default": 1e-05
   },
   "values": {
-    "accuracy.accuracy": 0.9795918367346939,
-    "accuracy.correct": 48,
-    "accuracy.prob_accuracy": 0.9645608082005032,
+    "accuracy.accuracy": 0.9591836734693877,
+    "accuracy.correct": 47,
+    "accuracy.prob_accuracy": 0.96230755074274,
     "accuracy.total": 49,
-    "baseline.per_class_output_dists.dists.first": 9.576580850989558e-06,
-    "baseline.per_class_output_dists.dists.last": 5.058555416326271e-06,
-    "baseline.per_class_output_dists.dists.mean": 1.1684427363434224e-06,
+    "baseline.per_class_output_dists.dists.first": 9.191283425025176e-06,
+    "baseline.per_class_output_dists.dists.last": 5.536946900974726e-06,
+    "baseline.per_class_output_dists.dists.mean": 1.1674967481667409e-06,
     "baseline.per_class_output_dists.dists.shape": [
       7,
       7
     ],
-    "baseline.per_class_output_dists.dists.std": 3.85579278372461e-06,
-    "baseline.per_class_output_dists.sha256": "486a6b7c83bab03e95236954c82e717fbec5714859a07a0a78cb63507fcc5df4",
-    "full_output_dists.first": 5.6756337097566695e-14,
-    "full_output_dists.last": 4.809836059133529e-18,
-    "full_output_dists.mean": 6.581718480447307e-06,
-    "full_output_dists.sha256": "f6839b49f1aeef4b0960acc6c6b1b4ede9a5698cf0effef06d33bb67990e5b22",
+    "baseline.per_class_output_dists.dists.std": 3.8706534724042285e-06,
+    "baseline.per_class_output_dists.sha256": "34ed963e64bf32823e8294b75035361eef2f60d62ccd45ff568a4893174c623e",
+    "full_output_dists.first": 7.518988144779304e-14,
+    "full_output_dists.last": 2.41988772390729e-18,
+    "full_output_dists.mean": 6.581718935194658e-06,
+    "full_output_dists.sha256": "2ebef6f644010d17f1e7430a68b071d9723acad2ee9ded41836af0418004f570",
     "full_output_dists.shape": [
       49,
       151936
     ],
-    "full_output_dists.std": 0.0025372866075485945
+    "full_output_dists.std": 0.0025387522764503956
   }
 }

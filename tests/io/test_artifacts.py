@@ -209,3 +209,111 @@ def test_check_format_version_rejects_newer_version(tmp_path: object) -> None:
 
     with pytest.raises(ValueError, match="format version"):
         load_tensors_with_meta(str(tmp_path), "newer")
+
+
+class TestSaveInterventionResults:
+    """The stored-artifact schema at the io boundary (EU5b, #487): producers
+    hand ``save_intervention_results`` the legacy one-synthetic-batch
+    ``raw_results`` view (``GenerationResult.to_raw_results()``); the on-disk
+    schema is independent of the run's internal batch split (the flat result
+    erased batch boundaries before io ever sees them — the EU5a review's
+    ``batch_size < n_examples`` follow-up) and unchanged vs legacy runs with
+    ``batch_size >= n_examples``. Legacy multi-batch runs stored one inner
+    ``"string"`` list per batch (and single-example batches a bare str);
+    ``to_raw_results()`` always emits the one-batch nesting instead."""
+
+    def _results_by_key(self, n: int = 3, width: int = 2):
+        from causalab.neural.pipeline import GenerationResult
+
+        result = GenerationResult(
+            sequences=torch.arange(n * width, dtype=torch.long).reshape(n, width),
+            strings=[f"out_{i}" for i in range(n)],
+        )
+        return {
+            ("layer0", "pos0"): {
+                "avg_score": 0.5,
+                "scores_by_variable": {},
+                "raw_results": result.to_raw_results(),
+            }
+        }
+
+    def test_stored_schema_from_to_raw_results(self, tmp_path) -> None:
+        from causalab.io.artifacts import save_intervention_results
+        from safetensors.torch import load_file
+
+        out_dir = str(tmp_path)
+        paths = save_intervention_results(self._results_by_key(), out_dir)
+
+        with open(paths["scores_path"]) as f:
+            scores = json.load(f)
+        assert list(scores.values()) == [0.5]
+
+        # raw_results.json: one synthetic batch per key — [[...strings...]].
+        with open(paths["raw_results_path"]) as f:
+            raw = json.load(f)
+        assert raw["string"] == [[["out_0", "out_1", "out_2"]]]
+
+        # raw_results.safetensors: per-key synthetic batches concat to (N, W).
+        tensors = load_file(paths["raw_results_tensors_path"])
+        assert tensors["sequences"].shape == (3, 2)
+        assert torch.equal(
+            tensors["sequences"], torch.arange(6, dtype=torch.long).reshape(3, 2)
+        )
+
+
+class TestSaveTrainingArtifacts:
+    """``save_training_artifacts`` writes per-cell WU1 spec bundles (WU5, #507)."""
+
+    @staticmethod
+    def _spec(layer: int = 2, key: str = "residual_stream.L2.block_output.last"):
+        from causalab.neural.featurized_site import FeaturizedSite
+        from causalab.neural.site import Site
+        from causalab.neural.specs import SiteSpec
+
+        return SiteSpec(
+            fsite=FeaturizedSite(Site("block_output", layer)),
+            positions=(0,),
+            key=key,
+            width=8,
+        )
+
+    def test_writes_feature_indices_and_spec_bundle(self, tmp_path) -> None:
+        from causalab.neural.specs import load_site_specs
+
+        spec = self._spec()
+        results_by_key = {
+            (2, "last"): {
+                "feature_indices": {spec.key: [0, 3]},
+                "trained_specs": [[spec]],  # nested groups form
+            }
+        }
+
+        paths = artifacts.save_training_artifacts(results_by_key, str(tmp_path))
+
+        # feature_indices.json keyed by the (opaque) spec key.
+        with open(paths["feature_indices_path"]) as f:
+            indices = json.load(f)
+        assert indices == {"2__last": {spec.key: [0, 3]}}
+
+        # The models/<key>/ dir is a loadable WU1 spec bundle.
+        bundle_dir = os.path.join(paths["models_dir"], "2__last")
+        assert os.path.exists(os.path.join(bundle_dir, "sites.json"))
+        loaded = load_site_specs(bundle_dir)
+        assert len(loaded) == 1
+        assert loaded[0].key == spec.key
+        assert loaded[0].fsite.site == spec.fsite.site
+        assert loaded[0].width == 8
+
+    def test_flat_spec_sequence_also_accepted(self, tmp_path) -> None:
+        from causalab.neural.specs import load_site_specs
+
+        spec = self._spec()
+        results_by_key = {("single",): {"feature_indices": {}, "trained_specs": [spec]}}
+        paths = artifacts.save_training_artifacts(results_by_key, str(tmp_path))
+        loaded = load_site_specs(os.path.join(paths["models_dir"], "single"))
+        assert [s.key for s in loaded] == [spec.key]
+
+    def test_cell_without_trained_specs_writes_no_bundle(self, tmp_path) -> None:
+        results_by_key = {("single",): {"feature_indices": {"k": [1]}}}
+        paths = artifacts.save_training_artifacts(results_by_key, str(tmp_path))
+        assert not os.path.exists(os.path.join(paths["models_dir"], "single"))

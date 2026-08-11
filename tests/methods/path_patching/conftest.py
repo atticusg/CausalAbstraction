@@ -1,5 +1,13 @@
 """Fixtures shared by the path-patching method tests.
 
+All pipelines here are **single-step** (``max_new_tokens=1``): the Plan-lowered
+runner scores prefill logits and refuses multi-token generation (decode-step
+edits are CAP1 headroom), so ``mock_tiny_lm`` is overridden from the global
+3-token fixture. Every fixture also builds its own model object (fresh
+name-based load or fresh random init) — pyvene's cleanup clears *all* forward
+hooks on a model, killing the nnterp wrapper's, so a model object must never
+serve both backends (a coexistence constraint until SH2 deletes pyvene).
+
 ``gqa_tiny_lm`` is a grouped-query-attention variant of the tiny-random Llama
 (``num_key_value_heads < num_attention_heads``), needed because the default tiny
 stub is multi-head (n_kv == n_head) and so cannot exercise the query→KV-group
@@ -11,7 +19,15 @@ from __future__ import annotations
 import pytest
 
 from causalab.neural.pipeline import LMPipeline
-from tests._helpers.tiny import TINY_RANDOM_MODEL_NAME, tiny_random_gpt2_model
+from tests._helpers.tiny import TINY_RANDOM_GPT2_MODEL_NAME, TINY_RANDOM_MODEL_NAME
+
+
+@pytest.fixture(scope="module")
+def mock_tiny_lm() -> LMPipeline:
+    """Single-step override of the global ``mock_tiny_lm`` (which generates 3
+    tokens): the Plan-lowered path-patching runner scores single-step outputs
+    and refuses ``max_new_tokens > 1`` before any forward pass."""
+    return LMPipeline(model_or_name=TINY_RANDOM_MODEL_NAME, max_new_tokens=1)
 
 
 @pytest.fixture(scope="module")
@@ -27,7 +43,9 @@ def tiny_gpt2_lm() -> LMPipeline:
     Random weights, CPU — only for the position contract, not behaviour.
     """
     return LMPipeline(
-        model_or_name=tiny_random_gpt2_model(), max_new_tokens=1, padding_side="left"
+        model_or_name=TINY_RANDOM_GPT2_MODEL_NAME,
+        max_new_tokens=1,
+        padding_side="left",
     )
 
 
@@ -43,7 +61,7 @@ def gqa_tiny_lm() -> LMPipeline:
     config.num_key_value_heads = config.num_attention_heads // 2
     model = LlamaForCausalLM(config)  # random init — smoke-only
     model.eval()
-    return LMPipeline(model_or_name=model, max_new_tokens=3)
+    return LMPipeline(model_or_name=model, max_new_tokens=1)
 
 
 @pytest.fixture(scope="module")
@@ -52,11 +70,12 @@ def gqa_decoupled_head_dim_lm() -> LMPipeline:
     ``hidden_size // num_attention_heads``.
 
     The default tiny stub (and ``gqa_tiny_lm``) keep ``head_dim == hidden // n_head``,
-    so the value-receiver's ``shape=(head_dim,)`` slice and pyvene's per-KV-head
-    ``head_value_output`` split are only ever exercised in the coupled regime. Modern
-    decoder-only models (e.g. Qwen3) set ``head_dim`` independently, so this fixture
-    pins that the head-value path uses ``config.head_dim`` — not ``hidden // n_head`` —
-    end to end. Random weights, CPU — smoke-only, like ``gqa_tiny_lm``.
+    so the value-receiver head slicing is only ever exercised in the coupled
+    regime. Modern decoder-only models (e.g. Qwen3) set ``head_dim``
+    independently, so this fixture pins that the head-value path uses
+    ``config.head_dim`` — not ``hidden // n_head`` — end to end (supported on the
+    Plan stack; pyvene 0.1.8 refused it). Random weights, CPU — smoke-only, like
+    ``gqa_tiny_lm``.
     """
     from transformers import AutoConfig, LlamaForCausalLM
 
@@ -68,4 +87,4 @@ def gqa_decoupled_head_dim_lm() -> LMPipeline:
     assert config.head_dim != config.hidden_size // config.num_attention_heads
     model = LlamaForCausalLM(config)  # random init — smoke-only
     model.eval()
-    return LMPipeline(model_or_name=model, max_new_tokens=3)
+    return LMPipeline(model_or_name=model, max_new_tokens=1)

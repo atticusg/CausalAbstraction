@@ -1,0 +1,86 @@
+{
+  "golden": {
+    "clean": [
+      "Tuesday",
+      "Thursday",
+      "Thursday",
+      "Sunday",
+      "Sunday",
+      "Monday",
+      "Monday",
+      "Sunday"
+    ],
+    "iia": {
+      "0": 0.125,
+      "18": 0.125,
+      "27": 0.875
+    },
+    "intervened": {
+      "0": [
+        "Tuesday",
+        "Thursday",
+        "Thursday",
+        "Sunday",
+        "Sunday",
+        "Monday",
+        "Monday",
+        "Sunday"
+      ],
+      "18": [
+        "Tuesday",
+        "Thursday",
+        "Thursday",
+        "Sunday",
+        "Sunday",
+        "Monday",
+        "Monday",
+        "Sunday"
+      ],
+      "27": [
+        "Tuesday",
+        "Tuesday",
+        "Wednesday",
+        "Sunday",
+        "Friday",
+        "Friday",
+        "Saturday",
+        "Thursday"
+      ]
+    },
+    "logits_delta": {
+      "0": 0.04559626430273056,
+      "18": 0.09369194507598877,
+      "27": 1.9110215902328491
+    }
+  },
+  "tiny-random": {
+    "clean": [
+      "logging",
+      "logging",
+      "logging",
+      "logging"
+    ],
+    "iia": {
+      "0": 0.0,
+      "1": 0.0
+    },
+    "intervened": {
+      "0": [
+        "logging",
+        "logging",
+        "logging",
+        "logging"
+      ],
+      "1": [
+        "logging",
+        "logging",
+        "logging",
+        "logging"
+      ]
+    },
+    "logits_delta": {
+      "0": 0.0027129556983709335,
+      "1": 0.004177645314484835
+    }
+  }
+}

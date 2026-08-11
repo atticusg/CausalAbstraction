@@ -25,18 +25,19 @@ import torch
 
 from causalab.causal.trace import CausalTrace, Mechanism
 from causalab.methods.steer.steer import make_zero_features, run_steering_interventions
-from causalab.neural.activations.targets import (
-    build_attention_head_targets,
-    build_mlp_targets,
+from causalab.neural.activations.site_grids import (
+    build_attention_head_sites,
+    build_mlp_sites,
 )
-from causalab.neural.LM_units import ResidualStream
+from causalab.neural.featurized_site import FeaturizedSite
 from causalab.neural.pipeline import LMPipeline
+from causalab.neural.site import Site
+from causalab.neural.specs import SiteSpec
 from causalab.neural.token_positions import (
     TokenPosition,
     get_all_tokens,
     get_last_token_index,
 )
-from causalab.neural.units import InterchangeTarget
 
 # Shape contracts at the steering-primitive boundary plus the behavioral
 # invariant that `replace` perturbs the logits while `add`-zero is a no-op — all
@@ -67,31 +68,24 @@ def _dataset() -> list[dict[str, Any]]:
     return [{"input": _trace("hello world")}, {"input": _trace("blue green")}]
 
 
-def _first_logits(scores: Any) -> torch.Tensor:
-    """Drill through the nested batch/step list structure to the first logit tensor."""
-    node: Any = scores
-    while isinstance(node, (list, tuple)):
-        node = node[0]
-    return node
-
-
-def _run(pipeline: LMPipeline, target: InterchangeTarget, mode: str) -> torch.Tensor:
+def _run(pipeline: LMPipeline, sites: list[SiteSpec], mode: str) -> torch.Tensor:
     """Run zero-vector steering in ``mode`` and return the first-step logits.
 
     ``mode="add"`` with zeros is a no-op (base + 0), giving the un-intervened
     reference; ``mode="replace"`` with zeros is the actual ablation.
     """
-    zeros = make_zero_features(target)
+    zeros = make_zero_features(sites)
     out = run_steering_interventions(
         pipeline,
         _dataset(),
-        target,
+        sites,
         zeros,
         batch_size=2,
         mode=mode,  # type: ignore[arg-type]
         output_scores=True,
     )
-    return _first_logits(out["scores"])
+    assert out.scores is not None  # output_scores=True above
+    return out.scores[0]  # first generated step, (n_examples, vocab)
 
 
 # --------------------------------------------------------------------------- #
@@ -108,10 +102,14 @@ class TestAttentionHeadSteering:
             mock_tiny_lm,
             id="last_token",
         )
-        target = build_attention_head_targets(mock_tiny_lm, [0], [0], last)[(0, 0)]
+        sites = [
+            s
+            for g in build_attention_head_sites(mock_tiny_lm, [0], [0], last)[(0, 0)]
+            for s in g
+        ]
 
-        base = _run(mock_tiny_lm, target, mode="add")
-        ablated = _run(mock_tiny_lm, target, mode="replace")
+        base = _run(mock_tiny_lm, sites, mode="add")
+        ablated = _run(mock_tiny_lm, sites, mode="replace")
 
         assert base.shape == ablated.shape
         assert not torch.allclose(base, ablated)
@@ -120,10 +118,14 @@ class TestAttentionHeadSteering:
         self, mock_tiny_lm: LMPipeline
     ) -> None:
         span = get_all_tokens(_dataset()[0]["input"], mock_tiny_lm)
-        target = build_attention_head_targets(mock_tiny_lm, [0], [0], span)[(0, 0)]
+        sites = [
+            s
+            for g in build_attention_head_sites(mock_tiny_lm, [0], [0], span)[(0, 0)]
+            for s in g
+        ]
 
-        base = _run(mock_tiny_lm, target, mode="add")
-        ablated = _run(mock_tiny_lm, target, mode="replace")
+        base = _run(mock_tiny_lm, sites, mode="add")
+        ablated = _run(mock_tiny_lm, sites, mode="replace")
 
         assert not torch.allclose(base, ablated)
 
@@ -138,10 +140,14 @@ class TestMultiPositionSteering:
         self, mock_tiny_lm: LMPipeline
     ) -> None:
         span = get_all_tokens(_dataset()[0]["input"], mock_tiny_lm)
-        target = build_mlp_targets(mock_tiny_lm, [0], [span])[(0, "all_tokens")]
+        sites = [
+            s
+            for g in build_mlp_sites(mock_tiny_lm, [0], [span])[(0, "all_tokens")]
+            for s in g
+        ]
 
-        base = _run(mock_tiny_lm, target, mode="add")
-        ablated = _run(mock_tiny_lm, target, mode="replace")
+        base = _run(mock_tiny_lm, sites, mode="add")
+        ablated = _run(mock_tiny_lm, sites, mode="replace")
 
         assert not torch.allclose(base, ablated)
 
@@ -161,12 +167,14 @@ class TestSinglePositionRegression:
             mock_tiny_lm,
             id="last_token",
         )
-        unit = ResidualStream(
-            layer=0, token_indices=last, target_output=True, shape=(hidden,)
+        site = SiteSpec(
+            fsite=FeaturizedSite(Site("block_output", 0)),
+            positions=last,
+            key="residual.L0.last_token",
+            width=hidden,
         )
-        target = InterchangeTarget([[unit]])
 
-        base = _run(mock_tiny_lm, target, mode="add")
-        ablated = _run(mock_tiny_lm, target, mode="replace")
+        base = _run(mock_tiny_lm, [site], mode="add")
+        ablated = _run(mock_tiny_lm, [site], mode="replace")
 
         assert not torch.allclose(base, ablated)

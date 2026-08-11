@@ -1,0 +1,46 @@
+# @package _global_
+# Smoke-tier path-patching runner; coverage-oriented, not a scientific run.
+# tiny-random + existence-only asserts (see docs/TESTS.md "Smoke vs golden split").
+#
+# Task choice mirrors alphabet_causal_sufficiency_*: the logit-diff metric needs
+# single-token answers, which the alphabet task's single-letter values satisfy on
+# the tiny-random tokenizer (IOI's randomly-sampled, partly-multi-token name pool
+# can't). `answer_flip` resamples `entity`, flipping `result` — the generic
+# corruption; the IOI-specific `abc` source is value-pinned by the GPT-2 goldens.
+#
+# Uses an *internal* receiver (mlp_input @ layer 1) so the CPU tier exercises the
+# full two-pass Plan lowering — sender interchange, clean-frozen restorers, and
+# the receiver collect∘inject edge — end to end through the runner; the output
+# one-pass sweep is a strict subset of this machinery. Both tiny-random layers'
+# senders reach mlp_input@1, so the 2x2 grid stays rectangular.
+defaults:
+- /base
+- /task: natural_domains_arithmetic_alphabet
+- /model: tiny-random
+- /analysis/path_patching
+- _self_
+
+task:
+  target_variable: result
+  n_train: 2
+  n_test: 2
+  enumerate_all: false
+
+path_patching:
+  layers: [0, 1]
+  heads: [0, 1]
+  receiver:
+    kind: mlp_input
+    layer: 1
+  restore: [attention, mlp]
+  corruption: answer_flip
+  resample_variable: entity
+  correct_variable: result
+  distractor_variable: entity
+  relative_to_base: true
+  batch_size: 2
+  top_k: 4
+
+expected_artifacts:
+- path_patching/answer_flip_True/mlp_input_L1/results.json
+- path_patching/answer_flip_True/mlp_input_L1/metadata.json

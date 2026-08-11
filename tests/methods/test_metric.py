@@ -11,10 +11,18 @@ from __future__ import annotations
 import pytest
 import torch
 
+from causalab.neural.pipeline import GenerationResult
 from causalab.methods.metric import (
+    InterchangeMetric,
     answer_token_forms,
+    as_label_checker,
+    as_generation_result,
     compute_base_accuracy,
     make_logit_metric,
+    outputs_from_logits,
+    score_base_outputs,
+    score_intervention_outputs,
+    score_label_predictions,
     single_token_id,
     tokenize_variable_values,
 )
@@ -45,9 +53,17 @@ class _StubTokenizer:
         " dark": [7, 8],  # compound modifier: multi-token both spacings
         "dark": [9, 10],
     }
+    # First single-token surface form per id — enough decode for the adapter
+    # tests (argmax id → string), the inverse of the encode table above.
+    _DECODE = {5: " blue", 6: "blue", 3: "green", 4: " green"}
 
     def encode(self, text, add_special_tokens=False):
         return list(self._TABLE.get(text, [98, 99]))
+
+    def batch_decode(self, sequences, skip_special_tokens=False):
+        return [
+            "".join(self._DECODE.get(int(t), "?") for t in seq) for seq in sequences
+        ]
 
 
 class TestAnswerTokenForms:
@@ -96,7 +112,11 @@ def _stub_pipeline(emitted: str, logits_row: list[float], max_new_tokens: int = 
         def generate(self, batch_inputs):
             n = len(batch_inputs)
             scores = torch.tensor([logits_row], dtype=torch.float32).repeat(n, 1)
-            return {"string": [emitted] * n, "scores": [scores]}
+            return GenerationResult(
+                sequences=torch.zeros((n, _max_new_tokens), dtype=torch.long),
+                strings=[emitted] * n,
+                scores=[scores],
+            )
 
     return _StubPipeline()
 
@@ -199,10 +219,206 @@ class TestComputeBaseAccuracyChecker:
 
 
 class _PipelineWithTokenizer:
-    """Just enough of an ``LMPipeline`` for :func:`single_token_id`."""
+    """Just enough of an ``LMPipeline`` for :func:`single_token_id`, the
+    Plan-logits adapter (``tokenizer.batch_decode``) and the label-prediction
+    scorer (``dump``)."""
 
     def __init__(self) -> None:
         self.tokenizer = _StubTokenizer()
+
+    def dump(self, token_ids):
+        decoded = self.tokenizer.batch_decode(token_ids, skip_special_tokens=True)
+        return decoded[0] if len(decoded) == 1 else decoded
+
+
+class TestOutputsFromLogits:
+    """The MX1 scoring adapter (#408): Plan-saved logits → per-example
+    ``{"string", "sequences", "scores"}`` outputs, the shape every scorer
+    consumes."""
+
+    def _logits(self) -> torch.Tensor:
+        # Two examples, three positions, vocab 8. Argmax at the LAST position
+        # is id 5 (" blue") / id 3 ("green"); an earlier position carries a
+        # decoy peak that must be ignored (prefill logits ≠ next-token step).
+        logits = torch.zeros(2, 3, 8)
+        logits[0, -1, 5] = 9.0
+        logits[1, -1, 3] = 9.0
+        logits[0, 0, 6] = 99.0  # decoy at a non-final position
+        return logits
+
+    def test_last_position_argmax_decodes_to_string(self):
+        outputs = outputs_from_logits(_PipelineWithTokenizer(), self._logits())
+        assert [o["string"] for o in outputs] == [" blue", "green"]
+        # Each output carries its argmax token id as a (1, 1) sequences row
+        # (EU5b, #487) — what as_generation_result stacks.
+        assert [o["sequences"].tolist() for o in outputs] == [[[5]], [[3]]]
+
+    def test_scores_are_the_last_position_row(self):
+        logits = self._logits()
+        outputs = outputs_from_logits(_PipelineWithTokenizer(), logits)
+        assert len(outputs[0]["scores"]) == 1  # prefill-only → ONE step
+        assert torch.equal(outputs[0]["scores"][0], logits[0, -1])
+        assert torch.equal(outputs[1]["scores"][0], logits[1, -1])
+
+    def test_accepts_per_example_rows_of_ragged_length(self):
+        # collect_dataset_features returns one (seq, vocab) row per example;
+        # rows may differ in seq length — only the last position matters.
+        short = torch.zeros(2, 8)
+        short[-1, 6] = 1.0  # "blue"
+        long = torch.zeros(5, 8)
+        long[-1, 4] = 1.0  # " green"
+        outputs = outputs_from_logits(_PipelineWithTokenizer(), [short, long])
+        assert [o["string"] for o in outputs] == ["blue", " green"]
+
+
+class TestAsGenerationResult:
+    def _outputs(self) -> list[dict]:
+        logits = torch.zeros(2, 3, 8)
+        logits[0, -1, 5] = 9.0  # " blue"
+        logits[1, -1, 3] = 9.0  # "green"
+        return outputs_from_logits(_PipelineWithTokenizer(), logits)
+
+    def test_flattens_per_example_outputs(self):
+        result = as_generation_result(self._outputs())
+        assert isinstance(result, GenerationResult)
+        assert result.strings == [" blue", "green"]
+        assert result.sequences.shape == (2, 1)  # per-example (1, 1) rows, stacked
+        assert result.sequences.squeeze(1).tolist() == [5, 3]  # the argmax ids
+        assert result.scores is not None
+        assert len(result.scores) == 1  # prefill-only → ONE step
+        assert result.scores[0].shape == (2, 8)  # tok0 (N, V)
+
+    def test_string_only_when_step_counts_are_mixed(self):
+        # Mixed per-example step counts cannot form flat (N, V) steps — the
+        # flattened value scores strings only (the retired as_raw_results
+        # contract, preserved).
+        seq = torch.zeros(1, 1, dtype=torch.long)
+        result = as_generation_result(
+            [
+                {"string": "a", "sequences": seq},
+                {"string": "b", "sequences": seq, "scores": []},
+            ]
+        )
+        assert result.strings == ["a", "b"]
+        assert result.scores is None
+
+    def test_roundtrip_through_score_intervention_outputs(self):
+        # End-to-end: Plan logits → adapter → the shipped scorer, both the
+        # string path (checker) and the scores path (example_idx-addressed).
+        outputs = self._outputs()
+
+        def fn(intervention_output, expected, original):
+            row = intervention_output["scores"][0][intervention_output["example_idx"]]
+            assert row.shape == (8,)
+            return float(intervention_output["string"] == " blue")
+
+        metric = InterchangeMetric(fn=fn, needs_causal_expected=False)
+        scores = score_intervention_outputs(
+            results={("k",): as_generation_result(outputs)},
+            dataset=[{"input": {}}, {"input": {}}],  # length only (no causal labels)
+            metric=metric,
+        )
+        assert scores[("k",)] == pytest.approx(0.5)
+
+    def test_score_intervention_outputs_refuses_top_k(self):
+        # Metrics consume full-vocab per-step tensors; a top-k-compressed
+        # result cannot be scored and refuses loudly (legacy crashed with an
+        # opaque TypeError inside torch.cat).
+        result = GenerationResult(
+            sequences=torch.zeros(1, 1, dtype=torch.long),
+            strings=["a"],
+            scores_top_k=[{"top_k_logits": torch.zeros(1, 2)}],
+        )
+        metric = InterchangeMetric(fn=lambda o, e, g: 1.0, needs_causal_expected=False)
+        with pytest.raises(ValueError, match="top-k"):
+            score_intervention_outputs(
+                results={("k",): result},
+                dataset=[{"input": {}}],
+                metric=metric,
+            )
+
+
+class TestScoreBaseOutputs:
+    """The grading semantics behind ``compute_base_accuracy``, off saved
+    outputs — one implementation for generation runs and Plan-saved logits."""
+
+    def test_matches_compute_base_accuracy(self):
+        logits = [0.0] * 8
+        logits[5] = 12.0
+        pipeline = _stub_pipeline(" blue", logits)
+        dataset = [{"input": {"raw_output": "blue"}}]
+        via_pipeline = compute_base_accuracy(dataset, pipeline, checker=_exact_checker)
+
+        outputs = [{"string": " blue", "scores": [torch.tensor(logits)]}]
+        via_outputs = score_base_outputs(
+            outputs,
+            dataset,
+            _exact_checker,
+            tokenizer=pipeline.tokenizer,
+            single_token=True,
+        )
+        assert via_outputs == via_pipeline
+
+    def test_single_token_inferred_from_one_score_row(self):
+        logits = torch.zeros(8)
+        logits[5] = 12.0
+        outputs = [{"string": " blue", "scores": [logits]}]
+        result = score_base_outputs(
+            outputs,
+            [{"input": {"raw_output": "blue"}}],
+            _exact_checker,
+            tokenizer=_StubTokenizer(),
+        )
+        assert result["accuracy"] == 1.0
+        assert result["prob_accuracy"] > 0.99
+
+    def test_no_tokenizer_skips_prob_accuracy(self):
+        outputs = [{"string": " blue", "scores": [torch.zeros(8)]}]
+        result = score_base_outputs(
+            outputs, [{"input": {"raw_output": "blue"}}], _exact_checker
+        )
+        assert result["accuracy"] == 1.0
+        assert result["prob_accuracy"] is None
+
+    def test_misaligned_outputs_raise(self):
+        with pytest.raises(ValueError, match="misaligned"):
+            score_base_outputs(
+                [{"string": "blue"}],
+                [{"input": {"raw_output": "blue"}}] * 2,
+                _exact_checker,
+            )
+
+
+class TestScoreLabelPredictions:
+    """The answer-scoring half of ``LM_loss_and_metric_fn``, consuming the ED3
+    loss slice's ``pred_ids`` (MX1 owns scoring; the forward is trainable.py's)."""
+
+    def test_scores_decoded_predictions_via_checker(self):
+        pred_ids = torch.tensor([[5], [3]])  # " blue", "green"
+        result = score_label_predictions(
+            _PipelineWithTokenizer(), pred_ids, ["blue", "blue"], _exact_checker
+        )
+        assert result["scores"] == [1.0, 0.0]
+        assert result["accuracy"] == pytest.approx(0.5)
+
+    def test_dict_labels_via_as_label_checker(self):
+        pred_ids = torch.tensor([[5]])
+        result = score_label_predictions(
+            _PipelineWithTokenizer(),
+            pred_ids,
+            [{"string": "blue"}],
+            as_label_checker(_exact_checker),
+        )
+        assert result["accuracy"] == 1.0
+
+    def test_misaligned_labels_raise(self):
+        with pytest.raises(ValueError, match="misaligned"):
+            score_label_predictions(
+                _PipelineWithTokenizer(),
+                torch.tensor([[5]]),
+                ["a", "b"],
+                _exact_checker,
+            )
 
 
 class TestSingleTokenId:

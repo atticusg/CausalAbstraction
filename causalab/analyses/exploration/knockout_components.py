@@ -38,7 +38,8 @@ Both ablation references are run when ``ablation_modes`` lists both: ``zero``
 (drop the contribution) and ``mean`` (replace with the corpus-mean activation).
 Each reference writes its own ``<ablation_mode>/results.json`` under the mode's
 output dir, carrying a per-metric grid for each family; the optional web app
-turns the saved grids into per-width / per-family tabs with a metric selector.
+(see the ``explore-behavior`` skill) turns the saved grids into per-width /
+per-family tabs with a metric selector.
 """
 
 from __future__ import annotations
@@ -62,9 +63,9 @@ from causalab.methods.ablation import (
     run_ablation_scan_multi,
 )
 from causalab.methods.metric import InterchangeMetric, compute_base_outputs
-from causalab.neural.activations.targets import (
-    build_attention_head_targets,
-    build_mlp_targets,
+from causalab.neural.activations.site_grids import (
+    build_attention_head_sites,
+    build_mlp_sites,
 )
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_positions import (
@@ -72,7 +73,6 @@ from causalab.neural.token_positions import (
     get_all_tokens,
     get_last_token_index,
 )
-from causalab.neural.units import InterchangeTarget
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +196,7 @@ def _resolve_span(
         if not path:
             raise ValueError(
                 "knockout.span='essential' requires knockout.essential_tokens "
-                "(path to an essential_tokens.json listing the essential token slots)."
+                "(path to the essential_tokens.json from the skill's Step 2)."
             )
         with open(path) as f:
             tokens = json.load(f)
@@ -220,15 +220,14 @@ def _reference_vectors(
     ablation_mode: str,
     pipeline: LMPipeline,
     dataset: list[dict[str, Any]],
-    units: list[Any],
+    specs: list[Any],
     batch_size: int,
 ) -> dict[str, Any]:
-    """Zero or corpus-mean reference vector per unit id, built once for the whole
-    grid (one ``make_*`` call over a combined one-unit-per-group target)."""
-    combined = InterchangeTarget([[u] for u in units])
+    """Zero or corpus-mean reference vector per spec key, built once for the
+    whole grid (one ``make_*`` call over every grid spec)."""
     if ablation_mode == "zero":
-        return make_zero_vectors(combined)
-    return make_mean_vectors(pipeline, dataset, combined, batch_size=batch_size)
+        return make_zero_vectors(specs)
+    return make_mean_vectors(pipeline, dataset, specs, batch_size=batch_size)
 
 
 def _band_sweep(
@@ -325,12 +324,12 @@ def _knockout_one_mode(
     os.makedirs(mode_dir, exist_ok=True)
     metric_names = list(metrics)
 
-    # One reference-vector dict covers every grid unit; scan/combo slice per target.
+    # One reference-vector dict covers every grid spec; scan/combo slice per cell.
     grid_units = []
     if head_targets is not None:
-        grid_units += [u for t in head_targets.values() for u in t.flatten()]
+        grid_units += [spec for groups in head_targets.values() for spec in groups[0]]
     if mlp_targets is not None:
-        grid_units += [u for t in mlp_targets.values() for u in t.flatten()]
+        grid_units += [spec for groups in mlp_targets.values() for spec in groups[0]]
     vectors = _reference_vectors(
         ablation_mode, pipeline, dataset, grid_units, batch_size
     )
@@ -398,8 +397,8 @@ def _knockout_one_mode(
         # in one layer) — coarser than the per-head grid above, and the direct
         # analogue of the MLP per-layer band.
         head_units_by_layer: dict[int, list[Any]] = {}
-        for (layer, _head), target in head_targets.items():
-            head_units_by_layer.setdefault(layer, []).extend(target.flatten())
+        for (layer, _head), groups in head_targets.items():
+            head_units_by_layer.setdefault(layer, []).extend(groups[0])
         add_band_sweeps(
             "attention_head",
             head_metrics,
@@ -413,9 +412,7 @@ def _knockout_one_mode(
         }
 
     if mlp_targets is not None:
-        unit_by_layer = {
-            layer: mlp_targets[(layer, span_id)].flatten()[0] for layer in layers
-        }
+        unit_by_layer = {layer: mlp_targets[(layer, span_id)][0][0] for layer in layers}
         mlp_metrics: dict[str, dict[str, Any]] = {name: {} for name in metric_names}
         add_band_sweeps(
             "mlp",
@@ -474,12 +471,12 @@ def run(pipeline: LMPipeline, acfg: DictConfig, out_dir: str) -> dict[str, Any]:
                 f"knockout.components entries must be in {_COMPONENTS}; got {comp!r}"
             )
     head_targets = (
-        build_attention_head_targets(pipeline, layers, heads, span)
+        build_attention_head_sites(pipeline, layers, heads, span)
         if "attention_head" in requested
         else None
     )
     mlp_targets = (
-        build_mlp_targets(pipeline, layers, [span]) if "mlp" in requested else None
+        build_mlp_sites(pipeline, layers, [span]) if "mlp" in requested else None
     )
 
     ablation_modes = [str(m) for m in acfg.get("ablation_modes", list(_ABLATION_MODES))]

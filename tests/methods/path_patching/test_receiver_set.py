@@ -33,19 +33,13 @@ from causalab.methods.path_patching.run import (
 from causalab.methods.path_patching.targets import (
     OUTPUT,
     ReceiverSpec,
-    build_receiver_unit,
-    build_restorer_set,
+    build_restorer_sites,
     deepest_receiver,
     sender_reaches_any,
 )
-from causalab.neural.activations.intervenable_model import (
-    delete_intervenable_model,
-    prepare_intervenable_model,
-)
-from causalab.neural.activations.targets import build_attention_head_targets
+from causalab.neural.activations.site_grids import build_attention_head_sites
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_positions import TokenPosition, get_last_token_index
-from causalab.neural.units import InterchangeTarget
 
 
 def _trace(text: str) -> CausalTrace:
@@ -92,9 +86,9 @@ def _first_logit_metric() -> InterchangeMetric:
 
 def _sender(pipeline: LMPipeline, layer: int, head: int) -> Any:
     pos = _last_token(pipeline)
-    return build_attention_head_targets(pipeline, [layer], [head], pos)[
-        (layer, head)
-    ].flatten()[0]
+    return build_attention_head_sites(pipeline, [layer], [head], pos)[(layer, head)][0][
+        0
+    ]
 
 
 class TestDegeneracy:
@@ -173,35 +167,6 @@ class TestOrderInvariance:
             assert ab[key] == pytest.approx(ba[key], abs=1e-6)
 
 
-class TestPass2Grouping:
-    """PASS 2 puts each receiver in its own pyvene group, so the model has one
-    intervention group per receiver — pyvene's _input_validation needs one source
-    representation per group, and PASS 2 injects one v* per receiver."""
-
-    pytestmark = pytest.mark.unit
-
-    def test_one_group_per_receiver(self, mock_tiny_lm: LMPipeline) -> None:
-        pos = _last_token(mock_tiny_lm)
-        receivers = [
-            build_receiver_unit(
-                mock_tiny_lm,
-                ReceiverSpec(
-                    kind="head_value_input", layer=1, head=h, token_position=pos
-                ),
-            )
-            for h in (0, 1)
-        ]
-        model = prepare_intervenable_model(
-            mock_tiny_lm,
-            InterchangeTarget([[r] for r in receivers]),
-            intervention_type="interchange",
-        )
-        try:
-            assert len(model._intervention_group) == len(receivers)
-        finally:
-            delete_intervenable_model(model)
-
-
 class TestDeepestReceiver:
     """The restorer set and reachability gate for a set use the deepest receiver
     (max read depth); reaching it ⇔ reaching at least one member."""
@@ -229,13 +194,13 @@ class TestDeepestReceiver:
         deepest = deepest_receiver(mock_tiny_lm, specs)
         # The union restorer set is exactly build_restorer_set against the deepest
         # member — the contract run_path_patching_set_scan relies on.
-        expected = build_restorer_set(
+        expected = build_restorer_sites(
             mock_tiny_lm, sender, deepest, restore=("attention",)
         )
-        against_last = build_restorer_set(
+        against_last = build_restorer_sites(
             mock_tiny_lm, sender, specs[-1], restore=("attention",)
         )
-        assert [u.id for u in expected] == [u.id for u in against_last]
+        assert expected == against_last
 
     def test_sender_reaches_any_matches_deepest(self, mock_tiny_lm: LMPipeline) -> None:
         pos = _last_token(mock_tiny_lm)

@@ -18,11 +18,13 @@ receiver — is the estimand definition, selectable via ``restore``.
 
 Public surface:
 
-* :class:`ReceiverSpec` / :data:`OUTPUT` / :func:`build_receiver_unit` — the receiver.
-* :func:`build_restorer_set` / :func:`build_path_patching_target` — assemble the
-  two-group sender/restorer :class:`InterchangeTarget`.
+* :class:`ReceiverSpec` / :data:`OUTPUT` / :func:`build_receiver_site` — the receiver.
+* :func:`build_restorer_sites` — resolve the restorer set onto the Site stack
+  (the sender is a :class:`causalab.neural.specs.SiteSpec`, already holding a
+  real engine site).
 * :func:`run_path_patching` / :func:`run_path_patching_scan` — the runner
-  (one-pass for ``output``, two-pass for internal receivers).
+  (one-pass for ``output``, two-pass for internal receivers), lowered through
+  the Plan compiler (:mod:`causalab.neural.plan`).
 * :func:`run_path_patching_set` / :func:`run_path_patching_set_scan` — patch one
   sender into a *set* of internal receivers simultaneously (IOI Fig. 4 / Fig. 5).
 * :func:`make_logit_diff_metric` — the direct-effect logit-difference metric.
@@ -31,11 +33,9 @@ Public surface:
 from causalab.methods.path_patching.targets import (
     OUTPUT,
     ReceiverSpec,
-    build_path_patching_target,
-    build_receiver_unit,
-    build_restorer_set,
+    build_receiver_site,
+    build_restorer_sites,
     deepest_receiver,
-    group_path_patching_target,
     sender_reaches_any,
     sender_reaches_receiver,
 )
@@ -54,11 +54,9 @@ from causalab.methods.metric import make_logit_diff_metric
 __all__ = [
     "OUTPUT",
     "ReceiverSpec",
-    "build_path_patching_target",
-    "build_receiver_unit",
-    "build_restorer_set",
+    "build_receiver_site",
+    "build_restorer_sites",
     "deepest_receiver",
-    "group_path_patching_target",
     "sender_reaches_any",
     "sender_reaches_receiver",
     "run_path_patching",

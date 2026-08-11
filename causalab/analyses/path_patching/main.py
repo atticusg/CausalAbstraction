@@ -48,10 +48,10 @@ from causalab.methods.path_patching.targets import (
     deepest_receiver,
     sender_reaches_receiver,
 )
-from causalab.neural.activations.targets import build_attention_head_targets
+from causalab.neural.activations.site_grids import build_attention_head_sites
 from causalab.neural.token_positions import TokenPosition, get_last_token_index
 from causalab.runner.helpers import (
-    generate_datasets,
+    prepare_datasets,
     resolve_task,
     _task_config_for_metadata,  # pyright: ignore[reportPrivateUsage]
 )
@@ -262,13 +262,14 @@ def _build_dataset(cfg: DictConfig, analysis: DictConfig, task) -> list[dict[str
         return mod.generate_abc_dataset(
             task.causal_model, n=cfg.task.n_test, seed=cfg.seed
         )
-    _train, test_dataset = generate_datasets(
+    _train, test_dataset = prepare_datasets(
         task,
         n_train=cfg.task.n_train,
         n_test=cfg.task.n_test,
         seed=cfg.seed,
         enumerate_all=cfg.task.enumerate_all,
         resample_variable=analysis.get("resample_variable", "name_C"),
+        filter_correct=False,
     )
     return test_dataset
 
@@ -350,8 +351,8 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         else list(range(config.num_attention_heads))
     )
     sender_pos = token_pos
-    sender_targets = build_attention_head_targets(pipeline, layers, heads, sender_pos)
-    senders = {key: target.flatten()[0] for key, target in sender_targets.items()}
+    sender_grid = build_attention_head_sites(pipeline, layers, heads, sender_pos)
+    senders = {key: groups[0][0] for key, groups in sender_grid.items()}
 
     # An internal receiver can only be reached by senders upstream of its read point;
     # the methods runner raises on a downstream (structurally-zero) edge, so filter the

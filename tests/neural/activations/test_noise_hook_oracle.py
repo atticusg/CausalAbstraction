@@ -25,10 +25,11 @@ from __future__ import annotations
 import pytest
 import torch
 
-from causalab.neural.LM_units import ResidualStream
+from causalab.neural.featurized_site import FeaturizedSite
 from causalab.neural.pipeline import LMPipeline
+from causalab.neural.site import Site
+from causalab.neural.specs import SiteSpec
 from causalab.neural.token_positions import TokenPosition
-from causalab.neural.units import InterchangeTarget
 from causalab.methods.steer.steer import make_zero_features, run_steering_interventions
 
 from tests.neural.activations.hook_oracle import make_trace, next_token_logits
@@ -38,37 +39,38 @@ _POS = 1
 _BASE = "the quick brown fox jumps"
 
 
-def _noise_target(pipeline: LMPipeline) -> InterchangeTarget:
+def _noise_site(pipeline: LMPipeline) -> SiteSpec:
     hidden = pipeline.model.config.hidden_size
     tp = TokenPosition(lambda _x: [_POS], pipeline, id="pos1")
-    unit = ResidualStream(
-        layer=_LAYER, token_indices=tp, target_output=True, shape=(hidden,)
+    return SiteSpec(
+        fsite=FeaturizedSite(Site("block_output", _LAYER)),
+        positions=tp,
+        key=f"residual.L{_LAYER}.pos1",
+        width=hidden,
     )
-    return InterchangeTarget([[unit]])
 
 
 def _run_noise(
-    pipeline: LMPipeline, target: InterchangeTarget, *, scale: float, seed: int
+    pipeline: LMPipeline, site: SiteSpec, *, scale: float, seed: int
 ) -> torch.Tensor:
     """Run a pure-noise intervention; return the example's next-token logits.
 
-    ``steering_vectors`` carries the per-unit noise *scale*; ``type_by_unit``
-    flips the single unit to the ``noise`` intervention type."""
-    unit_id = target.flatten()[0].id
-    zeros = make_zero_features(target)
-    scale_vec = {unit_id: torch.full_like(zeros[unit_id], float(scale))}
+    ``steering_vectors`` carries the per-site noise *scale*; ``type_by_key``
+    flips the single site to the ``noise`` intervention type."""
+    zeros = make_zero_features([site])
+    scale_vec = {site.key: torch.full_like(zeros[site.key], float(scale))}
     result = run_steering_interventions(
         pipeline,
         [{"input": make_trace(_BASE), "counterfactual_inputs": []}],
-        target,
+        [site],
         scale_vec,
-        mode="replace",  # overridden per-unit by type_by_unit
-        type_by_unit={unit_id: "noise"},
+        mode="replace",  # overridden per-site by type_by_key
+        type_by_key={site.key: "noise"},
         noise_seed=seed,
         output_scores=True,
     )
-    # run_steering_interventions nests one batch deep: scores[batch][step].
-    return result["scores"][0][0]
+    # Flat GenerationResult contract: per-step scores -> (1, vocab).
+    return result.scores[0]
 
 
 class TestNoiseInterventionContract:
@@ -79,33 +81,33 @@ class TestNoiseInterventionContract:
     def test_zero_scale_is_no_op(self, oracle_pipeline: LMPipeline) -> None:
         """``scale=0`` adds ``0·noise`` — the activation is untouched, so the run
         must reproduce the clean logits exactly."""
-        target = _noise_target(oracle_pipeline)
+        site = _noise_site(oracle_pipeline)
         clean = next_token_logits(
             oracle_pipeline, oracle_pipeline.load([make_trace(_BASE)])
         )
-        noised = _run_noise(oracle_pipeline, target, scale=0.0, seed=0)
+        noised = _run_noise(oracle_pipeline, site, scale=0.0, seed=0)
         torch.testing.assert_close(noised, clean, atol=1e-5, rtol=1e-4)
 
     def test_positive_scale_is_non_trivial(self, oracle_pipeline: LMPipeline) -> None:
         """A positive scale must actually corrupt the activation (logits move)."""
-        target = _noise_target(oracle_pipeline)
+        site = _noise_site(oracle_pipeline)
         clean = next_token_logits(
             oracle_pipeline, oracle_pipeline.load([make_trace(_BASE)])
         )
-        noised = _run_noise(oracle_pipeline, target, scale=3.0, seed=0)
+        noised = _run_noise(oracle_pipeline, site, scale=3.0, seed=0)
         assert not torch.allclose(noised, clean, atol=1e-4)
 
     def test_same_seed_is_reproducible(self, oracle_pipeline: LMPipeline) -> None:
         """Same seed → byte-identical corruption across independent runs (each
         rebuilds the model, re-seeding the per-instance generator)."""
-        target = _noise_target(oracle_pipeline)
-        a = _run_noise(oracle_pipeline, target, scale=3.0, seed=7)
-        b = _run_noise(oracle_pipeline, target, scale=3.0, seed=7)
+        site = _noise_site(oracle_pipeline)
+        a = _run_noise(oracle_pipeline, site, scale=3.0, seed=7)
+        b = _run_noise(oracle_pipeline, site, scale=3.0, seed=7)
         torch.testing.assert_close(a, b, atol=0.0, rtol=0.0)
 
     def test_different_seed_differs(self, oracle_pipeline: LMPipeline) -> None:
         """A different seed draws different noise → different logits."""
-        target = _noise_target(oracle_pipeline)
-        a = _run_noise(oracle_pipeline, target, scale=3.0, seed=7)
-        b = _run_noise(oracle_pipeline, target, scale=3.0, seed=8)
+        site = _noise_site(oracle_pipeline)
+        a = _run_noise(oracle_pipeline, site, scale=3.0, seed=7)
+        b = _run_noise(oracle_pipeline, site, scale=3.0, seed=8)
         assert not torch.allclose(a, b, atol=1e-4)

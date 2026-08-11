@@ -32,6 +32,11 @@ analysis:
     training_epoch: 20        # epochs for the mask-intervention training loop
     lr: 0.001                 # initial learning rate
     regularization_coefficient: 100  # mask sparsity penalty
+
+  prescan:                    # attribution-patching fail-fast gate (#456), pairwise only
+    enabled: false            # one-backward gradient x delta-activation scores every cell
+    top_k: 10                 # exact interchange then runs only on the top-k survivors
+    n_examples: null          # cap on counterfactual pairs scored; null = full test set
 ```
 
 **Task config** may declare `target_variables: [v1, v2, ...]` (plural) to loop; the legacy singular `target_variable` still works.
@@ -47,6 +52,10 @@ analysis:
   > Pairwise is only informative when `task.resample_variable` is a single variable (the one being localized) — see **docs/CODEBASE.md §5**.
 - **`centroid`** — patch per-class centroid activations and compare to per-class average distributions (`intervention_metric: kl`/`hellinger`). Meaningful under `resample_variable: "all"`.
 
+### Attribution pre-scan (fail-fast gate)
+
+`prescan.enabled: true` (pairwise mode, single-model only) runs a one-backward **gradient x delta-activation** approximation of every cell's interchange effect before the exact grid: one forward over the counterfactual batch plus one forward+backward over the base batch scores all cells, exact interchange then runs only on the `top_k` survivors. Cells are ranked by **|approx|** — the linearization's sign is unreliable through many downstream non-linearities, but the magnitude separates live cells from dead ones. `results.json` reports both scores wherever both were computed (`prescan.exact_and_approx`) plus `agreement_at_k` (top-set overlap at k capped to half the both-scored cells, so it can miss), `rank_correlation` (signed) and `abs_rank_correlation`, so the approximation quality stays visible; `prescan_heatmap.*` shows the approximate grid. The approximation linearizes around the base run — saturated cells can mis-rank, which is why the exact scan still runs on the survivors.
+
 ---
 
 ## Outputs
@@ -57,7 +66,9 @@ analysis:
 ├── results.json               # top-level (first-variable best_cell)
 └── {variable}/
     ├── heatmap.pdf            # (layer × position) score heatmap
+    ├── prescan_heatmap.pdf    # approx grid (prescan.enabled only)
     ├── results.json           # best_cell, scores_per_cell, scores_per_layer
+    │                          #   (+ prescan block when the gate ran)
     └── L{layer}/P{pos_id}/    # centroid mode only
         ├── patched_dists.safetensors
         ├── patched_dists.meta.json

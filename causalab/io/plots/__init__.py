@@ -4,9 +4,9 @@ from .score_heatmap import (
     plot_score_heatmap,
     plot_variable_localization_heatmap,
 )
-from causalab.neural.activations.targets import (
-    detect_component_type_from_targets,
+from causalab.neural.activations.site_grids import (
     extract_grid_dimensions_from_targets,
+    grid_component,
 )
 from .string_heatmap import (
     plot_residual_stream_intervention_heatmap,
@@ -26,14 +26,12 @@ from .binary_mask import (
     get_selected_residual_positions,
     get_selected_mlps,
 )
-from .unit_id import (
-    # Unit ID parsing helpers (shared by binary_mask and feature_masks)
-    extract_layer_from_unit_id,
-    extract_token_position_from_unit_id,
-    extract_layer_head_from_unit_id,
-    detect_component_type,
-    is_per_layer_mode,
-    extract_grid_dimensions,
+from .grid_cells import (
+    # Structured grid-cell records — the retired unit-id parsing's successor
+    GridCell,
+    cell_grid_dimensions,
+    cells_from_site_grid,
+    cells_from_specs,
 )
 from .feature_masks import (
     # Feature count plotting (DBM with tie_masks=False)
@@ -41,8 +39,6 @@ from .feature_masks import (
     plot_attention_head_feature_counts,
     plot_residual_stream_feature_counts,
     plot_mlp_feature_counts,
-    count_selected_features,
-    NFeatures,
 )
 from .text_analysis import (
     print_residual_stream_patching_analysis,
@@ -85,7 +81,7 @@ __all__ = [
     "plot_score_heatmap",
     "plot_variable_localization_heatmap",
     # Component type detection and grid extraction utilities
-    "detect_component_type_from_targets",
+    "grid_component",
     "extract_grid_dimensions_from_targets",
     # String heatmaps
     "plot_residual_stream_intervention_heatmap",
@@ -100,20 +96,16 @@ __all__ = [
     "get_selected_heads",
     "get_selected_residual_positions",
     "get_selected_mlps",
-    # Unit ID parsing helpers (shared)
-    "extract_layer_from_unit_id",
-    "extract_token_position_from_unit_id",
-    "extract_layer_head_from_unit_id",
-    "detect_component_type",
-    "is_per_layer_mode",
-    "extract_grid_dimensions",
+    # Structured grid-cell records (unit-id parsing retired)
+    "GridCell",
+    "cell_grid_dimensions",
+    "cells_from_site_grid",
+    "cells_from_specs",
     # Feature count plotting (DBM with tie_masks=False)
     "plot_feature_counts",
     "plot_attention_head_feature_counts",
     "plot_residual_stream_feature_counts",
     "plot_mlp_feature_counts",
-    "count_selected_features",
-    "NFeatures",
     # Text analysis functions
     "print_residual_stream_patching_analysis",
     # PCA scatter plots

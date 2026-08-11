@@ -223,7 +223,14 @@ def save_intervention_results(
         results_by_key: Dict mapping keys to result dicts with:
             - score: float
             - scores_by_variable: dict (unused, kept for compatibility)
-            - raw_results: dict with "string" and "sequences"
+            - raw_results: dict with "string" and "sequences" — the legacy
+              one-synthetic-batch view producers emit via
+              :meth:`~causalab.neural.pipeline.GenerationResult.to_raw_results`
+              (EU5b, #487; the stored-artifact schema is unchanged for runs
+              with ``batch_size >= n_examples`` — legacy multi-batch runs
+              stored one inner ``"string"`` list per batch, and
+              single-example batches a bare str, where ``to_raw_results()``
+              always emits the one-batch nesting)
         output_dir: Output directory
         prefix: Optional prefix for subdirectory (e.g., "train_eval", "test_eval")
 
@@ -281,18 +288,47 @@ def save_training_artifacts(
     """
     Save training-specific artifacts (feature indices, models).
 
+    Each cell's trained specs are written as a WU1 spec bundle
+    (:func:`causalab.neural.specs.save_site_specs` — ``sites.json`` +
+    ``featurizers.safetensors``/``.meta.json``) under ``models/<key>/``;
+    ``training/feature_indices.json`` is keyed by ``spec.key`` (opaque —
+    nothing may parse it; the structured site records live in each bundle's
+    ``sites.json``).
+
     Args:
         results_by_key: Dict mapping keys to result dicts with:
-            - feature_indices: dict
-            - trained_target: InterchangeTarget (optional, for model saving)
+            - feature_indices: dict keyed by ``spec.key``
+            - trained_specs: the cell's trained specs — a flat sequence of
+              :class:`~causalab.neural.specs.SiteSpec` or nested spec groups
+              (optional, for model saving)
         output_dir: Output directory
 
     Returns:
         Dict of output paths
+
+    Raises:
+        ValueError: From ``save_site_specs``, e.g. on a non-trivial featurizer
+            whose ``to_dict()`` returns ``None`` — the legacy save silently
+            dropped such featurizers; the spec bundle refuses to (see
+            ``causalab/neural/specs.py``).
     """
+    # Lazy import: keeps this module a near-leaf (the specs module itself
+    # lazy-imports causalab.io.nested_artifacts for its payload I/O).
+    from causalab.neural.specs import SiteSpec, save_site_specs
+
+    def _flat_specs(trained: Any) -> list[SiteSpec]:
+        """Accept a flat spec sequence or nested spec groups."""
+        flat: list[SiteSpec] = []
+        for item in trained:
+            if isinstance(item, SiteSpec):
+                flat.append(item)
+            else:
+                flat.extend(item)
+        return flat
+
     paths = {}
 
-    # Save feature_indices.json: {key: {unit_id: [indices]}}
+    # Save feature_indices.json: {key: {spec.key: [indices]}}
     training_dir = os.path.join(output_dir, "training")
     os.makedirs(training_dir, exist_ok=True)
 
@@ -308,15 +344,15 @@ def save_training_artifacts(
     )
     paths["feature_indices_path"] = feature_path
 
-    # Save models to models/ directory
+    # Save models (spec bundles) to models/ directory
     models_dir = os.path.join(output_dir, "models")
     os.makedirs(models_dir, exist_ok=True)
 
     for key, result in results_by_key.items():
-        if "trained_target" in result:
+        if "trained_specs" in result:
             key_str = _key_to_str(key)
             model_path = os.path.join(models_dir, key_str)
-            result["trained_target"].save(model_path)
+            save_site_specs(_flat_specs(result["trained_specs"]), model_path)
 
     paths["models_dir"] = models_dir
 

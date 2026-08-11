@@ -1,10 +1,18 @@
 """Tests for the logit lens method (causalab.methods.logit_lens).
 
-The pure-tensor tests validate the projection math and accessors with a stub
-module and run anywhere. The gpt2 integration test (marked ``slow``) is the
-real correctness check: at the *last* layer, with the final norm applied, the
-lens must reproduce the model's own next-token argmax — proving the
-final-norm + unembedding wiring is faithful.
+Two layers of checks:
+
+* **Pure-tensor** — the projection math (:func:`project_to_logits`) with a stub
+  module, runs anywhere.
+* **nnterp-routed** — on the tiny-random Llama, that
+  :func:`resolve_final_norm_and_unembed` / :func:`project_on_vocab` find and
+  apply the *same* final-norm + unembedding the removed ``_FINAL_NORM_PATHS``
+  probe did (parity), and that the nnterp trace wrappers (:func:`logit_lens`,
+  :func:`get_topk_closest_tokens`) return valid distributions — the last
+  logit-lens layer reproduces the model's own next-token distribution.
+
+The gpt2 integration test (real weights) is the end-to-end faithful-wiring check
+for :func:`compute_logit_lens`.
 """
 
 from __future__ import annotations
@@ -15,8 +23,11 @@ import torch.nn as nn
 from causalab.causal.trace import CausalTrace, Mechanism
 from causalab.methods.logit_lens import (
     compute_logit_lens,
-    get_final_norm,
+    get_topk_closest_tokens,
+    logit_lens,
+    project_on_vocab,
     project_to_logits,
+    resolve_final_norm_and_unembed,
     save_logit_lens_results,
 )
 
@@ -26,33 +37,6 @@ import pytest
 # --------------------------------------------------------------------------- #
 # Pure-tensor unit tests (no model download)                                  #
 # --------------------------------------------------------------------------- #
-
-
-@pytest.mark.unit
-def test_get_final_norm_finds_gpt2_style_path():
-    """A transformer.ln_f chain (GPT-2 family) is resolved."""
-
-    class _Inner(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.ln_f = nn.LayerNorm(8)
-
-    class _Model(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.transformer = _Inner()
-
-    norm = get_final_norm(_Model())
-    assert isinstance(norm, nn.LayerNorm)
-
-
-@pytest.mark.unit
-def test_get_final_norm_raises_when_absent():
-    class _Model(nn.Module):
-        pass
-
-    with pytest.raises(ValueError, match="final layer norm"):
-        get_final_norm(_Model())
 
 
 @pytest.mark.numerical_unit
@@ -81,6 +65,96 @@ def test_project_to_logits_skips_norm_when_disabled():
 
     logits = project_to_logits(hidden, final_norm, lm_head, apply_final_norm=False)
     torch.testing.assert_close(logits, lm_head(hidden), atol=1e-5, rtol=1e-4)
+
+
+# --------------------------------------------------------------------------- #
+# nnterp-routed projection on the tiny-random Llama (no big download)         #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(scope="module")
+def tiny_pipeline():
+    from causalab.neural.pipeline import LMPipeline
+    from tests._helpers.tiny import TINY_RANDOM_MODEL_NAME
+
+    try:
+        return LMPipeline(
+            TINY_RANDOM_MODEL_NAME, max_new_tokens=1, device="cpu", dtype="float32"
+        )
+    except Exception as exc:  # pragma: no cover - offline / no weights
+        pytest.skip(f"Could not load tiny-random: {exc}")
+
+
+@pytest.mark.numerical_unit
+def test_project_on_vocab_parity_with_bespoke_final_norm_path(tiny_pipeline):
+    """nnterp resolves the *same* modules the removed _FINAL_NORM_PATHS did.
+
+    The deleted path probed ``("model", "norm")`` for the final norm and
+    ``get_output_embeddings()`` for the unembedding. nnterp's standardized
+    ``ln_final`` / ``lm_head`` must be those exact modules, so ``project_on_vocab``
+    reproduces the old projection bit-for-bit (project_to_logits is unchanged).
+    """
+    pipe = tiny_pipeline
+    hf = pipe.hf_model
+
+    norm, head = resolve_final_norm_and_unembed(pipe)
+    # Identity, not just numerical equality: nnterp found the same objects.
+    assert norm is hf.model.norm
+    assert head is hf.get_output_embeddings()
+
+    hidden = torch.randn(4, pipe.model.hidden_size, dtype=torch.float32)
+    got = project_on_vocab(pipe, hidden)
+    expected = project_to_logits(
+        hidden, hf.model.norm, hf.get_output_embeddings(), apply_final_norm=True
+    )
+    assert got.shape == (4, pipe.model.config.vocab_size)
+    torch.testing.assert_close(got, expected, atol=1e-5, rtol=1e-4)
+
+    # apply_final_norm=False path also routes through the same unembedding.
+    raw = project_on_vocab(pipe, hidden, apply_final_norm=False)
+    raw_expected = project_to_logits(
+        hidden, hf.model.norm, hf.get_output_embeddings(), apply_final_norm=False
+    )
+    torch.testing.assert_close(raw, raw_expected, atol=1e-5, rtol=1e-4)
+
+
+@pytest.mark.numerical_unit
+def test_logit_lens_wrapper_last_layer_matches_model(tiny_pipeline):
+    """nnterp logit_lens: valid per-layer distributions; last layer == model."""
+    pipe = tiny_pipeline
+    prompts = ["The cat sat on the"]
+
+    probs = logit_lens(pipe, prompts)
+    n_layers = pipe.model.config.num_hidden_layers
+    vocab = pipe.model.config.vocab_size
+    assert probs.shape == (len(prompts), n_layers, vocab)
+    # Valid probability distributions per (prompt, layer).
+    assert torch.all(probs >= 0)
+    torch.testing.assert_close(
+        probs.sum(-1), torch.ones(len(prompts), n_layers), atol=1e-4, rtol=1e-4
+    )
+
+    # The last logit-lens layer projects the final residual through the same
+    # final norm + unembedding as the model itself, so it reproduces the model's
+    # own next-token distribution.
+    enc = pipe.tokenizer(prompts, return_tensors="pt")
+    with torch.no_grad():
+        model_logits = pipe.hf_model(**enc).logits
+    model_probs = model_logits[:, -1].softmax(-1)
+    torch.testing.assert_close(probs[:, -1], model_probs, atol=1e-4, rtol=1e-3)
+
+
+@pytest.mark.unit
+def test_get_topk_closest_tokens_shapes(tiny_pipeline):
+    pipe = tiny_pipeline
+    hidden_size = pipe.model.hidden_size
+
+    single = get_topk_closest_tokens(pipe, torch.randn(hidden_size), k=3)
+    assert isinstance(single, dict) and len(single) == 3
+
+    batched = get_topk_closest_tokens(pipe, torch.randn(2, hidden_size), k=4)
+    assert isinstance(batched, list) and len(batched) == 2
+    assert all(isinstance(d, dict) and len(d) == 4 for d in batched)
 
 
 # --------------------------------------------------------------------------- #

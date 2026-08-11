@@ -6,10 +6,10 @@ locate / attention-pattern intervention should read from or write to. The
 declarative spec system (:class:`Template`,
 :func:`build_token_position_factories`), and the combinators
 (:func:`paired_token_position`, :func:`combined_token_position`) feed every
-``AtomicModelUnit.index_component`` call routed through
+position resolution routed through
 ``causalab.methods.interchange.single_pair``, ``causalab.analyses.locate.main``,
 ``causalab.methods.attention_pattern_analysis``,
-``causalab.neural.activations.targets``, and the per-task wrappers in
+``causalab.neural.activations.site_grids``, and the per-task wrappers in
 ``causalab/tasks/*/token_positions.py``. If indices come back wrong, every
 downstream intervention reads/writes the wrong residual-stream rows and the
 IIA / locate / attention-pattern artifacts are silently corrupted.
@@ -1025,7 +1025,7 @@ class TestBuildTokenPositionsUnit:
     ``create_token_positions`` should use. Guards issue #179: returning the
     un-materialized factories from :func:`build_token_position_factories` instead
     crashes ``locate`` because consumers (``build_targets_for_grid``,
-    ``build_residual_stream_targets``) read ``.id`` off each value and a bare factory
+    ``site_grids.build_residual_stream_sites``) read ``.id`` off each value and a bare factory
     function has none."""
 
     pytestmark = pytest.mark.unit
@@ -1181,8 +1181,8 @@ class TestCombinedTokenPositionProperty:
 class TestTokenPositionIsOriginalFlagUnit:
     """Migrated from ``tests/neural/test_is_original_flag.py``: the
     ``TokenPosition``-specific cases pinning the per-call ``is_original``
-    dispatch contract. The ``ComponentIndexer`` / ``AtomicModelUnit`` cases
-    stay in their original file. (The vestigial ``is_original`` *constructor*
+    dispatch contract. The ``ComponentIndexer``-level cases live in
+    ``tests/neural/test_component_indexer.py``. (The vestigial ``is_original`` *constructor*
     flag was removed in #430 — routing is per call only.)"""
 
     pytestmark = pytest.mark.unit
@@ -1436,3 +1436,69 @@ class TestRawInputGuard:
         )
         with pytest.raises(PromptTemplateMismatchError):
             positions["x"].index(self._var_trace("A cat B and extra", "cat"))
+
+
+# --------------------------------------------------------------------------- #
+#  Batch-first resolution under a chat template (PL3, #405)                    #
+# --------------------------------------------------------------------------- #
+class TestBatchFirstChatTemplateUnit:
+    """Chat-wrapped batch-first resolution: the run encoding's offsets index
+    the *wrapped* prompt per row, so the rebase + verbatim guards must hold on
+    the batched path exactly as they do per example — parity with the legacy
+    resolve + shift pins it."""
+
+    pytestmark = pytest.mark.unit
+
+    _TEMPLATE = "The sum of {x} and {y} is "
+
+    @staticmethod
+    def _sample(x: str, y: str) -> CausalTrace:
+        text = f"The sum of {x} and {y} is "
+        return CausalTrace(
+            mechanisms={
+                "raw_input": Mechanism(parents=[], compute=lambda t: t["raw_input"]),
+                "x": Mechanism(parents=[], compute=lambda t: t["x"]),
+                "y": Mechanism(parents=[], compute=lambda t: t["y"]),
+            },
+            inputs={"raw_input": text, "x": x, "y": y},
+        )
+
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            {"type": "variable", "name": "x"},
+            {"type": "index", "position": -1},
+            {"type": "index", "position": 0},
+            {"type": "index", "position": -1, "scope": {"variable": "y"}},
+        ],
+        ids=["variable", "last", "first_content", "scoped"],
+    )
+    def test_chat_parity_with_legacy_shift(
+        self, tiny_chat_pipeline, spec: dict
+    ) -> None:
+        from causalab.neural.positions import (
+            resolve_positions,
+            resolve_positions_batched,
+        )
+
+        tp = build_token_positions({"p": spec}, self._TEMPLATE, tiny_chat_pipeline)["p"]
+        traces = [self._sample("5", "7"), self._sample("9", "7777777")]
+        enc = tiny_chat_pipeline.load(traces, return_offsets_mapping=True)
+        batched = resolve_positions_batched(tp, traces, enc)
+        legacy = resolve_positions(tp, traces, enc["attention_mask"])
+        assert batched == legacy
+
+    def test_chat_variable_rows_decode_to_value(self, tiny_chat_pipeline) -> None:
+        from causalab.neural.positions import resolve_positions_batched
+
+        tp = build_token_positions(
+            {"x": {"type": "variable", "name": "x"}}, self._TEMPLATE, tiny_chat_pipeline
+        )["x"]
+        traces = [self._sample("5", "7"), self._sample("9", "7777777")]
+        enc = tiny_chat_pipeline.load(traces, return_offsets_mapping=True)
+        rows = resolve_positions_batched(tp, traces, enc)
+        for i, value in enumerate(["5", "9"]):
+            decoded = tiny_chat_pipeline.tokenizer.decode(
+                [enc["input_ids"][i][p].item() for p in rows[i]]
+            )
+            assert value in decoded

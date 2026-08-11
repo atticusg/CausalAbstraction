@@ -1,10 +1,17 @@
 """
 Generic Intervention Training Script (DBM and DAS)
 
-This module provides a generic function to train interventions on any InterchangeTarget.
-Supports both:
-- DBM (Desiderata-Based Masking): Learns binary masks over units
+This module provides a generic function to train interventions on any nested
+:class:`~causalab.neural.specs.SiteSpec` groups (or a whole
+:data:`~causalab.neural.activations.site_grids.SiteGrid`). Supports both:
+- DBM (Desiderata-Based Masking): Learns binary masks over sites
 - DAS (Distributed Alignment Search): Learns linear subspaces containing causal variables
+
+Feature-space management is functional (WU4, #506): featurizer initialization
+and the trained feature-index readout *return new specs*
+(``with_featurizer`` / ``with_feature_ids``) — nothing mutates the caller's
+specs. The trained featurizer modules themselves are shared by reference, so
+the returned specs carry the trained parameters.
 
 Output Structure:
 ================
@@ -28,29 +35,47 @@ import collections
 import copy
 import logging
 import random
-from typing import Dict, Any, Callable, Union, Tuple
+from typing import Dict, Any, Callable, Mapping, Sequence, Union, Tuple
 
 import numpy as np
 import torch
-from torch import Tensor
 import transformers
 from tqdm import tqdm
 
 from causalab.causal.causal_model import CausalModel
-from causalab.causal.counterfactual_dataset import CounterfactualExample
+from causalab.causal.counterfactual_dataset import (
+    CounterfactualExample,
+    LabeledCounterfactualExample,
+)
 from causalab.neural.featurizer import Featurizer
 from causalab.neural.activations.interchange_mode import run_interchange_interventions
 from causalab.methods.metric import (
-    LM_loss_and_metric_fn,
     causal_score_intervention_outputs,
+    score_label_predictions,
 )
 from causalab.methods.trained_subspace.subspace import SubspaceFeaturizer
-from causalab.neural.activations.intervenable_model import (
-    prepare_intervenable_model,
-    delete_intervenable_model,
+from causalab.neural.activations.site_grids import SiteGrid
+from causalab.neural.dataset import (
+    forward_inputs,
+    resolve_spec_positions,
 )
-from causalab.neural.pipeline import Pipeline, LMPipeline
-from causalab.neural.units import InterchangeTarget
+from causalab.neural.edit import Edit
+from causalab.neural.featurized_site import FeaturizedSite
+from causalab.neural.modes import MaskGate
+from causalab.neural.pipeline import LMPipeline
+from causalab.neural.site import collect_ordered, forward_key
+from causalab.methods.edit_training import temperature_schedule
+from causalab.neural.specs import SiteSpec
+from causalab.neural.trainable import (
+    concat_label_inputs,
+    das_edit,
+    dbm_edit,
+    freeze_model_parameters,
+    place_edit_parameters,
+    selected_feature_ids,
+    site_device,
+    traced_label_loss,
+)
 from causalab.io.artifacts import (
     save_intervention_results,
     save_training_artifacts,
@@ -62,9 +87,7 @@ logger = logging.getLogger(__name__)
 
 def train_interventions(
     causal_model: CausalModel,
-    interchange_targets: Union[
-        Dict[Tuple[Any, ...], InterchangeTarget], InterchangeTarget
-    ],
+    grid: Union[SiteGrid, Sequence[Sequence[SiteSpec]]],
     train_dataset: list[CounterfactualExample],
     test_dataset: list[CounterfactualExample],
     pipeline: LMPipeline,
@@ -74,7 +97,7 @@ def train_interventions(
     source_pipeline: LMPipeline | None = None,
 ) -> Dict[str, Any]:
     """
-    Train interventions (DBM or DAS) on one or more InterchangeTargets.
+    Train interventions (DBM or DAS) on one or more grid cells of SiteSpecs.
 
     Handles featurizer initialization based on config:
     - intervention_type="mask": Uses Featurizer with tie_masks from config
@@ -85,7 +108,10 @@ def train_interventions(
 
     Args:
         causal_model: Causal model for generating expected outputs
-        interchange_targets: Either a dict mapping keys to targets, or a single target
+        grid: Either a :data:`~causalab.neural.activations.site_grids.SiteGrid`
+            (cell key → nested spec groups) or a single nested
+            ``Sequence[Sequence[SiteSpec]]`` (wrapped as the ``("single",)``
+            cell)
         train_dataset: In-memory training counterfactual examples
         test_dataset: In-memory test counterfactual examples
         pipeline: Target LMPipeline where interventions are applied
@@ -103,19 +129,26 @@ def train_interventions(
             source_pipeline.
 
     Note:
-        Units with pre-initialized featurizers (id != "null") are preserved.
-        This allows using PCA/SVD-initialized featurizers without overwriting them.
+        Specs with pre-initialized featurizers (id != "null") are preserved.
+        This allows using PCA/SVD-initialized featurizers without overwriting
+        them. Initialization and the trained readout are functional — the
+        caller's specs are never mutated; the *returned* ``trained_specs``
+        carry the trained feature spaces.
 
     Returns:
         Dictionary containing:
-            - results_by_key: dict mapping keys to per-target results with:
+            - results_by_key: dict mapping keys to per-cell results with:
                 - train_score: training accuracy
                 - test_score: test accuracy
-                - feature_indices: feature indices dict
+                - feature_indices: ``{spec.key: indices}`` dict
                 - train_eval: full train evaluation results
                 - test_eval: full test evaluation results
-            - avg_train_score: average training accuracy across targets
-            - avg_test_score: average test accuracy across targets
+                - trained_specs: the trained nested spec groups (a DBM mask
+                  that switched every feature off drops its spec here — the
+                  no-op-by-omission contract; its ``feature_indices`` entry
+                  records the empty selection)
+            - avg_train_score: average training accuracy across cells
+            - avg_test_score: average test accuracy across cells
             - metadata: experiment configuration and summary
 
     Raises:
@@ -139,12 +172,13 @@ def train_interventions(
             "or {'tie_masks': False} for separate masks per feature dimension."
         )
 
-    # Wrap single target in dict
-    if isinstance(interchange_targets, InterchangeTarget):
-        interchange_targets = {("single",): interchange_targets}
+    # Wrap bare nested spec groups in a single-cell grid
+    if not isinstance(grid, Mapping):
+        grid = {("single",): [list(group) for group in grid]}
 
-    # Initialize featurizers based on config (skips pre-initialized featurizers)
-    _initialize_featurizers(interchange_targets, config)
+    # Initialize featurizers based on config (skips pre-initialized featurizers;
+    # returns new specs — the caller's grid is untouched)
+    grid = _initialize_featurizers(grid, config)
 
     # Label training dataset
     labeled_train_dataset = causal_model.label_counterfactual_data(
@@ -154,40 +188,32 @@ def train_interventions(
     results_by_key = {}
     eval_batch_size = config["evaluation_batch_size"]
 
-    # Outer progress bar for all targets
+    # Outer progress bar for all cells
     pbar = tqdm(
-        interchange_targets.items(),
+        grid.items(),
         desc="Training targets",
         disable=not logger.isEnabledFor(logging.DEBUG),
-        total=len(interchange_targets),
+        total=len(grid),
     )
 
-    def loss_fn(p, m, b, t, sp, sim):
-        return LM_loss_and_metric_fn(
-            p, m, b, t, metric, source_pipeline=sp, source_intervenable_model=sim
-        )
-
-    for key, target in pbar:
-        # Train this target (inner progress bar handled by training loop)
-        _run_training_loop(
+    for key, groups in pbar:
+        # Train this cell (inner progress bar handled by training loop)
+        trained_groups, feature_indices, _summary = _run_training_loop(
             pipeline=pipeline,
-            interchange_target=target,
-            counterfactual_dataset=labeled_train_dataset,  # type: ignore[arg-type]
+            groups=groups,
+            counterfactual_dataset=labeled_train_dataset,  # pyright: ignore[reportArgumentType]  # label_counterfactual_data returns plain dicts
             intervention_type=intervention_type,
             config=config,  # type: ignore[arg-type]
-            loss_and_metric_fn=loss_fn,
+            checker=metric,
             source_pipeline=source_pipeline,
         )
 
-        # Get feature indices
-        feature_indices = target.get_feature_indices()
-
         # Run interventions on train data
-        train_raw_results = {
+        train_results = {
             key: run_interchange_interventions(
                 pipeline=pipeline,
                 counterfactual_dataset=train_dataset,
-                interchange_target=target,
+                groups=trained_groups,
                 batch_size=eval_batch_size,
                 output_scores=False,
                 source_pipeline=source_pipeline,
@@ -196,7 +222,7 @@ def train_interventions(
 
         # Score train results
         train_eval = causal_score_intervention_outputs(
-            raw_results=train_raw_results,
+            results=train_results,
             dataset=train_dataset,
             causal_model=causal_model,
             target_variable_groups=[target_variable_group],
@@ -204,11 +230,11 @@ def train_interventions(
         )
 
         # Run interventions on test data
-        test_raw_results = {
+        test_results = {
             key: run_interchange_interventions(
                 pipeline=pipeline,
                 counterfactual_dataset=test_dataset,
-                interchange_target=target,
+                groups=trained_groups,
                 batch_size=eval_batch_size,
                 output_scores=False,
                 source_pipeline=source_pipeline,
@@ -217,7 +243,7 @@ def train_interventions(
 
         # Score test results
         test_eval = causal_score_intervention_outputs(
-            raw_results=test_raw_results,
+            results=test_results,
             dataset=test_dataset,
             causal_model=causal_model,
             target_variable_groups=[target_variable_group],
@@ -230,7 +256,7 @@ def train_interventions(
             "feature_indices": feature_indices,
             "train_eval": train_eval["results_by_key"][key],
             "test_eval": test_eval["results_by_key"][key],
-            "trained_target": target,  # For model saving
+            "trained_specs": trained_groups,  # For model saving
         }
 
     pbar.close()
@@ -262,7 +288,7 @@ def train_interventions(
         "target_variable_group": list(target_variable_group),
         "num_train_examples": len(train_dataset),
         "num_test_examples": len(test_dataset),
-        "num_targets": len(interchange_targets),
+        "num_targets": len(grid),
         "avg_train_score": float(avg_train),
         "avg_test_score": float(avg_test),
         "training_config": training_config,
@@ -293,105 +319,178 @@ def train_interventions(
 
 
 def _initialize_featurizers(
-    interchange_targets: Dict[Tuple[Any, ...], InterchangeTarget],
+    grid: Mapping[Tuple[Any, ...], Sequence[Sequence[SiteSpec]]],
     config: dict[str, Any],
-) -> None:
+) -> Dict[Tuple[Any, ...], list[list[SiteSpec]]]:
     """
-    Initialize featurizers on all units based on config.
+    Initialize featurizers on all specs based on config — functionally.
 
-    Skips units that already have a non-placeholder featurizer (id != "null"),
-    allowing pre-initialized featurizers (e.g., from PCA/SVD) to be preserved.
+    Returns a new grid: specs that already carry a non-placeholder featurizer
+    (id != "null") pass through unchanged, allowing pre-initialized
+    featurizers (e.g., from PCA/SVD) to be preserved; the rest get a fresh
+    trainable featurizer via ``with_featurizer`` (the caller's specs are
+    never mutated).
 
     For intervention_type="mask": Uses Featurizer with tie_masks
     For intervention_type="interchange": Uses SubspaceFeaturizer with n_features
     """
     intervention_type = config["intervention_type"]
 
-    for _key, target in interchange_targets.items():
-        for unit in target.flatten():
-            # Skip units with pre-initialized featurizers
-            if unit.featurizer.id != "null":
-                continue
+    def initialize(spec: SiteSpec) -> SiteSpec:
+        # Skip specs with pre-initialized featurizers
+        if spec.fsite.featurizer.id != "null":
+            return spec
 
-            unit_shape = unit.shape
-            if unit_shape is None:
-                raise ValueError(f"Unit {unit.id} has no shape defined")
-            if intervention_type == "mask":
-                tie_masks = config["featurizer_kwargs"]["tie_masks"]
-                unit.set_featurizer(
-                    Featurizer(
-                        n_features=unit_shape[0],
-                        tie_masks=tie_masks,
-                        id=f"mask_{unit.id}",
+        if spec.width is None:
+            raise ValueError(f"Unit {spec.key} has no width defined")
+        if intervention_type == "mask":
+            tie_masks = config["featurizer_kwargs"]["tie_masks"]
+            return spec.with_featurizer(
+                Featurizer(
+                    n_features=spec.width,
+                    tie_masks=tie_masks,
+                    id=f"mask_{spec.key}",
+                )
+            )
+        else:  # "interchange" (DAS or subspace tracing)
+            n_features = config["DAS"]["n_features"]
+            return spec.with_featurizer(
+                SubspaceFeaturizer(
+                    shape=(spec.width, n_features),
+                    trainable=True,
+                    id=f"DAS_{spec.key}",
+                )
+            )
+
+    return {
+        key: [[initialize(spec) for spec in group] for group in groups]
+        for key, groups in grid.items()
+    }
+
+
+def _collect_raw_sources(
+    pipeline: LMPipeline,
+    groups: Sequence[Sequence[SiteSpec]],
+    dataset: Sequence[CounterfactualExample],
+    batch_size: int,
+) -> dict[int, torch.Tensor]:
+    """Pre-collect every spec's RAW source activations over the dataset.
+
+    One early-stopped forward per (batch, counterfactual group) on
+    ``pipeline``'s model (the *source* pipeline under cross-model patching),
+    reading each spec's site through an identity :class:`FeaturizedSite` —
+    the training shapes (:func:`das_edit` / :func:`dbm_edit`) featurize the
+    raw source *live in the base trace*, so gradients reach the rotation
+    through the source path too.
+
+    Sources are constants of the optimization (the ED3
+    ``source_representations`` pattern): collected once here, sliced per
+    training batch. Returns ``{id(spec): (n_examples, k, d)}`` in dataset
+    order, offloaded to CPU (the package's collect convention — a
+    full-dataset pre-collect must not stay GPU-resident for the whole run);
+    ``batch_edits`` moves each batch's slice back to its site's device.
+    """
+    model = pipeline.model
+    chunks: dict[int, list[torch.Tensor]] = {
+        id(spec): [] for group in groups for spec in group
+    }
+    for start in range(0, len(dataset), batch_size):
+        batch = dataset[start : start + batch_size]
+        for g, group in enumerate(groups):
+            if not group:
+                continue
+            cf_traces = [ex["counterfactual_inputs"][g] for ex in batch]
+            cf_encoding = pipeline.load(cf_traces, return_offsets_mapping=True)
+            taps = []
+            for spec in group:
+                rows = resolve_spec_positions(
+                    spec, cf_traces, cf_encoding, is_original=False
+                )
+                raw_site = FeaturizedSite(spec.fsite.site)  # identity → raw
+                taps.append(
+                    (
+                        forward_key(raw_site.site, model),
+                        lambda m, s=raw_site, r=rows: s.read(m, r),
                     )
                 )
-            else:  # "interchange" (DAS or subspace tracing)
-                n_features = config["DAS"]["n_features"]
-                unit.set_featurizer(
-                    SubspaceFeaturizer(
-                        shape=(unit_shape[0], n_features),
-                        trainable=True,
-                        id=f"DAS_{unit.id}",
-                    )
+            with torch.no_grad():
+                values = collect_ordered(
+                    model, forward_inputs(cf_encoding), taps, offload=True
                 )
+            for spec, value in zip(group, values):
+                if value.dim() != 3:
+                    raise ValueError(
+                        f"unit {spec.key!r}: training requires every example to "
+                        f"select the same number of positions (got a ragged "
+                        f"read of shape {tuple(value.shape)})"
+                    )
+                chunks[id(spec)].append(value)
+    return {uid: torch.cat(rows, dim=0) for uid, rows in chunks.items()}
 
 
 def _run_training_loop(
-    pipeline: Pipeline,
-    interchange_target: InterchangeTarget,
-    counterfactual_dataset: list[CounterfactualExample],
+    pipeline: LMPipeline,
+    groups: Sequence[Sequence[SiteSpec]],
+    counterfactual_dataset: list[LabeledCounterfactualExample],
     intervention_type: str,
     config: dict[str, Any],
-    loss_and_metric_fn: Callable[..., tuple[Tensor, dict[str, Any], dict[str, Any]]],
-    source_pipeline: Pipeline | None = None,
-) -> str:
+    checker: Callable[[Dict[str, Any], Any], float | bool],
+    source_pipeline: LMPipeline | None = None,
+) -> tuple[list[list[SiteSpec]], dict[str, list[int] | None], str]:
     """
-    Train intervention models on a counterfactual dataset.
+    Train intervention parameters on a labeled counterfactual dataset.
 
-    This function implements the training loop for neural network interventions,
-    supporting both "interchange" and "mask" intervention types. It optimizes
-    intervention parameters while keeping the base model frozen.
+    The loop composes the ED3 toolkit (:mod:`causalab.neural.trainable`):
+    :func:`das_edit` / :func:`dbm_edit` build each batch's edits around the
+    specs' shared featurizer / :class:`MaskGate` modules, the label-concat
+    forward is :func:`traced_label_loss` under the pinned saved-logits grad
+    contract, and answer scoring is :func:`score_label_predictions` (MX1) —
+    this function owns only the orchestration around them: the LR scheduler,
+    early stopping, the DBM temperature/sparsity schedule, progress logging,
+    memory hygiene, and the feature-indices readout.
 
     Args:
         pipeline: Target pipeline where interventions are applied
-        interchange_target: InterchangeTarget containing model components to intervene on,
-                           where groups share counterfactual inputs
-        counterfactual_dataset: List of counterfactual examples
+        groups: Nested :class:`SiteSpec` groups to intervene on, where groups
+            share counterfactual inputs
+        counterfactual_dataset: Labeled counterfactual examples (each carries
+            the ``label`` the loss slice scores against)
         intervention_type: Type of intervention ("interchange" or "mask")
         config: Configuration parameters including:
-            - batch_size: Number of examples per batch
+            - train_batch_size: Number of examples per batch
             - training_epoch: Maximum number of training epochs
             - init_lr: Initial learning rate
-            - regularization_coefficient: Weight for sparsity regularization (mask only)
-            - log_dir: Directory for TensorBoard logs
-            - temperature_schedule: Start and end temperature for mask annealing
-            - temperature_annealing_fraction: Fraction of training steps to anneal
+            - masking.regularization_coefficient: Weight for sparsity regularization (mask only)
+            - masking.temperature_schedule: Start and end temperature for mask annealing
+            - masking.temperature_annealing_fraction: Fraction of training steps to anneal
             - patience: Epochs without improvement before early stopping
             - scheduler_type: Learning rate scheduler type
             - memory_cleanup_freq: Batch frequency for memory cleanup
             - shuffle: Whether to shuffle data
-        loss_and_metric_fn: Function computing loss and metrics for a batch
-                           with signature (pipeline, model, examples, units, source_pipeline) ->
-                           (loss, metrics_dict, logging_info)
+        checker: Answer-scoring authority for the in-loop accuracy metric,
+            ``(neural_output, label) -> bool | float`` (a task checker via
+            ``as_label_checker``)
         source_pipeline: If provided, collect activations from this pipeline instead
             of the target pipeline during training. Enables cross-model patching.
 
     Returns:
-        str: Summary string with final metrics
-    """
-    # ----- Model Initialization ----- #
-    intervenable_model = prepare_intervenable_model(
-        pipeline, interchange_target, intervention_type=intervention_type
-    )
-    intervenable_model.disable_model_gradients()
-    intervenable_model.eval()
+        ``(trained_groups, feature_indices, summary)``:
 
-    # Create source intervenable model if doing cross-model patching
-    source_intervenable_model = None
-    if source_pipeline is not None:
-        source_intervenable_model = prepare_intervenable_model(
-            source_pipeline, interchange_target, intervention_type="collect"
-        )
+        - ``trained_groups`` — the trained specs, nested like ``groups``. For
+          DAS these are the input specs (their shared featurizer modules now
+          carry the trained rotation); for DBM each spec gets its
+          hard-threshold selection via ``with_feature_ids``, and a mask that
+          switched *every* feature off drops its spec entirely (the
+          no-op-by-omission contract — an empty selection is not
+          constructible as a spec).
+        - ``feature_indices`` — ``{spec.key: indices}`` readout, recording
+          the raw selection for every spec (including ``[]`` for all-off DBM
+          masks and ``None`` for all-features).
+        - ``summary`` — human-readable final-metrics string.
+    """
+    model = pipeline.model
+    freeze_model_parameters(model)
+    sites = [spec for group in groups for spec in group]
 
     # ----- Data Preparation ----- #
     train_batch_size = config["train_batch_size"]
@@ -410,13 +509,61 @@ def _run_training_loop(
     patience_counter = 0
     early_stopping_enabled = patience is not None
 
-    # ----- Optimizer Configuration ----- #
-    optimizer_params = []
-    for k, v in intervenable_model.interventions.items():
-        optimizer_params += list(v.parameters())
+    # ----- Trainable state: gates (DBM) + the specs' featurizers (DAS) ----- #
+    gates: dict[int, MaskGate] = {}
+    if intervention_type == "mask":
+        tie_masks = config["featurizer_kwargs"]["tie_masks"]
+        for spec in sites:
+            gates[id(spec)] = MaskGate(
+                spec.fsite.featurizer.n_features, tie=tie_masks
+            ).train()
 
+    # ----- Pre-collected raw sources (constants of the optimization) ----- #
+    raw_sources = _collect_raw_sources(
+        source_pipeline if source_pipeline is not None else pipeline,
+        groups,
+        counterfactual_dataset,
+        batch_size=train_batch_size,
+    )
+
+    def batch_edits(
+        example_indices: list[int],
+    ) -> tuple[tuple[Edit, ...], dict[str, Any]]:
+        """One batch's edits: tokenize the base side, resolve each spec's
+        positions in this batch's padded frame, slice its pre-collected raw
+        source rows, and wrap them in the training shape. The state that
+        trains lives in the shared featurizer/gate modules, not in the frozen
+        Edit values."""
+        base_traces = [counterfactual_dataset[i]["input"] for i in example_indices]
+        base_encoding = pipeline.load(base_traces, return_offsets_mapping=True)
+        edits = []
+        for spec in sites:
+            fsite = spec.fsite
+            rows = resolve_spec_positions(
+                spec, base_traces, base_encoding, is_original=True
+            )
+            raw = raw_sources[id(spec)][example_indices].to(site_device(model, fsite))
+            if intervention_type == "mask":
+                edits.append(dbm_edit(fsite, raw, gates[id(spec)], positions=rows))
+            else:
+                edits.append(das_edit(fsite, raw, positions=rows))
+        return tuple(edits), base_encoding
+
+    # ----- Optimizer Configuration ----- #
+    params: dict[int, torch.nn.Parameter] = {}
+    for spec in sites:
+        for module in (
+            spec.fsite.featurizer.featurizer,
+            spec.fsite.featurizer.inverse_featurizer,
+        ):
+            for p in module.parameters():
+                if p.requires_grad:
+                    params[id(p)] = p
+    for gate in gates.values():
+        for p in gate.parameters():
+            params[id(p)] = p
     optimizer = torch.optim.AdamW(
-        optimizer_params, lr=config["init_lr"], weight_decay=0
+        list(params.values()), lr=config["init_lr"], weight_decay=0
     )
 
     scheduler = transformers.get_scheduler(
@@ -429,43 +576,25 @@ def _run_training_loop(
     current_step = 0
 
     # ----- Temperature Scheduling for Mask Interventions ----- #
-    temperature_schedule = None
-    interventions = None
+    temps = None
+    mask_numel = 0
     if intervention_type == "mask":
         temperature_start, temperature_end = config["masking"]["temperature_schedule"]
-        temperature_annealing_fraction = config["masking"][
-            "temperature_annealing_fraction"
-        ]
-
-        # Calculate number of steps for annealing
-        total_steps = num_epoch * num_batches
-        annealing_steps = int(total_steps * temperature_annealing_fraction)
-
-        # Create schedule: anneal for first fraction of steps, then stay constant
-        annealing_schedule = torch.linspace(
-            temperature_start, temperature_end, annealing_steps + 1
+        temps = temperature_schedule(
+            temperature_start,
+            temperature_end,
+            num_epoch * num_batches,
+            config["masking"]["temperature_annealing_fraction"],
         )
-        constant_schedule = torch.full(
-            (total_steps - annealing_steps,), temperature_end
-        )
-        temperature_schedule = torch.cat([annealing_schedule, constant_schedule])
-        temperature_schedule = temperature_schedule.to(pipeline.model.dtype).to(
-            pipeline.model.device
-        )
-
-        # Set initial temperature for all mask interventions
-        interventions = intervenable_model.interventions
-        assert interventions is not None
-        for k, v in interventions.items():
-            # pyvene's intervention dict values are dynamically typed
-            init_intervention = v[0] if isinstance(v, tuple) else v
-            init_intervention.set_temperature(temperature_schedule[current_step])  # pyright: ignore[reportCallIssue]
+        mask_numel = sum(g.mask.numel() for g in gates.values())
 
     # ----- Training Loop ----- #
+    placed = False
     postfix_dict: dict[str, str] = {}  # Initialize to avoid unbound error
+    site_keys_desc = ", ".join(spec.key for spec in sites)
     train_iterator = tqdm(
         range(0, int(num_epoch)),
-        desc=f"Training {str(interchange_target)[:100]}...",
+        desc=f"Training [{site_keys_desc}]"[:100] + "...",
         leave=False,
     )
     for epoch in train_iterator:
@@ -483,45 +612,46 @@ def _run_training_loop(
             leave=False,
         )
         for step, start in enumerate(epoch_iterator):
-            examples = [
-                counterfactual_dataset[i]
-                for i in indices[start : start + train_batch_size]
-            ]
+            example_indices = indices[start : start + train_batch_size]
+            examples = [counterfactual_dataset[i] for i in example_indices]
 
-            # Run training step
-            loss, eval_metrics, _logging_info = loss_and_metric_fn(
-                pipeline,
-                intervenable_model,
-                examples,
-                interchange_target,
-                source_pipeline,
-                source_intervenable_model,
+            edits, base_encoding = batch_edits(example_indices)
+            if not placed:
+                place_edit_parameters(model, edits)
+                placed = True
+
+            # Anneal the gates BEFORE the forward (the train_edits step
+            # order): the loss at step s uses temperature s.
+            if temps is not None:
+                for gate in gates.values():
+                    gate.set_temperature(temps[current_step])
+
+            labels = [ex["label"] for ex in examples]
+            label_strs = [
+                label["string"] if isinstance(label, dict) else label
+                for label in labels
+            ]
+            joint, label_ids = concat_label_inputs(pipeline, base_encoding, label_strs)
+            loss, pred_ids = traced_label_loss(
+                model, joint, label_ids, edits, pipeline.tokenizer.pad_token_id
             )
 
-            # Add sparsity loss for mask interventions
-            if intervention_type == "mask":
-                assert temperature_schedule is not None
-                assert interventions is not None
-                temp = temperature_schedule[current_step]
+            # Add sparsity loss for mask interventions. Normalize by total
+            # mask elements so regularization_coefficient has consistent
+            # meaning regardless of number of features/units.
+            if gates and regularization_coefficient and mask_numel:
+                total_sparsity = sum(
+                    g.sparsity_loss().to(loss.device) for g in gates.values()
+                )
+                loss = loss + regularization_coefficient * (total_sparsity / mask_numel)
 
-                # Collect sparsity losses and mask sizes for normalization
-                total_sparsity: Tensor = torch.tensor(0.0, device=loss.device)
-                total_mask_elements = 0
-                for k, v in interventions.items():
-                    # pyvene's intervention dict values are dynamically typed
-                    mask_intervention = v[0] if isinstance(v, tuple) else v
-                    total_sparsity = (
-                        total_sparsity + mask_intervention.get_sparsity_loss()  # pyright: ignore[reportCallIssue]
-                    )
-                    total_mask_elements += mask_intervention.mask.numel()  # pyright: ignore[reportAttributeAccessIssue, reportCallIssue]
-                    mask_intervention.set_temperature(temp)  # pyright: ignore[reportCallIssue]
-
-                # Normalize by total mask elements so regularization_coefficient
-                # has consistent meaning regardless of number of features/units
-                if total_mask_elements > 0:
-                    loss = loss + regularization_coefficient * (
-                        total_sparsity / total_mask_elements
-                    )
+            # In-loop answer scoring — the task checker stays the single
+            # match authority (score_label_predictions, MX1 #408).
+            label_scores = score_label_predictions(pipeline, pred_ids, labels, checker)
+            eval_metrics = {
+                "accuracy": label_scores["accuracy"],
+                "token_accuracy": label_scores["accuracy"],
+            }
 
             # Update statistics
             aggregated_stats["loss"].append(loss.item())
@@ -540,7 +670,7 @@ def _run_training_loop(
             # but we only use schedulers that don't require it
             scheduler.step()  # pyright: ignore[reportCallIssue]
             current_step += 1
-            intervenable_model.set_zero_grad()
+            optimizer.zero_grad()
 
             # Periodic memory cleanup
             if step % memory_cleanup_freq == 0 and torch.cuda.is_available():
@@ -575,48 +705,57 @@ def _run_training_loop(
                 if patience_counter >= patience:
                     break
 
-    # ----- Feature Selection for Mask Interventions ----- #
+    # ----- Feature Selection for Mask Interventions (functional readout) ----- #
+    feature_indices: dict[str, list[int] | None] = {}
     if intervention_type == "mask":
-        # Flatten InterchangeTarget to get all model units
-        model_units = interchange_target.flatten()
-        assert intervenable_model.interventions is not None
+        # Hard-threshold readout: tied gates keep the legacy convention
+        # (None = all features when on, [] when off).
+        selected: dict[int, list[int] | None] = {
+            id(spec): selected_feature_ids(gates[id(spec)]) for spec in sites
+        }
+        feature_indices = {spec.key: selected[id(spec)] for spec in sites}
+        trained_groups: list[list[SiteSpec]] = []
+        for group in groups:
+            trained_group: list[SiteSpec] = []
+            for spec in group:
+                ids = selected[id(spec)]
+                if ids is not None and len(ids) == 0:
+                    # A mask that switched EVERY feature off is a no-op edit.
+                    # An empty selection is not constructible as a spec
+                    # (FeaturizedSite refuses empty feature_ids), so the
+                    # trained flow drops the spec — the dataset layer's
+                    # no-op-by-omission contract. The empty selection stays
+                    # recorded in feature_indices above.
+                    continue
+                trained_group.append(spec.with_feature_ids(ids))
+            trained_groups.append(trained_group)
+    else:
+        feature_indices = {
+            spec.key: (
+                list(spec.fsite.feature_ids)
+                if spec.fsite.feature_ids is not None
+                else None
+            )
+            for spec in sites
+        }
+        trained_groups = [list(group) for group in groups]
 
-        for kv, model_unit in zip(
-            intervenable_model.interventions.items(),
-            model_units,
-        ):
-            k, v = kv
-            # pyvene's intervention dict values are dynamically typed
-            intervention = v[0] if isinstance(v, tuple) else v
-
-            if config["featurizer_kwargs"]["tie_masks"]:
-                # If masks are tied, use the average mask across all units
-                if torch.sigmoid(intervention.mask[0]) > 0.5:  # pyright: ignore[reportIndexIssue,reportArgumentType]
-                    indices = None
-                else:
-                    indices = []
-            else:
-                # Get binary mask and indices
-                mask_binary = (torch.sigmoid(intervention.mask) > 0.5).float().cpu()  # pyright: ignore[reportArgumentType]
-                indices = torch.nonzero(mask_binary).numpy().flatten().tolist()
-
-            # Update model unit
-            model_unit.set_feature_indices(indices)
-
-    # ----- Cleanup ----- #
-    delete_intervenable_model(intervenable_model)
-    if source_intervenable_model is not None:
-        delete_intervenable_model(source_intervenable_model)
-
-    summary = f"Trained intervention for {str(interchange_target)[:200]}"
+    summary = f"Trained intervention for [{site_keys_desc}]"[:200]
     summary += "\nFinal metrics: " + " ".join(
         [f"{k}: {v}" for k, v in postfix_dict.items()]
     )
-    return summary
+    return trained_groups, feature_indices, summary
 
 
 def save_train_results(result: Dict[str, Any], output_dir: str) -> Dict[str, str]:
-    """Save train_interventions results to disk."""
+    """Save train_interventions results to disk.
+
+    ``results_by_key[key]["trained_specs"]`` holds nested :class:`SiteSpec`
+    groups; ``causalab.io.artifacts.save_training_artifacts`` writes each
+    cell's ``models/`` bundle from them via
+    ``causalab.neural.specs.save_site_specs`` (WU5, #507). Everything else
+    (feature_indices, evals, metadata) saves as before.
+    """
     results_by_key = result["results_by_key"]
     metadata = result["metadata"]
     output_paths: Dict[str, str] = {}

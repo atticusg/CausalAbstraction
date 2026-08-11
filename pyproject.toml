@@ -14,7 +14,6 @@ dependencies = [
     "matplotlib",
     "pandas",
     "numpy",
-    "pyvene",
     "scikit-learn",
     "ipywidgets",
     "jupyterlab",
@@ -27,7 +26,8 @@ dependencies = [
     "dash-cytoscape",
     "jupyter-dash",
     "rich",
-    "nnsight>=0.5.9",
+    "nnsight>=0.6",
+    "nnterp>=1.3",
     "ipykernel>=7.0.1",
     "umap-learn>=0.5.0",
     "hydra-core>=1.3.0",
@@ -38,7 +38,12 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-pyvene = { git = "https://github.com/stanfordnlp/pyvene.git", branch = "main" }
+# nnterp packaging fix merged upstream (ndif-team/nnterp#49): released wheels
+# (<= 1.3.0) omit nnterp/data/ (package-data globs tests/* but not data/*),
+# which crashes `python -m nnterp run_tests` on import. This pins the upstream
+# merge commit while awaiting a PyPI release that ships the fix; dropping this
+# git source is then a routine dep bump.
+nnterp = { git = "https://github.com/ndif-team/nnterp", rev = "b4a31274692f986e493ac5d20ba20a4ec8640955" }
 
 [tool.pytest.ini_options]
 markers = [

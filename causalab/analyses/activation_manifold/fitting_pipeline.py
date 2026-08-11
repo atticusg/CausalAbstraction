@@ -32,7 +32,7 @@ import logging
 import os
 
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 import numpy as np
 import torch
@@ -49,7 +49,7 @@ from causalab.methods.spline.train import (
 )
 from causalab.methods.spline.featurizer import ManifoldFeaturizer
 from causalab.methods.standardize import StandardizeFeaturizer
-from causalab.neural.units import InterchangeTarget
+from causalab.neural.specs import SiteSpec, save_site_specs
 from causalab.neural.pipeline import LMPipeline
 
 from causalab.analyses.activation_manifold.utils import (
@@ -70,7 +70,7 @@ class ManifoldFittingConfig:
 
     # Required
     pipeline: LMPipeline = field(repr=False)
-    interchange_target: InterchangeTarget = field(repr=False)
+    sites: Sequence[Sequence[SiteSpec]] = field(repr=False)
     features: Tensor = field(repr=False)
     train_dataset: list | str = field(repr=False)
     causal_model: CausalModel = field(repr=False)
@@ -224,11 +224,11 @@ def run_manifold_fitting_pipeline(
         )
         k = new_k
 
-    # Validate target
-    units = config.interchange_target.flatten()
-    if len(units) != 1:
-        raise ValueError(f"Expected single unit in target, got {len(units)}")
-    unit = units[0]
+    # Validate sites (single-spec flow)
+    specs = [spec for group in config.sites for spec in group]
+    if len(specs) != 1:
+        raise ValueError(f"Expected a single site spec, got {len(specs)}")
+    spec = specs[0]
 
     logger.info(
         "Starting manifold fitting pipeline: k=%d, d=%d, method=%s",
@@ -284,7 +284,7 @@ def run_manifold_fitting_pipeline(
         )
 
     manifold_result = train_spline_manifold(
-        interchange_target=config.interchange_target,
+        spec,
         dataset_path=train_dataset,
         pipeline=config.pipeline,
         intrinsic_dim=d,
@@ -324,16 +324,26 @@ def run_manifold_fitting_pipeline(
 
     standardize = StandardizeFeaturizer(mean, std)
     manifold_feat = ManifoldFeaturizer(manifold_obj, n_features=k)
-    composed = unit.featurizer >> standardize >> manifold_feat
-    unit.set_featurizer(composed)
+    composed = spec.fsite.featurizer >> standardize >> manifold_feat
+    # Functional attach: downstream steps (and the returned result) use the
+    # updated spec; the caller's input specs are unchanged.
+    spec = spec.with_featurizer(composed)
 
-    logger.info("Composed featurizer: %s", type(unit.featurizer).__name__)
+    logger.info("Composed featurizer: %s", type(spec.fsite.featurizer).__name__)
 
-    # Persist the composed featurizer so evaluate can reload it
+    # Persist the composed featurizer so evaluate can reload it (WU1 spec
+    # bundle; the bundle dir is keyed by (layer, position name), both read
+    # structurally from the spec).
+    pos_id = getattr(spec.positions, "id", None)
+    if pos_id is None:
+        raise ValueError(
+            f"spec {spec.key!r} has no named position resolver; the manifold "
+            "featurizer bundle is keyed by (layer, position name)."
+        )
     models_dir = os.path.join(config.output_dir, "models")
-    key_str = f"{unit.layer}__{unit.get_index_id()}"
+    key_str = f"{spec.fsite.site.layer}__{pos_id}"
     save_dir = os.path.join(models_dir, key_str)
-    config.interchange_target.save(save_dir)
+    save_site_specs([spec], save_dir)
     logger.info("Step 2 complete (%.1fs)", _time.time() - _t1)
 
     # =====================================================================
@@ -344,6 +354,7 @@ def run_manifold_fitting_pipeline(
 
     ranges = _compute_intrinsic_ranges(features, manifold_obj, mean, std)
     result["ranges"] = ranges
+    result["spec"] = spec
 
     logger.info("Building steering grid...")
     grid = make_intrinsic_steering_grid(
@@ -440,10 +451,10 @@ def run_manifold_fitting_pipeline(
         )
 
         steered_probs_fvs = collect_grid_distributions(
-            pipeline=config.pipeline,
-            grid_points=control_points,
-            interchange_target=config.interchange_target,
-            filtered_samples=train_dataset,
+            config.pipeline,
+            control_points,
+            [[spec]],
+            train_dataset,
             var_indices=config.score_token_ids,
             batch_size=config.batch_size,
             full_vocab_softmax=True,

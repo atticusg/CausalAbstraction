@@ -20,7 +20,7 @@ from causalab.analyses.path_patching.main import (
     _resolve_token_position,
 )
 from causalab.methods.path_patching.targets import OUTPUT, ReceiverSpec
-from causalab.neural.activations.targets import build_attention_head_targets
+from causalab.neural.activations.site_grids import build_attention_head_sites
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_positions import TokenPosition, get_last_token_index
 
@@ -46,8 +46,8 @@ def _sender_grid(pipeline: LMPipeline):
     pos = TokenPosition(
         lambda inp: get_last_token_index(inp, pipeline), pipeline, id="last_token"
     )
-    targets = build_attention_head_targets(pipeline, [0, 1], [0, 1], pos)
-    return {key: t.flatten()[0] for key, t in targets.items()}, pos
+    grid = build_attention_head_sites(pipeline, [0, 1], [0, 1], pos)
+    return {key: groups[0][0] for key, groups in grid.items()}, pos
 
 
 class TestBuildReceiverSpec:

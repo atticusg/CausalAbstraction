@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import gc
 import logging
 import os
@@ -8,8 +9,8 @@ from typing import Any, Dict, List
 
 import torch
 from torch import Tensor
-from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel
-from pyvene import IntervenableModel  # type: ignore[import-untyped]
+from transformers import AutoTokenizer, PreTrainedModel
+from nnterp import StandardizedTransformer
 from causalab.causal.counterfactual_dataset import CounterfactualExample
 from causalab.causal.trace import CausalTrace
 from tqdm import tqdm
@@ -19,9 +20,15 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "Pipeline",
     "LMPipeline",
+    "GenerationResult",
+    "compress_scores_top_k",
+    "UnsupportedArchitectureError",
+    "assert_architecture_supported",
+    "device_for_layer",
     "resolve_device",
     "left_pad_position_ids",
     "ensure_position_ids",
+    "right_pad_sequences",
 ]
 
 
@@ -51,19 +58,20 @@ def ensure_position_ids(inputs: dict[str, Tensor]) -> dict[str, Tensor]:
     Rotary models are immune (RoPE is relative; a uniform left-pad shift cancels),
     so this is a no-op for them.
 
-    For plain (non-generate) forwards, call this directly. The two generate paths
-    handle it as follows (see ``LMPipeline.intervenable_generate``):
+    For plain (non-generate) forwards, call this directly. The generate paths
+    handle it as follows (see ``dataset.run_intervened_generation`` and the
+    engine's ``plan._check_generate_inputs``):
 
-    * **Multi-step** ``generate`` / ``intervenable_generate`` number their own
-      per-step ``position_ids``; feeding them a prompt-shaped ``position_ids`` is
-      wrong across decode steps — measured to shift GPT-2 multi-step logits by ~0.26
-      — so they are left alone. This is also why ``load`` does not emit
-      ``position_ids`` by default (its output feeds both paths).
-    * **Single-step** ``intervenable_generate`` (``max_new_tokens == 1`` — the
-      path-patching case) has only the prompt prefill forward, so a prompt-shaped
-      ``position_ids`` is exactly correct; ``intervenable_generate`` applies this to
-      its base (and, always, to its source-collection forwards) internally. Callers
-      of that path need not wrap inputs themselves.
+    * **Multi-step** generation numbers its own per-step ``position_ids``;
+      feeding it a prompt-shaped ``position_ids`` is wrong across decode steps
+      — measured to shift GPT-2 multi-step logits by ~0.26 — so it is left
+      alone. This is also why ``load`` does not emit ``position_ids`` by
+      default (its output feeds both paths).
+    * **Single-step** generation (``max_new_tokens == 1`` — the path-patching
+      case) has only the prompt prefill forward, so a prompt-shaped
+      ``position_ids`` is exactly correct; the engine's generate path applies
+      this to its base (and, always, to its source-collection forwards)
+      internally. Callers of that path need not wrap inputs themselves.
 
     No-op if ``position_ids`` is already present (e.g. the pipeline was built with
     ``position_ids=True``) or if there is no ``attention_mask`` to derive from.
@@ -75,6 +83,195 @@ def ensure_position_ids(inputs: dict[str, Tensor]) -> dict[str, Tensor]:
         **inputs,
         "position_ids": left_pad_position_ids(inputs["attention_mask"]),
     }
+
+
+# ---------------------------------------------------------------------------
+# Generated-sequence width — single source of truth for the fixed-width
+# contract on generated-token blocks
+# ---------------------------------------------------------------------------
+
+
+def right_pad_sequences(sequences: Tensor, width: int, pad_token_id: int) -> Tensor:
+    """Pin a generated-tokens block ``(batch, n_generated)`` to a fixed
+    ``(batch, width)`` shape.
+
+    Right-pads with ``pad_token_id`` (= EOS under the pipeline convention,
+    dropped on decode) when early EOS ended generation short of the budget,
+    and truncates when a run generated past it — so downstream consumers that
+    concatenate sequences across batches always see the same width.
+    Extracted from :meth:`LMPipeline._generated_tokens` (EU4, #485) so the
+    engine's plain ``[:, prompt_len:]`` slice
+    (:attr:`causalab.neural.plan.PlanResult.sequences`) gets the same
+    stable-shape contract on the dataset generation path.
+    """
+    deficit = width - sequences.shape[1]
+    if deficit > 0:
+        pad_block = sequences.new_full((sequences.shape[0], deficit), pad_token_id)
+        return torch.cat([sequences, pad_block], dim=1)
+    if deficit < 0:
+        return sequences[:, :width]
+    return sequences
+
+
+# ---------------------------------------------------------------------------
+# GenerationResult — THE generation output shape (EU5a, #486)
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class GenerationResult:
+    """One flat result per generation run — the single output shape every
+    generation producer emits (EU5a, #486).
+
+    Replaces the three divergent legacy shapes (``LMPipeline.generate``'s
+    ``{"scores", "sequences", "string"}`` dict, ``run_intervened_generation``'s
+    batch-nested lists, and the per-example dicts consumers built from them) —
+    and with them the ``['string']`` vs ``[0]['string']`` vs ``['string'][0]``
+    access-pattern divergence. Producers flatten across their internal batches;
+    the batch split is an execution detail and never appears in the result.
+
+    Attributes:
+        sequences: ``(n_examples, max_new_tokens)`` generated tokens only
+            (prompt stripped), CPU, right-padded with the pipeline's
+            ``pad_token_id`` (:func:`right_pad_sequences`); the width is the
+            **pipeline's** ``max_new_tokens`` budget even under a per-call
+            ``max_new_tokens`` override — the deliberate legacy width contract
+            (see :meth:`LMPipeline._generated_tokens`).
+        strings: ``pipeline.dump(sequences)`` per example — ALWAYS a list of
+            ``n_examples`` strings, including for a single example (unlike
+            ``LMPipeline.dump``'s bare-``str``-for-one collapse).
+        scores: per-step full-vocabulary logits ``(n_examples, vocab)``, CPU —
+            one entry per actually generated step (early EOS can stop short of
+            the budget, so ``len(scores)`` may be < ``sequences.shape[1]``).
+            ``None`` when scores were not requested. Exclusive with
+            ``scores_top_k``.
+        scores_top_k: memory-compressed per-step top-k structures
+            (:func:`compress_scores_top_k`); ``None`` unless compressed.
+            Exclusive with ``scores``.
+    """
+
+    sequences: torch.Tensor
+    strings: list[str]
+    scores: list[torch.Tensor] | None = None
+    scores_top_k: list[dict[str, Any]] | None = None
+
+    def __post_init__(self) -> None:
+        if self.scores is not None and self.scores_top_k is not None:
+            raise ValueError(
+                "GenerationResult carries either full-vocabulary scores or "
+                "top-k compressed scores, never both — compress_scores_top_k "
+                "replaces scores with scores_top_k."
+            )
+
+    def to_raw_results(self) -> dict[str, list[Any]]:
+        """The legacy ``raw_results`` dict — ONE synthetic batch.
+
+        The io/artifact boundary consumes the pre-EU5a batch-nested contract
+        (``{"sequences": [per-batch (b, W)], "string": [per-batch list],
+        "scores": [per-batch per-step]}``); this adapter wraps the flat
+        result as a single synthetic batch of that schema — exactly what the
+        legacy path produced at ``batch_size >= n_examples`` — so the
+        stored-artifact schema (``io.artifacts.save_intervention_results``,
+        ``raw_results.json``) is unchanged. Since EU5b (#487) this view is
+        io-only: the scorers (``score_intervention_outputs``) consume the
+        flat :class:`GenerationResult` directly. ``scores`` carries whichever
+        score form the result holds (full-vocab or top-k) and is omitted when
+        neither was requested, matching the legacy key set.
+        """
+        raw: dict[str, list[Any]] = {
+            "sequences": [self.sequences],
+            "string": [self.strings],
+        }
+        if self.scores is not None:
+            raw["scores"] = [self.scores]
+        elif self.scores_top_k is not None:
+            raw["scores"] = [self.scores_top_k]
+        return raw
+
+
+def compress_scores_top_k(
+    result: GenerationResult, pipeline: "Pipeline", k: int
+) -> GenerationResult:
+    """Compress a result's full-vocabulary ``scores`` to per-step top-k.
+
+    The memory-efficiency tail the wrappers apply for ``output_scores=int``
+    (replaces the retired legacy ``postprocess_batch_outputs`` /
+    ``convert_to_top_k`` passes, operating on the flat shape): each per-step
+    ``(n_examples, vocab)`` tensor becomes ``{"top_k_logits": (n_examples,
+    k), "top_k_indices": (n_examples, k), "top_k_tokens":
+    list[n_examples][k]}`` — the exact structure the legacy pass produced,
+    so stored top-k artifacts are value-identical.
+
+    Returns a new :class:`GenerationResult` with ``scores_top_k`` set and
+    ``scores`` dropped (the two are exclusive). Requires ``result.scores``;
+    a scores-less result has nothing to compress and is refused loudly.
+    """
+    if k <= 0:
+        raise ValueError(f"k must be positive, got {k}")
+    if result.scores is None:
+        raise ValueError(
+            "compress_scores_top_k needs full-vocabulary scores; this result "
+            "carries none (generate with output_scores=True, and compress "
+            "at most once)."
+        )
+    top_k_scores: list[dict[str, Any]] = []
+    for step_logits in result.scores:
+        # step_logits: (n_examples, vocab)
+        n_examples, vocab_size = step_logits.shape
+        k_actual = min(k, vocab_size)
+        top_k_values, top_k_indices = torch.topk(step_logits, k=k_actual, dim=1)
+        flat_indices = top_k_indices.flatten().tolist()
+        flat_tokens = pipeline.tokenizer.batch_decode(
+            [[idx] for idx in flat_indices], skip_special_tokens=False
+        )
+        top_k_tokens = [
+            flat_tokens[i * k_actual : (i + 1) * k_actual] for i in range(n_examples)
+        ]
+        top_k_scores.append(
+            {
+                "top_k_logits": top_k_values,
+                "top_k_indices": top_k_indices,
+                "top_k_tokens": top_k_tokens,
+            }
+        )
+    return dataclasses.replace(result, scores=None, scores_top_k=top_k_scores)
+
+
+# ---------------------------------------------------------------------------
+# Device resolution for sharded (hf_device_map) models
+# ---------------------------------------------------------------------------
+
+
+def _device_for_key(key: str, hf_device_map: dict) -> str:
+    """Resolve the GPU device for a dotted module path.
+
+    Walks up the dotted path (``"model.layers.77"`` → ``"model.layers"`` → …)
+    until it finds a match in ``hf_device_map``.
+    """
+    path = key.split("#")[0]
+    while path:
+        if path in hf_device_map:
+            return hf_device_map[path]
+        path = path.rsplit(".", 1)[0] if "." in path else ""
+    return next(iter(hf_device_map.values()))
+
+
+def device_for_layer(pipeline: "Pipeline", layer: int) -> torch.device:
+    """Resolve the device a given transformer layer lives on.
+
+    For models loaded with ``device_map="auto"``, different layers can live
+    on different GPUs. Tensors that participate in operations at that layer
+    (steering vectors, featurizers, etc.) must be on the same device. For
+    single-device models this returns ``model.device``.
+    """
+    if hasattr(pipeline.hf_model, "hf_device_map"):
+        device_map = pipeline.hf_model.hf_device_map
+        key = f"model.layers.{layer}"
+        if key in device_map:
+            return torch.device(device_map[key])
+        # Fallback: look up nearest ancestor in the map
+        return torch.device(_device_for_key(key, device_map))
+    return pipeline.hf_model.device
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +311,77 @@ def _patch_extra_special_tokens() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Architecture preflight — fail fast, with the actual cause, on model types
+# the installed transformers cannot load
+# ---------------------------------------------------------------------------
+
+
+class UnsupportedArchitectureError(ValueError):
+    """A checkpoint's ``model_type`` is unknown to the installed transformers.
+
+    Subclasses ``ValueError`` so :func:`causalab.neural.validate.validate_model_load`
+    reports it as a failed gate verdict rather than a crash.
+    """
+
+
+def assert_architecture_supported(model_name: str, token: str | None = None) -> None:
+    """Fail fast when the installed transformers cannot load ``model_name``.
+
+    A checkpoint whose ``model_type`` postdates the pinned transformers (e.g.
+    ``gemma4`` under transformers 4.57.x) otherwise dies deep inside
+    ``AutoConfig`` with a generic "update Transformers" message that names
+    neither the architecture gap nor the version the checkpoint needs. This
+    preflight reads the checkpoint's **raw** config dict — via
+    ``PretrainedConfig.get_config_dict``, which unlike ``AutoConfig`` works for
+    model types the installed transformers doesn't know — and checks its
+    ``model_type`` against transformers' ``CONFIG_MAPPING``.
+
+    Deliberately best-effort and out of the way:
+
+    * unreadable config (offline without cache, gated repo, malformed JSON) →
+      return and let the normal load path fail as before;
+    * no ``model_type`` in the config → return (nothing to check);
+    * repos shipping their own code (``auto_map`` present) → return; they
+      resolve their classes via ``trust_remote_code``, not ``CONFIG_MAPPING``.
+
+    Raises:
+        UnsupportedArchitectureError: naming the checkpoint, its ``model_type``,
+            the installed transformers version, and (when the config records it)
+            the transformers version the checkpoint was saved with.
+    """
+    from transformers import PretrainedConfig
+
+    try:
+        config_dict, _ = PretrainedConfig.get_config_dict(model_name, token=token)
+    except Exception as exc:
+        logger.debug("architecture preflight: no config for %s (%s)", model_name, exc)
+        return
+    model_type = config_dict.get("model_type")
+    if not isinstance(model_type, str) or not model_type:
+        return
+    if "auto_map" in config_dict:
+        return
+
+    import transformers
+    from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+
+    if model_type in CONFIG_MAPPING:
+        return
+    saved_with = config_dict.get("transformers_version")
+    saved_with_note = (
+        f" (the checkpoint was saved with transformers {saved_with})"
+        if saved_with
+        else ""
+    )
+    raise UnsupportedArchitectureError(
+        f"{model_name!r} has model_type {model_type!r}, which the installed "
+        f"transformers {transformers.__version__} does not know{saved_with_note}. "
+        f"Loading this architecture requires a newer transformers release than "
+        f"the installed/pinned one."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Helper utils
 # ---------------------------------------------------------------------------
 
@@ -149,6 +417,66 @@ def _infer_device_and_dtype(
     return requested_device, requested_dtype
 
 
+#: safetensors header dtype strings → torch floating dtypes (the dtypes HF's
+#: ``dtype="auto"`` weights-fallback can resolve to; integer/quantized entries
+#: are deliberately absent — they never decide a model's compute dtype).
+_SAFETENSORS_FLOAT_DTYPES: dict[str, torch.dtype] = {
+    "F64": torch.float64,
+    "F32": torch.float32,
+    "F16": torch.float16,
+    "BF16": torch.bfloat16,
+}
+
+
+def _checkpoint_weights_dtype(
+    name: str, token: str | None = None
+) -> torch.dtype | None:
+    """The dominant floating dtype of a checkpoint's safetensors weights.
+
+    This is HF ``dtype="auto"``'s *second* resolution step — used when the
+    config carries no ``dtype``/``torch_dtype`` (#449 below-cut 1). A local
+    directory reads the first shard's JSON header directly (8-byte length
+    prefix + header; no tensor data touched); a hub id reads the repo's
+    safetensors metadata via range requests (no weight download). Returns
+    ``None`` when it can't be determined — the caller then falls back to the
+    torch default (fp32), the pre-existing behavior."""
+    try:
+        counts: dict[str, int] = {}
+        if os.path.isdir(name):
+            import glob
+            import json
+            import struct
+
+            shards = sorted(glob.glob(os.path.join(name, "*.safetensors")))
+            if not shards:
+                return None
+            with open(shards[0], "rb") as fh:
+                (header_len,) = struct.unpack("<Q", fh.read(8))
+                header = json.loads(fh.read(header_len))
+            for tensor_name, info in header.items():
+                if tensor_name == "__metadata__":
+                    continue
+                numel = 1
+                for dim in info.get("shape") or [1]:
+                    numel *= int(dim)
+                counts[info["dtype"]] = counts.get(info["dtype"], 0) + numel
+        else:
+            from huggingface_hub import get_safetensors_metadata
+
+            meta = get_safetensors_metadata(name, token=token)
+            counts = {str(k): int(v) for k, v in meta.parameter_count.items()}
+        float_counts = {
+            k: v for k, v in counts.items() if k in _SAFETENSORS_FLOAT_DTYPES
+        }
+        if not float_counts:
+            return None
+        dominant = max(float_counts, key=lambda k: float_counts[k])
+        return _SAFETENSORS_FLOAT_DTYPES[dominant]
+    except Exception as exc:  # noqa: BLE001 — best-effort fallback, never fatal
+        logger.debug("could not read weights dtype for %s: %s", name, exc)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Base pipeline – minimal signatures (no *args / **kwargs)
 # ---------------------------------------------------------------------------
@@ -170,6 +498,23 @@ class Pipeline(ABC):
         self.model_or_name = model_or_name
         self._setup_model()
 
+    @property
+    def hf_model(self) -> Any:
+        """The raw HuggingFace ``PreTrainedModel`` backing this pipeline.
+
+        ``self.model`` is an nnterp ``StandardizedTransformer`` (the standardized
+        accessor surface the site layer is built on); its underlying HF module lives
+        at ``._model``. A handful of consumers need that raw module rather than the
+        standardized wrapper: ``hf_device_map`` sharding lookups and plain
+        HF ``generate``. Everything else (``.config`` / ``.device`` / ``.dtype`` /
+        ``.name_or_path`` / ``.generation_config`` / ``.eval()``) is proxied by the
+        standardized wrapper, so callers keep using ``pipeline.model`` for those.
+
+        Passthrough when ``self.model`` is not a ``StandardizedTransformer`` — a raw
+        HF model, or the ``load_weights=False`` ``SimpleNamespace`` (config only).
+        """
+        return getattr(self.model, "_model", self.model)
+
     # ------------------------------------------------------------------
     # Abstract hooks – simple signatures only
     # ------------------------------------------------------------------
@@ -187,19 +532,7 @@ class Pipeline(ABC):
         pass
 
     @abstractmethod
-    def generate(self, prompt: Any) -> Dict[str, Any]:
-        pass
-
-    @abstractmethod
-    def intervenable_generate(
-        self,
-        intervenable_model: IntervenableModel,
-        base: Any,
-        sources: Any,
-        map: Any,  # noqa: A002 – intentional name
-        feature_indices: Any,
-        source_representations: Any = None,
-    ) -> Dict[str, Any]:
+    def generate(self, prompt: Any) -> GenerationResult:
         pass
 
 
@@ -255,51 +588,45 @@ class LMPipeline(Pipeline):
     def _setup_model(self) -> None:
         _patch_extra_special_tokens()
 
+        if self._init_extra_kwargs.get("enable_attention_probs", False) and (
+            self._init_extra_kwargs.get("check_renaming", True) is False
+        ):
+            # nnterp validates-and-enables the attention-probability accessor
+            # only under its load-time checks (check_source runs iff
+            # check_renaming); with check_renaming=False it silently disables
+            # the accessor, and the failure would only surface at first read
+            # as a misleading "load it with enable_attention_probs=True" —
+            # even though the caller did. Name the real cause at load instead.
+            raise ValueError(
+                "enable_attention_probs=True is incompatible with "
+                "check_renaming=False: nnterp only enables (and check_source-"
+                "validates) the attention-probability accessor under its "
+                "load-time checks, and silently disables it when they are "
+                "skipped. Drop check_renaming=False."
+            )
+
         device, dtype = _infer_device_and_dtype(
             self._init_extra_kwargs.get("device"), self._init_extra_kwargs.get("dtype")
         )
+        hf_token = (
+            self._init_extra_kwargs.get("hf_token", None)
+            or os.environ.get("HF_TOKEN")
+            or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        )
 
         if isinstance(self.model_or_name, str):
-            hf_token = (
-                self._init_extra_kwargs.get("hf_token", None)
-                or os.environ.get("HF_TOKEN")
-                or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-            )
             self.tokenizer = AutoTokenizer.from_pretrained(
                 self.model_or_name, token=hf_token
             )
-            device_map = self._init_extra_kwargs.get("device_map")
-            pretrained_kwargs: dict[str, Any] = dict(
-                config=self._init_extra_kwargs.get("config"),
-                token=hf_token,
-                dtype=dtype,
-            )
-            if device_map is not None:
-                pretrained_kwargs["device_map"] = device_map
             if self.load_weights:
-                self.model = AutoModelForCausalLM.from_pretrained(  # type: ignore[call-arg]
-                    self.model_or_name, **pretrained_kwargs
+                self.model = self._load_standardized_from_name(
+                    self.model_or_name, device=device, dtype=dtype, hf_token=hf_token
                 )
-                if device_map is None:
-                    self.model = self.model.to(device=device)
-                if self._init_extra_kwargs.get("eager_attn", True):
-                    if hasattr(self.model.config, "_attn_implementation"):
-                        self.model.config._attn_implementation = "eager"
-                if hasattr(self.model.config, "use_cache"):
-                    self.model.config.use_cache = False
-                # We always greedy-decode (do_sample=False); strip sampling-only
-                # fields from generation_config so transformers doesn't warn that
-                # temperature/top_p are being ignored on every generate() call.
-                gen_cfg = getattr(self.model, "generation_config", None)
-                if gen_cfg is not None:
-                    gen_cfg.do_sample = False
-                    gen_cfg.temperature = None
-                    gen_cfg.top_p = None
-                    gen_cfg.top_k = None
+                self._apply_model_conventions()
             else:
                 # Tokenizer + config only: skip weight load. Forward passes will fail;
                 # this mode is for code paths that only need hidden_size + tokenization
-                # (e.g. building InterchangeTargets for cached-feature manifold fitting).
+                # (e.g. building site grids for cached-feature manifold fitting).
                 from types import SimpleNamespace
                 from transformers import AutoConfig
 
@@ -309,14 +636,53 @@ class LMPipeline(Pipeline):
                 )
                 self.model = SimpleNamespace(config=hf_config)
         else:
-            # Pre-loaded model: move to device, and only convert dtype if explicit
-            self.model = self.model_or_name.to(device)
+            # Pre-loaded model instance: wrap it in a StandardizedTransformer as-is.
+            # Respect the caller's placement — relocate only on an *explicit* device
+            # request. A bare/``"auto"`` device must NOT force-move the model onto
+            # CUDA just because a GPU is visible: production always loads by *name*
+            # (the branch above resolves ``"auto" → cuda`` there, which is correct
+            # for a hub load), so this pre-loaded branch is the test-fixture /
+            # bring-your-own-model entry point. Silently relocating here is wrong in
+            # two ways: (a) it drags a CPU test model onto a visible GPU while the
+            # rest of the CPU tier stays on CPU — the #471 CPU-tier device mismatch;
+            # and (b) it would collapse an already-sharded ``device_map`` model onto
+            # a single device. dtype is converted only for an explicit ``torch.dtype``;
+            # the user's config (attn impl / use_cache / generation_config) is left
+            # untouched.
+            requested_device = self._init_extra_kwargs.get("device")
+            module = self.model_or_name
+            if requested_device is not None and requested_device != "auto":
+                module = module.to(requested_device)
             if isinstance(dtype, torch.dtype):
-                self.model = self.model.to(dtype)
-            # If dtype is "auto", keep the model's existing dtype
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                self.model.config.name_or_path
+                module = module.to(dtype)
+            wrap_kwargs = self._nnterp_validation_kwargs()
+            if self._init_extra_kwargs.get("enable_attention_probs", False):
+                # A pre-loaded module keeps its own attention implementation
+                # (this path never rewrites the caller's config), and the
+                # attention-probability tap only exists under the eager kernel
+                # — fail fast with the remedy instead of letting nnterp's
+                # check_source() die mid-trace on a missing source node.
+                impl = getattr(module.config, "_attn_implementation", None)
+                if impl != "eager":
+                    raise ValueError(
+                        f"enable_attention_probs=True needs eager attention, but "
+                        f"this pre-loaded model uses attn_implementation="
+                        f"{impl!r}. Reload it with attn_implementation='eager' "
+                        f"(or pass the model name so the pipeline loads it "
+                        f"eagerly itself)."
+                    )
+                wrap_kwargs["enable_attention_probs"] = True
+            self.tokenizer = AutoTokenizer.from_pretrained(module.config.name_or_path)
+            self.model = StandardizedTransformer(
+                module, tokenizer=self.tokenizer, **wrap_kwargs
             )
+            self.model.dispatch()
+            if getattr(self.model, "config", None) is None:
+                # nnsight populates ``.config`` only on name-loads; wrapping a
+                # pre-loaded module leaves it None. Consumers read
+                # ``pipeline.model.config`` (hidden_size, num_hidden_layers, …), so
+                # mirror the HF config onto the standardized wrapper.
+                self.model.config = module.config
 
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.pad_token_id = self.tokenizer.convert_tokens_to_ids(
@@ -324,6 +690,133 @@ class LMPipeline(Pipeline):
         )
         if self.padding_side is not None:
             self.tokenizer.padding_side = self.padding_side
+
+    def _load_standardized_from_name(
+        self,
+        name: str,
+        *,
+        device: str | torch.device,
+        dtype: torch.dtype | str,
+        hf_token: str | None,
+    ) -> StandardizedTransformer:
+        """Load ``name`` as a **dispatched** nnterp ``StandardizedTransformer``.
+
+        nnterp standardizes the module tree across architectures — the uniform
+        ``layers_output[i]`` / ``attentions_output[i]`` accessors the site layer is
+        built on — and validates the rename/IO shapes at load. Model-load kwargs
+        (``dtype``, ``device_map``, ``config``, ``token``, attention
+        implementation) flow
+        through nnsight's ``LanguageModel`` to HF ``from_pretrained``. We
+        ``dispatch()`` immediately so the weights are materialised rather than lazy
+        (meta) tensors: plain HF generation needs real tensors.
+        """
+        # Fail fast — with the transformers-version cause — on architectures the
+        # installed transformers cannot load (see assert_architecture_supported).
+        assert_architecture_supported(name, token=hf_token)
+        st_kwargs: dict[str, Any] = dict(
+            tokenizer=self.tokenizer,
+            # Single device by default; a caller-supplied ``device_map`` ("auto" for
+            # multi-GPU sharding, via io/pipelines.py) takes precedence.
+            device_map=self._init_extra_kwargs.get("device_map") or device,
+        )
+        # Resolve dtype to a concrete torch.dtype. HF ``from_pretrained`` accepts the
+        # string "auto" (load in the checkpoint's saved dtype), but nnsight's meta
+        # load path passes it to ``getattr(torch, "auto")`` and crashes — so read the
+        # config's dtype ourselves, which is exactly what "auto" means. When the
+        # config carries no dtype, mirror HF's second "auto" step: the weights'
+        # own dtype from the safetensors headers (#449 below-cut 1) — otherwise a
+        # config-less non-fp32 checkpoint silently loads fp32.
+        resolved_dtype = dtype
+        if resolved_dtype == "auto":
+            cfg = self._init_extra_kwargs.get("config")
+            if cfg is None:
+                from transformers import AutoConfig
+
+                cfg = AutoConfig.from_pretrained(name, token=hf_token)
+            resolved_dtype = getattr(cfg, "dtype", None) or getattr(
+                cfg, "torch_dtype", None
+            )
+            if isinstance(resolved_dtype, str):
+                resolved_dtype = getattr(torch, resolved_dtype, None)
+            if resolved_dtype is None:
+                resolved_dtype = _checkpoint_weights_dtype(name, token=hf_token)
+        if isinstance(resolved_dtype, torch.dtype):
+            st_kwargs["dtype"] = resolved_dtype
+        if self._init_extra_kwargs.get("config") is not None:
+            st_kwargs["config"] = self._init_extra_kwargs["config"]
+        if hf_token is not None:
+            st_kwargs["token"] = hf_token
+        if self._init_extra_kwargs.get("eager_attn", False):
+            # Opt-in eager attention (``eager_attn=True``): required for
+            # attention-probability work — under sdpa, ``output_attentions=True``
+            # yields no weights (transformers' capture flags support only
+            # eager/eager_paged/flex_attention). By default we pass nothing and
+            # let HF resolve the implementation (sdpa/flash where available) —
+            # the deliberate post-cutover SH3 flip (#424); goldens are pinned
+            # under this default, while the migration parity pins force eager
+            # themselves (tests/neural/parity/cases.py).
+            st_kwargs["attn_implementation"] = "eager"
+        if self._init_extra_kwargs.get("enable_attention_probs", False):
+            # Attention-probability editing (CAP4, #457): nnterp exposes
+            # ``attention_probabilities[i]`` as an editable trace target only
+            # when loaded with this flag, which forces eager attention itself
+            # (compatible with an explicit ``eager_attn=True``; nnterp rejects
+            # any non-eager ``attn_implementation``). Under the default
+            # ``check_renaming=True`` nnterp also runs its
+            # ``attention_probabilities.check_source()`` causal-validation
+            # gate at load — probs have the right shape, sum to 1, and
+            # modifying them changes the logits (the F2-deferred adoption,
+            # #393); with ``check_renaming=False`` nnterp disables the
+            # accessor outright.
+            st_kwargs["enable_attention_probs"] = True
+        st_kwargs.update(self._nnterp_validation_kwargs())
+
+        model = StandardizedTransformer(name, **st_kwargs)
+        model.dispatch()
+        return model
+
+    def _nnterp_validation_kwargs(self) -> dict[str, Any]:
+        """nnterp load-time validation passthrough (mirrors ``causalab.neural.validate``
+        — see F2 / #393).
+
+        Honors an explicit ``check_renaming`` and a custom-architecture
+        ``rename_config`` from the constructor kwargs; otherwise nnterp's defaults
+        apply. ``check_renaming=False`` is the escape hatch for a model that can't be
+        re-validated in place (e.g. a deep copy of an already-dispatched model).
+        """
+        kw: dict[str, Any] = {}
+        if "check_renaming" in self._init_extra_kwargs:
+            kw["check_renaming"] = self._init_extra_kwargs["check_renaming"]
+        if self._init_extra_kwargs.get("rename_config") is not None:
+            kw["rename_config"] = self._init_extra_kwargs["rename_config"]
+        return kw
+
+    def _apply_model_conventions(self) -> None:
+        """Pin the pipeline's greedy conventions on the loaded model.
+
+        Applied to freshly *loaded* models only (never a caller's pre-loaded
+        instance): strip sampling-only generation fields so transformers doesn't
+        warn on every greedy ``generate`` call, and freeze the model parameters
+        once — trainable edits (ED3) optimize featurizer/gate parameters only,
+        and freezing here replaces the retired backbone's per-model
+        ``disable_model_gradients`` dance (see ``causalab.neural.trainable``;
+        gradients w.r.t. activations still flow from any trainable leaf onward).
+
+        ``config.use_cache`` is left at the HF default (enabled). The retired
+        pyvene backbone forced it off (its decode-step hooks mis-addressed
+        cached generation); nnsight edits are cache-safe — prefill edits
+        persist through the decode *because* generation is cached — and both
+        generate paths pass ``use_cache=True`` explicitly (SH3, #424).
+        """
+        hf_model = self.hf_model
+        for p in hf_model.parameters():
+            p.requires_grad_(False)
+        gen_cfg = getattr(hf_model, "generation_config", None)
+        if gen_cfg is not None:
+            gen_cfg.do_sample = False
+            gen_cfg.temperature = None
+            gen_cfg.top_p = None
+            gen_cfg.top_k = None
 
     # ------------------------------------------------------------------
     # Chat-template prefix metadata
@@ -385,6 +878,17 @@ class LMPipeline(Pipeline):
             count = len(self.tokenizer(prefix, add_special_tokens=False)["input_ids"])
             self._chat_prefix_token_count_cache = count
         return count
+
+    def _batch_device(self) -> torch.device:
+        """Device for batched token tensors returned by :meth:`load`.
+
+        Indexing-only pipelines (``load_weights=False``) have no model
+        parameters; keep token batches on CPU rather than requiring
+        ``self.model.device``.
+        """
+        if not self.load_weights:
+            return torch.device("cpu")
+        return self.model.device
 
     # ------------------------------------------------------------------
     # Encoding
@@ -453,15 +957,16 @@ class LMPipeline(Pipeline):
             # prompt-shaped position_ids unconditionally would regress multi-step
             # decoding on absolute-position models (measured ~0.26 logit shift on
             # GPT-2), so we leave it off here; plain-forward sites opt in via
-            # ensure_position_ids, and single-step intervenable_generate applies it
-            # internally. Same left-pad convention either way; set in place so enc
+            # ensure_position_ids, and the engine's single-step generate path
+            # applies it internally. Same left-pad convention either way; set in place so enc
             # stays a BatchEncoding.
             enc["position_ids"] = left_pad_position_ids(enc["attention_mask"])
         # Pop offset_mapping if present - it's a list of tuples, not a tensor
         offset_mapping = enc.pop("offset_mapping", None)
 
+        batch_device = self._batch_device()
         for k, v in enc.items():
-            enc[k] = v.to(self.model.device)
+            enc[k] = v.to(batch_device)
 
         # Add back offset_mapping if it was present
         if offset_mapping is not None:
@@ -539,24 +1044,44 @@ class LMPipeline(Pipeline):
         The slice is right-padded back to a fixed ``max_new_tokens`` width with
         ``pad_token_id`` (= EOS, dropped on decode) so the returned tensor keeps a
         stable shape contract for downstream consumers that concatenate sequences
-        across batches.
+        across batches (:func:`right_pad_sequences` owns the width contract).
         """
-        gen = sequences[:, prompt_len:]
-        deficit = self.max_new_tokens - gen.shape[1]
-        if deficit > 0:
-            pad_block = gen.new_full(
-                (gen.shape[0], deficit), self.tokenizer.pad_token_id
-            )
-            gen = torch.cat([gen, pad_block], dim=1)
-        elif deficit < 0:
-            gen = gen[:, : self.max_new_tokens]
-        return gen
+        return right_pad_sequences(
+            sequences[:, prompt_len:], self.max_new_tokens, self.tokenizer.pad_token_id
+        )
 
     def generate(
         self,
         input: list[CausalTrace],
         **gen_kwargs: Any,
-    ) -> dict[str, Any]:
+    ) -> GenerationResult:
+        """Plain (un-intervened, un-traced) greedy HF generation over a batch.
+
+        Returns the unified :class:`GenerationResult` (EU5a, #486): CPU
+        ``sequences`` right-padded to the pipeline's ``max_new_tokens``
+        budget, ``strings`` always a list, per-step CPU ``scores`` (``None``
+        when the caller passes ``output_scores=False``). Values are exactly
+        the legacy ``{"scores", "sequences", "string"}`` dict's — only the
+        shape changed.
+        """
+        # Persistent edits live in nnsight's tracing layer; the plain HF
+        # generate below bypasses them entirely, so a steered eval would
+        # silently produce UNsteered outputs. Refuse loudly instead (the
+        # compose-or-refuse contract, causalab.neural.persistent).
+        from causalab.neural.site import backbone_has_edits
+
+        if backbone_has_edits(self.model):
+            from causalab.neural.persistent import PersistentEditError
+
+            raise PersistentEditError(
+                "this pipeline's model carries persistent edits (model.edit(), "
+                "causalab.neural.persistent), but LMPipeline.generate runs "
+                "plain HF generation on pipeline.hf_model, which bypasses "
+                "nnsight edits — the output would silently ignore them. Run "
+                "generation through the traced path "
+                "(causalab.neural.dataset.run_intervened_generation) or "
+                "uninstall_edits(pipeline.model) first."
+            )
         inputs = self.load(input)
         defaults: dict[str, Any] = dict(
             max_new_tokens=self.max_new_tokens,
@@ -568,104 +1093,27 @@ class LMPipeline(Pipeline):
         )
         defaults.update(gen_kwargs)
         with torch.no_grad():
-            out = self.model.generate(**inputs, **defaults)
-        scores = [s.detach().cpu() for s in (out.scores or [])]
+            # Plain generation runs on the underlying HF model (nnterp's own
+            # ``generate`` is a deferred nnsight trace with a different return shape);
+            # this preserves the {scores, sequences, string} contract exactly.
+            out = self.hf_model.generate(**inputs, **defaults)
+        # HF returns scores=None iff output_scores=False was requested; keep
+        # that as scores=None (vs an actual per-step list) on the result.
+        scores = (
+            [s.detach().cpu() for s in out.scores] if out.scores is not None else None
+        )
         prompt_len = inputs["input_ids"].shape[1]
         seq = self._generated_tokens(out.sequences, prompt_len).detach().cpu()
         del inputs, out
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         gc.collect()
-        return {
-            "scores": scores,
-            "sequences": seq,
-            "string": self.dump(seq, is_logits=False),
-        }
-
-    # ------------------------------------------------------------------
-    # Intervention generation
-    # ------------------------------------------------------------------
-
-    def intervenable_generate(
-        self,
-        intervenable_model: IntervenableModel,
-        base: dict[str, Tensor],
-        sources: list[dict[str, Tensor]] | None,
-        map: dict[str, Any],
-        feature_indices: list[list[int]] | None,
-        source_representations: list[Tensor] | None = None,
-        **gen_kwargs: Any,
-    ) -> dict[str, Any]:
-        """
-        Generate with interventions applied.
-
-        Args:
-            intervenable_model: PyVENE model with preset intervention locations
-            base: Tokenized base inputs
-            sources: Tokenized counterfactual inputs. Can be None if source_representations
-                is provided (cross-model patching case).
-            map: Unit locations mapping {"sources->base": (source_indices, base_indices)}
-            feature_indices: Feature subspace indices for each unit
-            source_representations: Pre-collected activations to use instead of computing
-                from sources. When provided, sources should be None. This enables cross-model
-                patching where activations are collected from a different model.
-                Format: List of tensors, one per intervention location.
-            **gen_kwargs: Additional generation kwargs
-        """
-        defaults = dict(
-            unit_locations=map,
-            subspaces=feature_indices,
-            max_new_tokens=self.max_new_tokens,
-            pad_token_id=self.tokenizer.pad_token_id,
-            return_dict_in_generate=True,
-            output_scores=True,
-            intervene_on_prompt=True,
-            do_sample=False,
-            use_cache=True,
+        decoded = self.dump(seq, is_logits=False)
+        return GenerationResult(
+            sequences=seq,
+            strings=[decoded] if isinstance(decoded, str) else decoded,
+            scores=scores,
         )
-        defaults.update(gen_kwargs)
-        # Left-pad position_ids for absolute-position models (GPT-2 et al.); no-op on
-        # RoPE or when position_ids is already present. pyvene runs each source as a
-        # plain collection forward (`self.model(**source)`) and the base as the
-        # generate prefill (`self.model.generate(**base)`) — neither carries
-        # position_ids otherwise, so a left-padded row is numbered from the pad tokens
-        # and every activation in it is corrupted.
-        #   * Sources are plain forwards: always safe to fix.
-        #   * Base is the prefill. For single-step decoding (max_new_tokens == 1 — the
-        #     path-patching case) the prefill is the ONLY forward, so a prompt-shaped
-        #     position_ids is exactly correct. For multi-step we must NOT pin it (it
-        #     can't extend across decode steps — measured ~0.26 GPT-2 logit drift), so
-        #     leave multi-step base alone and let generate number its own steps.
-        if sources is not None:
-            sources = [
-                ensure_position_ids(s) if s is not None else None for s in sources
-            ]
-        if defaults["max_new_tokens"] == 1:
-            base = ensure_position_ids(base)
-        with torch.no_grad():
-            # pyvene type stubs are incomplete - source_representations accepts list or dict
-            out = intervenable_model.generate(
-                base,
-                sources=sources,
-                source_representations=source_representations,  # type: ignore[reportArgumentType]
-                **defaults,  # type: ignore[reportArgumentType]
-            )  # type: ignore[reportOptionalMemberAccess]
-
-        # Return dictionary like HuggingFace models. Slice the generated tokens
-        # from the prompt end (not the last max_new_tokens) so an early EOS stop
-        # doesn't leak trailing prompt tokens into the decoded string — see
-        # _generated_tokens.
-        prompt_len = base["input_ids"].shape[1]
-        sequences = self._generated_tokens(out[-1].sequences, prompt_len).detach().cpu()
-        result = {"sequences": sequences}
-
-        if gen_kwargs.get("output_scores", True):
-            scores = [s.detach().cpu() for s in (out[-1].scores or [])]
-            result["scores"] = scores
-
-        result["string"] = self.dump(sequences, is_logits=False)
-
-        return result
 
     # ------------------------------------------------------------------
     # Batch processing
@@ -696,74 +1144,44 @@ class LMPipeline(Pipeline):
                 - "scores": List of score tensors (if available)
                 - "string": String output
         """
-        base_inputs = [example["input"] for example in dataset]
 
-        base_outputs = []
-
-        # Process base inputs in batches
-        for start in tqdm(
-            range(0, len(base_inputs), batch_size),
-            desc="Computing base outputs",
-            disable=not logger.isEnabledFor(logging.DEBUG),
-            leave=False,
-        ):
-            batch_inputs = base_inputs[start : start + batch_size]
-            with torch.no_grad():
-                # Generate outputs
-                output_dict = self.generate(batch_inputs)
-
-                # Flatten batch outputs into individual examples
+        def per_example_outputs(inputs: list, desc: str) -> list[dict[str, Any]]:
+            """Generate over ``inputs`` in batches; slice the flat
+            :class:`GenerationResult` into the per-example dicts the
+            checker/metric protocols consume (EU5b, #487)."""
+            outputs: list[dict[str, Any]] = []
+            for start in tqdm(
+                range(0, len(inputs), batch_size),
+                desc=desc,
+                disable=not logger.isEnabledFor(logging.DEBUG),
+                leave=False,
+            ):
+                batch_inputs = inputs[start : start + batch_size]
+                with torch.no_grad():
+                    result = self.generate(batch_inputs)
                 for i in range(len(batch_inputs)):
-                    example_output = {
-                        "sequences": output_dict["sequences"][i : i + 1],
+                    example_output: dict[str, Any] = {
+                        "sequences": result.sequences[i : i + 1],
                     }
-                    if "scores" in output_dict and output_dict["scores"]:
+                    if result.scores:
                         example_output["scores"] = [
-                            score[i : i + 1] for score in output_dict["scores"]
+                            score[i : i + 1] for score in result.scores
                         ]
-                    if "string" in output_dict:
-                        example_output["string"] = (
-                            output_dict["string"][i]
-                            if isinstance(output_dict["string"], list)
-                            else output_dict["string"]
-                        )
-                    base_outputs.append(example_output)
+                    example_output["string"] = result.strings[i]
+                    outputs.append(example_output)
+            return outputs
+
+        base_inputs = [example["input"] for example in dataset]
+        base_outputs = per_example_outputs(base_inputs, "Computing base outputs")
 
         # Extract counterfactual inputs (flattened)
         counterfactual_inputs = []
         for example in dataset:
             counterfactual_inputs.extend(example["counterfactual_inputs"])
 
-        # Process counterfactuals if they exist
-        counterfactual_outputs = []
-        if counterfactual_inputs:
-            for start in tqdm(
-                range(0, len(counterfactual_inputs), batch_size),
-                desc="Computing counterfactual outputs",
-                disable=not logger.isEnabledFor(logging.DEBUG),
-                leave=False,
-            ):
-                batch_inputs = counterfactual_inputs[start : start + batch_size]
-                with torch.no_grad():
-                    # Generate outputs
-                    output_dict = self.generate(batch_inputs)
-
-                    # Flatten batch outputs into individual examples
-                    for i in range(len(batch_inputs)):
-                        example_output = {
-                            "sequences": output_dict["sequences"][i : i + 1],
-                        }
-                        if "scores" in output_dict and output_dict["scores"]:
-                            example_output["scores"] = [
-                                score[i : i + 1] for score in output_dict["scores"]
-                            ]
-                        if "string" in output_dict:
-                            example_output["string"] = (
-                                output_dict["string"][i]
-                                if isinstance(output_dict["string"], list)
-                                else output_dict["string"]
-                            )
-                        counterfactual_outputs.append(example_output)
+        counterfactual_outputs = per_example_outputs(
+            counterfactual_inputs, "Computing counterfactual outputs"
+        )
 
         return {
             "base_outputs": base_outputs,
@@ -775,7 +1193,11 @@ class LMPipeline(Pipeline):
     # ------------------------------------------------------------------
 
     def get_num_layers(self) -> int:
-        return int(self.model.config.num_hidden_layers)
+        # Prefer nnterp's standardized introspection; fall back to the HF config for
+        # the load_weights=False (SimpleNamespace) path. Values are identical.
+        n = getattr(self.model, "num_layers", None)
+        return int(n) if n is not None else int(self.model.config.num_hidden_layers)
 
     def get_num_attention_heads(self) -> int:
-        return int(self.model.config.num_attention_heads)
+        n = getattr(self.model, "num_heads", None)
+        return int(n) if n is not None else int(self.model.config.num_attention_heads)

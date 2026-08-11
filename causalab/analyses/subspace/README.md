@@ -27,6 +27,7 @@ The artifacts produced here are prerequisites for `activation_manifold`, `output
 - `token_positions` — list of position names (residual stream / MLP).
 - `component_type` — `residual_stream | attention_head | mlp`.
 - `modes` — optional sweep: a list of per-mode overrides, each written under `subspace/{mode._subdir}/{mode.name or mode.component_type}/`. `_subdir` is re-resolved per mode, so entries that differ by a `_subdir`-feeding field (`k_features`, `method`) land in distinct dirs instead of colliding.
+- `prescan` — attribution-patching fail-fast gate (#456) for the trained grids (`das`/`dbm`/`boundless`, `residual_stream` grid mode): with `enabled: true`, a one-backward **gradient x delta-activation** pre-scan over the training pairs scores every cell and training runs only on the `top_k` survivors ranked by |approx| (`n_examples` caps the pairs scored). `grid_results.json` reports approximate and exact scores side by side (`prescan.exact_and_approx`, `agreement_at_k`, `rank_correlation`, `abs_rank_correlation`) and `heatmaps/prescan.*` shows the approximate grid.
 - Per-method blocks: `das`, `dbm`, `boundless`, and **`fixed`** (provide exactly one input):
   ```yaml
   fixed:

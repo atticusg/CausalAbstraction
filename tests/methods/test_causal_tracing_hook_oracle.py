@@ -22,10 +22,11 @@ from __future__ import annotations
 import pytest
 import torch
 
-from causalab.neural.LM_units import ResidualStream
+from causalab.neural.featurized_site import FeaturizedSite
 from causalab.neural.pipeline import LMPipeline
+from causalab.neural.site import Site
+from causalab.neural.specs import SiteSpec
 from causalab.neural.token_positions import TokenPosition, get_last_token_index
-from causalab.neural.units import InterchangeTarget
 from causalab.methods.steer.steer import run_steering_interventions
 
 from tests.neural.activations.hook_oracle import (
@@ -63,37 +64,37 @@ def _final_layer(pipeline: LMPipeline) -> int:
     return pipeline.model.config.num_hidden_layers - 1
 
 
-def _last_unit(pipeline: LMPipeline, layer: int) -> ResidualStream:
+def _last_site(pipeline: LMPipeline, layer: int) -> SiteSpec:
     tp = TokenPosition(
         lambda inp: get_last_token_index(inp, pipeline), pipeline, id="last"
     )
-    return ResidualStream(
-        layer=layer,
-        token_indices=tp,
-        target_output=True,
-        shape=(pipeline.model.config.hidden_size,),
+    return SiteSpec(
+        fsite=FeaturizedSite(Site("block_output", layer)),
+        positions=tp,
+        key=f"residual.L{layer}.last",
+        width=pipeline.model.config.hidden_size,
     )
 
 
 def _run_mixed(
     pipeline: LMPipeline,
-    target: InterchangeTarget,
+    sites: list[SiteSpec],
     steering_vectors: dict,
-    type_by_unit: dict,
+    type_by_key: dict,
     *,
     seed: int = 0,
 ) -> torch.Tensor:
     result = run_steering_interventions(
         pipeline,
         [{"input": make_trace(_BASE), "counterfactual_inputs": []}],
-        target,
+        sites,
         steering_vectors,
         mode="replace",
-        type_by_unit=type_by_unit,
+        type_by_key=type_by_key,
         noise_seed=seed,
         output_scores=True,
     )
-    return result["scores"][0][0]
+    return result.scores[0]  # first generated step, (1, vocab)
 
 
 class TestCausalTracingMixedModel:
@@ -102,16 +103,15 @@ class TestCausalTracingMixedModel:
     def test_corruption_alone_is_non_trivial(self, oracle_pipeline: LMPipeline) -> None:
         """Noise at the entry site alone moves the next-token logits off clean."""
         hidden = oracle_pipeline.model.config.hidden_size
-        entry = _last_unit(oracle_pipeline, _ENTRY_LAYER)
-        target = InterchangeTarget([[entry]])
+        entry = _last_site(oracle_pipeline, _ENTRY_LAYER)
         clean = next_token_logits(
             oracle_pipeline, oracle_pipeline.load([make_trace(_BASE)])
         )
         corrupted = _run_mixed(
             oracle_pipeline,
-            target,
-            {entry.id: torch.full((hidden,), 5.0)},
-            {entry.id: "noise"},
+            [entry],
+            {entry.key: torch.full((hidden,), 5.0)},
+            {entry.key: "noise"},
         )
         assert not torch.allclose(corrupted, clean, atol=1e-4)
 
@@ -122,12 +122,8 @@ class TestCausalTracingMixedModel:
         overwrites the corrupted final residual with the clean one."""
         hidden = oracle_pipeline.model.config.hidden_size
         restore_layer = _final_layer(oracle_pipeline)
-        entry = _last_unit(oracle_pipeline, _ENTRY_LAYER)
-        restore = _last_unit(oracle_pipeline, restore_layer)
-        # One unit per group: the steering path supplies one source vector per
-        # intervention group, so the corrupted entry and the restored site sit in
-        # separate groups.
-        target = InterchangeTarget([[entry], [restore]])
+        entry = _last_site(oracle_pipeline, _ENTRY_LAYER)
+        restore = _last_site(oracle_pipeline, restore_layer)
 
         base_inputs = oracle_pipeline.load([make_trace(_BASE)])
         clean = next_token_logits(oracle_pipeline, base_inputs)
@@ -137,22 +133,21 @@ class TestCausalTracingMixedModel:
 
         recovered = _run_mixed(
             oracle_pipeline,
-            target,
+            [entry, restore],
             {
-                entry.id: torch.full((hidden,), 5.0),  # noise scale
-                restore.id: clean_restore,  # clean value to restore
+                entry.key: torch.full((hidden,), 5.0),  # noise scale
+                restore.key: clean_restore,  # clean value to restore
             },
-            {entry.id: "noise", restore.id: "replace"},
+            {entry.key: "noise", restore.key: "replace"},
         )
         torch.testing.assert_close(recovered, clean, atol=1e-4, rtol=1e-3)
 
     def test_mixed_run_is_reproducible(self, oracle_pipeline: LMPipeline) -> None:
         """Same seed → byte-identical mixed-model output across runs."""
         hidden = oracle_pipeline.model.config.hidden_size
-        entry = _last_unit(oracle_pipeline, _ENTRY_LAYER)
-        target = InterchangeTarget([[entry]])
-        vecs = {entry.id: torch.full((hidden,), 5.0)}
-        types = {entry.id: "noise"}
-        a = _run_mixed(oracle_pipeline, target, vecs, types, seed=3)
-        b = _run_mixed(oracle_pipeline, target, vecs, types, seed=3)
+        entry = _last_site(oracle_pipeline, _ENTRY_LAYER)
+        vecs = {entry.key: torch.full((hidden,), 5.0)}
+        types = {entry.key: "noise"}
+        a = _run_mixed(oracle_pipeline, [entry], vecs, types, seed=3)
+        b = _run_mixed(oracle_pipeline, [entry], vecs, types, seed=3)
         torch.testing.assert_close(a, b, atol=0.0, rtol=0.0)

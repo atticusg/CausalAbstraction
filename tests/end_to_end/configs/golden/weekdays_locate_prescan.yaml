@@ -1,0 +1,37 @@
+# @package _global_
+# Golden-tier locate runner with the attribution pre-scan gate (#456) —
+# chat-coherent (Qwen3-4B-Instruct-2507).
+#
+# Twin of weekdays_locate.yaml with locate.prescan enabled and top_k set to
+# the FULL grid (2 layers x 3 task positions = 6 cells): nothing is pruned,
+# so exact interchange scores exist for every cell and the pinned prescan
+# block carries the load-bearing values — approx_scores_per_cell,
+# exact_and_approx, agreement_at_k (top-|approx| vs top-exact overlap at
+# k capped to half the grid, so it can miss), rank_correlation (signed),
+# and abs_rank_correlation — pinning the pre-scan's top-k agreement with
+# the exact grid on a real model. See methods/interchange/attribution.py
+# for why gates rank by |approx|.
+defaults:
+- /base
+- /task: natural_domains_arithmetic_weekdays
+- /model: chat-coherent
+- /analysis/baseline   # locate looks up baseline accuracy + ref dists if cached
+- /analysis/locate
+- _self_
+
+task:
+  target_variable: result
+  n_train: 49
+  n_test: 2
+
+baseline:
+  batch_size: 8
+
+locate:
+  layers: [0, 1]
+  n_steer: 2
+  batch_size: 8
+  prescan:
+    enabled: true
+    top_k: 6          # = the full 2x3 grid: no pruning, exact everywhere
+    n_examples: null

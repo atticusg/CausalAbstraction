@@ -117,6 +117,24 @@ def get_attention_patterns(
             f"Head index {head} out of range. Valid range: 0-{num_heads - 1}"
         )
 
+    # Attention probabilities only materialize under the eager kernel: sdpa /
+    # flash return no weights and flex_attention returns a log-sum-exp, not
+    # the (seq, seq) probability matrix, so transformers' output_attentions
+    # capture records nothing usable and ``outputs.attentions`` comes back
+    # empty. Allow-list exactly the kernel verified to materialize the
+    # probabilities — fail closed on any other (incl. future) kernel name
+    # rather than IndexError below. (The pipeline-wide default is sdpa since
+    # SH3, #424 — load with ``eager_attn=True``.) A config that doesn't
+    # declare an implementation (non-HF stubs) passes through.
+    attn_impl = getattr(pipeline.model.config, "_attn_implementation", None)
+    supported = ("eager",)
+    if attn_impl is not None and attn_impl not in supported:
+        raise ValueError(
+            f"Attention-pattern extraction needs output_attentions=True, which "
+            f"attn_implementation={attn_impl!r} does not support (supported: "
+            f"{supported}). Load the pipeline with eager_attn=True."
+        )
+
     if verbose:
         logger.info(f"Extracting attention patterns for Layer {layer}, Head {head}")
         logger.info(f"Processing {len(prompts)} prompts")

@@ -1,20 +1,22 @@
 """DAS (Distributed Alignment Search) subspace discovery.
 
 Trains a linear subspace via interchange interventions, then collects
-features through the learned featurizer.
+features through the learned featurizer. Training is functional: the trained
+featurizer arrives on the *returned* specs (``trained_specs`` in the train
+result), never by mutating the caller's specs (WU5, #507).
 """
 
 from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable, cast
+from typing import Any, Callable, Sequence, cast
 
 from safetensors.torch import save_file
 
 from causalab.causal.causal_model import CausalModel
 from causalab.analyses.subspace._visualization import save_features_visualization
-from causalab.neural.units import InterchangeTarget
+from causalab.neural.specs import SiteSpec
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.activations.collect import collect_features
 
@@ -22,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 def find_das_subspace(
-    target: InterchangeTarget,
+    sites: Sequence[Sequence[SiteSpec]],
     train_dataset: list,
     test_dataset: list,
     pipeline: LMPipeline,
@@ -44,10 +46,12 @@ def find_das_subspace(
     """Train a DAS subspace and collect features through it.
 
     Calls ``train_interventions`` directly (no grid/heatmap) to learn a
-    linear subspace, then runs a forward pass to collect projected features.
+    linear subspace, then runs a forward pass to collect projected features
+    through the trained spec the result carries.
 
     Args:
-        target: Interchange target (single unit).
+        sites: Single-group nested spec lists holding one site
+            (a grid cell value — ``[[spec]]``).
         train_dataset: Training counterfactual examples.
         test_dataset: Test counterfactual examples.
         pipeline: LM pipeline.
@@ -65,6 +69,7 @@ def find_das_subspace(
         Dict with keys:
         - ``das_result``: training result dict from ``train_interventions``
         - ``features``: (N, k) projected features tensor
+        - ``spec``: the trained :class:`SiteSpec` (learned featurizer attached)
     """
     from causalab.methods.trained_subspace.train import train_interventions
     from causalab.methods.trained_subspace.train import save_train_results
@@ -108,7 +113,7 @@ def find_das_subspace(
         raise ValueError("`metric` is required for find_das_subspace")
     das_result = train_interventions(
         causal_model=causal_model,
-        interchange_targets=target,
+        grid={("single",): sites},
         train_dataset=train_examples,
         test_dataset=test_examples,
         pipeline=pipeline,
@@ -123,8 +128,12 @@ def find_das_subspace(
         das_result.get("avg_test_score", "N/A"),
     )
 
-    # Collect features through the learned featurizer
-    unit = target.flatten()[0]
+    # Collect features through the learned featurizer — thread the TRAINED
+    # spec out of the result (training returns updated specs; the caller's
+    # input specs are unchanged).
+    from causalab.analyses.subspace._trained import trained_spec as _trained_spec
+
+    trained_spec = _trained_spec(das_result["results_by_key"][("single",)])
     # collect_output_logits=False (default) returns dict[str, Tensor];
     # cast tells pyright we're in that branch of the union.
     from torch import Tensor as _Tensor
@@ -134,11 +143,11 @@ def find_das_subspace(
         collect_features(
             dataset=train_examples,
             pipeline=pipeline,
-            model_units=[unit],
+            sites=[trained_spec],
             batch_size=batch_size,
         ),
     )
-    features = features_dict[unit.id].detach()
+    features = features_dict[trained_spec.key].detach()
     logger.info("Collected %d-dim features: %s", k_features, features.shape)
 
     if output_dir:
@@ -165,6 +174,7 @@ def find_das_subspace(
     return {
         "das_result": das_result,
         "features": features,
+        "spec": trained_spec,
     }
 
 

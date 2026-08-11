@@ -14,7 +14,7 @@ from omegaconf import DictConfig, OmegaConf
 from causalab.runner.helpers import (
     resolve_task,
     _task_config_for_metadata,
-    generate_datasets,
+    prepare_datasets,
     get_output_token_ids,
 )
 from causalab.io.artifacts import save_tensors_with_meta, load_tensor_results
@@ -149,7 +149,7 @@ def _build_belief_artifacts(
     # decision can validate the ROW count — not just the class dim. A debug pass
     # (small n_train) and a full pass sharing one experiment_root must not reuse
     # each other's belief cache (GH #220).
-    train_dataset, _ = generate_datasets(
+    train_dataset, _ = prepare_datasets(
         task,
         n_train=cfg.task.n_train,
         n_test=cfg.task.n_test,
@@ -157,6 +157,7 @@ def _build_belief_artifacts(
         balanced=cfg.task.get("balanced", False),
         enumerate_all=cfg.task.enumerate_all,
         resample_variable=cfg.task.get("resample_variable", "all"),
+        filter_correct=False,
     )
     expected_rows = len(train_dataset)
 
@@ -216,7 +217,7 @@ def _build_belief_artifacts(
             start, end = bi * batch_size, min((bi + 1) * batch_size, len(train_dataset))
             batch_inputs = [ex["input"] for ex in train_dataset[start:end]]
             result = pipeline.generate(batch_inputs)
-            scores = result["scores"]
+            scores = result.scores or []
             for k in range(len(batch_inputs)):
                 output_logits.append([s[k].cpu() for s in scores])
 
@@ -337,7 +338,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
 
     # Regenerate the train_dataset _build_belief_artifacts produced (deterministic
     # via seed) to get TRUE class labels row-aligned with natural_dists.
-    _bm_train_ds, _ = generate_datasets(
+    _bm_train_ds, _ = prepare_datasets(
         task,
         n_train=cfg.task.n_train,
         n_test=cfg.task.n_test,
@@ -345,6 +346,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         balanced=cfg.task.get("balanced", False),
         enumerate_all=cfg.task.enumerate_all,
         resample_variable=cfg.task.get("resample_variable", "all"),
+        filter_correct=False,
     )
     _class_assignments = torch.tensor(
         [task.intervention_value_index(ex) for ex in _bm_train_ds],

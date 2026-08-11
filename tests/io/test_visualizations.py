@@ -1,10 +1,11 @@
 """
-Test suite for experiments/visualizations/
+Test suite for causalab/io/plots — mask/feature-count/heatmap visualizations.
 
-Tests the visualization functions for attention head and residual stream interventions.
+Post where-unification (WU5, #507) the mask and feature-count plots consume
+structured :class:`~causalab.io.plots.grid_cells.GridCell` records joined
+from a grid's own specs; the unit-id string parsing they used to rely on is
+retired (``causalab/io/plots/unit_id.py`` was deleted by the WU6 sweep, #508).
 """
-
-from typing import Dict, List, Optional
 
 import pytest
 import numpy as np
@@ -17,13 +18,16 @@ import tempfile
 import os
 
 from causalab.io.plots import (
+    GridCell,
+    cell_grid_dimensions,
+    cells_from_site_grid,
+    get_selected_heads,
     plot_attention_head_heatmap,
     plot_attention_head_mask,
-    get_selected_heads,
-    extract_layer_head_from_unit_id,
+    plot_binary_mask,
+    plot_feature_counts,
     plot_residual_stream_heatmap,
 )
-from causalab.io.plots.unit_id import extract_grid_dimensions
 from causalab.io.plots.utils import (
     create_heatmap,
     create_binary_mask_heatmap,
@@ -33,100 +37,172 @@ from causalab.io.plots.utils import (
 pytestmark = pytest.mark.unit
 
 
-# ---------------------- Tests for extract_layer_head_from_unit_id ---------------------- #
+def _head_cell(layer: int, head: int, indices=None, n_features=None) -> GridCell:
+    return GridCell(
+        key=f"k.L{layer}.H{head}",
+        layer=layer,
+        head=head,
+        indices=indices,
+        n_features=n_features,
+    )
 
 
-class TestExtractLayerHeadFromUnitId:
-    """Tests for the extract_layer_head_from_unit_id function."""
+def _pos_cell(layer: int, position: str, indices=None, n_features=None) -> GridCell:
+    return GridCell(
+        key=f"k.L{layer}.{position}",
+        layer=layer,
+        position=position,
+        indices=indices,
+        n_features=n_features,
+    )
 
-    def test_standard_format(self):
-        """Test extraction from standard AttentionHead unit ID format."""
-        unit_id = "AttentionHead(Layer-5,Head-3,position=last)"
-        layer, head = extract_layer_head_from_unit_id(unit_id)
-        assert layer == 5
-        assert head == 3
 
-    def test_different_numbers(self):
-        """Test with various layer and head numbers."""
-        unit_id = "AttentionHead(Layer-12,Head-15,position=first)"
-        layer, head = extract_layer_head_from_unit_id(unit_id)
-        assert layer == 12
-        assert head == 15
+# ---------------------- Tests for cells_from_site_grid ---------------------- #
 
-    def test_zero_indices(self):
-        """Test with layer 0 and head 0."""
-        unit_id = "AttentionHead(Layer-0,Head-0,position=last)"
-        layer, head = extract_layer_head_from_unit_id(unit_id)
-        assert layer == 0
-        assert head == 0
 
-    def test_invalid_format_raises_error(self):
-        """Test that invalid format raises ValueError."""
-        with pytest.raises(ValueError, match="Could not parse"):
-            extract_layer_head_from_unit_id("InvalidFormat")
+class _StubPos:
+    """Minimal PositionResolver with an id (what the grid builders bind)."""
 
-    def test_partial_match_raises_error(self):
-        """Test that partial matches raise ValueError."""
-        with pytest.raises(ValueError, match="Could not parse"):
-            extract_layer_head_from_unit_id("Layer-5")
+    def __init__(self, name: str) -> None:
+        self.id = name
+
+    def index(self, inp):  # pragma: no cover - never resolved in these tests
+        return [0]
+
+
+def _residual_grid(layers, position_names):
+    """A hand-built per-unit residual SiteGrid (no model/pipeline needed)."""
+    from causalab.neural.featurized_site import FeaturizedSite
+    from causalab.neural.site import Site
+    from causalab.neural.specs import SiteSpec
+
+    grid = {}
+    for layer in layers:
+        for name in position_names:
+            spec = SiteSpec(
+                fsite=FeaturizedSite(Site("block_output", layer)),
+                positions=_StubPos(name),
+                key=f"residual_stream.L{layer}.block_output.{name}",
+                width=8,
+            )
+            grid[(layer, name)] = [[spec]]
+    return grid
+
+
+def _head_grid(layers, heads, position_name="last"):
+    from causalab.neural.featurized_site import FeaturizedSite
+    from causalab.neural.head_view import HeadSite
+    from causalab.neural.specs import SiteSpec
+
+    grid = {}
+    for layer in layers:
+        for head in heads:
+            spec = SiteSpec(
+                fsite=FeaturizedSite(
+                    HeadSite(kind="attention_value", layer=layer, head=head)
+                ),
+                positions=_StubPos(position_name),
+                key=f"attention_head.L{layer}.H{head}.{position_name}",
+                width=4,
+            )
+            grid[(layer, head)] = [[spec]]
+    return grid
+
+
+class TestCellsFromSiteGrid:
+    def test_joins_structure_from_specs_never_from_keys(self):
+        """(component, layer, position) come from the specs; the opaque
+        feature_indices keys are matched exactly, never parsed."""
+        grid = _residual_grid([0, 1], ["last"])
+        feature_indices = {
+            "residual_stream.L0.block_output.last": [1, 2],
+            "residual_stream.L1.block_output.last": None,
+        }
+        component, cells = cells_from_site_grid(grid, feature_indices)
+        assert component == "residual_stream"
+        by_layer = {c.layer: c for c in cells}
+        assert set(by_layer) == {0, 1}
+        assert by_layer[0].position == "last"
+        assert by_layer[0].indices == (1, 2)
+        assert by_layer[1].indices is None
+
+    def test_skips_keys_absent_from_indices(self):
+        grid = _residual_grid([0, 1], ["last"])
+        component, cells = cells_from_site_grid(
+            grid, {"residual_stream.L1.block_output.last": []}
+        )
+        assert component == "residual_stream"
+        assert [c.layer for c in cells] == [1]
+        assert cells[0].indices == ()
+
+    def test_head_grid_carries_heads(self):
+        grid = _head_grid([0], [0, 1])
+        component, cells = cells_from_site_grid(
+            grid,
+            {
+                "attention_head.L0.H0.last": None,
+                "attention_head.L0.H1.last": [],
+            },
+        )
+        assert component == "attention_head"
+        assert {(c.layer, c.head) for c in cells} == {(0, 0), (0, 1)}
+
+    def test_shared_int_n_features(self):
+        grid = _residual_grid([0], ["last"])
+        _, cells = cells_from_site_grid(
+            grid, {"residual_stream.L0.block_output.last": None}, 16
+        )
+        assert cells[0].n_features == 16
+
+    def test_fused_grid_key_recovers_structure_from_specs(self):
+        """A one_target_all_units-style grid keys on ("all",) — structure must
+        still come out per spec (the legacy path parsed unit ids here)."""
+        grid = _residual_grid([0, 1], ["last"])
+        fused = {("all",): [[groups[0][0] for groups in grid.values()]]}
+        feature_indices = {
+            "residual_stream.L0.block_output.last": None,
+            "residual_stream.L1.block_output.last": [3],
+        }
+        component, cells = cells_from_site_grid(fused, feature_indices)
+        assert component == "residual_stream"
+        assert {c.layer for c in cells} == {0, 1}
 
 
 # ---------------------- Tests for get_selected_heads ---------------------- #
 
 
 class TestGetSelectedHeads:
-    """Tests for the get_selected_heads function."""
+    """Tests for the get_selected_heads function (structured cells)."""
 
     def test_all_selected(self):
-        """Test when all heads are selected (None values)."""
-        feature_indices = {
-            "AttentionHead(Layer-0,Head-0,position=last)": None,
-            "AttentionHead(Layer-0,Head-1,position=last)": None,
-            "AttentionHead(Layer-1,Head-0,position=last)": None,
-        }
-        selected = get_selected_heads(feature_indices)
-        assert selected == [(0, 0), (0, 1), (1, 0)]
+        cells = [_head_cell(0, 0), _head_cell(0, 1), _head_cell(1, 0)]
+        assert get_selected_heads(cells) == [(0, 0), (0, 1), (1, 0)]
 
     def test_none_selected(self):
-        """Test when no heads are selected (empty list values)."""
-        feature_indices = {
-            "AttentionHead(Layer-0,Head-0,position=last)": [],
-            "AttentionHead(Layer-0,Head-1,position=last)": [],
-        }
-        selected = get_selected_heads(feature_indices)
-        assert selected == []
+        cells = [_head_cell(0, 0, indices=()), _head_cell(0, 1, indices=())]
+        assert get_selected_heads(cells) == []
 
     def test_mixed_selection(self):
-        """Test with mix of selected and unselected heads."""
-        feature_indices = {
-            "AttentionHead(Layer-0,Head-0,position=last)": None,  # selected
-            "AttentionHead(Layer-0,Head-1,position=last)": [],  # not selected
-            "AttentionHead(Layer-1,Head-0,position=last)": None,  # selected
-            "AttentionHead(Layer-1,Head-1,position=last)": [],  # not selected
-        }
-        selected = get_selected_heads(feature_indices)
-        assert selected == [(0, 0), (1, 0)]
+        cells = [
+            _head_cell(0, 0),  # selected
+            _head_cell(0, 1, indices=()),  # not selected
+            _head_cell(1, 0),  # selected
+            _head_cell(1, 1, indices=()),  # not selected
+        ]
+        assert get_selected_heads(cells) == [(0, 0), (1, 0)]
 
     def test_sorted_output(self):
-        """Test that output is sorted by layer then head."""
-        feature_indices = {
-            "AttentionHead(Layer-2,Head-1,position=last)": None,
-            "AttentionHead(Layer-0,Head-3,position=last)": None,
-            "AttentionHead(Layer-1,Head-0,position=last)": None,
-            "AttentionHead(Layer-0,Head-1,position=last)": None,
-        }
-        selected = get_selected_heads(feature_indices)
-        assert selected == [(0, 1), (0, 3), (1, 0), (2, 1)]
+        cells = [
+            _head_cell(2, 1),
+            _head_cell(0, 3),
+            _head_cell(1, 0),
+            _head_cell(0, 1),
+        ]
+        assert get_selected_heads(cells) == [(0, 1), (0, 3), (1, 0), (2, 1)]
 
-    def test_ignores_non_attention_units(self):
-        """Test that non-AttentionHead units are ignored."""
-        feature_indices = {
-            "AttentionHead(Layer-0,Head-0,position=last)": None,
-            "ResidualStream(Layer-0,position=last)": None,
-            "MLP(Layer-1)": [],
-        }
-        selected = get_selected_heads(feature_indices)
-        assert selected == [(0, 0)]
+    def test_ignores_position_cells(self):
+        cells = [_head_cell(0, 0), _pos_cell(0, "last"), _pos_cell(1, "last")]
+        assert get_selected_heads(cells) == [(0, 0)]
 
 
 # ---------------------- Tests for plot_attention_head_heatmap ---------------------- #
@@ -191,42 +267,84 @@ class TestPlotAttentionHeadHeatmap:
 
 
 class TestPlotAttentionHeadMask:
-    """Tests for plot_attention_head_mask function."""
+    """Tests for plot_attention_head_mask function (structured cells)."""
 
     @pytest.fixture
-    def sample_feature_indices(self):
-        """Sample feature indices for mask plotting."""
-        return {
-            "AttentionHead(Layer-0,Head-0,position=last)": None,  # selected
-            "AttentionHead(Layer-0,Head-1,position=last)": [],  # not selected
-            "AttentionHead(Layer-1,Head-0,position=last)": [],  # not selected
-            "AttentionHead(Layer-1,Head-1,position=last)": None,  # selected
-        }
+    def sample_cells(self):
+        """Sample grid cells for mask plotting."""
+        return [
+            _head_cell(0, 0),  # selected
+            _head_cell(0, 1, indices=()),  # not selected
+            _head_cell(1, 0, indices=()),  # not selected
+            _head_cell(1, 1),  # selected
+        ]
 
-    def test_basic_mask(self, sample_feature_indices):
+    def test_basic_mask(self, sample_cells):
         """Test basic mask heatmap creation."""
         with patch("matplotlib.pyplot.show"):
             plot_attention_head_mask(
-                feature_indices=sample_feature_indices,
+                cells=sample_cells,
                 layers=[0, 1],
                 heads=[0, 1],
                 title="Test Mask",
             )
         plt.close("all")
 
-    def test_mask_with_save(self, sample_feature_indices):
+    def test_mask_with_save(self, sample_cells):
         """Test mask heatmap with file saving."""
         with tempfile.TemporaryDirectory() as tmpdir:
             save_path = os.path.join(tmpdir, "test_mask.png")
             with patch("matplotlib.pyplot.show"):
                 plot_attention_head_mask(
-                    feature_indices=sample_feature_indices,
+                    cells=sample_cells,
                     layers=[0, 1],
                     heads=[0, 1],
                     save_path=save_path,
                     figure_format="png",
                 )
             assert os.path.exists(save_path)
+        plt.close("all")
+
+    def test_unified_dispatcher_saves(self, sample_cells):
+        """plot_binary_mask dispatches on the caller's component_type."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_path = os.path.join(tmpdir, "mask.png")
+            with patch("matplotlib.pyplot.show"):
+                plot_binary_mask(
+                    "attention_head",
+                    sample_cells,
+                    save_path=save_path,
+                    figure_format="png",
+                )
+            assert os.path.exists(save_path)
+        plt.close("all")
+
+
+class TestPlotFeatureCounts:
+    """Feature-count dispatcher over structured cells."""
+
+    def test_residual_counts_save(self):
+        cells = [
+            _pos_cell(0, "last", indices=(1, 2, 3), n_features=8),
+            _pos_cell(1, "last", indices=None, n_features=8),
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_path = os.path.join(tmpdir, "counts.png")
+            with patch("matplotlib.pyplot.show"):
+                plot_feature_counts(
+                    "residual_stream",
+                    cells,
+                    scores=0.75,
+                    save_path=save_path,
+                    figure_format="png",
+                )
+            assert os.path.exists(save_path)
+        plt.close("all")
+
+    def test_all_selected_without_n_features_raises(self):
+        cells = [_pos_cell(0, "last", indices=None, n_features=None)]
+        with pytest.raises(ValueError, match="n_features"):
+            plot_feature_counts("residual_stream", cells, scores=0.5)
         plt.close("all")
 
 
@@ -383,36 +501,35 @@ class TestCreateBinaryMaskHeatmap:
         plt.close("all")
 
 
-# ---------------------- Tests for extract_grid_dimensions ---------------------- #
+# ---------------------- Tests for cell_grid_dimensions ---------------------- #
 
 
-class TestExtractGridDimensions:
-    """Tests for the extract_grid_dimensions function."""
+class TestCellGridDimensions:
+    """Axis extraction from structured cells (the extract_grid_dimensions
+    successor — same ordering contracts, no id parsing)."""
 
     def test_token_position_ordering_preserved(self):
-        """Test that token position order is preserved, not alphabetically sorted."""
-        # Feature indices with non-alphabetical insertion order
-        feature_indices: Dict[str, Optional[List[int]]] = {
-            "ResidualStream(Layer-0,block_output,Token-zebra)": None,
-            "ResidualStream(Layer-0,block_output,Token-alpha)": None,
-            "ResidualStream(Layer-0,block_output,Token-middle)": None,
-        }
-        dims = extract_grid_dimensions("residual_stream", feature_indices)
+        """Token position order is first-seen, not alphabetically sorted."""
+        cells = [
+            _pos_cell(0, "zebra"),
+            _pos_cell(0, "alpha"),
+            _pos_cell(0, "middle"),
+        ]
+        dims = cell_grid_dimensions("residual_stream", cells)
         # Should preserve insertion order, not alphabetical
         assert dims["token_position_ids"] == ["zebra", "alpha", "middle"]
         # Layers should still be sorted
         assert dims["layers"] == [0]
 
     def test_token_position_ordering_with_multiple_layers(self):
-        """Test token position ordering with multiple layers."""
-        feature_indices: Dict[str, Optional[List[int]]] = {
-            "ResidualStream(Layer-2,block_output,Token-last_token)": None,
-            "ResidualStream(Layer-0,block_output,Token-first_token)": None,
-            "ResidualStream(Layer-1,block_output,Token-middle_token)": None,
-            "ResidualStream(Layer-2,block_output,Token-first_token)": None,
-            "ResidualStream(Layer-0,block_output,Token-last_token)": None,
-        }
-        dims = extract_grid_dimensions("residual_stream", feature_indices)
+        cells = [
+            _pos_cell(2, "last_token"),
+            _pos_cell(0, "first_token"),
+            _pos_cell(1, "middle_token"),
+            _pos_cell(2, "first_token"),
+            _pos_cell(0, "last_token"),
+        ]
+        dims = cell_grid_dimensions("residual_stream", cells)
         # Token positions should preserve first-seen order
         assert dims["token_position_ids"] == [
             "last_token",
@@ -423,23 +540,21 @@ class TestExtractGridDimensions:
         assert dims["layers"] == [0, 1, 2]
 
     def test_mlp_token_position_ordering(self):
-        """Test that MLP token positions also preserve order."""
-        feature_indices: Dict[str, Optional[List[int]]] = {
-            "MLP(Layer-0,mlp_output,Token-pos_c)": None,
-            "MLP(Layer-0,mlp_output,Token-pos_a)": None,
-            "MLP(Layer-0,mlp_output,Token-pos_b)": None,
-        }
-        dims = extract_grid_dimensions("mlp", feature_indices)
+        cells = [
+            _pos_cell(0, "pos_c"),
+            _pos_cell(0, "pos_a"),
+            _pos_cell(0, "pos_b"),
+        ]
+        dims = cell_grid_dimensions("mlp", cells)
         assert dims["token_position_ids"] == ["pos_c", "pos_a", "pos_b"]
 
     def test_attention_head_dimensions(self):
-        """Test that attention head dimensions are still sorted."""
-        feature_indices: Dict[str, Optional[List[int]]] = {
-            "AttentionHead(Layer-2,Head-5,Token-last)": None,
-            "AttentionHead(Layer-0,Head-3,Token-last)": None,
-            "AttentionHead(Layer-1,Head-1,Token-last)": None,
-        }
-        dims = extract_grid_dimensions("attention_head", feature_indices)
+        cells = [
+            _head_cell(2, 5),
+            _head_cell(0, 3),
+            _head_cell(1, 1),
+        ]
+        dims = cell_grid_dimensions("attention_head", cells)
         # Both layers and heads should be sorted for attention
         assert dims["layers"] == [0, 1, 2]
         assert dims["heads"] == [1, 3, 5]

@@ -1,0 +1,42 @@
+# @package _global_
+# Smoke-tier DAS-grid subspace runner with the attribution pre-scan gate (#456).
+#
+# Exercises the trained-grid gate on tiny-random: the one-backward
+# gradient x delta-activation pre-scan scores the (layer x position) grid,
+# prunes it to top_k, and DAS trains only on the survivors. Asserts the gated
+# chain completes and writes grid_results.json (with its prescan block);
+# value pins live in the golden tier.
+defaults:
+- /base
+- /task: natural_domains_arithmetic_weekdays
+- /model: tiny-random
+- /analysis/baseline
+- /analysis/subspace
+- _self_
+
+task:
+  target_variable: result
+  n_train: 2
+  n_test: 2
+
+baseline:
+  batch_size: 2
+
+subspace:
+  filter_correct: false  # tiny-random solves ~nothing; correct-only filtering would empty the dataset
+  method: das
+  # tiny-random has hidden_size=16, so k_features must stay <= 16.
+  k_features: 4
+  layers: [0, 1]
+  batch_size: 2
+  das:
+    training_epoch: 1
+    lr: 0.001
+  prescan:
+    enabled: true
+    top_k: 3          # 2 layers x 3 task positions = 6 cells; DAS trains on 3
+    n_examples: 2
+
+expected_artifacts:
+- subspace/das_k4/result/grid_results.json
+- subspace/das_k4/result/heatmaps/prescan.png

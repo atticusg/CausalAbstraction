@@ -147,6 +147,51 @@ def tiny_random_gpt2_model() -> Any:
     return AutoModelForCausalLM.from_pretrained(TINY_RANDOM_GPT2_MODEL_NAME)
 
 
+# ---------------------------------------------------------------------------
+# Fresh (uncached) instances — for nnsight/nnterp trace tests
+# ---------------------------------------------------------------------------
+#
+# The ``lru_cache`` singletons above are shared across suites; leftover
+# forward hooks on a shared instance break a later nnsight trace
+# (``MissedProviderError`` on the block/model outputs). Tests that wrap a model in an nnterp
+# ``StandardizedTransformer`` (``tests/neural/test_site.py`` /
+# ``test_head_view.py``) therefore build a private, seeded instance from config —
+# through these factories, so the recipe lives in one place.
+def fresh_tiny_random_llama(mutate_config: Any = None) -> tuple[Any, Any]:
+    """A fresh (uncached) random-weight tiny Llama + tokenizer, seeded for
+    determinism. Real RoPE architecture, numerically meaningless outputs.
+    ``mutate_config`` (optional callable) edits the loaded config in place before
+    the model is built — for architecture variants (GQA, decoupled ``head_dim``)."""
+    import torch
+    from transformers import AutoConfig, AutoTokenizer, LlamaForCausalLM
+
+    cfg = AutoConfig.from_pretrained(TINY_RANDOM_MODEL_NAME)
+    if mutate_config is not None:
+        mutate_config(cfg)
+    torch.manual_seed(0)
+    model = LlamaForCausalLM(cfg).eval()
+    tok = AutoTokenizer.from_pretrained(TINY_RANDOM_MODEL_NAME)
+    return model, tok
+
+
+def fresh_tiny_random_gpt2(mutate_config: Any = None) -> tuple[Any, Any]:
+    """A fresh (uncached) random-weight tiny GPT-2 + tokenizer, seeded for
+    determinism. Built from the tiny-random-gpt2 config (not a shrunk ``gpt2``
+    config): its vocab matches its tokenizer, so real tokenized text has
+    in-range ids. ``mutate_config`` (optional callable) edits the loaded config
+    in place before the model is built — mirrors the llama factory."""
+    import torch
+    from transformers import AutoConfig, AutoTokenizer, GPT2LMHeadModel
+
+    cfg = AutoConfig.from_pretrained(TINY_RANDOM_GPT2_MODEL_NAME)
+    if mutate_config is not None:
+        mutate_config(cfg)
+    torch.manual_seed(0)
+    model = GPT2LMHeadModel(cfg).eval()
+    tok = AutoTokenizer.from_pretrained(TINY_RANDOM_GPT2_MODEL_NAME)
+    return model, tok
+
+
 def tiny_random_runner_overrides(experiment_root: Path | str) -> dict[str, Any]:
     """Return Hydra overrides pointing a baseline runner at the tiny-random
     Llama stub and shrinking the dataset to smoke-test scale.

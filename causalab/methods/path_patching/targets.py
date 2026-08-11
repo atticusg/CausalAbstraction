@@ -1,20 +1,22 @@
 """Path-patching target construction for a sender → receiver edge.
 
-Builds the pyvene grouping path patching needs: group 0 is the **sender** (which
-reads the *source* input) and group 1 is the **restorer set** (which reads the
-*base* input, freezing other paths to their clean value). The hard correctness
-rule lives here — restorers are only ``attention_output`` / ``mlp_output``
-components, **never** ``block_output`` (which bundles the residual stream
-carrying the sender's direct contribution and would erase the path).
+Resolves the *locations* of a path-patched edge onto the Site stack: the
+**sender** (a :class:`~causalab.neural.specs.SiteSpec` at the API boundary —
+born holding a real engine :class:`~causalab.neural.site.Site` /
+:class:`~causalab.neural.head_view.HeadSite`, WU4 #506), the **receiver**
+(:class:`ReceiverSpec` → :func:`build_receiver_site`), and the **restorer set**
+(:func:`build_restorer_sites` — the components frozen to their clean-base value
+between them). The hard correctness rule lives here — restorers are only
+``attention_output`` / ``mlp_output`` components, **never** ``block_output``
+(which bundles the residual stream carrying the sender's direct contribution
+and would erase the path).
 
-This module also defines the **receiver** (:class:`ReceiverSpec`) and constructs
-the concrete receiver unit (:func:`build_receiver_unit`): ``output`` (the logits,
-the degenerate one-pass case) or an internal ``head_value_input`` /
-``head_query_input`` / ``mlp_input`` / ``residual`` read-point that the two-pass
-runner collects and re-injects. The
-restorer **range** stops at the receiver's read point via the forward-order depth
-rule below, reducing to "sender-layer MLP + every layer above" when the receiver
-is the output.
+Receivers are ``output`` (the logits, the degenerate one-pass case) or an
+internal ``head_value_input`` / ``head_query_input`` / ``mlp_input`` /
+``residual`` read-point that the two-pass plan collects and re-injects. The
+restorer **range** stops at the receiver's read point via the forward-order
+depth rule below, reducing to "sender-layer MLP + every layer above" when the
+receiver is the output.
 
 The restorer set *is the estimand definition*, exposed via ``restore``:
 
@@ -37,16 +39,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Literal
 
-from causalab.neural.LM_units import (
-    AttentionHeadQuery,
-    AttentionHeadValue,
-    AttentionOutput,
-    MLP,
-    ResidualStream,
-)
+from causalab.neural.head_view import HeadSite
 from causalab.neural.pipeline import LMPipeline
+from causalab.neural.site import Site
+from causalab.neural.specs import SiteSpec
 from causalab.neural.token_positions import TokenPosition
-from causalab.neural.units import AtomicModelUnit, ComponentIndexer, InterchangeTarget
 
 RestoreFamily = Literal["attention", "mlp"]
 _VALID_FAMILIES: frozenset[str] = frozenset({"attention", "mlp"})
@@ -65,12 +62,11 @@ class ReceiverSpec:
       intervened forward (there is nothing downstream of the output to strip), so
       this never needs the collect/inject machinery.
     * ``head_value_input`` — a head's value path at ``(layer, head)``, realized as
-      its per-head value vector (pyvene ``head_value_output``; see
-      :class:`~causalab.neural.LM_units.AttentionHeadValue`). The canonical "v of
-      head h" receiver.
+      its per-head value vector (:class:`~causalab.neural.head_view.HeadSite`
+      kind ``"value"``). The canonical "v of head h" receiver.
     * ``head_query_input`` — a head's query path at ``(layer, head)``, realized as
-      its per-head query vector (pyvene ``head_query_output``; see
-      :class:`~causalab.neural.LM_units.AttentionHeadQuery`). The "q of head h"
+      its per-head query vector (:class:`~causalab.neural.head_view.HeadSite`
+      kind ``"query"``). The "q of head h"
       receiver — the Fig. 4 S-Inhibition → Name-Mover *query* edge. Read at the
       same depth as the value receiver (``2·layer``); the query vector is
       per-query-head, so unlike the value path it needs no GQA KV-group remap.
@@ -110,51 +106,36 @@ class ReceiverSpec:
 OUTPUT = ReceiverSpec(kind="output")
 
 
-def build_receiver_unit(
+def build_receiver_site(
     pipeline: LMPipeline, receiver: ReceiverSpec
-) -> AtomicModelUnit | None:
-    """Construct the concrete receiver unit to collect (PASS 1) and inject (PASS 2).
+) -> Site | HeadSite | None:
+    """Resolve the receiver's read/write location to collect (PASS 1) and inject
+    (PASS 2).
 
     Returns ``None`` for ``kind='output'`` (the degenerate single-forward case has
-    no receiver unit — the metric is read straight off the logits). For internal
-    receivers the unit's component is the read-point pyvene exposes:
-    ``head_value_output`` (per-head value vector), ``head_query_output`` (per-head
-    query vector), ``mlp_input``, or the residual ``block_output`` / ``block_input``.
+    no receiver location — the metric is read straight off the logits). Internal
+    receivers resolve to a per-head :class:`HeadSite` (``value`` / ``query``) or a
+    whole-component :class:`Site` (``mlp_input``, ``block_input`` /
+    ``block_output``); the receiver's ``token_position`` stays on the spec and is
+    resolved per batch by the plan builder. Unlike pyvene 0.1.8 (which sliced
+    value vectors at ``hidden // n_head``), :class:`HeadSite` honours a decoupled
+    ``config.head_dim`` (e.g. Qwen3), so value receivers on such models are
+    supported.
     """
     if receiver.kind == "output":
         return None
     config = pipeline.model.config
-    hidden = config.hidden_size
     assert receiver.layer is not None and receiver.token_position is not None
     if receiver.kind == "head_value_input":
         assert receiver.head is not None
         n_head = config.num_attention_heads
-        n_kv_heads = getattr(config, "num_key_value_heads", n_head)
+        n_kv_heads = getattr(config, "num_key_value_heads", None) or n_head
         if not 0 <= receiver.head < n_head:
             raise ValueError(
                 f"head_value_input receiver head={receiver.head} is out of range "
                 f"0..{n_head - 1} (num_attention_heads={n_head})."
             )
-        head_dim = getattr(config, "head_dim", None) or (hidden // n_head)
-        # pyvene 0.1.8's head_value_output realizes the per-head value vector at width
-        # `hidden_size // num_attention_heads` (it infers the head dim from the head
-        # count, not config.head_dim). When head_dim is decoupled from that ratio
-        # (e.g. Qwen3), PASS 1 collects a `hidden // n_head`-wide vector that cannot be
-        # injected into the true `head_dim`-wide slot in PASS 2 — pyvene raises a deep
-        # broadcast error mid-forward. Guard it here, at the construction chokepoint
-        # both the runner and the analysis route through, with an actionable message.
-        # (The common coupled case, head_dim == hidden // n_head, is unaffected.)
-        if head_dim != hidden // n_head:
-            raise NotImplementedError(
-                f"head_value_input receiver needs head_dim == hidden_size // "
-                f"num_attention_heads, but head_dim={head_dim} and hidden_size // "
-                f"num_attention_heads={hidden // n_head}. pyvene 0.1.8's "
-                f"head_value_output slices the value vector at the hidden // n_head "
-                f"width, so a model with a decoupled head_dim (e.g. Qwen3) is "
-                f"unsupported for the value receiver. Use a residual or mlp_input "
-                f"receiver instead."
-            )
-        # pyvene's head_value_output is indexed in KV-head space (it splits v_proj by
+        # The value vector is indexed in KV-head space (v_proj splits by
         # num_key_value_heads). Under grouped-/multi-query attention (n_kv < n_head)
         # each value vector is *shared* by a group of query heads, so the receiver's
         # query head maps to its KV group `head // (n_head // n_kv)`. On non-GQA
@@ -163,9 +144,7 @@ def build_receiver_unit(
         # edge is "into the group's shared value", not one isolated head — a
         # per-query-head value path does not exist in GQA.
         kv_head = receiver.head // (n_head // n_kv_heads)
-        return AttentionHeadValue(
-            receiver.layer, kv_head, receiver.token_position, shape=(head_dim,)
-        )
+        return HeadSite("value", receiver.layer, kv_head)
     if receiver.kind == "head_query_input":
         assert receiver.head is not None
         n_head = config.num_attention_heads
@@ -174,28 +153,14 @@ def build_receiver_unit(
                 f"head_query_input receiver head={receiver.head} is out of range "
                 f"0..{n_head - 1} (num_attention_heads={n_head})."
             )
-        # pyvene's head_query_output is indexed in query-head space (it splits q_proj
-        # by num_attention_heads). Queries are per-query-head even under GQA — only
-        # k/v are shared across a KV group — so the receiver's head maps to itself
-        # with no KV-group remap (contrast head_value_input above).
-        head_dim = getattr(config, "head_dim", None) or (hidden // n_head)
-        return AttentionHeadQuery(
-            receiver.layer, receiver.head, receiver.token_position, shape=(head_dim,)
-        )
+        # Queries are per-query-head even under GQA — only k/v are shared across a
+        # KV group — so the receiver's head maps to itself with no KV-group remap
+        # (contrast head_value_input above).
+        return HeadSite("query", receiver.layer, receiver.head)
     if receiver.kind == "mlp_input":
-        return MLP(
-            receiver.layer,
-            receiver.token_position,
-            location="mlp_input",
-            shape=(hidden,),
-        )
+        return Site("mlp_input", receiver.layer)
     if receiver.kind == "residual":
-        return ResidualStream(
-            receiver.layer,
-            receiver.token_position,
-            target_output=(receiver.residual_point == "block_output"),
-            shape=(hidden,),
-        )
+        return Site(receiver.residual_point, receiver.layer)
     raise ValueError(f"Unknown receiver kind {receiver.kind!r}.")
 
 
@@ -216,11 +181,6 @@ def _normalize_restore(restore: Iterable[str]) -> tuple[str, ...]:
     return families
 
 
-def _unit_position(unit: AtomicModelUnit) -> ComponentIndexer:
-    """The token position an :class:`AtomicModelUnit` reads/writes."""
-    return unit._indices_func  # pyright: ignore[reportPrivateUsage]
-
-
 # Residual-stream writers/readers laid out in forward order as integer "depths":
 # layer i's attention output writes at 2*i, its MLP output at 2*i+1. A restorer
 # belongs strictly *between* the sender's write and the receiver's read — i.e. its
@@ -230,32 +190,31 @@ def _unit_position(unit: AtomicModelUnit) -> ComponentIndexer:
 # membership for internal receivers (e.g. an MLP input reads after its layer's
 # attention, so that attention is a restorer; a head's value input reads before its
 # layer's attention, so it is not).
-_ATTENTION_COMPONENTS = frozenset(
-    {
-        "head_attention_value_output",
-        "head_attention_value_input",
-        "attention_output",
-        "head_value_output",
-        "head_query_output",
-        "head_key_output",
-    }
-)
 
 
-def _sender_write_depth(sender: AtomicModelUnit) -> int:
-    ct = sender.component_type
-    if ct in _ATTENTION_COMPONENTS:
-        return 2 * sender.layer
-    if ct in ("mlp_output", "mlp_input", "mlp_activation"):
-        return 2 * sender.layer + 1
-    if ct == "block_output":
-        return 2 * sender.layer + 1
-    if ct == "block_input":
+def _sender_write_depth(sender: SiteSpec) -> int:
+    # Structural placement off the spec's engine site: every per-head site
+    # (HeadSite, whatever its kind) writes within its layer's attention, as
+    # does the whole attention sublayer output.
+    site = sender.fsite.site
+    layer = site.layer  # type: ignore[attr-defined]  # Site and HeadSite both carry it
+    if isinstance(site, HeadSite):
+        return 2 * layer
+    component = site.component  # type: ignore[attr-defined]
+    if component == "attention_output":
+        return 2 * layer
+    if component in ("mlp_output", "mlp_input", "mlp_activation"):
+        return 2 * layer + 1
+    if component == "block_output":
+        return 2 * layer + 1
+    if component == "block_input":
         # Reads/writes before layer L's attention; at layer 0 this is depth -1
         # (before everything), which is intentional — it places such a sender
         # upstream of all writers.
-        return 2 * sender.layer - 1
-    raise ValueError(f"Cannot place sender component {ct!r} in the residual order.")
+        return 2 * layer - 1
+    raise ValueError(
+        f"Cannot place sender component {component!r} in the residual order."
+    )
 
 
 def _receiver_read_depth(receiver: ReceiverSpec, n_layers: int) -> int:
@@ -283,7 +242,7 @@ def _receiver_read_depth(receiver: ReceiverSpec, n_layers: int) -> int:
 
 
 def sender_reaches_receiver(
-    pipeline: LMPipeline, sender: AtomicModelUnit, receiver: ReceiverSpec
+    pipeline: LMPipeline, sender: SiteSpec, receiver: ReceiverSpec
 ) -> bool:
     """True iff the sender writes to the residual stream before the receiver reads it.
 
@@ -318,7 +277,7 @@ def deepest_receiver(
 
 def sender_reaches_any(
     pipeline: LMPipeline,
-    sender: AtomicModelUnit,
+    sender: SiteSpec,
     receiver_specs: list[ReceiverSpec],
 ) -> bool:
     """True iff the sender reaches at least one receiver in the set.
@@ -333,89 +292,39 @@ def sender_reaches_any(
     )
 
 
-def build_restorer_set(
+def build_restorer_sites(
     pipeline: LMPipeline,
-    sender: AtomicModelUnit,
+    sender: SiteSpec,
     receiver: ReceiverSpec = OUTPUT,
     *,
     restore: Iterable[str] = ("attention", "mlp"),
-) -> list[AtomicModelUnit]:
-    """Construct the restorer units for the edge ``sender → receiver``.
+) -> list[Site]:
+    """Construct the restorer locations for the edge ``sender → receiver``.
 
-    Returns ``attention_output`` / ``mlp_output`` units, never ``block_output``
-    (which bundles the residual stream carrying the sender's direct contribution).
-    A component is a restorer iff its forward-order depth lies strictly between the
-    sender's write and the receiver's read (see the module-level depth note), and
-    its family is in ``restore`` (``"attention"`` and/or ``"mlp"``).
+    Returns ``attention_output`` / ``mlp_output`` :class:`Site`\\ s, never
+    ``block_output`` (which bundles the residual stream carrying the sender's
+    direct contribution). A component is a restorer iff its forward-order depth
+    lies strictly between the sender's write and the receiver's read (see the
+    module-level depth note), and its family is in ``restore`` (``"attention"``
+    and/or ``"mlp"``).
 
     For ``receiver = output`` this is the sender-layer MLP plus every attention /
     MLP output above the sender — the IOI-tutorial restorer set. For an internal
-    receiver the range stops at the receiver's read point, and restorers freeze at
-    the *receiver's* token position (the residual at a position is written only by
-    components at that position, so freezing there isolates the direct edge while
-    staying single-token — never tripping the one-token-per-position guard).
+    receiver the range stops at the receiver's read point. The *position* the
+    restorers freeze at is the plan builder's job (the receiver's token position,
+    falling back to the sender's for the output case — the residual at a position
+    is written only by components at that position, so freezing there isolates
+    the direct edge while staying single-token).
     """
     families = _normalize_restore(restore)
-    config = pipeline.model.config
-    n_layers = config.num_hidden_layers
-    hidden = config.hidden_size
-    # Restorers freeze at the receiver's read position; for the output case there is
-    # no internal receiver, so fall back to the sender's (last-token) position.
-    pos = (
-        receiver.token_position if receiver.kind != "output" else _unit_position(sender)
-    )
+    n_layers = pipeline.model.config.num_hidden_layers
     sender_depth = _sender_write_depth(sender)
     read_depth = _receiver_read_depth(receiver, n_layers)
 
-    restorers: list[AtomicModelUnit] = []
+    restorers: list[Site] = []
     for i in range(n_layers):
         if "attention" in families and sender_depth < 2 * i < read_depth:
-            restorers.append(AttentionOutput(i, pos, shape=(hidden,)))
+            restorers.append(Site("attention_output", i))
         if "mlp" in families and sender_depth < 2 * i + 1 < read_depth:
-            restorers.append(MLP(i, pos, location="mlp_output", shape=(hidden,)))
+            restorers.append(Site("mlp_output", i))
     return restorers
-
-
-def group_path_patching_target(
-    sender: AtomicModelUnit, restorers: list[AtomicModelUnit]
-) -> InterchangeTarget:
-    """Group a sender and its restorers into the path-patching ``InterchangeTarget``.
-
-    Group 0 is the sender (it reads the *source* input); group 1 is the restorer
-    set (it reads the *base* input). When ``restorers`` is empty (e.g. a top-layer
-    head under ``restore=("attention",)``: no layers above and no MLP to freeze)
-    the target collapses to the single sender group ``[[sender]]`` — path patching
-    then degenerates to a plain single-source interchange of the sender, and the
-    caller must feed the original 1-source dataset, *not* the re-presented
-    ``[source, base]`` one.
-
-    This is the single source of grouping truth: both
-    :func:`build_path_patching_target` and the runner
-    (:func:`causalab.methods.path_patching.run.run_path_patching`) route through
-    it, so the target shape cannot drift between them.
-    """
-    if not restorers:
-        return InterchangeTarget([[sender]])
-    return InterchangeTarget([[sender], restorers])
-
-
-def build_path_patching_target(
-    pipeline: LMPipeline,
-    sender: AtomicModelUnit,
-    receiver: ReceiverSpec = OUTPUT,
-    *,
-    restore: Iterable[str] = ("attention", "mlp"),
-) -> InterchangeTarget:
-    """Assemble the path-patching grouping for the edge ``sender → receiver``.
-
-    Returns ``InterchangeTarget([[sender], [*restorers]])`` — group 0 is the
-    sender (it reads the *source* input), group 1 is the restorer set (it reads
-    the *base* input). This is the two-group pyvene path-patching config: for
-    ``receiver = output`` the direct effect on the logits is read from a single
-    intervened forward; for an internal receiver this same grouping drives PASS 1
-    of the two-pass runner (the receiver is collected alongside it). When there
-    are no restorers the target collapses to ``[[sender]]`` (see
-    :func:`group_path_patching_target`).
-    """
-    restorers = build_restorer_set(pipeline, sender, receiver, restore=restore)
-    return group_path_patching_target(sender, restorers)

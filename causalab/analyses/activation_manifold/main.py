@@ -13,7 +13,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from causalab.runner.helpers import (
     resolve_task,
-    generate_datasets,
+    prepare_datasets,
     get_output_token_ids,
     resolve_intervention_metric,
     build_targets_for_layers,
@@ -128,18 +128,19 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     )
 
     _t = _time.time()
-    train_dataset, test_dataset = generate_datasets(  # pyright: ignore[reportUnusedVariable]
+    train_dataset, test_dataset = prepare_datasets(  # pyright: ignore[reportUnusedVariable]
         task,
         n_train=cfg.task.n_train,
         n_test=cfg.task.n_test,
         seed=cfg.seed,
         enumerate_all=cfg.task.enumerate_all,
         resample_variable=cfg.task.get("resample_variable", "all"),
+        filter_correct=False,
     )
     logger.info("Dataset generation: %.1fs", _time.time() - _t)
 
     # Only load full model weights when the decoding reconstruction test will run.
-    # Manifold fitting itself works on cached features; building InterchangeTargets
+    # Manifold fitting itself works on cached features; building site specs
     # and saving the composed featurizer only need tokenizer + model config.
     skip_decoding_eval = analysis.get("skip_decoding_eval", True)
 
@@ -234,7 +235,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             out_dir = os.path.join(out_dir, tv)
         os.makedirs(out_dir, exist_ok=True)
 
-        # Build interchange target
+        # Build the cell's site spec
         if token_position is not None:
             targets, positions = build_targets_for_grid(  # pyright: ignore[reportUnusedVariable]
                 pipeline,
@@ -244,10 +245,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             )
         else:
             targets, _token_pos = build_targets_for_layers(pipeline, task, [layer])
-        target = next(iter(targets.values()))
+        spec = next(iter(targets.values()))[0][0]
 
         # Resolve subspace artifact directories
-        from causalab.analyses.subspace import load_subspace_onto_target
+        from causalab.analyses.subspace import load_subspace_onto_spec
 
         subspace_out_dir = os.path.join(root, "subspace", ss_sub)
         if tv:
@@ -264,8 +265,8 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         else:
             cell_dir = subspace_out_dir
 
-        load_subspace_onto_target(
-            target,
+        spec = load_subspace_onto_spec(
+            spec,
             cell_dir,
             ss_method,
             k_features,
@@ -306,7 +307,6 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             from causalab.neural.activations.collect import collect_features
             from torch import Tensor
 
-            unit = target.flatten()[0]
             # collect_output_logits=False (default) returns dict[str, Tensor];
             # cast tells pyright we're in that branch of the union.
             features_dict = cast(
@@ -314,11 +314,11 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 collect_features(
                     dataset=train_dataset,
                     pipeline=pipeline,
-                    model_units=[unit],
+                    sites=[spec],
                     batch_size=analysis.batch_size,
                 ),
             )
-            features = features_dict[unit.id].detach()
+            features = features_dict[spec.key].detach()
             logger.info(
                 "Collected features on-the-fly for grid cell (layer=%s, pos=%s)",
                 layer,
@@ -376,7 +376,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         # Run the manifold fitting pipeline
         fitting_config = ManifoldFittingConfig(
             pipeline=pipeline,
-            interchange_target=target,
+            sites=[[spec]],
             features=features,
             train_dataset=train_dataset,
             causal_model=task.causal_model,

@@ -259,7 +259,12 @@ def plot_residual_stream_intervention_heatmap(
     Create heatmap showing output tokens after interventions at each (layer, position).
 
     Args:
-        intervention_results: Dict with (layer, token_pos_id) keys and intervention outputs.
+        intervention_results: Dict with (layer, token_pos_id) keys and
+            intervention outputs — each cell is the legacy ``raw_results``
+            dict view of a single-example run
+            (:meth:`~causalab.neural.pipeline.GenerationResult.to_raw_results`:
+            ``{"string": [[<decoded>]], ...}``), or a hand-built flat
+            ``{"string": [<decoded>]}`` (e.g. the logit-lens heatmap).
         prompt: Original prompt text to extract token labels.
         layers: List of layer indices that were intervened on.
         token_positions: List of TokenPosition objects used in interventions.
@@ -289,12 +294,15 @@ def plot_residual_stream_intervention_heatmap(
             if key in intervention_results:
                 result = intervention_results[key]
 
-                # Extract output token from string results (first item of batch)
+                # Extract the first example's decoded output. The io boundary
+                # consumes GenerationResult.to_raw_results() (EU5b, #487),
+                # whose "string" is ONE synthetic batch ([[...strings...]]);
+                # a hand-built flat ["<decoded>"] cell (logit lens) also works.
                 output_token = ""
-                if "string" in result and result["string"]:
-                    output_token = (
-                        result["string"][0].strip() if result["string"] else ""
-                    )
+                first = result["string"][0] if result.get("string") else ""
+                if isinstance(first, list):
+                    first = first[0] if first else ""
+                output_token = str(first).strip()
 
                 # Store the output token
                 token_matrix[layer_idx, pos_idx] = output_token if output_token else "∅"

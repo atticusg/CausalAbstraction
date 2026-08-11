@@ -34,6 +34,7 @@ def load_pipeline(
     device: str | None = None,
     dtype: str | None = None,
     eager_attn: bool | None = None,
+    enable_attention_probs: bool | None = None,
     use_chat_template: bool = False,
     chat_answer_directive: str | None = None,
 ):
@@ -44,6 +45,17 @@ def load_pipeline(
     otherwise restate the question instead of answering). ``chat_answer_directive``,
     when set, is emitted as a system message nudging the model to reply with only
     the bare answer so a 1-token completion contract still scores the answer.
+
+    ``eager_attn=True`` opts into eager attention (needed for
+    attention-probability extraction); ``None`` defers to ``LMPipeline``'s
+    default — HF's own resolution, sdpa/flash where available (SH3, #424).
+
+    ``enable_attention_probs=True`` additionally exposes nnterp's *editable*
+    ``attention_probabilities[i]`` trace target (attention knockout /
+    renormalize — :mod:`causalab.neural.attention_probs`, CAP4 #457): it
+    forces eager attention on its own and runs nnterp's ``check_source()``
+    validation gate at load. Thread it from an analysis config as
+    ``enable_attention_probs=cfg.model.get("enable_attention_probs")``.
     """
     from causalab.neural.pipeline import LMPipeline, resolve_device
 
@@ -67,8 +79,10 @@ def load_pipeline(
 
     if dtype:
         model_kwargs["dtype"] = DTYPE_MAP.get(dtype, torch.bfloat16)
-    if eager_attn is False:
-        model_kwargs["eager_attn"] = False
+    if eager_attn is not None:
+        model_kwargs["eager_attn"] = eager_attn
+    if enable_attention_probs is not None:
+        model_kwargs["enable_attention_probs"] = enable_attention_probs
 
     pipeline = LMPipeline(
         model_name,
@@ -92,12 +106,12 @@ def load_lite_pipeline(
     """Load an ``LMPipeline`` with tokenizer + config only (no model weights).
 
     For analyses that need ``pipeline.tokenizer`` and ``pipeline.model.config``
-    (e.g. to build :class:`InterchangeTarget` from cached features) but never
-    run forward passes. Returns immediately for any model size; calling
-    ``pipeline.generate`` or running the model will fail.
+    (e.g. to build :class:`~causalab.neural.specs.SiteSpec` grids from cached
+    features) but never run forward passes. Returns immediately for any model
+    size; calling ``pipeline.generate`` or running the model will fail.
 
     ``use_chat_template`` is threaded through even though no forward pass runs:
-    the token-position code paths these lite pipelines feed (InterchangeTarget
+    the token-position code paths these lite pipelines feed (site-spec grid
     construction) tokenize prompts, so they must wrap consistently with the full
     pipeline or intervention indices would be computed on the bare text.
     """

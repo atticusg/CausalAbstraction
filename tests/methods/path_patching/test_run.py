@@ -1,9 +1,10 @@
 """Tests for the path-patching runner (``methods.path_patching.run``).
 
 The tiny-random model has no IOI behaviour, so the integration checks pin
-*wiring*: the source/base second-source arrangement, and that the OUTPUT
-head-sweep generates and scores one finite value per cell over the real
-interchange path. Property tier (path-equivalence / shape contracts).
+*wiring*: every receiver regime runs its Plan lowering end to end through the
+public functions and scores one finite value per cell. Property tier
+(path-equivalence / shape contracts); ``TestLeftPadGenerateParity`` is the
+numerical_unit left-pad position_ids gate.
 """
 
 from __future__ import annotations
@@ -16,23 +17,16 @@ import torch
 from causalab.causal.trace import CausalTrace, Mechanism
 from causalab.methods.metric import InterchangeMetric
 from causalab.methods.path_patching.run import (
-    _with_base_as_second_source,
     run_path_patching,
     run_path_patching_scan,
 )
 from causalab.methods.path_patching.targets import (
     ReceiverSpec,
-    build_receiver_unit,
-    build_restorer_set,
+    build_restorer_sites,
 )
-from causalab.neural.activations.intervenable_model import (
-    delete_intervenable_model,
-    prepare_mixed_intervenable_model,
-)
-from causalab.neural.activations.targets import build_attention_head_targets
+from causalab.neural.activations.site_grids import build_attention_head_sites
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_positions import TokenPosition, get_last_token_index
-from causalab.neural.units import InterchangeTarget
 
 
 def _trace(text: str) -> CausalTrace:
@@ -83,38 +77,25 @@ def _first_logit_metric() -> InterchangeMetric:
     )
 
 
-class TestSecondSource:
-    pytestmark = pytest.mark.property
-
-    def test_orders_source_then_base(self, mock_tiny_lm: LMPipeline) -> None:
-        ds = _dataset()
-        out = _with_base_as_second_source(ds)
-        for orig, new in zip(ds, out):
-            assert new["input"] is orig["input"]
-            # group 0 (sender) reads the original source; group 1 (restorers) the base
-            assert new["counterfactual_inputs"][0] is orig["counterfactual_inputs"][0]
-            assert new["counterfactual_inputs"][1] is orig["input"]
-
-
 class TestOutputScan:
     pytestmark = pytest.mark.property
 
     def test_run_path_patching_returns_scores(self, mock_tiny_lm: LMPipeline) -> None:
-        sender = build_attention_head_targets(
+        sender = build_attention_head_sites(
             mock_tiny_lm, [0], [0], _last_token(mock_tiny_lm)
-        )[(0, 0)].flatten()[0]
+        )[(0, 0)][0][0]
         out = run_path_patching(mock_tiny_lm, _dataset(), sender, batch_size=2)
-        assert "scores" in out and out["scores"]
+        assert out.scores
 
     @pytest.mark.parametrize("restore", [("attention", "mlp"), ("attention",)])
     def test_scan_one_finite_score_per_cell(
         self, mock_tiny_lm: LMPipeline, restore: tuple[str, ...]
     ) -> None:
         layers, heads = [0, 1], [0, 1]
-        targets = build_attention_head_targets(
+        targets = build_attention_head_sites(
             mock_tiny_lm, layers, heads, _last_token(mock_tiny_lm)
         )
-        senders = {key: t.flatten()[0] for key, t in targets.items()}
+        senders = {key: t[0][0] for key, t in targets.items()}
 
         scores = run_path_patching_scan(
             mock_tiny_lm,
@@ -145,51 +126,13 @@ class TestTwoPassReceivers:
             return ReceiverSpec(kind=kind, layer=1, token_position=pos)
         return ReceiverSpec(kind=kind, layer=1, token_position=pos)
 
-    def test_pass1_forward_gets_position_ids(
-        self, mock_tiny_lm: LMPipeline, monkeypatch
-    ) -> None:
-        """PASS-1's plain (collect-under-interchange) forward must route its base
-        inputs through ``ensure_position_ids`` — otherwise a left-padded batch is
-        mis-encoded on absolute-position models. The tiny model is RoPE (immune
-        numerically), so we spy on the wiring: ``ensure_position_ids`` is called
-        with a batch carrying ``attention_mask`` and returns one with
-        ``position_ids``. (PASS 2 goes through ``intervenable_generate``, which —
-        being single-step for path patching — applies the same left-pad
-        ``position_ids`` fix to its base internally; the end-to-end numeric guard
-        for both passes is ``TestLeftPadGenerateParity`` on ``tiny_gpt2_lm``.)"""
-        import causalab.neural.activations.interchange_mode as im
-
-        real = im.ensure_position_ids
-        seen: dict[str, bool] = {}
-
-        def spy(inputs):
-            out = real(inputs)
-            seen["had_mask"] = "attention_mask" in inputs
-            seen["got_position_ids"] = "position_ids" in out
-            return out
-
-        monkeypatch.setattr(im, "ensure_position_ids", spy)
-        pos = _last_token(mock_tiny_lm)
-        targets = build_attention_head_targets(mock_tiny_lm, [0], [0], pos)
-        senders = {key: t.flatten()[0] for key, t in targets.items()}
-        run_path_patching_scan(
-            mock_tiny_lm,
-            _dataset(),
-            senders,
-            metric=_first_logit_metric(),
-            receiver=self._receiver("residual", pos),
-            restore=("attention", "mlp"),
-            batch_size=2,
-        )
-        assert seen.get("had_mask") and seen.get("got_position_ids")
-
     @pytest.mark.parametrize("kind", ["head_value_input", "mlp_input", "residual"])
     def test_internal_receiver_scan_finite(
         self, mock_tiny_lm: LMPipeline, kind: str
     ) -> None:
         pos = _last_token(mock_tiny_lm)
-        targets = build_attention_head_targets(mock_tiny_lm, [0], [0, 1], pos)
-        senders = {key: t.flatten()[0] for key, t in targets.items()}
+        targets = build_attention_head_sites(mock_tiny_lm, [0], [0, 1], pos)
+        senders = {key: t[0][0] for key, t in targets.items()}
 
         scores = run_path_patching_scan(
             mock_tiny_lm,
@@ -211,8 +154,8 @@ class TestTwoPassReceivers:
         cfg = gqa_tiny_lm.model.config
         assert cfg.num_key_value_heads < cfg.num_attention_heads
         pos = _last_token(gqa_tiny_lm)
-        targets = build_attention_head_targets(gqa_tiny_lm, [0], [0, 1], pos)
-        senders = {key: t.flatten()[0] for key, t in targets.items()}
+        targets = build_attention_head_sites(gqa_tiny_lm, [0], [0, 1], pos)
+        senders = {key: t[0][0] for key, t in targets.items()}
         scores = run_path_patching_scan(
             gqa_tiny_lm,
             _dataset(),
@@ -231,38 +174,37 @@ class TestTwoPassReceivers:
         assert set(scores.keys()) == set(senders.keys())
         assert all(torch.isfinite(torch.tensor(v)) for v in scores.values())
 
-    def test_decoupled_head_dim_value_scan_raises(
+    def test_decoupled_head_dim_value_scan_finite(
         self, gqa_decoupled_head_dim_lm: LMPipeline
     ) -> None:
         """A head_value_input scan on a model whose head_dim is decoupled from
-        hidden // n_head must surface the unsupported-config guard at the user-facing
-        runner (pyvene 0.1.8 can't realize the decoupled value receiver), rather than
-        fail deep in pyvene mid-scan."""
+        hidden // n_head runs to finite scores: HeadSite slices value vectors at
+        the true config.head_dim, lifting pyvene 0.1.8's refusal (which inferred
+        the width from the head count and could not realize this receiver)."""
         cfg = gqa_decoupled_head_dim_lm.model.config
         assert cfg.head_dim != cfg.hidden_size // cfg.num_attention_heads
         pos = _last_token(gqa_decoupled_head_dim_lm)
-        targets = build_attention_head_targets(gqa_decoupled_head_dim_lm, [0], [0], pos)
-        senders = {key: t.flatten()[0] for key, t in targets.items()}
-        with pytest.raises(NotImplementedError, match="decoupled head_dim"):
-            run_path_patching_scan(
-                gqa_decoupled_head_dim_lm,
-                _dataset(),
-                senders,
-                metric=_first_logit_metric(),
-                receiver=ReceiverSpec(
-                    kind="head_value_input", layer=1, head=0, token_position=pos
-                ),
-                restore=("attention", "mlp"),
-                batch_size=2,
-            )
+        targets = build_attention_head_sites(gqa_decoupled_head_dim_lm, [0], [0], pos)
+        senders = {key: t[0][0] for key, t in targets.items()}
+        scores = run_path_patching_scan(
+            gqa_decoupled_head_dim_lm,
+            _dataset(),
+            senders,
+            metric=_first_logit_metric(),
+            receiver=ReceiverSpec(
+                kind="head_value_input", layer=1, head=0, token_position=pos
+            ),
+            restore=("attention", "mlp"),
+            batch_size=2,
+        )
+        assert set(scores.keys()) == set(senders.keys())
+        assert all(torch.isfinite(torch.tensor(v)) for v in scores.values())
 
     def test_run_path_patching_internal_returns_scores(
         self, mock_tiny_lm: LMPipeline
     ) -> None:
         pos = _last_token(mock_tiny_lm)
-        sender = build_attention_head_targets(mock_tiny_lm, [0], [0], pos)[
-            (0, 0)
-        ].flatten()[0]
+        sender = build_attention_head_sites(mock_tiny_lm, [0], [0], pos)[(0, 0)][0][0]
         out = run_path_patching(
             mock_tiny_lm,
             _dataset(),
@@ -270,7 +212,7 @@ class TestTwoPassReceivers:
             ReceiverSpec(kind="mlp_input", layer=1, token_position=pos),
             batch_size=2,
         )
-        assert "scores" in out and out["scores"]
+        assert out.scores
 
     def test_empty_restorer_two_pass_through_runner(
         self, mock_tiny_lm: LMPipeline
@@ -282,13 +224,13 @@ class TestTwoPassReceivers:
         sources=[source, None]. Pin that this empty-restorer path works end to end."""
         n_layers = mock_tiny_lm.model.config.num_hidden_layers
         pos = _last_token(mock_tiny_lm)
-        sender = build_attention_head_targets(mock_tiny_lm, [n_layers - 1], [0], pos)[
+        sender = build_attention_head_sites(mock_tiny_lm, [n_layers - 1], [0], pos)[
             (n_layers - 1, 0)
-        ].flatten()[0]
+        ][0][0]
         receiver = ReceiverSpec(kind="residual", layer=n_layers - 1, token_position=pos)
         # Precondition: this configuration really does produce an empty restorer set.
         assert (
-            build_restorer_set(mock_tiny_lm, sender, receiver, restore=("attention",))
+            build_restorer_sites(mock_tiny_lm, sender, receiver, restore=("attention",))
             == []
         )
         out = run_path_patching(
@@ -299,7 +241,7 @@ class TestTwoPassReceivers:
             restore=("attention",),
             batch_size=2,
         )
-        assert "scores" in out and out["scores"]
+        assert out.scores
 
 
 class TestDownstreamSenderGuard:
@@ -312,9 +254,7 @@ class TestDownstreamSenderGuard:
         self, mock_tiny_lm: LMPipeline
     ) -> None:
         pos = _last_token(mock_tiny_lm)
-        sender = build_attention_head_targets(mock_tiny_lm, [1], [0], pos)[
-            (1, 0)
-        ].flatten()[0]
+        sender = build_attention_head_sites(mock_tiny_lm, [1], [0], pos)[(1, 0)][0][0]
         with pytest.raises(ValueError, match="not upstream"):
             run_path_patching(
                 mock_tiny_lm,
@@ -327,8 +267,8 @@ class TestDownstreamSenderGuard:
     def test_scan_raises_on_downstream(self, mock_tiny_lm: LMPipeline) -> None:
         pos = _last_token(mock_tiny_lm)
         senders = {
-            key: t.flatten()[0]
-            for key, t in build_attention_head_targets(
+            key: t[0][0]
+            for key, t in build_attention_head_sites(
                 mock_tiny_lm, [1], [0], pos
             ).items()
         }
@@ -343,67 +283,39 @@ class TestDownstreamSenderGuard:
             )
 
 
-class TestMixedForwardPropagation:
-    """The PASS-1 primitive: a single mixed collect+interchange forward must
-    actually route the sender's *source* value into the receiver (otherwise the
-    two-pass would be a no-op). With the sender at layer 0 and an mlp_input
-    receiver at layer 1 (downstream, nothing frozen between them), the collected
-    receiver value must change when the sender reads its source vs its base."""
+class TestTwoPassPropagation:
+    """The PASS-1 semantics: the injected v* is the receiver's activation UNDER
+    the sender patch (otherwise the two-pass would be a no-op). With the sender
+    at layer 0 and an mlp_input receiver at layer 1 (nothing frozen between
+    them), a real source moves the final logits away from clean, while a *null*
+    interchange (source == base) reproduces the clean run exactly."""
 
     pytestmark = pytest.mark.property
 
-    def test_source_sender_changes_collected_receiver(
+    def test_source_sender_changes_output_null_does_not(
         self, mock_tiny_lm: LMPipeline
     ) -> None:
         pos = _last_token(mock_tiny_lm)
-        sender = build_attention_head_targets(mock_tiny_lm, [0], [0], pos)[
-            (0, 0)
-        ].flatten()[0]
-        receiver = build_receiver_unit(
-            mock_tiny_lm, ReceiverSpec(kind="mlp_input", layer=1, token_position=pos)
-        )
-        assert receiver is not None
-        model = prepare_mixed_intervenable_model(
-            mock_tiny_lm, InterchangeTarget([[sender]]), [receiver]
-        )
+        sender = build_attention_head_sites(mock_tiny_lm, [0], [0], pos)[(0, 0)][0][0]
+        receiver = ReceiverSpec(kind="mlp_input", layer=1, token_position=pos)
         ds = _dataset()
-        raw_base = [ex["input"] for ex in ds]
-        raw_src = [ex["counterfactual_inputs"][0] for ex in ds]
-        base_in = mock_tiny_lm.load(raw_base)
-        src_in = mock_tiny_lm.load(raw_src)
-        s_idx = sender.index_component(
-            raw_src,
-            batch=True,
-            is_original=False,
-            attention_mask=src_in["attention_mask"],
-        )
-        b_idx = sender.index_component(
-            raw_base,
-            batch=True,
-            is_original=True,
-            attention_mask=base_in["attention_mask"],
-        )
-        r_idx = receiver.index_component(
-            raw_base,
-            batch=True,
-            is_original=True,
-            attention_mask=base_in["attention_mask"],
-        )
-        try:
-            with torch.no_grad():
-                v_source = model(
-                    base_in,
-                    sources=[src_in, None],
-                    unit_locations={"sources->base": ([s_idx, r_idx], [b_idx, r_idx])},
-                )[0][1][0]
-                v_base = model(
-                    base_in,
-                    sources=[base_in, None],
-                    unit_locations={"sources->base": ([b_idx, r_idx], [b_idx, r_idx])},
-                )[0][1][0]
-        finally:
-            delete_intervenable_model(model)
-        assert not torch.allclose(v_source, v_base)
+        null_ds = [
+            {"input": ex["input"], "counterfactual_inputs": [ex["input"]]} for ex in ds
+        ]
+        clean = mock_tiny_lm.generate([ex["input"] for ex in ds]).scores[0]
+        real = run_path_patching(
+            mock_tiny_lm, ds, sender, receiver, restore=("attention",), batch_size=2
+        ).scores[0]
+        null = run_path_patching(
+            mock_tiny_lm,
+            null_ds,
+            sender,
+            receiver,
+            restore=("attention",),
+            batch_size=2,
+        ).scores[0]
+        assert not torch.allclose(real, clean, atol=1e-4)
+        torch.testing.assert_close(null, clean, atol=1e-4, rtol=1e-3)
 
 
 class TestReceiverSpanGuard:
@@ -442,15 +354,15 @@ class TestReceiverSpanGuard:
                 "counterfactual_inputs": [_trace("yo there")],
             },
         ]
-        sender = build_attention_head_targets(
+        sender = build_attention_head_sites(
             mock_tiny_lm, [n_layers - 1], [0], _last_token(mock_tiny_lm)
-        )[(n_layers - 1, 0)].flatten()[0]
+        )[(n_layers - 1, 0)][0][0]
         receiver = ReceiverSpec(
             kind="residual", layer=n_layers - 1, token_position=ragged
         )
         # Precondition: this really is the empty-restorer two-pass path.
         assert (
-            build_restorer_set(mock_tiny_lm, sender, receiver, restore=("attention",))
+            build_restorer_sites(mock_tiny_lm, sender, receiver, restore=("attention",))
             == []
         )
         with pytest.raises(
@@ -516,8 +428,8 @@ class TestLeftPadGenerateParity:
         dataset = _mixed_length_dataset()
         self._assert_left_pads(pipeline, dataset)
         pos = _last_token(pipeline)
-        targets = build_attention_head_targets(pipeline, [0, 1], [0, 1], pos)
-        senders = {key: t.flatten()[0] for key, t in targets.items()}
+        targets = build_attention_head_sites(pipeline, [0, 1], [0, 1], pos)
+        senders = {key: t[0][0] for key, t in targets.items()}
 
         def scan(batch_size: int) -> dict[Any, float]:
             return run_path_patching_scan(
@@ -547,8 +459,8 @@ class TestLeftPadGenerateParity:
         dataset = _mixed_length_dataset()
         self._assert_left_pads(pipeline, dataset)
         pos = _last_token(pipeline)
-        targets = build_attention_head_targets(pipeline, [0], [0, 1], pos)
-        senders = {key: t.flatten()[0] for key, t in targets.items()}
+        targets = build_attention_head_sites(pipeline, [0], [0, 1], pos)
+        senders = {key: t[0][0] for key, t in targets.items()}
         receiver = ReceiverSpec(kind="residual", layer=1, token_position=pos)
 
         def scan(batch_size: int) -> dict[Any, float]:

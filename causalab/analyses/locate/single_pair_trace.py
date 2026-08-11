@@ -20,27 +20,20 @@ from causalab.io.plots.string_heatmap import (
     plot_single_pair_trace_heatmap,
 )
 from causalab.methods.interchange.single_pair import run_single_pair_trace
-from causalab.neural.pipeline import LMPipeline
+from causalab.neural.pipeline import GenerationResult, LMPipeline
 from causalab.neural.token_positions import TokenPosition
 
 logger = logging.getLogger(__name__)
 
 
-def _cell_output(res: dict[str, Any]) -> str:
-    """Coerce one intervention cell's decoded output to a single stripped string.
+def _cell_output(res: GenerationResult) -> str:
+    """One intervention cell's decoded output, stripped.
 
-    ``run_interchange_interventions`` returns ``string`` as a list whose first
-    element is the decoded continuation — but with ``max_new_tokens > 1`` that
-    element can itself be a per-token list. Normalize both shapes here so the
-    caller never has to (mirrors ``LMPipeline.dump``'s str-or-list handling).
+    Each cell is a single-example run, so its flat
+    :class:`~causalab.neural.pipeline.GenerationResult` carries exactly one
+    string (EU5b, #487 — the legacy nested-list normalization is gone).
     """
-    raw = res.get("string")
-    if not raw:
-        return ""
-    first = raw[0]
-    if isinstance(first, list):
-        first = "".join(str(t) for t in first)
-    return str(first).strip()
+    return res.strings[0].strip() if res.strings else ""
 
 
 def save_single_pair_trace(

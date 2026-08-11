@@ -7,13 +7,13 @@ generates the features_3d visualization.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, cast
+from typing import Any, Callable, Sequence, cast
 
 from torch import Tensor
 
 from causalab.analyses.subspace._visualization import save_features_visualization
-from causalab.methods.trained_subspace.subspace import build_SVD_featurizers
-from causalab.neural.units import InterchangeTarget
+from causalab.methods.trained_subspace.subspace import SubspaceFeaturizer
+from causalab.neural.specs import SiteSpec
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.activations.collect import collect_features
 from causalab.methods.pca import compute_svd
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def find_pca_subspace(
-    target: InterchangeTarget,
+    sites: Sequence[Sequence[SiteSpec]],
     train_dataset: list,
     pipeline: LMPipeline,
     k_features: int,
@@ -39,12 +39,14 @@ def find_pca_subspace(
 ) -> dict[str, Any]:
     """Find a k-dimensional PCA subspace and project features through it.
 
-    Collects raw activations, computes SVD, sets the PCA featurizer on the
-    target, and projects the raw features through the rotation matrix (single
-    forward pass).
+    Collects raw activations, computes SVD, and projects the raw features
+    through the rotation matrix (single forward pass). The PCA featurizer is
+    attached **functionally**: the returned ``spec`` carries it; the caller's
+    input specs are unchanged.
 
     Args:
-        target: Interchange target (must contain a single unit).
+        sites: Single-group nested spec lists holding one site
+            (a grid cell value — ``[[spec]]``).
         train_dataset: Training counterfactual examples.
         pipeline: LM pipeline for collecting activations.
         k_features: Number of principal components.
@@ -58,8 +60,9 @@ def find_pca_subspace(
         - ``rotation``: (d_model, k) rotation matrix
         - ``explained_variance_ratio``: list of per-component ratios
         - ``features``: (N, k) projected features tensor
+        - ``spec``: the updated :class:`SiteSpec` carrying the PCA featurizer
     """
-    unit = target.flatten()[0]
+    spec = sites[0][0]
 
     logger.info("Computing PCA with k=%d...", k_features)
     # collect_output_logits=False (default) returns dict[str, Tensor];
@@ -69,7 +72,7 @@ def find_pca_subspace(
         collect_features(
             dataset=train_dataset,
             pipeline=pipeline,
-            model_units=[unit],
+            sites=[spec],
             batch_size=batch_size,
         ),
     )
@@ -79,18 +82,19 @@ def find_pca_subspace(
         n_components=k_features,
         preprocess="center",
     )
-    build_SVD_featurizers(
-        [unit],
-        svd_results,
-        trainable=False,
-        featurizer_id="PCA",
-    )
+    raw_features = raw_features_dict[spec.key].detach()
+    rotation = svd_results[spec.key]["rotation"]  # (d_model, k)
 
-    raw_features = raw_features_dict[unit.id].detach()
-    rotation = svd_results[unit.id]["rotation"]  # (d_model, k)
+    # Functional attach: a fresh SubspaceFeaturizer on a new spec — the input
+    # spec is never mutated.
+    pca_featurizer = SubspaceFeaturizer(
+        rotation_subspace=rotation, trainable=False, id="PCA"
+    )
+    spec = spec.with_featurizer(pca_featurizer).with_feature_ids(None)
+
     features = (raw_features.float() @ rotation.float()).detach()
 
-    var_ratios = svd_results[unit.id]["explained_variance_ratio"]
+    var_ratios = svd_results[spec.key]["explained_variance_ratio"]
     logger.info(
         "PCA variance explained: %s, total: %.1f%%",
         [f"{v:.1%}" for v in var_ratios],
@@ -128,4 +132,5 @@ def find_pca_subspace(
         "rotation": rotation,
         "explained_variance_ratio": var_ratios,
         "features": features,
+        "spec": spec,
     }

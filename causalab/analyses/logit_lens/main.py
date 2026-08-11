@@ -35,7 +35,7 @@ from causalab.neural.token_positions import (
     get_last_token_index,
 )
 from causalab.runner.helpers import (
-    generate_datasets,
+    prepare_datasets,
     get_output_token_ids,
     resolve_task,
     _task_config_for_metadata,  # pyright: ignore[reportPrivateUsage]
@@ -89,13 +89,14 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         target_variable=target_variable,
         seed=cfg.seed,
     )
-    _train_dataset, test_dataset = generate_datasets(
+    _train_dataset, test_dataset = prepare_datasets(
         task,
         n_train=cfg.task.n_train,
         n_test=cfg.task.n_test,
         seed=cfg.seed,
         enumerate_all=cfg.task.enumerate_all,
         resample_variable=cfg.task.get("resample_variable", "all"),
+        filter_correct=False,
     )
     if not test_dataset:
         raise ValueError("logit_lens: test dataset is empty; nothing to analyze.")

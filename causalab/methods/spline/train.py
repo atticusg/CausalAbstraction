@@ -40,7 +40,7 @@ from causalab.methods.spline.builders import (
     remap_periodic_to_angle,
     build_spline_manifold,
 )
-from causalab.neural.units import InterchangeTarget, AtomicModelUnit
+from causalab.neural.specs import SiteSpec
 from causalab.neural.pipeline import Pipeline
 from causalab.neural.activations.collect import collect_features
 from causalab.causal.causal_model import CausalModel
@@ -87,14 +87,9 @@ def _has_subspace_rotation(featurizer: Any) -> bool:
     return False
 
 
-def _validate_target(target: InterchangeTarget) -> AtomicModelUnit:
-    """Validate target has single unit with SubspaceFeaturizer, return it."""
-    units = target.flatten()
-    if len(units) != 1:
-        raise ValueError(f"Expected single unit, got {len(units)}")
-
-    unit = units[0]
-    featurizer = unit.featurizer
+def _validate_site(site: SiteSpec) -> SiteSpec:
+    """Validate the site carries a SubspaceFeaturizer, return it."""
+    featurizer = site.fsite.featurizer
 
     # Check it's a SubspaceFeaturizer (or compatible with DAS rotation)
     if not _has_subspace_rotation(featurizer):
@@ -102,7 +97,7 @@ def _validate_target(target: InterchangeTarget) -> AtomicModelUnit:
             f"Expected SubspaceFeaturizer with rotation, got {type(featurizer)}"
         )
 
-    return unit
+    return site
 
 
 def _save_checkpoint(
@@ -240,7 +235,7 @@ def _chord_length_parameterize(
 
 
 def train_spline_manifold(
-    interchange_target: InterchangeTarget,
+    site: SiteSpec,
     dataset_path: str | list[CounterfactualExample],
     pipeline: Pipeline,
     intrinsic_dim: int,
@@ -256,14 +251,14 @@ def train_spline_manifold(
     """
     Train a SplineManifold by fitting through parameter centroids.
 
-    The target must have a single unit with a trained SubspaceFeaturizer (DAS/PCA rotation).
+    The site must carry a trained SubspaceFeaturizer (DAS/PCA rotation).
     Features are collected from the dataset, then grouped by parameter values to compute
     centroids. A Thin-Plate Spline is fitted through these centroids to create a smooth
     manifold interpolation.
 
     Args:
-        interchange_target: Single target with trained DAS/PCA featurizer.
-            Must have exactly one group with one unit.
+        site: Single :class:`~causalab.neural.specs.SiteSpec` with trained
+            DAS/PCA featurizer.
         dataset_path: Path to dataset JSON file or list of CounterfactualExample objects.
         pipeline: Model pipeline for processing inputs.
         intrinsic_dim: Dimensionality d of manifold (d < k where k is DAS/PCA dimension).
@@ -302,9 +297,9 @@ def train_spline_manifold(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # Validate target
-    unit = _validate_target(interchange_target)
-    k = unit.featurizer.n_features
+    # Validate the site
+    site = _validate_site(site)
+    k = site.fsite.featurizer.n_features
     if k is None:
         raise ValueError(
             "Featurizer n_features is None; cannot determine subspace dimension"
@@ -341,12 +336,12 @@ def train_spline_manifold(
         features_dict = collect_features(
             dataset=dataset,
             pipeline=pipeline,
-            model_units=[unit],
+            sites=[site],
             batch_size=config.batch_size,
         )
         # collect_output_logits is False (default), so the return is dict[str, Tensor]
         assert isinstance(features_dict, dict)
-        features = features_dict[unit.id].detach().float()
+        features = features_dict[site.key].detach().float()
         logger.info(f"Collected features: {features.shape}")
     else:
         if verbose:
@@ -589,7 +584,7 @@ def train_spline_manifold(
         "max_control_points": config.max_control_points,
         "chord_length": config.chord_length,
         "config": config.to_dict(),
-        "unit_id": unit.id,
+        "unit_id": site.key,
     }
 
     with open(os.path.join(output_dir, "metadata.json"), "w") as f:

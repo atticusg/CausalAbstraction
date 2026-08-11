@@ -264,6 +264,42 @@ class TestGetAttentionPatterns:
             )
 
 
+class TestAttentionImplementationGuard:
+    """The eager-only guard (SH3, #424): only the eager kernel materializes the
+    (seq, seq) attention-probability matrix under ``output_attentions=True``.
+    sdpa/flash return no weights and flex_attention returns a log-sum-exp, so
+    the guard is a fail-closed allow-list of exactly ``("eager",)`` — any other
+    declared kernel (including future names) is rejected with the fix; a config
+    that declares nothing (non-HF stubs, like the mock here) passes through."""
+
+    def _extract(self, mock_pipeline: Any, sample_prompts: List[CausalTrace]):
+        return get_attention_patterns(
+            pipeline=mock_pipeline, layer=0, head=0, prompts=sample_prompts[:1]
+        )
+
+    @pytest.mark.parametrize("impl", ["sdpa", "flash_attention_2", "flex_attention"])
+    def test_non_eager_kernel_rejected(
+        self, mock_pipeline: Any, sample_prompts: List[CausalTrace], impl: str
+    ) -> None:
+        mock_pipeline.model.config._attn_implementation = impl
+        with pytest.raises(ValueError, match="eager_attn=True"):
+            self._extract(mock_pipeline, sample_prompts)
+
+    def test_eager_kernel_accepted(
+        self, mock_pipeline: Any, sample_prompts: List[CausalTrace]
+    ) -> None:
+        mock_pipeline.model.config._attn_implementation = "eager"
+        results = self._extract(mock_pipeline, sample_prompts)
+        assert len(results) == 1
+
+    def test_undeclared_implementation_passes_through(
+        self, mock_pipeline: Any, sample_prompts: List[CausalTrace]
+    ) -> None:
+        assert not hasattr(mock_pipeline.model.config, "_attn_implementation")
+        results = self._extract(mock_pipeline, sample_prompts)
+        assert len(results) == 1
+
+
 # ---------------------- Tests for compute_average_attention ---------------------- #
 
 

@@ -6,6 +6,10 @@ Tests for methods/trained_subspace/train.py - train_interventions public API.
 import pytest
 from unittest.mock import MagicMock, patch
 
+import torch
+
+from causalab.neural.pipeline import GenerationResult
+
 from causalab.methods.trained_subspace.train import train_interventions
 from causalab.configs.train_config import (
     DEFAULT_CONFIG,
@@ -35,7 +39,7 @@ class TestTrainInterventionValidation:
             # config is TypedDict ExperimentConfig; signature expects plain dict
             train_interventions(
                 causal_model=MagicMock(),
-                interchange_targets={("test",): MagicMock()},
+                grid={("test",): [[MagicMock()]]},
                 train_dataset=[],
                 test_dataset=[],
                 pipeline=MagicMock(),
@@ -62,16 +66,20 @@ class TestTrainInterventionExecution:
     def mock_dependencies(self, tmp_path):
         mock_dataset = create_mock_dataset(5)
 
-        mock_target = MagicMock()
-        mock_target.flatten = MagicMock(return_value=[MagicMock() for _ in range(3)])
-        mock_target.get_feature_indices = MagicMock(
-            return_value={
-                "unit_0": [0, 1],
-                "unit_1": [],
-                "unit_2": [0, 1, 2],
-            }
-        )
-        mock_target.save = MagicMock()
+        # Nested spec groups: one group of three mock specs whose featurizer
+        # id is non-"null" so the functional initializer passes them through.
+        mock_specs = []
+        for i in range(3):
+            spec = MagicMock()
+            spec.key = f"unit_{i}"
+            spec.fsite.featurizer.id = "pretrained"
+            mock_specs.append(spec)
+        mock_groups = [mock_specs]
+        mock_feature_indices = {
+            "unit_0": [0, 1],
+            "unit_1": [],
+            "unit_2": [0, 1, 2],
+        }
 
         mock_pipeline = MagicMock()
         mock_pipeline.model_or_name = "test_model"
@@ -83,7 +91,8 @@ class TestTrainInterventionExecution:
 
         return {
             "dataset": mock_dataset,
-            "target": mock_target,
+            "groups": mock_groups,
+            "feature_indices": mock_feature_indices,
             "pipeline": mock_pipeline,
             "causal_model": mock_causal_model,
             "tmp_path": tmp_path,
@@ -114,12 +123,20 @@ class TestTrainInterventionExecution:
                 "causalab.methods.trained_subspace.train.run_interchange_interventions"
             ) as mock_run_interventions,
         ):
-            mock_run_interventions.return_value = {"string": ["A"] * 5}
+            mock_train.return_value = (
+                mocks["groups"],
+                mocks["feature_indices"],
+                "summary",
+            )
+            mock_run_interventions.return_value = GenerationResult(
+                sequences=torch.zeros((5, 1), dtype=torch.long),
+                strings=["A"] * 5,
+            )
 
             # config is TypedDict ExperimentConfig; signature expects plain dict
             result = train_interventions(
                 causal_model=mocks["causal_model"],
-                interchange_targets={("test",): mocks["target"]},
+                grid={("test",): mocks["groups"]},
                 train_dataset=mocks["dataset"],
                 test_dataset=mocks["dataset"],
                 pipeline=mocks["pipeline"],
@@ -139,17 +156,27 @@ class TestTrainInterventionExecution:
         config = self._make_config(mocks["tmp_path"])
 
         with (
-            patch("causalab.methods.trained_subspace.train._run_training_loop"),
+            patch(
+                "causalab.methods.trained_subspace.train._run_training_loop"
+            ) as mock_train,
             patch(
                 "causalab.methods.trained_subspace.train.run_interchange_interventions"
             ) as mock_run_interventions,
         ):
-            mock_run_interventions.return_value = {"string": ["A"] * 5}
+            mock_train.return_value = (
+                mocks["groups"],
+                mocks["feature_indices"],
+                "summary",
+            )
+            mock_run_interventions.return_value = GenerationResult(
+                sequences=torch.zeros((5, 1), dtype=torch.long),
+                strings=["A"] * 5,
+            )
 
             # config is TypedDict ExperimentConfig; signature expects plain dict
             result = train_interventions(
                 causal_model=mocks["causal_model"],
-                interchange_targets={("test",): mocks["target"]},
+                grid={("test",): mocks["groups"]},
                 train_dataset=mocks["dataset"],
                 test_dataset=mocks["dataset"],
                 pipeline=mocks["pipeline"],

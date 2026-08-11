@@ -16,7 +16,7 @@ from omegaconf import DictConfig, OmegaConf
 from causalab.runner.helpers import (
     _task_config_for_metadata,  # pyright: ignore[reportPrivateUsage]
     resolve_task,
-    generate_datasets,
+    prepare_datasets,
     build_targets_for_grid,
 )
 from causalab.io.pipelines import (
@@ -312,11 +312,11 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             [_tp_name] if _tp_name else None,
         )
         token_pos = _tp_list[0]
-        interchange_target = next(iter(targets.values()))
+        spec = next(iter(targets.values()))[0][0]
 
         if is_linear_baseline:
             # Linear baseline: load only the subspace featurizer (no manifold)
-            from causalab.analyses.subspace import load_subspace_onto_target
+            from causalab.analyses.subspace import load_subspace_onto_spec
 
             ss_method = ss_meta.get("method", "pca")
             k_features = ss_meta.get("k_features")
@@ -326,22 +326,25 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             subspace_out_dir = os.path.join(root, "subspace", ss_sub)
             if tv:
                 subspace_out_dir = os.path.join(subspace_out_dir, tv)
-            load_subspace_onto_target(
-                interchange_target, subspace_out_dir, ss_method, k_features
+            spec = load_subspace_onto_spec(
+                spec, subspace_out_dir, ss_method, k_features
             )
-            featurizer = interchange_target.flatten()[0].featurizer
+            featurizer = spec.fsite.featurizer
             logger.info(
                 "Linear baseline: loaded subspace featurizer only (no manifold)"
             )
         else:
-            # Load featurizer from manifold output
-            from causalab.analyses.activation_manifold.loading import load_featurizer
+            # Load featurizer from manifold output (constructive; the spec is
+            # updated functionally)
+            from causalab.analyses.activation_manifold.loading import (
+                apply_loaded_featurizer,
+            )
 
             manifold_out = os.path.join(root, "activation_manifold", ss_sub, m_sub)
             if tv:
                 manifold_out = os.path.join(manifold_out, tv)
-            featurizer = load_featurizer(
-                manifold_out, interchange_target, layer, token_pos.id
+            spec, featurizer = apply_loaded_featurizer(
+                spec, manifold_out, layer, token_pos.id
             )
 
         encode_mode = getattr(analysis, "encode_mode", "nearest_centroid")
@@ -556,13 +559,14 @@ def main(cfg: DictConfig) -> dict[str, Any]:
 
             _train_ds = load_counterfactual_examples(saved_ds_path, task.causal_model)
         else:
-            _train_ds, _ = generate_datasets(
+            _train_ds, _ = prepare_datasets(
                 task,
                 n_train=ss_meta.get("n_train", task_cfg.get("n_train", 1000)),
                 n_test=0,
                 seed=ss_meta.get("seed", cfg.seed),
                 enumerate_all=cfg.task.enumerate_all,
                 resample_variable=cfg.task.get("resample_variable", "all"),
+                filter_correct=False,
             )
 
         # Compute centroids in PCA and raw space
@@ -590,8 +594,8 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         feat_mean = feat_std = None
         # Determine whether this featurizer pipeline carries a manifold stage.
         # `stages` is only present on ComposedFeaturizer subclass; base Featurizer
-        # lacks it (the call site may pass either via the load_subspace_onto_target /
-        # load_featurizer paths above).
+        # lacks it (the call site may pass either via the load_subspace_onto_spec /
+        # apply_loaded_featurizer paths above).
         _stages = getattr(featurizer, "stages", None)
         has_manifold = (
             _stages is not None
@@ -678,10 +682,14 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                         )
                 continue
 
-            # Swap featurizer if this mode has an override
-            if pm.featurizer_override is not None:
-                for u in interchange_target.flatten():
-                    u.set_featurizer(pm.featurizer_override)
+            # Per-mode featurizer override: a functional view of the spec —
+            # the base `spec` (and every other mode) is untouched, so there is
+            # nothing to restore afterwards.
+            mode_spec = (
+                spec.with_featurizer(pm.featurizer_override)
+                if pm.featurizer_override is not None
+                else spec
+            )
 
             try:
                 # Select centroids in the appropriate space for this path mode
@@ -828,10 +836,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
 
                         # (num_steps, n_prompts, W)
                         probs = collect_grid_distributions(
-                            pipeline=pipeline,
-                            grid_points=grid_points,
-                            interchange_target=interchange_target,
-                            filtered_samples=eval_samples,
+                            pipeline,
+                            grid_points,
+                            [[mode_spec]],
+                            eval_samples,
                             var_indices=var_indices,
                             batch_size=batch_size,
                             n_base_samples=n_prompts,
@@ -1070,10 +1078,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                                 oversteer_steps=oversteer_steps,
                             )
                             probs = collect_grid_distributions(
-                                pipeline=pipeline,
-                                grid_points=grid_points,
-                                interchange_target=interchange_target,
-                                filtered_samples=eval_samples,
+                                pipeline,
+                                grid_points,
+                                [[mode_spec]],
+                                eval_samples,
                                 var_indices=var_indices,
                                 batch_size=batch_size,
                                 n_base_samples=n_prompts,
@@ -1207,10 +1215,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 )
 
             finally:
-                # Restore original featurizer
-                if pm.featurizer_override is not None:
-                    for u in interchange_target.flatten():
-                        u.set_featurizer(featurizer)
+                # Featurizer overrides are functional views (`mode_spec`), so
+                # there is no in-place swap to restore.
+                pass
 
         # --- Receptive field: decision-map over the top-2 activation PCs.
         # Sweeps a 2-D grid over the chosen subspace PCs and steers the model at
@@ -1221,7 +1228,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         # steering-path families are all stored in the same [c0, c1] columns.
         if "receptive_field" in visualizations and not replot_only:
             try:
-                from causalab.analyses.subspace import load_subspace_onto_target
+                from causalab.analyses.subspace import load_subspace_onto_spec
                 from causalab.methods.steer.collect import collect_grid_distributions
                 from safetensors.torch import save_file as _rf_save
 
@@ -1244,16 +1251,19 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 _rf_fvs = bool(_rf_cfg.get("full_vocab_softmax", True))
                 _rf_pad = float(_rf_cfg.get("range_pad", 0.05))
 
-                # Install the bare subspace (PCA) featurizer so a (G, 2) grid sets
-                # output dims = PC _c0, _c1. Post-loop the target may carry the
-                # composed/manifold featurizer, whose first dims are intrinsic.
+                # A functional view of the spec carrying the bare subspace
+                # (PCA) featurizer, so a (G, 2) grid sets output dims = PC
+                # _c0, _c1 (the base `spec` keeps the composed/manifold
+                # featurizer, whose first dims are intrinsic — nothing leaks
+                # into the rest of the evaluate stage and nothing needs
+                # restoring).
                 _rf_method = ss_meta.get("method", "pca")
                 _rf_k = ss_meta.get("k_features")
                 assert _rf_k is not None, (
                     f"subspace metadata for {ss_sub} missing 'k_features'"
                 )
-                load_subspace_onto_target(
-                    interchange_target, subspace_out_dir, _rf_method, int(_rf_k)
+                _rf_spec = load_subspace_onto_spec(
+                    spec, subspace_out_dir, _rf_method, int(_rf_k)
                 )
 
                 def _rf_axis(ci: int) -> tuple[float, float]:
@@ -1270,10 +1280,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 )  # (G, D); G = grid_res ** len(_comps)
 
                 _rf_dists = collect_grid_distributions(
-                    pipeline=pipeline,
-                    grid_points=_grid,
-                    interchange_target=interchange_target,
-                    filtered_samples=eval_samples,
+                    pipeline,
+                    _grid,
+                    [[_rf_spec]],
+                    eval_samples,
                     var_indices=var_indices,
                     batch_size=batch_size,
                     n_base_samples=_rf_np,
@@ -1366,12 +1376,6 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 logger.warning(
                     "Receptive field collection failed: %s", _rf_e, exc_info=True
                 )
-            finally:
-                # Always restore the original featurizer — a mid-collection raise
-                # must not leak the bare PCA featurizer into the rest of the
-                # evaluate stage. Harmless no-op when the swap never happened.
-                for _u in interchange_target.flatten():
-                    _u.set_featurizer(featurizer)
 
         # Paired t-tests between path modes for the path-based criteria.
         # Compares per-pair scores under each path mode (same pair indices,
@@ -1465,7 +1469,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                     belief_dir = os.path.join(out_dir, "vis", "belief_space")
                     # Regenerate train_dataset matching output_manifold's params to
                     # provide TRUE class labels (row-aligned with natural_dists).
-                    _bm_train_ds, _ = generate_datasets(
+                    _bm_train_ds, _ = prepare_datasets(
                         task,
                         n_train=cfg.task.n_train,
                         n_test=cfg.task.n_test,
@@ -1473,6 +1477,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                         balanced=cfg.task.get("balanced", False),
                         enumerate_all=cfg.task.enumerate_all,
                         resample_variable=cfg.task.get("resample_variable", "all"),
+                        filter_correct=False,
                     )
                     plot_paths_in_belief_space(
                         natural_dists=nd,
@@ -1782,7 +1787,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                     )
                     # TRUE class labels for natural_dists rows: regenerate
                     # output_manifold's train_dataset (deterministic via seed).
-                    _bm_train_ds_dm, _ = generate_datasets(
+                    _bm_train_ds_dm, _ = prepare_datasets(
                         task,
                         n_train=cfg.task.n_train,
                         n_test=cfg.task.n_test,
@@ -1790,6 +1795,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                         balanced=cfg.task.get("balanced", False),
                         enumerate_all=cfg.task.enumerate_all,
                         resample_variable=cfg.task.get("resample_variable", "all"),
+                        filter_correct=False,
                     )
                     _bel_classes_true = np.array(
                         [

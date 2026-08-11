@@ -6,9 +6,9 @@ model units and perform PCA analysis on them. It follows the standard job patter
 saving results and generating visualizations.
 
 Key Features:
-1. Accepts pre-built Dict[tuple, InterchangeTarget] specifying where to collect features
-2. Merges all targets for efficient single-pass feature collection
-3. Supports two combine modes: "concatenate" or "stack" features within each target
+1. Accepts a pre-built SiteGrid (dict[tuple, list[list[SiteSpec]]]) specifying where to collect features
+2. Merges all cells for efficient single-pass feature collection
+3. Supports two combine modes: "concatenate" or "stack" features within each cell
 4. Generates 2D and 3D scatter plots for specified component tuples
 5. Supports dual-label encoding with color and shape
 6. Saves features, SVD results, and visualizations
@@ -30,17 +30,17 @@ output_dir/
 Usage Example:
 ==============
 ```python
-from causalab.neural.activations.targets import build_residual_stream_targets
+from causalab.neural.activations.site_grids import build_residual_stream_sites
 from causalab.methods.pca import collect_and_compute_PCA
 
-# Build targets
-targets = build_residual_stream_targets(
+# Build the site grid
+grid = build_residual_stream_sites(
     pipeline, layers=[0, 1], token_positions=[token_pos], mode="one_target_per_unit"
 )
 
 # Collect features and compute PCA (concatenate mode - default)
 result = collect_and_compute_PCA(
-    interchange_targets=targets,
+    grid=grid,
     data=[{"input": x} for x in inputs],
     pipeline=pipeline,
     labels=labels,
@@ -49,22 +49,24 @@ result = collect_and_compute_PCA(
     output_dir="outputs/pca",
 )
 
-# Stack mode - each unit becomes separate points, useful for comparing units
+# Stack mode - each site becomes separate points, useful for comparing sites
 result = collect_and_compute_PCA(
-    interchange_targets=targets,
+    grid=grid,
     data=[{"input": x} for x in inputs],
     pipeline=pipeline,
     labels=labels,
     component_tuples=[(0, 1), (0, 1, 2)],
-    combine_mode="stack",  # Each unit's features stacked as separate samples
+    combine_mode="stack",  # Each site's features stacked as separate samples
     output_dir="outputs/pca_stacked",
 )
-# To color by unit, create labels from targets (auto-replicated by plot_pca_scatter):
-# unit_labels = [f"Layer {u.layer}" for u in targets[key].flatten()]
+# To color by site, create labels from the grid (auto-replicated by plot_pca_scatter):
+# site_labels = [
+#     f"Layer {s.fsite.site.layer}" for group in grid[key] for s in group
+# ]
 
 # Dual-label encoding: color by one variable, shape by another
 result = collect_and_compute_PCA(
-    interchange_targets=targets,
+    grid=grid,
     data=[{"input": x} for x in inputs],
     pipeline=pipeline,
     labels=answer_positions,       # Color by position
@@ -84,7 +86,7 @@ import torch
 from torch import Tensor
 
 from causalab.causal.counterfactual_dataset import CounterfactualExample
-from causalab.neural.units import InterchangeTarget
+from causalab.neural.activations.site_grids import SiteGrid
 from causalab.neural.pipeline import Pipeline
 from causalab.neural.activations.collect import collect_features
 
@@ -163,7 +165,7 @@ def _key_to_str(key: Tuple[Any, ...]) -> str:
 
 
 def collect_and_compute_PCA(
-    interchange_targets: Dict[Tuple[Any, ...], InterchangeTarget],
+    grid: SiteGrid,
     data: list[CounterfactualExample],
     pipeline: Pipeline,
     labels: Sequence[Any],
@@ -176,18 +178,19 @@ def collect_and_compute_PCA(
     verbose: bool = True,
 ) -> Dict[str, Any]:
     """
-    Collect features from model units and compute PCA for visualization.
+    Collect features from model sites and compute PCA for visualization.
 
-    This function efficiently processes all InterchangeTargets by:
-    1. Merging all units from all targets for a single collection pass
-    2. Splitting features back by original target
-    3. Combining features within each target (concatenate or stack)
+    This function efficiently processes the whole grid by:
+    1. Merging all specs from all cells for a single collection pass
+    2. Splitting features back by original cell
+    3. Combining features within each cell (concatenate or stack)
     4. Computing SVD/PCA on the combined features
     5. Generating scatter plots for specified principal component tuples
 
     Args:
-        interchange_targets: Pre-built Dict[tuple, InterchangeTarget] from any builder.
-                            Each target's units will have their features collected.
+        grid: Pre-built :data:`~causalab.neural.activations.site_grids.SiteGrid`
+              from any WU2 builder. Each cell's specs will have their features
+              collected.
         data: List of CounterfactualExample objects.
         pipeline: Pipeline object with loaded model for feature extraction
         labels: Sequence of labels (one per sample) for coloring scatter plots.
@@ -197,7 +200,7 @@ def collect_and_compute_PCA(
         shape_labels: Optional second label sequence for marker shapes. Same
                      auto-replication rules as labels. When provided, labels control
                      color and shape_labels control marker shape.
-        combine_mode: How to combine features from multiple units within a target.
+        combine_mode: How to combine features from multiple sites within a cell.
                      - "concatenate": (n_samples, n_units * hidden_size) - joint feature space
                      - "stack": (n_samples * n_units, hidden_size) - shared feature space
         n_components: Number of principal components to compute. If None, computes
@@ -209,9 +212,9 @@ def collect_and_compute_PCA(
 
     Returns:
         Dictionary containing:
-            - features_by_target: Dict mapping target keys to combined feature tensors
-            - svd_results_by_target: Dict mapping target keys to SVD result dicts (for visualization)
-            - svd_results_by_unit: Dict mapping model_unit.id to SVD result dicts (for featurizer init).
+            - features_by_target: Dict mapping cell keys to combined feature tensors
+            - svd_results_by_target: Dict mapping cell keys to SVD result dicts (for visualization)
+            - svd_results_by_unit: Dict mapping ``spec.key`` to SVD result dicts (for featurizer init).
                 Each SVD result contains "rotation" tensor of shape (hidden_dim, n_components).
             - metadata: Experiment configuration and summary statistics
 
@@ -221,20 +224,22 @@ def collect_and_compute_PCA(
 
     Example:
         >>> result = collect_and_compute_PCA(
-        ...     interchange_targets=targets,
+        ...     grid=grid,
         ...     data=[{"input": x} for x in inputs],
         ...     pipeline=pipeline,
         ...     labels=["A", "B", "A", "B"],
         ...     component_tuples=[(0, 1), (0, 2), (0, 1, 2)],
         ...     combine_mode="stack",
         ... )
-        >>> # Color by unit instead of sample label (labels auto-replicated)
-        >>> key = list(targets.keys())[0]
-        >>> unit_labels = [f"Layer {u.layer}" for u in targets[key].flatten()]
+        >>> # Color by site instead of sample label (labels auto-replicated)
+        >>> key = list(grid.keys())[0]
+        >>> site_labels = [
+        ...     f"Layer {s.fsite.site.layer}" for group in grid[key] for s in group
+        ... ]
         >>> plot_pca_scatter(
         ...     features=result["features_by_target"][_key_to_str(key)],
         ...     svd_result=result["svd_results_by_target"][_key_to_str(key)],
-        ...     labels=unit_labels,
+        ...     labels=site_labels,
         ...     component_tuples=[(0, 1)],
         ... )
     """
@@ -263,25 +268,26 @@ def collect_and_compute_PCA(
     n_samples = len(data)
 
     # =========================================================================
-    # Step 1: Merge all units from all targets for efficient single-pass collection
+    # Step 1: Merge all specs from all cells for efficient single-pass collection
     # =========================================================================
-    all_units = []
-    unit_to_target_key: Dict[str, Tuple[Any, ...]] = {}
+    all_specs = []
+    spec_key_to_cell: Dict[str, Tuple[Any, ...]] = {}
 
-    for key, target in interchange_targets.items():
-        for unit in target.flatten():
-            all_units.append(unit)
-            unit_to_target_key[unit.id] = key
+    for key, groups in grid.items():
+        for group in groups:
+            for spec in group:
+                all_specs.append(spec)
+                spec_key_to_cell[spec.key] = key
 
     logger.info(
-        f"Collecting features from {len(all_units)} total units across {len(interchange_targets)} targets"
+        f"Collecting features from {len(all_specs)} total units across {len(grid)} targets"
     )
 
-    # Single collection pass for all units
+    # Single collection pass for all specs
     all_features_dict = collect_features(
         data,
         pipeline,
-        all_units,
+        all_specs,
         batch_size=batch_size,
     )
     # collect_output_logits is False (default), so the return is dict[str, Tensor]
@@ -300,41 +306,41 @@ def collect_and_compute_PCA(
     logger.info(f"Computed per-unit SVD for {len(svd_results_by_unit)} units")
 
     # =========================================================================
-    # Step 3: Split features back by original target
+    # Step 3: Split features back by original cell
     # =========================================================================
     features_by_target_key: Dict[Tuple[Any, ...], Dict[str, torch.Tensor]] = (
         defaultdict(dict)
     )
-    for unit_id, features in all_features_dict.items():
-        target_key = unit_to_target_key[unit_id]
-        features_by_target_key[target_key][unit_id] = features
+    for spec_key, features in all_features_dict.items():
+        target_key = spec_key_to_cell[spec_key]
+        features_by_target_key[target_key][spec_key] = features
 
     # =========================================================================
-    # Step 4: Combine features within each target and compute PCA (for visualization)
+    # Step 4: Combine features within each cell and compute PCA (for visualization)
     # =========================================================================
     features_by_target: Dict[str, torch.Tensor] = {}
     svd_results_by_target: Dict[str, Dict[str, Any]] = {}
 
-    for key, target in interchange_targets.items():
+    for key, groups in grid.items():
         key_str = _key_to_str(key)
-        model_units = target.flatten()
+        cell_specs = [spec for group in groups for spec in group]
         unit_features = features_by_target_key[key]
 
-        # Get ordered feature list matching unit order
-        feature_list = [unit_features[unit.id] for unit in model_units]
+        # Get ordered feature list matching spec order
+        feature_list = [unit_features[spec.key] for spec in cell_specs]
 
         if combine_mode == "concatenate":
             # (n_samples, n_units * hidden_size) - joint feature space
             combined_features = torch.cat(feature_list, dim=1)
             logger.debug(
-                f"{key_str}: Concatenated {len(model_units)} units -> "
+                f"{key_str}: Concatenated {len(cell_specs)} units -> "
                 f"shape {combined_features.shape}"
             )
         else:  # stack
             # (n_samples * n_units, hidden_size) - unit-major order
             combined_features = torch.cat(feature_list, dim=0)
             logger.debug(
-                f"{key_str}: Stacked {len(model_units)} units -> "
+                f"{key_str}: Stacked {len(cell_specs)} units -> "
                 f"shape {combined_features.shape}"
             )
 
@@ -364,8 +370,8 @@ def collect_and_compute_PCA(
     metadata: Dict[str, Any] = {
         "experiment_type": "pca_analysis",
         "num_samples": n_samples,
-        "num_targets": len(interchange_targets),
-        "num_total_units": len(all_units),
+        "num_targets": len(grid),
+        "num_total_units": len(all_specs),
         "combine_mode": combine_mode,
         "n_components": n_components,
         "normalize": normalize,

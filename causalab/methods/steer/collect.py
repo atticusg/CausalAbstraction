@@ -15,6 +15,7 @@ Includes:
 from __future__ import annotations
 
 import math
+from typing import Sequence
 
 import torch
 from torch import Tensor
@@ -24,7 +25,8 @@ from causalab.methods.metric import (
     class_probabilities,
     scores_to_joint_probs as _scores_to_joint_probs,
 )
-from causalab.neural.activations.intervenable_model import device_for_layer
+from causalab.neural.pipeline import device_for_layer
+from causalab.neural.specs import SiteSpec
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +155,7 @@ def collect_all_variable_distributions(
         for start in range(0, len(variants), batch_size):
             batch = variants[start : start + batch_size]
             out = pipeline.generate(batch, output_scores=True)
-            for k, scores_k in enumerate(out["scores"]):
+            for k, scores_k in enumerate(out.scores or []):
                 if k >= len(step_batches):
                     step_batches.append([])
                 step_batches[k].append(scores_k)
@@ -182,7 +184,7 @@ def collect_all_variable_distributions(
 def collect_grid_distributions(
     pipeline,
     grid_points: torch.Tensor,
-    interchange_target,
+    groups: Sequence[Sequence[SiteSpec]],
     filtered_samples: list[dict],
     var_indices: torch.Tensor | list[list[int]],
     batch_size: int = 32,
@@ -199,9 +201,12 @@ def collect_grid_distributions(
 
     Args:
         grid_points: (G, d) intrinsic coordinates — passed directly to
-            replace_fn, NOT decoded here. The intervention pipeline's
-            FeatureInterpolateIntervention already applies inverse_featurizer
-            which includes manifold decode + un-standardization.
+            replace_fn, NOT decoded here. The intervention's in-trace edit
+            already applies inverse_featurizer which includes manifold decode
+            + un-standardization.
+        groups: Nested :class:`~causalab.neural.specs.SiteSpec` groups whose
+            featurizers carry the manifold decode (the shape
+            ``run_interpolation_interventions`` consumes).
         average: If True (default), return (G, W_cats) averaged over samples.
             If False, return (G, N, W_cats) per-sample distributions.
         full_vocab_softmax: If True, softmax over full vocabulary before
@@ -259,7 +264,7 @@ def collect_grid_distributions(
         results = run_interpolation_interventions(
             pipeline=pipeline,
             counterfactual_dataset=dummy_cf,  # pyright: ignore[reportArgumentType]  # constructed dicts conform to CounterfactualExample TypedDict at runtime
-            interchange_target=interchange_target,
+            groups=groups,
             fn=replace_fn,
             params={},
             batch_size=batch_size,
@@ -268,15 +273,15 @@ def collect_grid_distributions(
 
         # Restore featurizer modules to the GPU of the layer they hook into.
         # delete_intervenable_model moves shared sub-modules to CPU as a side-effect;
-        # for sharded models we route each unit to its own layer's device.
-        for group in interchange_target:
-            for unit in group:
-                unit_device = device_for_layer(pipeline, unit.layer)
-                unit.featurizer.featurizer.to(unit_device)
-                unit.featurizer.inverse_featurizer.to(unit_device)
+        # for sharded models we route each spec to its own layer's device.
+        for group in groups:
+            for spec in group:
+                site_device = device_for_layer(pipeline, spec.fsite.site.layer)
+                spec.fsite.featurizer.featurizer.to(site_device)
+                spec.fsite.featurizer.inverse_featurizer.to(site_device)
 
         joint_NW = _scores_to_joint_probs(
-            results["scores"], var_indices, full_vocab_softmax=full_vocab_softmax
+            results.scores, var_indices, full_vocab_softmax=full_vocab_softmax
         )
         if joint_NW is None:
             if average:

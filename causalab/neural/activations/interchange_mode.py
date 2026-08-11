@@ -1,346 +1,34 @@
-"""
-interchange.py
-==============
-Core utilities for running interchange intervention experiments.
+"""Interchange-mode execution over counterfactual datasets.
 
-This module provides functions for running interventions on neural networks using
-the pyvene library. It focuses on interchange interventions where activations are
-swapped between base and counterfactual inputs.
-
-For training intervention models, see train.py.
+The public wrapper :func:`run_interchange_interventions` lowers a
+counterfactual dataset onto the nnsight batched-execution engine
+(:func:`causalab.neural.dataset.run_intervened_generation`) — one
+tokenization per batch side, one early-stopped source collect per
+counterfactual group (on ``source_pipeline``'s model when cross-model,
+SH2 #411), ONE generate trace per base batch with prefill edits.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Sequence
 
-import torch
-from tqdm import tqdm
-from pyvene import IntervenableModel  # type: ignore[import-untyped]
+from causalab.causal.counterfactual_dataset import CounterfactualExample
+from causalab.neural.pipeline import GenerationResult, Pipeline, compress_scores_top_k
+from causalab.neural.specs import SiteSpec
 
-from causalab.causal.counterfactual_dataset import (
-    CounterfactualExample,
-    LabeledCounterfactualExample,
-)
-from causalab.neural.pipeline import Pipeline, ensure_position_ids
-from causalab.neural.units import AtomicModelUnit, InterchangeTarget
-from causalab.neural.activations.intervenable_model import (
-    prepare_intervenable_model,
-    prepare_mixed_intervenable_model,
-    delete_intervenable_model,
-)
-from causalab.neural.activations.collect import collect_source_representations
-from causalab.neural.activations.data_utils import (
-    convert_to_top_k,
-    move_outputs_to_cpu,
-)
-
-# Configure logging
 logger = logging.getLogger(__name__)
-
-
-def _first_index_shape_mismatch(
-    base: Any, cf: Any, path: tuple[int, ...] = ()
-) -> tuple[tuple[int, ...], Any, Any] | None:
-    """Return the first point where two nested index structures diverge in shape.
-
-    Interchange pairs base and counterfactual (source) positions element-wise, so
-    pyvene's gather/scatter requires their nested list shapes to match exactly.
-    Walks ``base`` and ``cf`` in parallel and returns ``(path, base_len, cf_len)``
-    at the first list whose lengths differ (or where one side is a list and the
-    other a scalar index); returns ``None`` when the shapes match. Generic over
-    nesting depth, so it covers both the single-axis ``ResidualStream`` layout
-    (per-example list of position lists) and the multi-axis ``AttentionHead``
-    layout (``[head_axis, position_axis]``).
-    """
-    base_is_list = isinstance(base, list)
-    cf_is_list = isinstance(cf, list)
-    if base_is_list != cf_is_list:
-        return path, base, cf
-    if not base_is_list:
-        return None
-    if len(base) != len(cf):
-        return path, len(base), len(cf)
-    for i, (b, c) in enumerate(zip(base, cf)):
-        mismatch = _first_index_shape_mismatch(b, c, path + (i,))
-        if mismatch is not None:
-            return mismatch
-    return None
-
-
-def _first_ragged_span(
-    group: Any,
-) -> tuple[int, tuple[tuple[int, ...], Any, Any]] | None:
-    """Return the first batch example in a *group* whose index shape diverges from example 0.
-
-    ``group`` is a batch of per-example locations that pyvene stacks with a
-    single ``torch.tensor(...)`` call (``[example_0, example_1, ...]``), so every
-    example must contribute the same nested shape. A *ragged* span — 1 token for
-    some examples and 2 for others — surfaces as the cryptic ``expected sequence
-    of length N at dim 1`` error that poisons the context. A *uniform*
-    multi-token span stacks fine and is allowed.
-
-    Returns ``(example_index, mismatch)`` for the first example whose shape
-    differs from example 0 (``mismatch`` is the `_first_index_shape_mismatch`
-    tuple), or ``None`` when every example shares the same shape. Comparing each
-    example against example 0 — rather than flagging any inner list of length
-    > 1 — distinguishes a legitimate uniform span from a genuinely ragged one.
-
-    The caller must pass a single tensorized group. A single-axis ``pos`` unit's
-    whole structure is one group; a multi-axis ``h.pos`` unit's head and position
-    axes are stacked by ``torch.tensor`` *separately* (``gather_neurons`` indexes
-    ``unit_locations_as_list[0]`` and ``[1]``), so each axis is its own group —
-    do NOT pass the combined ``[head_axis, position_axis]`` list here, or the two
-    axes (which legitimately differ in width) would read as ragged.
-    """
-    if not isinstance(group, list) or len(group) < 2:
-        return None
-    first = group[0]
-    for example_index in range(1, len(group)):
-        mismatch = _first_index_shape_mismatch(first, group[example_index])
-        if mismatch is not None:
-            return example_index, mismatch
-    return None
-
-
-def prepare_intervenable_inputs(
-    pipeline: Pipeline,
-    examples: list[CounterfactualExample] | list[LabeledCounterfactualExample],
-    interchange_target: InterchangeTarget,
-) -> tuple[
-    dict[str, Any],
-    list[dict[str, Any]],
-    dict[str, Any],
-    list[list[list[int] | None]],
-]:
-    """
-    Prepare the inputs for the intervenable model.
-
-    This function loads the base and counterfactual inputs, and prepares the indices
-    for the model units.
-
-    Args:
-        pipeline: The pipeline containing the model
-        examples: List of counterfactual examples, each with "input" and
-            "counterfactual_inputs" keys.
-        interchange_target: InterchangeTarget containing the model units to be intervened on.
-            Groups in the target correspond to counterfactual inputs.
-
-    Returns:
-        Tuple of (batched_base, batched_counterfactuals, inv_locations, feature_indices)
-    """
-    # Extract and batch inputs from examples
-    raw_base = [ex["input"] for ex in examples]
-    # Shape: (batch_size, num_counterfactuals) -> (num_counterfactuals, batch_size)
-    # Convert zip tuples to lists for pipeline.load() compatibility
-    raw_counterfactuals = [
-        list(cf_tuple)
-        for cf_tuple in zip(*[ex["counterfactual_inputs"] for ex in examples])
-    ]
-
-    batched_base = pipeline.load(raw_base)
-    batched_counterfactuals = [
-        pipeline.load(batched_counterfactual)
-        for batched_counterfactual in raw_counterfactuals
-    ]
-
-    # Positions returned by `index_component` are in each example's unpadded
-    # tokenization frame. Passing the per-batch `attention_mask` shifts them
-    # into the padded-batch frame (`argmax(attention_mask, dim=1)` per row).
-    # shape: (num_model_units, batch_size, num_component_indices)
-    base_indices = [
-        model_unit.index_component(
-            raw_base,
-            batch=True,
-            is_original=True,
-            attention_mask=batched_base["attention_mask"],
-        )
-        for group in interchange_target
-        for model_unit in group
-    ]
-
-    # shape: (num_model_units, batch_size, num_component_indices)
-    counterfactual_indices = [
-        model_unit.index_component(
-            batched_counterfactual,
-            batch=True,
-            is_original=False,
-            attention_mask=batched_cf["attention_mask"],
-        )
-        for group, batched_counterfactual, batched_cf in zip(
-            interchange_target, raw_counterfactuals, batched_counterfactuals
-        )
-        for model_unit in group
-    ]
-
-    # shape: (num_model_units, batch_size, num_feature_indices)
-    feature_indices = [
-        [model_unit.get_feature_indices() for _ in range(len(raw_base))]
-        for group in interchange_target
-        for model_unit in group
-    ]
-
-    # pyvene gathers source (counterfactual) activations and scatters them onto
-    # the base at the paired indices, so the two index structures must share the
-    # same nested shape. A mismatch reaches the CUDA gather/scatter as an
-    # out-of-bounds assertion that poisons the context; catch it on CPU here with
-    # an actionable error instead. The per-position bounds check in
-    # `_apply_padding_shift` (#176) only validates individual indices, so a
-    # length mismatch where every index is in-bounds slips past it.
-    mismatch = _first_index_shape_mismatch(base_indices, counterfactual_indices)
-    if mismatch is not None:
-        _path, base_len, cf_len = mismatch
-        raise ValueError(
-            f"Base and counterfactual token positions have mismatched shapes at "
-            f"index path {list(_path)}: base selects {base_len}, counterfactual "
-            f"selects {cf_len}. Interchange pairs positions, so both must select "
-            f"the same number of tokens per example — a mismatch reaches pyvene's "
-            f"gather/scatter as a CUDA assertion that poisons the context. Usual "
-            f"cause: a counterfactual value string that tokenizes to a different "
-            f"number of tokens than the base value. Use single-token values or a "
-            f"fixed single position."
-        )
-
-    # Multi-token positions are supported as long as the span is *uniform* across
-    # the batch (every example selects the same number of tokens). pyvene stacks a
-    # unit's per-example positions into one `(batch, num_positions)` tensor and
-    # gathers/scatters every position simultaneously, and the feature
-    # interventions set `keep_last_dim=True` so the featurizer sees
-    # `(batch, num_positions, d)` and applies per position (its d-sized weights
-    # broadcast across the span). The remaining failure mode is a *ragged* span —
-    # a width that varies across the batch. `torch.tensor` in `gather_neurons`
-    # can't build a rectangular tensor from it and raises the cryptic `expected
-    # sequence of length N at dim 1` error that poisons the context. The base/CF
-    # mismatch check above only compares the two sides element-wise, so a span
-    # that is ragged *within* one side (identically on both) slips past it; catch
-    # it here per unit with an actionable message. Each unit reports how pyvene
-    # tensorizes its index axes via `tensorized_index_groups` — a single-axis
-    # `pos` unit is one group, a multi-axis `h.pos` unit splits into head and
-    # position axes (stacked separately) — and we check each group on its own so
-    # the head and position axes' legitimately-different widths are never misread
-    # as ragged.
-    model_units = [model_unit for group in interchange_target for model_unit in group]
-    for label, all_indices in (
-        ("base", base_indices),
-        ("counterfactual", counterfactual_indices),
-    ):
-        for unit_idx, unit_indices in enumerate(all_indices):
-            # The unit class knows how pyvene tensorizes its index axes: a plain
-            # `pos` unit is one group; a multi-axis `h.pos` unit splits into
-            # `[head_axis, position_axis]`. Asking the unit keeps that layout
-            # knowledge on the class instead of re-deriving it from the unit
-            # string here.
-            tensorized_groups = model_units[unit_idx].tensorized_index_groups(
-                unit_indices
-            )
-            for group in tensorized_groups:
-                ragged = _first_ragged_span(group)
-                if ragged is not None:
-                    example_index, (_path, len0, len_j) = ragged
-                    raise ValueError(
-                        f"A {label} token position selects a variable number of "
-                        f"tokens across the batch (unit {unit_idx}: example 0 "
-                        f"selects {len0}, example {example_index} selects {len_j} "
-                        f"at index path {list(_path)}). Interchange stacks a "
-                        f"unit's per-example positions with `torch.tensor`, so "
-                        f"every example must select the same number of tokens — a "
-                        f"ragged span reaches pyvene's gather as an `expected "
-                        f"sequence of length N at dim 1` error that poisons the "
-                        f"context. Usual cause: a value string that tokenizes to a "
-                        f"different number of tokens for different examples. Use a "
-                        f"fixed-width position (e.g. the last token of the value)."
-                    )
-
-    inv_locations = {"sources->base": (counterfactual_indices, base_indices)}
-    return batched_base, batched_counterfactuals, inv_locations, feature_indices
-
-
-def batched_interchange_intervention(
-    pipeline: Pipeline,
-    intervenable_model: IntervenableModel,
-    examples: list[CounterfactualExample],
-    interchange_target: InterchangeTarget,
-    output_scores: bool | int = True,
-    source_pipeline: Pipeline | None = None,
-    source_intervenable_model: IntervenableModel | None = None,
-) -> dict[str, Any]:
-    """
-    Perform interchange interventions on batched inputs using an intervenable model.
-
-    This function executes the core intervention logic by:
-    1. Preparing the base and counterfactual inputs for intervention
-    2. Running the model with interventions at specified locations
-    3. Moving tensors back to CPU to free GPU memory
-
-    Args:
-        pipeline: Target pipeline where interventions are applied
-        intervenable_model: PyVENE model with preset intervention locations
-        examples: List of counterfactual examples
-        interchange_target: InterchangeTarget containing model components to intervene on
-        output_scores: Whether to include scores in output dictionary (default: True)
-        source_pipeline: If provided, collect activations from this pipeline instead
-            of the target pipeline. Enables cross-model patching.
-        source_intervenable_model: Optional pre-created intervenable model for the source
-            pipeline. If provided with source_pipeline, this model will be reused for
-            collecting activations instead of creating a new one per batch.
-
-    Returns:
-        dict: Dictionary with 'sequences' and optionally 'scores' keys
-    """
-    try:
-        # Prepare inputs for intervention (using target pipeline for base)
-        batched_base, batched_counterfactuals, inv_locations, feature_indices = (
-            prepare_intervenable_inputs(pipeline, examples, interchange_target)
-        )
-
-        # Collect source representations if using cross-model patching
-        source_representations = None
-        if source_pipeline is not None:
-            source_representations = collect_source_representations(
-                source_pipeline,
-                examples,
-                interchange_target,
-                source_intervenable_model,
-            )
-            # When using cross-model patching, we don't pass counterfactuals to pyvene
-            # because we're using pre-collected source_representations instead
-            batched_counterfactuals = None
-
-        # Execute the intervention via the pipeline
-        gen_kwargs = {"output_scores": output_scores}
-        output = pipeline.intervenable_generate(
-            intervenable_model,
-            batched_base,
-            batched_counterfactuals,
-            inv_locations,
-            feature_indices,
-            source_representations=source_representations,
-            **gen_kwargs,
-        )
-
-        # Move tensors to CPU to free GPU memory
-        if batched_counterfactuals is not None:
-            for batched in [batched_base] + batched_counterfactuals:
-                for k, v in batched.items():
-                    batched[k] = v.cpu()
-        else:
-            for k, v in batched_base.items():
-                batched_base[k] = v.cpu()
-
-        return output
-    finally:
-        delete_intervenable_model(intervenable_model)
 
 
 def run_interchange_interventions(
     pipeline: Pipeline,
     counterfactual_dataset: list[CounterfactualExample],
-    interchange_target: InterchangeTarget,
+    groups: Sequence[Sequence[SiteSpec]],
     batch_size: int = 32,
     output_scores: bool | int = True,
     source_pipeline: Pipeline | None = None,
-) -> dict[str, list[Any]]:
+    gen_kwargs: dict[str, Any] | None = None,
+) -> GenerationResult:
     """
     Run interchange interventions on a full counterfactual dataset in batches.
 
@@ -348,14 +36,17 @@ def run_interchange_interventions(
     1. Prepares an intervenable model configured for interchange interventions
     2. Processes the dataset in batches, applying interventions to each batch
     3. Converts scores to top-k format if requested (for memory efficiency)
-    4. Moves all outputs to CPU to free GPU memory
-    5. Collects and returns results from all batches
+    4. Returns ONE flat :class:`~causalab.neural.pipeline.GenerationResult`
+       over the whole dataset
 
     Args:
         pipeline: Target pipeline where interventions are applied
         counterfactual_dataset: List of counterfactual examples
-        interchange_target: InterchangeTarget containing model components to intervene on,
-                           where groups share counterfactual inputs
+        groups: Nested spec groups (``Sequence[Sequence[SiteSpec]]``) — the
+            outer index ``g`` picks the counterfactual input feeding the
+            group's source reads (``example["counterfactual_inputs"][g]``;
+            the grouping contract on
+            :func:`~causalab.neural.dataset.run_intervened_generation`).
         batch_size: Number of examples to process in each batch
         output_scores: Controls score output format:
             - False: No scores
@@ -364,237 +55,41 @@ def run_interchange_interventions(
         source_pipeline: If provided, collect activations from this pipeline instead
             of the target pipeline. Enables cross-model patching where activations
             from source_pipeline are patched into pipeline (the target).
+        gen_kwargs: Extra HF ``generate`` kwargs forwarded to
+            :func:`~causalab.neural.dataset.run_intervened_generation`
+            (e.g. ``{"min_new_tokens": N}`` — the escape hatch its
+            ragged-scores refusal names).
 
     Returns:
-        List[dict]: List of dictionaries, each with 'sequences' (on CPU) and optionally
-                   'scores' keys (on CPU, in top-k format if int was provided)
+        One flat :class:`~causalab.neural.pipeline.GenerationResult` over the
+        whole dataset (EU5b, #487): ``sequences`` ``(n_examples,
+        max_new_tokens)``, ``strings`` one entry per example, and per-step
+        ``scores`` (or ``scores_top_k`` for an integer ``output_scores``) —
+        the internal batch split never appears in the shape. The io/artifact
+        boundary converts via
+        :meth:`~causalab.neural.pipeline.GenerationResult.to_raw_results`.
     """
-    # Initialize intervenable model with interchange intervention type
-    intervenable_model = prepare_intervenable_model(
-        pipeline, interchange_target, intervention_type="interchange"
+    # PL3 (#405): rerouted onto the nnsight batched-execution engine — one
+    # tokenization per batch side with batch-first position resolution, one
+    # early-stopped source collect per counterfactual group, ONE generate
+    # trace per base batch (prefill edits, pyvene's split-forward layout).
+    # Cross-model patching rides the same path (SH2, #411): the collect
+    # forwards run on source_pipeline's model with its own tokenization.
+    from causalab.neural.dataset import run_intervened_generation
+    from causalab.neural.specs import EditSpec
+
+    edit_groups = [
+        [EditSpec(site, mode="interchange") for site in group] for group in groups
+    ]
+    result = run_intervened_generation(
+        pipeline,  # pyright: ignore[reportArgumentType]  # LMPipeline in practice
+        counterfactual_dataset,
+        edit_groups,
+        batch_size=batch_size,
+        output_scores=bool(output_scores),
+        source_pipeline=source_pipeline,  # pyright: ignore[reportArgumentType]
+        **(gen_kwargs or {}),
     )
-
-    # Create source intervenable model if doing cross-model patching
-    source_intervenable_model = None
-    if source_pipeline is not None:
-        source_intervenable_model = prepare_intervenable_model(
-            source_pipeline, interchange_target, intervention_type="collect"
-        )
-
-    all_outputs = []
-
-    # Process each batch with progress tracking
-    for start in tqdm(
-        range(0, len(counterfactual_dataset), batch_size),
-        desc="Processing batches",
-        disable=not logger.isEnabledFor(logging.DEBUG),
-        leave=False,
-    ):
-        examples = counterfactual_dataset[start : start + batch_size]
-        with torch.no_grad():  # Disable gradient tracking for inference
-            # Perform interchange interventions on the batch - returns dict
-            output_dict = batched_interchange_intervention(
-                pipeline,
-                intervenable_model,
-                examples,
-                interchange_target,
-                output_scores=output_scores,
-                source_pipeline=source_pipeline,
-                source_intervenable_model=source_intervenable_model,
-            )
-
-            # Collect outputs from this batch
-            all_outputs.append(output_dict)
-
-    # Clean up the intervenable models to free GPU memory
-    delete_intervenable_model(intervenable_model)
-    if source_intervenable_model is not None:
-        delete_intervenable_model(source_intervenable_model)
-
-    # Convert to top-k format if requested (while still on GPU for efficiency)
     if not isinstance(output_scores, bool) and output_scores > 0:
-        all_outputs = convert_to_top_k(all_outputs, pipeline, k=output_scores)
-
-    # Move all outputs to CPU
-    all_outputs = move_outputs_to_cpu(all_outputs)
-
-    # remove batch structure from outputs
-    if not all_outputs:
-        return {"sequences": [[]], "string": [[]]}
-    all_outputs = {
-        k: [output[k] for output in all_outputs] for k in all_outputs[0].keys()
-    }
-
-    return all_outputs
-
-
-def run_two_pass_path_patching(
-    pipeline: Pipeline,
-    counterfactual_dataset: list[CounterfactualExample],
-    interchange_target: InterchangeTarget,
-    receiver: AtomicModelUnit | list[AtomicModelUnit],
-    batch_size: int = 32,
-    output_scores: bool | int = True,
-) -> dict[str, list[Any]]:
-    """Two-pass path patching for one or a *set* of internal receivers.
-
-    Unlike the degenerate ``receiver = output`` case (a single intervened forward,
-    handled by :func:`run_interchange_interventions`), an internal receiver needs two
-    passes, because the sender's perturbation also reaches the output through routes
-    that *bypass* the receiver (the sender's own residual path, and sender→other
-    downstream components). Those must be stripped out:
-
-    * **PASS 1** runs one forward in which the sender reads its source and the
-      restorers read the base (the ``interchange_target`` groups), and *collects* the
-      receivers' activations ``v*`` — the values the receivers read when only the direct
-      sender→receiver path is perturbed. Hook firing order (forward order) makes this
-      exact: by the time execution reaches each receiver, every upstream restorer has
-      already overwritten its base value.
-    * **PASS 2** re-runs on the **clean base** (sender un-perturbed) with only the
-      receivers' activations replaced by ``v*`` (injected via ``source_representations``,
-      reusing the cross-model patching path). Every sender→output route that bypasses
-      the receivers is therefore clean, leaving exactly the sender→receiver edge effect.
-
-    ``receiver`` may be a single :class:`AtomicModelUnit` or a list of them. A set is
-    patched *simultaneously* (collected and injected in one shot) — not summed over
-    single receivers — because the metric is a nonlinear function of the patched
-    activations and the receivers interact downstream (the IOI Fig. 4 / Fig. 5 case:
-    one sender into all name-mover queries or all S-inhibition values at once). The
-    same ``receiver`` list is used for PASS 1's ``collect_units`` and PASS 2's
-    ``InterchangeTarget``, so the collected order (``result[0][1]``, in pyvene's
-    ``sorted_keys`` = config-add order) matches the injected order
-    (``source_representations[i] → sorted_keys[i]``) with no reordering. PASS 2 puts
-    each receiver in its own group (``[[r] for r in receivers]``) because pyvene's
-    ``_input_validation`` requires one source representation per intervention group.
-    A 1-element list reproduces the single-receiver run exactly.
-
-    ``counterfactual_dataset`` must already be presented so each example's
-    ``counterfactual_inputs`` lead with the source (group 0) followed by the base for
-    each restorer group — i.e. the ``[source, base]`` arrangement the path-patching
-    runner builds. Returns the same ``{"string", "sequences", "scores"}`` dict shape as
-    :func:`run_interchange_interventions`, so existing scoring applies unchanged.
-    """
-    receivers = list(receiver) if isinstance(receiver, (list, tuple)) else [receiver]
-    n_groups = len(list(interchange_target))
-    n_recv = len(receivers)
-    pass1_model = prepare_mixed_intervenable_model(
-        pipeline, interchange_target, receivers
-    )
-    # One group PER receiver (not one group of N): pyvene's _input_validation checks
-    # len(source_representations) == len(_intervention_group), and PASS 2 injects one
-    # v* per receiver, so the group count must equal the receiver count.
-    pass2_model = prepare_intervenable_model(
-        pipeline,
-        InterchangeTarget([[r] for r in receivers]),
-        intervention_type="interchange",
-    )
-
-    all_outputs: list[dict[str, Any]] = []
-    try:
-        for start in tqdm(
-            range(0, len(counterfactual_dataset), batch_size),
-            desc="path-patch two-pass",
-            disable=not logger.isEnabledFor(logging.DEBUG),
-            leave=False,
-        ):
-            examples = counterfactual_dataset[start : start + batch_size]
-            with torch.no_grad():
-                # PASS 1 — collect v* under the sender+restorer interchange. Reuse
-                # prepare_intervenable_inputs for the interchange groups' indices and
-                # its shape guards, then append the receiver (collected from the base:
-                # source index == base index, as in a plain collect).
-                batched_base, batched_cfs, inv_locations, feature_indices = (
-                    prepare_intervenable_inputs(pipeline, examples, interchange_target)
-                )
-                raw_base = [ex["input"] for ex in examples]
-                # The receiver indices are spliced straight into the pyvene locations
-                # below, bypassing the ragged-span guard prepare_intervenable_inputs
-                # runs on the interchange groups. Validate each on the same path — per
-                # tensorized axis group, like prepare_intervenable_inputs — so a ragged
-                # receiver span raises the actionable error rather than reaching
-                # pyvene's gather as the cryptic span error. A uniform multi-token span
-                # is fine; today every receiver reads a single last-token position.
-                recv_base_idxs = []
-                for r in receivers:
-                    recv_base_idx = r.index_component(
-                        raw_base,
-                        batch=True,
-                        is_original=True,
-                        attention_mask=batched_base["attention_mask"],
-                    )
-                    for group in r.tensorized_index_groups(recv_base_idx):
-                        ragged = _first_ragged_span(group)
-                        if ragged is not None:
-                            example_index, (_path, len0, len_j) = ragged
-                            raise ValueError(
-                                f"A path-patching receiver selects a variable number "
-                                f"of tokens across the batch (example 0 selects "
-                                f"{len0}, example {example_index} selects {len_j} at "
-                                f"index path {list(_path)}). Interchange stacks the "
-                                f"receiver's per-example positions with `torch.tensor`, "
-                                f"so every example must select the same number of "
-                                f"tokens — a ragged span reaches pyvene's gather as an "
-                                f"`expected sequence of length N at dim 1` error that "
-                                f"poisons the context. Use a fixed-width receiver "
-                                f"position (e.g. the last token)."
-                            )
-                    recv_base_idxs.append(recv_base_idx)
-                cf_idx, base_idx = inv_locations["sources->base"]
-                pass1_locations = {
-                    "sources->base": (
-                        cf_idx + recv_base_idxs,
-                        base_idx + recv_base_idxs,
-                    )
-                }
-                # One source per interchange group, then None per collected receiver
-                # (each consumes no source and reads the base).
-                sources = list(batched_cfs[:n_groups]) + [None] * n_recv
-                # Plain (non-generate) forward: supply position_ids on BOTH the base
-                # and every source so a left-padded batch is not mis-encoded on
-                # absolute-position models — pyvene runs each source as its own
-                # collection forward (see ensure_position_ids). PASS 2 below goes
-                # through intervenable_generate, which (being single-step) applies the
-                # same position_ids fix to its base internally.
-                sources = [
-                    ensure_position_ids(s) if s is not None else None for s in sources
-                ]
-                result = pass1_model(
-                    ensure_position_ids(batched_base),
-                    sources=sources,
-                    unit_locations=pass1_locations,
-                )
-                v_star = result[0][1]  # list[Tensor], one per receiver, in order
-                if len(v_star) != n_recv:
-                    raise RuntimeError(
-                        f"PASS 1 collected {len(v_star)} activations for {n_recv} "
-                        f"receivers — the collect-order ↔ sorted_keys contract pyvene "
-                        f"relies on (one CollectIntervention per receiver, in "
-                        f"config-add order) was violated."
-                    )
-
-                # PASS 2 — inject v* into the receivers on an otherwise-clean base run.
-                pass2_locations = {"sources->base": (recv_base_idxs, recv_base_idxs)}
-                pass2_feature_indices = [
-                    [r.get_feature_indices() for _ in range(len(raw_base))]
-                    for r in receivers
-                ]
-                output = pipeline.intervenable_generate(
-                    pass2_model,
-                    batched_base,
-                    None,
-                    pass2_locations,
-                    pass2_feature_indices,
-                    source_representations=v_star,
-                    output_scores=output_scores,
-                )
-                all_outputs.append(output)
-    finally:
-        delete_intervenable_model(pass1_model)
-        delete_intervenable_model(pass2_model)
-
-    if not isinstance(output_scores, bool) and output_scores > 0:
-        all_outputs = convert_to_top_k(all_outputs, pipeline, k=output_scores)
-    all_outputs = move_outputs_to_cpu(all_outputs)
-    if not all_outputs:
-        return {"sequences": [[]], "string": [[]]}
-    return {k: [output[k] for output in all_outputs] for k in all_outputs[0].keys()}
+        result = compress_scores_top_k(result, pipeline, k=output_scores)
+    return result

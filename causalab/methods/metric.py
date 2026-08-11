@@ -2,22 +2,15 @@
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Callable, Tuple, Any
+from typing import Dict, List, Callable, Sequence, Tuple, Any
 import copy
 import math
 import torch
 import torch.nn.functional as F
-from causalab.neural.activations.interchange_mode import prepare_intervenable_inputs
-from causalab.causal.counterfactual_dataset import (
-    CounterfactualExample,
-    LabeledCounterfactualExample,
-)
+from causalab.causal.counterfactual_dataset import CounterfactualExample
 from causalab.causal.causal_model import CausalModel
-from causalab.causal.trace import CausalTrace, Mechanism
 
-from causalab.neural.pipeline import LMPipeline, ensure_position_ids
-from causalab.neural.units import InterchangeTarget
-from causalab.neural.activations.collect import collect_source_representations
+from causalab.neural.pipeline import GenerationResult, LMPipeline
 from torch import Tensor
 
 logger = logging.getLogger(__name__)
@@ -130,16 +123,18 @@ def _normalize_var_indices(var_indices) -> list[list[int]]:
 
 
 def scores_to_joint_probs(
-    raw_scores: list,
+    step_scores: list[torch.Tensor] | None,
     var_indices: torch.Tensor | list[list[int]],
     full_vocab_softmax: bool = False,
 ) -> torch.Tensor | None:
-    """Convert raw intervention scores to joint probability distributions.
+    """Convert per-step intervention scores to joint probability distributions.
 
     Args:
-        raw_scores: List of batch score tensors from intervention runs
-            (each element is a list of per-token-step ``(B, V)`` tensors,
-            or a single ``(B, V)`` tensor).
+        step_scores: The flat per-step scores of a generation run —
+            :attr:`~causalab.neural.pipeline.GenerationResult.scores`: one
+            ``(N, V)`` tensor per generated step (EU5b, #487; the pre-EU5a
+            per-batch nesting is gone). ``None`` or empty when scores were
+            not requested.
         var_indices: Token indices for variable values — either a 1-D Tensor
             (single-token) or ``list[list[int]]`` (multi-token).
         full_vocab_softmax: If True, softmax over full vocabulary before
@@ -152,35 +147,21 @@ def scores_to_joint_probs(
     var_token_seqs = _normalize_var_indices(var_indices)
     W_cats = len(var_token_seqs)
 
-    step_batches: list[list[torch.Tensor]] = []
-    for batch_scores in raw_scores:
-        if isinstance(batch_scores, list):
-            for k, scores_k in enumerate(batch_scores):
-                if k >= len(step_batches):
-                    step_batches.append([])
-                step_batches[k].append(scores_k)
-        elif isinstance(batch_scores, torch.Tensor):
-            if len(step_batches) == 0:
-                step_batches.append([])
-            step_batches[0].append(batch_scores)
-
-    if not step_batches:
+    if not step_scores:
         return None
 
-    step_tensors = [torch.cat(batches, dim=0) for batches in step_batches]
-
-    N = step_tensors[0].shape[0]
+    N = step_scores[0].shape[0]
     joint_NW = torch.ones(N, W_cats)
 
     # Single generation step: pass the full variant lists to class_probabilities
-    if len(step_tensors) == 1:
+    if len(step_scores) == 1:
         probs = class_probabilities(
-            step_tensors[0], var_token_seqs, full_vocab_softmax=full_vocab_softmax
+            step_scores[0], var_token_seqs, full_vocab_softmax=full_vocab_softmax
         )
         joint_NW = probs.cpu()
     else:
         # Multi-step: each inner list is a step sequence, not variants
-        for k, logits_NV in enumerate(step_tensors):
+        for k, logits_NV in enumerate(step_scores):
             active = [
                 (w, seq[k]) for w, seq in enumerate(var_token_seqs) if k < len(seq)
             ]
@@ -246,13 +227,24 @@ def class_probabilities(
 
 
 def causal_score_intervention_outputs(
-    raw_results: Dict[Tuple[Any, ...], Dict[str, Any]],
+    results: Dict[Tuple[Any, ...], GenerationResult],
     dataset: list[CounterfactualExample],
     causal_model: CausalModel,
     target_variable_groups: List[Tuple[str, ...]],
     metric: Callable[[Any, Any], bool],
 ) -> Dict[str, Any]:
-    """Score intervention outputs against causal model expectations for each variable group."""
+    """Score intervention outputs against causal model expectations for each variable group.
+
+    ``results`` maps each key to its run's flat
+    :class:`~causalab.neural.pipeline.GenerationResult` (EU5b, #487). Each
+    ``results_by_key`` entry embeds the legacy ``raw_results`` dict view
+    (:meth:`~causalab.neural.pipeline.GenerationResult.to_raw_results`) —
+    the io boundary (``io.artifacts.save_intervention_results``) consumes
+    that view, so the stored-artifact schema is unchanged for runs with
+    ``batch_size >= n_examples``; legacy multi-batch runs stored one inner
+    ``"string"`` list per batch (and single-example batches a bare str),
+    where ``to_raw_results()`` always emits the one-synthetic-batch nesting.
+    """
     # Create a metric for each variable group and score
     scores_by_variable: Dict[Tuple[str, ...], Dict[Tuple[Any, ...], float]] = {}
     for var_group in target_variable_groups:
@@ -261,7 +253,7 @@ def causal_score_intervention_outputs(
 
         # Score using the core scoring function
         scores = score_intervention_outputs(
-            raw_results=raw_results,
+            results=results,
             dataset=dataset,
             metric=interchange_metric,
             causal_model=causal_model,
@@ -270,7 +262,7 @@ def causal_score_intervention_outputs(
 
     # Build results_by_key structure
     results_by_key = {}
-    for key in raw_results.keys():
+    for key in results.keys():
         scores_for_key = {
             str(var_group): scores_by_variable[var_group][key]
             for var_group in target_variable_groups
@@ -280,7 +272,10 @@ def causal_score_intervention_outputs(
         results_by_key[key] = {
             "scores_by_variable": scores_for_key,
             "avg_score": key_avg_score,
-            "raw_results": raw_results[key],
+            # The io boundary consumes the legacy raw_results dict view
+            # (EU5b, #487; schema unchanged at batch_size >= n_examples —
+            # see the docstring's qualifier).
+            "raw_results": results[key].to_raw_results(),
         }
 
     # Compute overall scores per variable group
@@ -327,7 +322,7 @@ def as_label_checker(
     """Adapt a task checker to the interchange-metric checker signature.
 
     A task's ``checker`` takes ``(neural_output, causal_output: str)``, but
-    intervention scoring (``make_causal_metric``, ``LM_loss_and_metric_fn``)
+    intervention scoring (``make_causal_metric``, ``score_label_predictions``)
     passes the causal *label*, which may arrive as a bare value or as a
     ``{"string": ...}`` dict.  This normalizes the label to a string before
     delegating, so ``task.checker`` becomes the single match authority for both
@@ -789,7 +784,7 @@ def compute_reference_distributions(
             batch_inputs = [ex["input"] for ex in batch_examples]
 
             result = pipeline.generate(batch_inputs)
-            scores = result["scores"]
+            scores = result.scores or []
 
             # Collect logits for each generation step we need
             logits_per_step: list[Tensor] = []
@@ -852,66 +847,115 @@ def compute_base_accuracy(
     binary top-1 accuracy.  Only computed for single-token outputs
     (``max_new_tokens == 1``); ``None`` otherwise.
 
+    Execution only — one ``pipeline.generate`` per batch; the grading semantics
+    live in :func:`score_base_outputs`, which this delegates to (and which
+    Plan-saved outputs reach directly via :func:`outputs_from_logits`), so the
+    answer-scoring semantics exist exactly once (MX1, #408).
+
     Returns dict with keys: accuracy, correct, total, prob_accuracy.
     """
-    tokenizer = pipeline.tokenizer
-    correct = 0
-    total = 0
-    prob_sum = 0.0
     single_token = pipeline.max_new_tokens == 1
+    outputs: List[Dict[str, Any]] = []
     n_batches = math.ceil(len(dataset) / batch_size)
     for batch_idx in range(n_batches):
         start = batch_idx * batch_size
         end = min(start + batch_size, len(dataset))
-        batch_examples = dataset[start:end]
-        batch_inputs = [ex["input"] for ex in batch_examples]
+        batch_inputs = [ex["input"] for ex in dataset[start:end]]
 
         result = pipeline.generate(batch_inputs)
-        strings = result["string"]
-        if isinstance(strings, str):
-            strings = [strings]
-        scores = result.get("scores", [])
+        strings = result.strings
+        scores = result.scores or []
 
-        # Full-vocab softmax for the first generated token
-        probs = None
-        if single_token and scores:
-            probs = F.softmax(scores[0].float(), dim=-1)  # (B, vocab_size)
-
-        for bi, ex in enumerate(batch_examples):
-            generated = strings[bi]
-            expected = (
-                answer_fn(ex) if answer_fn is not None else ex["input"]["raw_output"]
-            )
-            answers = expected if isinstance(expected, list) else [expected]
-            # The task's checker is the sole match authority (no strict-equality
-            # fallback, #167) — e.g. entity_binding's ``startswith`` accepts the
-            # continuation tokens a ``max_new_tokens > 1`` task emits after the
-            # answer. A list expectation (e.g. graph_walk) counts if any matches.
-            hit = any(checker({"string": generated}, ans) for ans in answers)
-            if hit:
-                correct += 1
-            total += 1
-
-            # P(valid answer): sum of probs for all valid answer token variants
+        for bi in range(len(batch_inputs)):
+            output: Dict[str, Any] = {"string": strings[bi]}
+            # Keep only the first step's row — the sole score consumer below is
+            # the single-token prob grader; carrying every step's full-vocab
+            # logits would multiply the memory footprint for nothing.
             if single_token and scores:
-                all_token_ids = set()
-                for ans in answers:
-                    # Collect all single-token forms of this answer, trying both
-                    # spacings and cases so the prob grader matches the
-                    # strip-tolerant string grader regardless of whether
-                    # ``raw_output`` carries a leading space.
-                    for var in answer_token_forms(ans):
-                        ids = tokenizer.encode(var, add_special_tokens=False)
-                        if len(ids) == 1:
-                            all_token_ids.add(ids[0])
-                if all_token_ids:
-                    assert (
-                        probs is not None
-                    )  # single_token and scores branch sets probs
-                    prob_sum += probs[bi, list(all_token_ids)].sum().item()
+                output["scores"] = [scores[0][bi]]
+            outputs.append(output)
+
+    return score_base_outputs(
+        outputs,
+        dataset,
+        checker,
+        tokenizer=pipeline.tokenizer,
+        answer_fn=answer_fn,
+        single_token=single_token,
+    )
+
+
+def score_base_outputs(
+    outputs: List[Dict[str, Any]],
+    dataset: list[CounterfactualExample],
+    checker: Callable[[dict, str], bool],
+    *,
+    tokenizer: Any = None,
+    answer_fn: Callable[[CounterfactualExample], str | list[str]] | None = None,
+    single_token: bool | None = None,
+) -> dict:
+    """Score per-example base outputs — :func:`compute_base_accuracy`'s grading
+    semantics, decoupled from execution (MX1, #408).
+
+    ``outputs`` is one ``{"string": ..., "scores": [...]}`` dict per example —
+    :func:`compute_base_outputs`'s shape, also produced from Plan-saved logits
+    by :func:`outputs_from_logits` — aligned with ``dataset``.
+
+    ``prob_accuracy`` (mean probability mass on valid answer tokens, full-vocab
+    softmax over each output's first score row) needs ``tokenizer`` to
+    enumerate the answers' single-token forms, and single-token outputs.
+    ``single_token`` defaults to "every output carries exactly one score row";
+    ``compute_base_accuracy`` passes its ``max_new_tokens == 1`` criterion
+    explicitly. ``None`` when not computed.
+
+    Returns dict with keys: accuracy, correct, total, prob_accuracy.
+    """
+    if len(outputs) != len(dataset):
+        raise ValueError(
+            f"outputs and dataset are misaligned: {len(outputs)} outputs for "
+            f"{len(dataset)} examples"
+        )
+    if single_token is None:
+        single_token = bool(outputs) and all(
+            len(o.get("scores") or []) == 1 for o in outputs
+        )
+    grade_probs = single_token and tokenizer is not None
+
+    correct = 0
+    total = 0
+    prob_sum = 0.0
+    for output, ex in zip(outputs, dataset):
+        generated = output["string"]
+        expected = answer_fn(ex) if answer_fn is not None else ex["input"]["raw_output"]
+        answers = expected if isinstance(expected, list) else [expected]
+        # The task's checker is the sole match authority (no strict-equality
+        # fallback, #167) — e.g. entity_binding's ``startswith`` accepts the
+        # continuation tokens a ``max_new_tokens > 1`` task emits after the
+        # answer. A list expectation (e.g. graph_walk) counts if any matches.
+        hit = any(checker({"string": generated}, ans) for ans in answers)
+        if hit:
+            correct += 1
+        total += 1
+
+        # P(valid answer): sum of probs for all valid answer token variants
+        scores = output.get("scores") or []
+        if grade_probs and scores:
+            all_token_ids = set()
+            for ans in answers:
+                # Collect all single-token forms of this answer, trying both
+                # spacings and cases so the prob grader matches the
+                # strip-tolerant string grader regardless of whether
+                # ``raw_output`` carries a leading space.
+                for var in answer_token_forms(ans):
+                    ids = tokenizer.encode(var, add_special_tokens=False)
+                    if len(ids) == 1:
+                        all_token_ids.add(ids[0])
+            if all_token_ids:
+                probs = F.softmax(scores[0].float(), dim=-1)  # (vocab_size,)
+                prob_sum += probs[list(all_token_ids)].sum().item()
 
     accuracy = correct / total if total > 0 else 0.0
-    prob_accuracy = prob_sum / total if (single_token and total > 0) else None
+    prob_accuracy = prob_sum / total if (grade_probs and total > 0) else None
     logger.info("Base model accuracy: %d/%d (%.1f%%)", correct, total, accuracy * 100)
     if prob_accuracy is not None:
         logger.info("Base model prob accuracy: %.1f%%", prob_accuracy * 100)
@@ -931,9 +975,12 @@ def compute_base_outputs(
     """Run the base (un-patched) model over a dataset, one output dict per example.
 
     Returns a list aligned with ``dataset`` where each entry is
-    ``{"string": <generated text>, "scores": [logits_tok0 (V,), ...]}``.  This is
-    the shape ``score_intervention_outputs`` expects for ``original_outputs`` when
-    a metric has ``needs_original_output=True`` (e.g. the distribution-shift metric).
+    ``{"string": <generated text>, "sequences": (1, max_new_tokens) generated
+    token ids, "scores": [logits_tok0 (V,), ...]}``.  This is the shape
+    ``score_intervention_outputs`` expects for ``original_outputs`` when a
+    metric has ``needs_original_output=True`` (e.g. the distribution-shift
+    metric), and what :func:`as_generation_result` re-flattens for metric
+    scoring.
     """
     outputs: List[Dict[str, Any]] = []
     n_batches = math.ceil(len(dataset) / batch_size)
@@ -944,28 +991,98 @@ def compute_base_outputs(
         batch_inputs = [ex["input"] for ex in batch_examples]
 
         result = pipeline.generate(batch_inputs)
-        strings = result["string"]
-        if isinstance(strings, str):
-            strings = [strings]
-        scores = result.get("scores", [])
+        strings = result.strings
+        scores = result.scores or []
         for bi in range(len(batch_examples)):
             outputs.append(
                 {
                     "string": strings[bi],
+                    "sequences": result.sequences[bi : bi + 1],
                     "scores": [scores[t][bi].cpu() for t in range(len(scores))],
                 }
             )
     return outputs
 
 
+def outputs_from_logits(
+    pipeline: Any,
+    logits: torch.Tensor | Sequence[torch.Tensor],
+) -> List[Dict[str, Any]]:
+    """Per-example outputs from Plan-saved logits — the scoring adapter (MX1, #408).
+
+    ``logits`` is a ``PlanResult.logits`` value (``(batch, seq, vocab)``) or the
+    per-example ``(seq, vocab)`` rows ``collect_dataset_features``'s
+    ``collect_output_logits=True`` returns. A Plan forward is prefill-only, so
+    there is exactly ONE generated step: the last position's next-token
+    distribution. Each output is ``{"string": <argmax token decoded>,
+    "sequences": (1, 1) argmax token id, "scores": [(vocab,) last-position
+    logits]}`` — :func:`compute_base_outputs`'s shape — so Plan-saved logits
+    feed the same scorers as generation runs: :func:`score_base_outputs`
+    directly, :func:`score_intervention_outputs` through
+    :func:`as_generation_result`.
+    """
+    last = torch.stack([row[-1].detach().cpu() for row in logits], dim=0)  # (N, V)
+    token_ids = last.argmax(dim=-1)
+    strings = pipeline.tokenizer.batch_decode(
+        token_ids.unsqueeze(1), skip_special_tokens=True
+    )
+    return [
+        {
+            "string": s,
+            "sequences": token_ids[i : i + 1].unsqueeze(1),
+            "scores": [last[i]],
+        }
+        for i, s in enumerate(strings)
+    ]
+
+
+def as_generation_result(outputs: List[Dict[str, Any]]) -> GenerationResult:
+    """Flatten per-example outputs into one
+    :class:`~causalab.neural.pipeline.GenerationResult` for
+    :func:`score_intervention_outputs` (EU5b, #487 — replaces the retired
+    ``as_raw_results`` synthetic-batch adapter).
+
+    ``outputs`` is the per-example list shape (:func:`compute_base_outputs` /
+    :func:`outputs_from_logits`): each entry carries ``string``, a
+    ``sequences`` row ``(1, W)``, and optionally per-step ``scores``.
+    ``scores`` is set on the result only when every output carries the same,
+    non-zero number of steps — otherwise the flattened value scores strings
+    only (the retired adapter's contract).
+    """
+    step_counts = {len(o.get("scores") or []) for o in outputs}
+    scores: list[torch.Tensor] | None = None
+    if len(step_counts) == 1 and step_counts != {0}:
+        n_tokens = next(iter(step_counts))
+        scores = [
+            torch.stack([o["scores"][t] for o in outputs], dim=0)
+            for t in range(n_tokens)
+        ]
+    return GenerationResult(
+        sequences=torch.cat([o["sequences"] for o in outputs], dim=0)
+        if outputs
+        else torch.empty((0, 0), dtype=torch.long),
+        strings=[o["string"] for o in outputs],
+        scores=scores,
+    )
+
+
 def score_intervention_outputs(
-    raw_results: Dict[Tuple[Any, ...], Dict[str, Any]],
+    results: Dict[Tuple[Any, ...], GenerationResult],
     dataset: list[CounterfactualExample],
     metric: InterchangeMetric,
     causal_model: CausalModel | None = None,
     original_outputs: List[Dict[str, Any]] | None = None,
 ) -> Dict[Tuple[Any, ...], float]:
-    """Score pre-computed intervention outputs. Returns dict mapping keys to average scores."""
+    """Score pre-computed intervention outputs. Returns dict mapping keys to average scores.
+
+    ``results`` maps each swept key to the flat
+    :class:`~causalab.neural.pipeline.GenerationResult` its run produced
+    (EU5b, #487): ``strings`` and per-step ``scores`` are consumed directly —
+    the pre-EU5a batch-nested ``raw_results`` flattening is gone. A result
+    holding top-k-compressed ``scores_top_k`` is refused: metrics consume
+    full-vocabulary per-step tensors, so score with ``output_scores=True``
+    (not an int).
+    """
     # Validate required arguments
     if metric.needs_causal_expected:
         if causal_model is None:
@@ -1003,32 +1120,22 @@ def score_intervention_outputs(
     # Compute scores for each key
     scores: Dict[Tuple[Any, ...], float] = {}
 
-    for key, outputs in raw_results.items():
-        # Extract string outputs and flatten if nested
-        string_outputs = outputs.get("string", [])
-        flattened_outputs: List[str] = []
-        for item in string_outputs:
-            if isinstance(item, list):
-                flattened_outputs.extend(item)
-            else:
-                flattened_outputs.append(item)
-
-        # Flatten score tensors across batches if present.
-        # raw_scores structure: [batch0_scores, batch1_scores, ...]
-        # where each batch_scores = [token0_tensor(B, V), token1_tensor(B, V)]
-        # We concat per token position → [token0(N, V), token1(N, V)]
-        raw_scores = outputs.get("scores")
-        flat_scores: List[torch.Tensor] | None = None
-        if raw_scores is not None and raw_scores:
-            n_tokens = len(raw_scores[0])
-            flat_scores = [
-                torch.cat([batch_scores[t] for batch_scores in raw_scores], dim=0)
-                for t in range(n_tokens)
-            ]
+    for key, result in results.items():
+        if result.scores_top_k is not None:
+            raise ValueError(
+                f"cannot score key {key!r}: its result carries top-k-compressed "
+                "scores (scores_top_k), but metrics consume full-vocabulary "
+                "per-step tensors. Generate with output_scores=True (not an "
+                "int) for metric scoring."
+            )
+        # Flat per-step scores, one (n_examples, vocab) tensor per generated
+        # step — exactly the shape metric fns index as
+        # ``scores[step][example_idx]``.
+        flat_scores = result.scores
 
         # Compute score for each example
         key_scores: List[float] = []
-        for idx, output_string in enumerate(flattened_outputs):
+        for idx, output_string in enumerate(result.strings):
             if idx < len(expected_outputs):
                 intervention_output: Dict[str, Any] = {"string": output_string}
                 if flat_scores is not None:
@@ -1045,133 +1152,40 @@ def score_intervention_outputs(
     return scores
 
 
-def LM_loss_and_metric_fn(
-    pipeline: LMPipeline,
-    intervenable_model: Any,
-    examples: List[LabeledCounterfactualExample],
-    interchange_target: InterchangeTarget,
-    checker: Callable[[Dict[str, Any], Dict[str, Any]], float],
-    source_pipeline: LMPipeline | None = None,
-    source_intervenable_model: Any = None,
-) -> Tuple[torch.Tensor, Dict[str, float], Dict[str, Any]]:
-    """Concatenate labels, run intervention forward pass, compute accuracy + cross-entropy loss."""
-    # Prepare intervenable inputs (using target pipeline)
-    batched_base, batched_counterfactuals, inv_locations, feature_indices = (
-        prepare_intervenable_inputs(pipeline, examples, interchange_target)
-    )
+def score_label_predictions(
+    pipeline: Any,
+    pred_ids: torch.Tensor,
+    labels: List[Any],
+    checker: Callable[[Dict[str, Any], Any], float | bool],
+) -> Dict[str, Any]:
+    """Score label-span predictions against expected labels — the answer-scoring
+    half of the retired pyvene ``LM_loss_and_metric_fn``, off the ED3 loss
+    slice (MX1, #408).
 
-    # Collect source representations if using cross-model patching
-    source_representations = None
-    if source_pipeline is not None:
-        source_representations = collect_source_representations(
-            source_pipeline, examples, interchange_target, source_intervenable_model
+    ``pred_ids`` is the ``(batch, n_label_tokens)`` argmax that
+    :func:`causalab.neural.trainable.traced_label_loss` returns. The loss-path
+    forward is ED3's (``causalab.neural.trainable``) — this function only
+    scores its predictions, so the answer-scoring semantics are not
+    re-implemented alongside the loss. ``labels`` are per-example expected
+    labels, passed to ``checker`` verbatim (an
+    :func:`as_label_checker`-wrapped task checker normalizes
+    ``{"string": ...}`` dicts).
+
+    Returns ``{"accuracy": mean score, "scores": per-example floats}``.
+    """
+    if pred_ids.shape[0] != len(labels):
+        raise ValueError(
+            f"pred_ids and labels are misaligned: {pred_ids.shape[0]} rows for "
+            f"{len(labels)} labels"
         )
-        batched_counterfactuals = None
-
-    # Get ground truth labels
-    batched_inv_label_strs = [ex["label"] for ex in examples]
-    if isinstance(batched_inv_label_strs[0], dict):
-        batched_inv_label_strs = [item["string"] for item in batched_inv_label_strs]
-
-    # Convert strings to CausalTraces
-    batched_inv_label_traces = [
-        CausalTrace(
-            mechanisms={
-                "raw_input": Mechanism(parents=[], compute=lambda t: t["raw_input"])
-            },
-            inputs={"raw_input": label_str},
-        )
-        for label_str in batched_inv_label_strs
-    ]
-    batched_inv_label = pipeline.load(
-        batched_inv_label_traces,
-        max_length=pipeline.max_new_tokens,
-        padding_side="right",
-        add_special_tokens=False,
-        use_chat_template=False,
-    )
-
-    # Drop any load-time position_ids before concatenating: base is left-padded
-    # and the label is right-padded, so segment-local position_ids (present when
-    # the pipeline is built with position_ids=True) would make the label restart
-    # at 0 instead of continuing from the base. ensure_position_ids below re-derives
-    # them from the *concatenated* mask, where base's right-aligned real tokens and
-    # the label's left-aligned real tokens are contiguous — so cumsum numbers the
-    # whole real span continuously regardless of padding side.
-    batched_base.pop("position_ids", None)
-
-    # Concatenate labels to base inputs for evaluation
-    for k in batched_base:
-        batched_base[k] = torch.cat([batched_base[k], batched_inv_label[k]], dim=-1)
-
-    # Run the intervenable model with interventions. This is a plain
-    # (non-generate) forward, so supply position_ids — otherwise a left-padded
-    # batch is mis-encoded on absolute-position models (see ensure_position_ids).
-    _, counterfactual_logits = intervenable_model(
-        ensure_position_ids(batched_base),
-        batched_counterfactuals,
-        unit_locations=inv_locations,
-        subspaces=feature_indices,
-        source_representations=source_representations,
-    )
-
-    # Extract relevant portions of logits and labels for evaluation
-    labels = batched_inv_label["input_ids"]
-    logits = counterfactual_logits.logits[:, -labels.shape[-1] - 1 : -1]
-    pred_ids = torch.argmax(logits, dim=-1)
-
-    # Compute metrics using checker function
-    scores = []
+    scores: List[float] = []
     for i in range(pred_ids.shape[0]):
-        # Decode predictions and labels to strings
         pred_str = pipeline.dump(pred_ids[i : i + 1])
-
-        # Create output dicts in same format as perform_interventions
-        neural_output = {"string": pred_str}
-
-        # Apply checker function
-        score = checker(neural_output, examples[i]["label"])
+        score = checker({"string": pred_str}, labels[i])
         if isinstance(score, torch.Tensor):
             score = score.item()
         scores.append(float(score))
-
+    # Empty → 1.0 mirrors the retired ``LM_loss_and_metric_fn`` (vacuous truth on an empty
+    # eval batch), so MX2's reroute is a drop-in swap.
     accuracy = sum(scores) / len(scores) if scores else 1.0
-    eval_metrics = {"accuracy": accuracy, "token_accuracy": accuracy}
-
-    # Compute loss
-    loss = compute_cross_entropy_loss(logits, labels, pipeline.tokenizer.pad_token_id)
-
-    # Collect detailed information for logging
-    logging_info: Dict[str, Any] = {
-        "preds": pipeline.dump(pred_ids),
-        "labels": pipeline.dump(labels),
-        "base_ids": batched_base["input_ids"][0],
-        "base_masks": batched_base["attention_mask"][0],
-        "base_inputs": pipeline.dump(batched_base["input_ids"][0]),
-        "inv_locations": inv_locations,
-        "feature_indices": feature_indices,
-    }
-    if batched_counterfactuals is not None:
-        logging_info["counterfactual_masks"] = [
-            c["attention_mask"][0] for c in batched_counterfactuals
-        ]
-        logging_info["counterfactual_ids"] = [
-            c["input_ids"][0] for c in batched_counterfactuals
-        ]
-        logging_info["counterfactual_inputs"] = [
-            pipeline.dump(c["input_ids"][0]) for c in batched_counterfactuals
-        ]
-
-    return loss, eval_metrics, logging_info
-
-
-def compute_cross_entropy_loss(
-    eval_preds: torch.Tensor, eval_labels: torch.Tensor, pad_token_id: int
-) -> torch.Tensor:
-    """Cross-entropy loss over non-padding tokens."""
-    _batch_size, _seq_length, vocab_size = eval_preds.shape
-    return torch.nn.functional.cross_entropy(
-        eval_preds.reshape(-1, vocab_size),
-        eval_labels.reshape(-1),
-        ignore_index=pad_token_id,
-    )
+    return {"accuracy": accuracy, "scores": scores}

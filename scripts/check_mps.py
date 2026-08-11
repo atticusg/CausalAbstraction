@@ -115,7 +115,7 @@ def check_model_load() -> None:
     device = resolve_device()
     print(f"  Loading gpt2 on {device}...")
     pipeline = LMPipeline("gpt2", max_new_tokens=5, device=device)
-    model_device = next(pipeline.model.parameters()).device
+    model_device = next(pipeline.hf_model.parameters()).device
     print(f"  Model device: {model_device}")
 
     # Quick forward pass

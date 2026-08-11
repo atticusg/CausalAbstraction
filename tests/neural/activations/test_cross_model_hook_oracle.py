@@ -1,10 +1,10 @@
 """Hook oracle for cross-model patching (``source_representations``) — GH #380.
 
 Cross-model patching collects activations from a *source* pipeline and injects
-them (via pyvene's ``source_representations``) into a *target* pipeline's base
-run, instead of running the counterfactual through the target. The contract:
-the value written into the target is the *source model's* activation at the
-counterfactual, gathered at the source's tokenization.
+them into a *target* pipeline's base run, instead of running the
+counterfactual through the target. The contract: the value written into the
+target is the *source model's* activation at the counterfactual, gathered at
+the source's tokenization.
 
 This test pins that with a hand-rolled hook ground truth. To prove the injected
 value comes from the source model (not the target), the source pipeline is a
@@ -20,10 +20,11 @@ import copy
 import pytest
 import torch
 
-from causalab.neural.LM_units import ResidualStream
+from causalab.neural.featurized_site import FeaturizedSite
 from causalab.neural.pipeline import LMPipeline
+from causalab.neural.site import Site
+from causalab.neural.specs import SiteSpec
 from causalab.neural.token_positions import TokenPosition
-from causalab.neural.units import InterchangeTarget
 from causalab.neural.activations.interchange_mode import run_interchange_interventions
 
 from tests.neural.activations.hook_oracle import (
@@ -40,9 +41,17 @@ _SOURCE = "a slow lazy old dog sits"
 
 
 def _perturbed_source(pipeline: LMPipeline) -> LMPipeline:
-    """A deep copy of ``pipeline`` with weights perturbed by fixed-seed noise — a
-    genuinely different source model that shares the tokenizer."""
-    src_model = copy.deepcopy(pipeline.model)
+    """A genuinely different source model that shares the tokenizer: a fresh HF
+    module of the same architecture with weights perturbed by fixed-seed noise.
+
+    Rebuilt from ``config`` + ``state_dict`` (so a grouped-query config survives)
+    rather than ``deepcopy``-ing ``pipeline.hf_model`` — the latter is an
+    already-dispatched nnsight module, which nnterp cannot cleanly re-wrap into a
+    forward-hookable model; a clean HF module onboards normally."""
+    hf = pipeline.hf_model
+    src_model = type(hf)(copy.deepcopy(hf.config))
+    src_model.load_state_dict(hf.state_dict())
+    src_model.eval()  # constructed models default to train mode; disable dropout
     g = torch.Generator().manual_seed(0)
     with torch.no_grad():
         for p in src_model.parameters():
@@ -50,15 +59,15 @@ def _perturbed_source(pipeline: LMPipeline) -> LMPipeline:
     return LMPipeline(src_model, max_new_tokens=1, padding_side="left")
 
 
-def _single_pos_target(pipeline: LMPipeline) -> InterchangeTarget:
+def _single_pos_groups(pipeline: LMPipeline) -> list[list[SiteSpec]]:
     tp = TokenPosition(lambda _x: [_POS], pipeline, id="pos1")
-    unit = ResidualStream(
-        layer=_LAYER,
-        token_indices=tp,
-        target_output=True,
-        shape=(pipeline.model.config.hidden_size,),
+    site = SiteSpec(
+        fsite=FeaturizedSite(Site("block_output", _LAYER)),
+        positions=tp,
+        key=f"residual.L{_LAYER}.pos1",
+        width=pipeline.model.config.hidden_size,
     )
-    return InterchangeTarget([[unit]])
+    return [[site]]
 
 
 class TestCrossModelHookOracle:
@@ -69,7 +78,7 @@ class TestCrossModelHookOracle:
         counterfactual position. The oracle captures that source-model activation
         by hand and patches the target's base with it."""
         source_pipeline = _perturbed_source(oracle_pipeline)
-        target = _single_pos_target(oracle_pipeline)
+        groups = _single_pos_groups(oracle_pipeline)
 
         # Source model's residual at the counterfactual, captured by hand.
         cf_inputs = source_pipeline.load([make_trace(_SOURCE)])
@@ -83,11 +92,11 @@ class TestCrossModelHookOracle:
         result = run_interchange_interventions(
             oracle_pipeline,
             [cf_example(_BASE, _SOURCE)],
-            target,
+            groups,
             source_pipeline=source_pipeline,
             output_scores=True,
         )
-        causalab = result["scores"][0][0]
+        causalab = result.scores[0]  # first generated step, (1, vocab)
         torch.testing.assert_close(causalab, manual, atol=1e-4, rtol=1e-3)
 
     def test_differs_from_same_model_patch(self, oracle_pipeline: LMPipeline) -> None:
@@ -96,7 +105,7 @@ class TestCrossModelHookOracle:
         counterfactual (ordinary same-model interchange). Confirms the injected
         value really comes from the source model."""
         source_pipeline = _perturbed_source(oracle_pipeline)
-        target = _single_pos_target(oracle_pipeline)
+        groups = _single_pos_groups(oracle_pipeline)
 
         # Target model's own residual at the counterfactual (same-model patch).
         cf_inputs = oracle_pipeline.load([make_trace(_SOURCE)])
@@ -109,9 +118,9 @@ class TestCrossModelHookOracle:
         result = run_interchange_interventions(
             oracle_pipeline,
             [cf_example(_BASE, _SOURCE)],
-            target,
+            groups,
             source_pipeline=source_pipeline,
             output_scores=True,
         )
-        cross_model = result["scores"][0][0]
+        cross_model = result.scores[0]  # first generated step, (1, vocab)
         assert not torch.allclose(cross_model, same_model, atol=1e-4)

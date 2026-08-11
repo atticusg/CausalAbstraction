@@ -54,21 +54,22 @@ from causalab.methods.causal_tracing import (
 )
 from causalab.methods.metric import (
     InterchangeMetric,
+    as_generation_result,
     compute_base_outputs,
     make_logit_diff_metric,
     make_logit_metric,
     make_prob_metric,
     score_intervention_outputs,
 )
-from causalab.neural.activations.targets import (
-    build_attention_head_targets,
-    build_attention_output_targets,
-    build_mlp_targets,
-    build_residual_stream_targets,
+from causalab.neural.activations.site_grids import (
+    SiteGrid,
+    build_attention_head_sites,
+    build_attention_output_sites,
+    build_mlp_sites,
+    build_residual_stream_sites,
 )
-from causalab.neural.units import InterchangeTarget
 from causalab.runner.helpers import (
-    generate_datasets,
+    prepare_datasets,
     resolve_task,
     _task_config_for_metadata,  # pyright: ignore[reportPrivateUsage]
 )
@@ -81,22 +82,22 @@ VALID_COMPONENT_TYPES = ("attention_head", "attention_output", "mlp", "residual"
 VALID_METRICS = ("logit_diff", "logit", "prob")
 
 
-def _build_grid_targets(
+def _build_grid_sites(
     pipeline, component_type: str, layers: list[int], heads: list[int], span
-) -> dict[tuple[Any, ...], InterchangeTarget]:
-    """One single-unit restore target per grid cell, dispatched on component type.
+) -> SiteGrid:
+    """One single-spec restore cell per grid cell, dispatched on component type.
 
     ``attention_head`` is keyed ``(layer, head)``; ``attention_output``, ``mlp``
     and ``residual`` are keyed ``(layer, span.id)`` (a layer × span grid). Mirrors
     the ablation grid so the heatmap keys line up.
     """
     if component_type == "attention_head":
-        return build_attention_head_targets(pipeline, layers, heads, span)
+        return build_attention_head_sites(pipeline, layers, heads, span)
     if component_type == "attention_output":
-        return build_attention_output_targets(pipeline, layers, [span])
+        return build_attention_output_sites(pipeline, layers, [span])
     if component_type == "residual":
-        return build_residual_stream_targets(pipeline, layers, [span])
-    return build_mlp_targets(pipeline, layers, [span])
+        return build_residual_stream_sites(pipeline, layers, [span])
+    return build_mlp_sites(pipeline, layers, [span])
 
 
 def _window_layers(center: int, window: int, n_layers: int) -> list[int]:
@@ -119,26 +120,26 @@ def _windowed_swept_targets(
     span,
     window: int,
     n_layers: int,
-) -> dict[tuple[Any, ...], InterchangeTarget]:
+) -> SiteGrid:
     """Restore grid where each cell restores a window of layers at one site.
 
     Keyed by *center* layer (``(center, head)`` or ``(center, span.id)``) so the
-    heatmap axes are unchanged; the cell's target collects the units across the
-    windowed layers, which the scan restores jointly. ``window=1`` reduces to the
-    single-unit grid of :func:`_build_grid_targets`.
+    heatmap axes are unchanged; the cell groups the specs across the windowed
+    layers into one joint group, which the scan restores jointly. ``window=1``
+    reduces to the single-spec grid of :func:`_build_grid_sites`.
     """
-    targets: dict[tuple[Any, ...], InterchangeTarget] = {}
+    targets: SiteGrid = {}
     for center in layers:
         w_layers = _window_layers(center, window, n_layers)
         if component_type == "attention_head":
             for head in heads:
-                sub = build_attention_head_targets(pipeline, w_layers, [head], span)
-                units = [u for t in sub.values() for u in t.flatten()]
-                targets[(center, head)] = InterchangeTarget([units])
+                sub = build_attention_head_sites(pipeline, w_layers, [head], span)
+                specs = [spec for groups in sub.values() for spec in groups[0]]
+                targets[(center, head)] = [specs]
         else:
-            sub = _build_grid_targets(pipeline, component_type, w_layers, [], span)
-            units = [u for t in sub.values() for u in t.flatten()]
-            targets[(center, span.id)] = InterchangeTarget([units])
+            sub = _build_grid_sites(pipeline, component_type, w_layers, [], span)
+            specs = [spec for groups in sub.values() for spec in groups[0]]
+            targets[(center, span.id)] = [specs]
     return targets
 
 
@@ -190,24 +191,12 @@ def _score_clean_ceiling(
 ) -> float:
     """Score the un-intervened (clean) run under ``metric`` — the recovery ceiling.
 
-    Wraps ``compute_base_outputs`` into the single-synthetic-batch shape
-    ``score_intervention_outputs`` expects (``string``/``scores`` nested one level
-    by "batch"), so the clean run is scored by exactly the same metric as each
-    intervened cell.
+    Flattens ``compute_base_outputs`` into the ``GenerationResult``
+    ``score_intervention_outputs`` consumes (via ``as_generation_result``), so
+    the clean run is scored by exactly the same metric as each intervened cell.
     """
-    n = len(base_outputs)
-    strings = [o["string"] for o in base_outputs]
-    raw: dict[str, Any] = {"string": [strings]}
-    if base_outputs and base_outputs[0].get("scores"):
-        n_tokens = len(base_outputs[0]["scores"])
-        raw["scores"] = [
-            [
-                torch.stack([base_outputs[i]["scores"][t] for i in range(n)], dim=0)
-                for t in range(n_tokens)
-            ]
-        ]
     return score_intervention_outputs(
-        raw_results={("clean",): raw},
+        results={("clean",): as_generation_result(base_outputs)},
         dataset=dataset,
         metric=metric,
         causal_model=causal_model,
@@ -269,13 +258,14 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         use_chat_template=cfg.model.get("chat_template", False),
         chat_answer_directive=cfg.model.get("chat_answer_directive"),
     )
-    train_dataset, test_dataset = generate_datasets(
+    train_dataset, test_dataset = prepare_datasets(
         task,
         n_train=cfg.task.n_train,
         n_test=cfg.task.n_test,
         seed=cfg.seed,
         enumerate_all=cfg.task.enumerate_all,
         resample_variable=cfg.task.get("resample_variable", "all"),
+        filter_correct=False,
     )
 
     config = pipeline.model.config
@@ -293,17 +283,17 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     # --- corruption: entry site + reference vectors ---------------------------
     corruption_span = resolve_span(corruption_cfg.span, task, pipeline, test_dataset)
     corruption_layer = corruption_cfg.get("layer", -1)
-    entry_target = build_residual_stream_targets(
+    entry_groups = build_residual_stream_sites(
         pipeline, [corruption_layer], [corruption_span]
     )[(corruption_layer, corruption_span.id)]
-    entry_units = entry_target.flatten()
+    entry_sites = list(entry_groups[0])
     entry_type = corruption_intervention_type(kind)
     noise_seed = corruption_cfg.get("noise_seed", 0)
     corruption_vectors = make_corruption_vectors(
         kind,
         pipeline,
         train_dataset,
-        entry_target,
+        entry_sites,  # flat Sequence[SiteSpec]
         noise_scale=corruption_cfg.get("noise_scale", 3.0),
         noise_seed=noise_seed,
         batch_size=analysis.batch_size,
@@ -323,12 +313,17 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         window,
         config.num_hidden_layers,
     )
-    # Union of every (windowed) restored unit — one collection pass covers them all.
-    swept_units = list(
-        {u.id: u for t in swept_targets.values() for u in t.flatten()}.values()
+    # Union of every (windowed) restored spec — one collection pass covers them all.
+    swept_sites = list(
+        {
+            spec.key: spec
+            for groups in swept_targets.values()
+            for group in groups
+            for spec in group
+        }.values()
     )
     clean_vectors = collect_clean_vectors(
-        pipeline, test_dataset, swept_units, batch_size=analysis.batch_size
+        pipeline, test_dataset, swept_sites, batch_size=analysis.batch_size
     )
 
     # --- metric + baselines ---------------------------------------------------
@@ -342,7 +337,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     corrupted_floor = run_corrupted_floor(
         pipeline,
         test_dataset,
-        entry_units,
+        entry_sites,
         corruption_vectors,
         metric=metric,
         entry_type=entry_type,
@@ -362,7 +357,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         swept_targets,
         test_dataset,
         pipeline,
-        entry_units=entry_units,
+        entry_sites=entry_sites,
         corruption_vectors=corruption_vectors,
         clean_vectors=clean_vectors,
         metric=metric,

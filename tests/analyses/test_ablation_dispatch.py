@@ -1,13 +1,14 @@
 """Analysis-level component dispatch for the ``ablation`` analysis.
 
 ``causalab/analyses/ablation/main.py`` maps a runner config's
-``component_type`` string to the right target builder in two places:
-``_build_grid_targets`` (the scan grid) and ``_combo_units`` (explicit joint
+``component_type`` string to the right spec-grid builder in two places:
+``_build_grid_sites`` (the scan grid) and ``_combo_units`` (explicit joint
 sets / the complement path). The builder layer is unit-tested in
-``tests/neural/activations/test_targets.py``; this module pins the *dispatch* —
-that ``"attention_output"`` and ``"residual"`` reach their builders and produce
-units keyed the way the scan / save path expects. A mis-dispatch here would make
-``component_type=attention_output`` silently fall through to MLP units.
+``tests/neural/activations/test_site_grids.py``; this module pins the
+*dispatch* — that ``"attention_output"`` and ``"residual"`` reach their
+builders and produce specs keyed the way the scan / save path expects. A
+mis-dispatch here would make ``component_type=attention_output`` silently
+fall through to MLP specs.
 """
 
 from __future__ import annotations
@@ -16,10 +17,10 @@ import pytest
 
 from causalab.analyses.ablation.main import (
     VALID_COMPONENT_TYPES,
-    _build_grid_targets,
+    _build_grid_sites,
     _combo_units,
 )
-from causalab.neural.activations.targets import detect_component_type_from_targets
+from causalab.neural.activations.site_grids import grid_component
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_positions import TokenPosition, get_last_token_index
 
@@ -46,8 +47,8 @@ class TestValidComponentTypes:
         }
 
 
-class TestBuildGridTargetsDispatch:
-    """``_build_grid_targets`` routes each config string to the right builder."""
+class TestBuildGridSitesDispatch:
+    """``_build_grid_sites`` routes each config string to the right builder."""
 
     @pytest.mark.parametrize(
         "component_type,detected",
@@ -62,39 +63,39 @@ class TestBuildGridTargetsDispatch:
     ) -> None:
         layers = [0, 1]
         span = _last_token(mock_tiny_lm)
-        targets = _build_grid_targets(mock_tiny_lm, component_type, layers, [], span)
+        targets = _build_grid_sites(mock_tiny_lm, component_type, layers, [], span)
         # Layer × span grid keyed (layer, span.id) — the shape _save_results plots.
         assert set(targets.keys()) == {(0, "last_token"), (1, "last_token")}
-        assert detect_component_type_from_targets(targets) == detected
+        assert grid_component(targets) == detected
 
     def test_attention_head_still_keyed_by_layer_head(
         self, mock_tiny_lm: LMPipeline
     ) -> None:
         span = _last_token(mock_tiny_lm)
-        targets = _build_grid_targets(mock_tiny_lm, "attention_head", [0], [0, 1], span)
+        targets = _build_grid_sites(mock_tiny_lm, "attention_head", [0], [0, 1], span)
         assert set(targets.keys()) == {(0, 0), (0, 1)}
-        assert detect_component_type_from_targets(targets) == "attention_head"
+        assert grid_component(targets) == "attention_head"
 
 
 class TestComboUnitsDispatch:
-    """``_combo_units`` materializes joint-ablation units for ``[layer, ...]``
+    """``_combo_units`` materializes joint-ablation specs for ``[layer, ...]``
     combos of the non-head component types (the path used by ``combos`` and the
     ``complement_keep`` sufficiency check)."""
 
     @pytest.mark.parametrize("component_type", ["attention_output", "residual", "mlp"])
-    def test_layer_combo_yields_one_unit_per_layer(
+    def test_layer_combo_yields_one_spec_per_layer(
         self, mock_tiny_lm: LMPipeline, component_type: str
     ) -> None:
         span = _last_token(mock_tiny_lm)
-        units = _combo_units(mock_tiny_lm, component_type, [0, 1], span)
-        assert len(units) == 2
-        # Units carry distinct ids per layer (so reference vectors don't collide).
-        assert len({u.id for u in units}) == 2
+        specs = _combo_units(mock_tiny_lm, component_type, [0, 1], span)
+        assert len(specs) == 2
+        # Specs carry distinct keys per layer (so reference vectors don't collide).
+        assert len({spec.key for spec in specs}) == 2
 
     def test_attention_head_combo_uses_layer_head_pairs(
         self, mock_tiny_lm: LMPipeline
     ) -> None:
         span = _last_token(mock_tiny_lm)
-        units = _combo_units(mock_tiny_lm, "attention_head", [[0, 0], [0, 1]], span)
-        assert len(units) == 2
-        assert len({u.id for u in units}) == 2
+        specs = _combo_units(mock_tiny_lm, "attention_head", [[0, 0], [0, 1]], span)
+        assert len(specs) == 2
+        assert len({spec.key for spec in specs}) == 2

@@ -1,8 +1,10 @@
 """Grid-mode subspace analysis: scan a (layer x token_position) grid.
 
-Each function accepts a pre-built target dict and returns in-memory results
-(scores per cell). Disk I/O (heatmaps, metadata) is handled by the caller
-in main.py.
+Each function accepts a pre-built spec grid
+(:data:`~causalab.neural.activations.site_grids.SiteGrid` — grid-cell key
+tuples to single-group nested ``[[SiteSpec]]`` lists) and returns in-memory
+results (scores per cell). Disk I/O (heatmaps, metadata) is handled by the
+caller in main.py.
 """
 
 from __future__ import annotations
@@ -12,14 +14,14 @@ import os
 from typing import Any, Callable, cast
 
 from causalab.causal.causal_model import CausalModel
+from causalab.neural.activations.site_grids import SiteGrid
 from causalab.neural.pipeline import LMPipeline
-from causalab.neural.units import InterchangeTarget
 
 logger = logging.getLogger(__name__)
 
 
 def run_das_grid(
-    targets: dict[tuple, InterchangeTarget],
+    targets: SiteGrid,
     train_dataset: list,
     test_dataset: list,
     pipeline: LMPipeline,
@@ -69,7 +71,7 @@ def run_das_grid(
 
     result = train_interventions(
         causal_model=causal_model,
-        interchange_targets=targets,
+        grid=targets,
         train_dataset=train_dataset,
         test_dataset=test_dataset,
         pipeline=pipeline,
@@ -100,7 +102,7 @@ def run_das_grid(
 
 
 def run_pca_grid(
-    targets: dict[tuple, InterchangeTarget],
+    targets: SiteGrid,
     train_dataset: list,
     pipeline: LMPipeline,
     k_features: int,
@@ -128,8 +130,9 @@ def run_pca_grid(
     svd_results_by_cell: dict[tuple, dict] = {}
     features_by_key: dict[tuple, Any] = {}
 
-    for key, target in targets.items():
-        unit = target.flatten()[0]
+    for key, groups in targets.items():
+        # Grid values are single-group nestings; per-unit cells hold one spec.
+        spec = groups[0][0]
         # collect_output_logits=False (default) returns dict[str, Tensor];
         # cast tells pyright we're in that branch of the union.
         raw = cast(
@@ -137,18 +140,18 @@ def run_pca_grid(
             collect_features(
                 dataset=train_dataset,
                 pipeline=pipeline,
-                model_units=[unit],
+                sites=[spec],
                 batch_size=batch_size,
             ),
         )
         svd = compute_svd(raw, n_components=k_features, preprocess="center")
-        var_ratios = svd[unit.id]["explained_variance_ratio"]
+        var_ratios = svd[spec.key]["explained_variance_ratio"]
         scores[key] = sum(var_ratios)
-        svd_results_by_cell[key] = svd[unit.id]
+        svd_results_by_cell[key] = svd[spec.key]
 
-        rotation = svd[unit.id]["rotation"]
+        rotation = svd[spec.key]["rotation"]
         features_by_key[key] = (
-            raw[unit.id].detach().float() @ rotation.float()
+            raw[spec.key].detach().float() @ rotation.float()
         ).detach()
 
         logger.debug("PCA cell %s: top-%d variance=%.3f", key, k_features, scores[key])
@@ -167,7 +170,7 @@ def run_pca_grid(
 
 
 def run_dbm_grid(
-    targets: dict[tuple, InterchangeTarget],
+    targets: SiteGrid,
     train_dataset: list,
     test_dataset: list,
     pipeline: LMPipeline,
@@ -218,7 +221,7 @@ def run_dbm_grid(
 
     result = train_interventions(
         causal_model=causal_model,
-        interchange_targets=targets,
+        grid=targets,
         train_dataset=train_dataset,
         test_dataset=test_dataset,
         pipeline=pipeline,
@@ -248,7 +251,7 @@ def run_dbm_grid(
 
 
 def run_boundless_grid(
-    targets: dict[tuple, InterchangeTarget],
+    targets: SiteGrid,
     train_dataset: list,
     test_dataset: list,
     pipeline: LMPipeline,
@@ -272,7 +275,7 @@ def run_boundless_grid(
     The ``boundless`` method is the explicitly-named, first-class path for this behavior.
 
     Args:
-        targets: Dict mapping (layer, position) tuples to InterchangeTargets.
+        targets: Spec grid mapping (layer, position) tuples to spec groups.
         train_dataset: Training counterfactual examples.
         test_dataset: Test counterfactual examples.
         pipeline: LM pipeline.
@@ -322,7 +325,7 @@ def run_boundless_grid(
 
     result = train_interventions(
         causal_model=causal_model,
-        interchange_targets=targets,
+        grid=targets,
         train_dataset=train_dataset,
         test_dataset=test_dataset,
         pipeline=pipeline,

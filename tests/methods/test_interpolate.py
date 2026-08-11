@@ -9,7 +9,6 @@ Run with:
 
 from __future__ import annotations
 
-from typing import Any
 
 import torch
 import pytest
@@ -58,10 +57,15 @@ def lossy_subspace_featurizer() -> F.SubspaceFeaturizer:
     return F.SubspaceFeaturizer(shape=(8, 4), trainable=False, id="lossy")
 
 
-def make_intervention(featurizer: F.Featurizer) -> Any:
-    """Instantiate a FeatureInterpolateIntervention from the given featurizer."""
-    cls = featurizer.get_interpolation_intervention()
-    return cls()
+def apply_interpolation(featurizer, base, src, fn, **params):
+    """The interpolate-mode math the engine applies in-trace (SH2, #411):
+    featurize both sides, apply ``fn`` in feature space, inverse with the
+    BASE error term — ``EditSpec(mode="interpolate")``'s per-tensor contract."""
+    f_base, err = featurizer.featurize(base)
+    f_src, _ = featurizer.featurize(src)
+    return featurizer.inverse_featurize(
+        fn(f_base=f_base, f_src=f_src, **params), err
+    ).to(base.dtype)
 
 
 # --------------------------------------------------------------------------- #
@@ -72,10 +76,9 @@ def test_identity_fn(identity_featurizer: F.Featurizer, rng: torch.Generator) ->
     base = randn((2, 8), rng)
     src = randn((2, 8), rng)
 
-    interv = make_intervention(identity_featurizer)
-    interv.set_interpolation(lambda f_base, f_src: f_base)
-
-    out = interv(base, src)
+    out = apply_interpolation(
+        identity_featurizer, base, src, lambda f_base, f_src: f_base
+    )
     assert torch.allclose(out, base, atol=1e-5), "identity fn should return base"
 
 
@@ -86,10 +89,9 @@ def test_interchange_fn(
     base = randn((2, 8), rng)
     src = randn((2, 8), rng)
 
-    interv = make_intervention(identity_featurizer)
-    interv.set_interpolation(lambda f_base, f_src: f_src)
-
-    out = interv(base, src)
+    out = apply_interpolation(
+        identity_featurizer, base, src, lambda f_base, f_src: f_src
+    )
     # For identity featurizer, interchange == copy src activations directly
     assert torch.allclose(out, src, atol=1e-5), "interchange fn should return src"
 
@@ -106,10 +108,9 @@ def test_linear_interp_midpoint(
     ) -> torch.Tensor:
         return (1 - alpha) * f_base + alpha * f_src
 
-    interv = make_intervention(square_subspace_featurizer)
-    interv.set_interpolation(linear_interp, alpha=0.5)
-
-    out = interv(base, src)
+    out = apply_interpolation(
+        square_subspace_featurizer, base, src, linear_interp, alpha=0.5
+    )
 
     # Compute expected: featurize both, average, inverse-featurize
     feat = square_subspace_featurizer
@@ -129,10 +130,9 @@ def test_base_error_preserved(
     src = randn((2, 8), rng)
 
     # fn copies source features — base_err (from base) should still be preserved
-    interv = make_intervention(lossy_subspace_featurizer)
-    interv.set_interpolation(lambda f_base, f_src: f_src)
-
-    out = interv(base, src)
+    out = apply_interpolation(
+        lossy_subspace_featurizer, base, src, lambda f_base, f_src: f_src
+    )
 
     # Manually reconstruct: featurize base to get base_err, featurize src for f_src
     feat = lossy_subspace_featurizer
@@ -141,47 +141,3 @@ def test_base_error_preserved(
     expected = feat.inverse_featurize(f_src, base_err).to(base.dtype)
 
     assert torch.allclose(out, expected, atol=1e-5), "base_err should come from base"
-
-
-def test_set_interpolation_updates(
-    identity_featurizer: F.Featurizer, rng: torch.Generator
-) -> None:
-    """Calling set_interpolation again replaces the previous fn and params."""
-    base = randn((2, 8), rng)
-    src = randn((2, 8), rng)
-
-    interv = make_intervention(identity_featurizer)
-
-    def fn1(f_base: torch.Tensor, f_src: torch.Tensor, alpha: float) -> torch.Tensor:
-        return (1 - alpha) * f_base + alpha * f_src
-
-    def fn2(f_base: torch.Tensor, f_src: torch.Tensor, alpha: float) -> torch.Tensor:
-        return alpha * f_base + (1 - alpha) * f_src  # reversed blend
-
-    interv.set_interpolation(fn1, alpha=0.9)
-    out1 = interv(base, src)
-
-    interv.set_interpolation(fn2, alpha=0.3)
-    out2 = interv(base, src)
-
-    # fn2 with alpha=0.3 should differ from fn1 with alpha=0.9
-    assert not torch.allclose(out1, out2, atol=1e-4), (
-        "set_interpolation should update both fn and params"
-    )
-
-    # Verify fn2/alpha=0.3 produces correct value: 0.3*base + 0.7*src
-    expected = 0.3 * base + 0.7 * src
-    assert torch.allclose(out2, expected, atol=1e-5)
-
-
-def test_raises_without_set_interpolation(
-    identity_featurizer: F.Featurizer, rng: torch.Generator
-) -> None:
-    """forward raises ValueError if set_interpolation was never called."""
-    base = randn((2, 8), rng)
-    src = randn((2, 8), rng)
-
-    interv = make_intervention(identity_featurizer)
-
-    with pytest.raises(ValueError, match="set_interpolation"):
-        interv(base, src)
