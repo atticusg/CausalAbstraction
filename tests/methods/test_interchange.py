@@ -4,10 +4,12 @@ Tests for experiments/metric.py - causal_score_intervention_outputs function.
 """
 
 import pytest
+import torch
 from typing import Any
 from unittest.mock import MagicMock
 
 from causalab.methods.metric import causal_score_intervention_outputs
+from causalab.neural.pipeline import GenerationResult
 
 
 pytestmark = pytest.mark.unit
@@ -19,6 +21,14 @@ def create_mock_cf_dataset(size: int = 3) -> Any:
         {"input": {"text": f"input_{i}"}, "counterfactual_inputs": []}
         for i in range(size)
     ]
+
+
+def _result(strings: list[str]) -> GenerationResult:
+    """A flat GenerationResult with the given decoded outputs (EU5b, #487)."""
+    return GenerationResult(
+        sequences=torch.zeros((len(strings), 1), dtype=torch.long),
+        strings=strings,
+    )
 
 
 class TestCausalScoreInterventionOutputs:
@@ -37,10 +47,10 @@ class TestCausalScoreInterventionOutputs:
             ]
         )
 
-        raw_results = {("test",): {"string": ["A", "B", "A"]}}
+        results = {("test",): _result(["A", "B", "A"])}
 
         result = causal_score_intervention_outputs(
-            raw_results=raw_results,
+            results=results,
             dataset=mock_cf_dataset,
             causal_model=mock_causal_model,
             target_variable_groups=[("answer",)],
@@ -68,10 +78,10 @@ class TestCausalScoreInterventionOutputs:
         )
 
         # Model outputs: A, A, A, A (correct on 2/4 = 50%)
-        raw_results = {("test",): {"string": ["A", "A", "A", "A"]}}
+        results = {("test",): _result(["A", "A", "A", "A"])}
 
         result = causal_score_intervention_outputs(
-            raw_results=raw_results,
+            results=results,
             dataset=mock_cf_dataset,
             causal_model=mock_causal_model,
             target_variable_groups=[("answer",)],
@@ -95,10 +105,10 @@ class TestCausalScoreInterventionOutputs:
             ]
         )
 
-        raw_results = {("test",): {"string": ["A", "A"]}}
+        results = {("test",): _result(["A", "A"])}
 
         result = causal_score_intervention_outputs(
-            raw_results=raw_results,
+            results=results,
             dataset=mock_cf_dataset,
             causal_model=mock_causal_model,
             target_variable_groups=[("answer",), ("position",)],
@@ -115,37 +125,30 @@ class TestCausalScoreInterventionOutputs:
         # Overall: average of 1.0 and 0.0 = 0.5
         assert result["avg_score"] == 0.5
 
-
-class TestCausalScoreNestedOutputs:
-    """Test handling of nested output structures."""
-
-    def test_handles_nested_string_outputs(self):
-        """Test that nested list outputs are flattened correctly."""
-        mock_cf_dataset = create_mock_cf_dataset(4)
+    def test_embeds_io_view_as_raw_results(self):
+        """Each results_by_key entry embeds the legacy one-synthetic-batch
+        ``raw_results`` dict (``to_raw_results()``) — the io boundary's
+        stored-artifact schema, unchanged by EU5b (#487)."""
+        mock_cf_dataset = create_mock_cf_dataset(2)
 
         mock_causal_model = MagicMock()
         mock_causal_model.label_counterfactual_data = MagicMock(
-            return_value=[
-                {"label": "A"},
-                {"label": "B"},
-                {"label": "C"},
-                {"label": "D"},
-            ]
+            return_value=[{"label": "A"}, {"label": "B"}]
         )
 
-        # Return nested structure (batched outputs)
-        raw_results = {("test",): {"string": [["A", "B"], ["C", "D"]]}}
-
+        generation = _result(["A", "B"])
         result = causal_score_intervention_outputs(
-            raw_results=raw_results,
+            results={("test",): generation},
             dataset=mock_cf_dataset,
             causal_model=mock_causal_model,
             target_variable_groups=[("answer",)],
             metric=lambda x, y: x.get("string") == y,
         )
 
-        # All 4 should match after flattening
-        assert result["avg_score"] == 1.0
+        raw = result["results_by_key"][("test",)]["raw_results"]
+        assert raw["string"] == [["A", "B"]]  # ONE synthetic batch
+        assert len(raw["sequences"]) == 1
+        assert torch.equal(raw["sequences"][0], generation.sequences)
 
 
 class TestCausalScoreMultipleKeys:
@@ -164,13 +167,13 @@ class TestCausalScoreMultipleKeys:
         )
 
         # Two keys with different results
-        raw_results = {
-            ("key1",): {"string": ["A", "B"]},  # 100% correct
-            ("key2",): {"string": ["X", "Y"]},  # 0% correct
+        results = {
+            ("key1",): _result(["A", "B"]),  # 100% correct
+            ("key2",): _result(["X", "Y"]),  # 0% correct
         }
 
         result = causal_score_intervention_outputs(
-            raw_results=raw_results,
+            results=results,
             dataset=mock_cf_dataset,
             causal_model=mock_causal_model,
             target_variable_groups=[("answer",)],

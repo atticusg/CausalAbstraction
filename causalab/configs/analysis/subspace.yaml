@@ -7,6 +7,14 @@ method: pca                  # pca | das | dbm | boundless | fixed
 k_features: 64               # for method: fixed, must equal the given rotation's k
 batch_size: 32
 
+# REQUIRED — no default. Keep only pairs the model answers correctly before fitting
+# the subspace? A trained subspace fit on prompts the model gets wrong cannot recover
+# a real subspace, so this is an explicit per-run choice (the runner fails fast if
+# unset). true = correct-only (trained subspaces/steering; matches the paper's
+# sampling). false = use every sampled pair (e.g. tiny-random smoke, where the model
+# solves nothing so filtering would empty the dataset).
+filter_correct: ???
+
 # Component to operate on. Used by all methods; the grid axes depend on type.
 #   residual_stream: layers x token_positions
 #   attention_head:  layers x heads (single token_position)
@@ -26,6 +34,11 @@ token_position: null         # single position name. Used by attention_head only
 # Each entry is a dict that overrides any analysis field (e.g.
 # component_type, layers, k_features, ...). Leave null for single-mode runs.
 modes: null
+
+prescan:                   # attribution-patching fail-fast gate (#456) for the trained
+  enabled: false           # grids (das/dbm/boundless, residual_stream): one-backward
+  top_k: 10                # gradient x delta-activation scores every cell; training
+  n_examples: null         # runs only on the top-k. null n_examples = full train set
 
 visualization:
   figure_format: ${figure_format}

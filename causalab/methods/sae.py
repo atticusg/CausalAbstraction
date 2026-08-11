@@ -137,17 +137,8 @@ class SAEFeaturizer(Featurizer):
     def to_dict(self) -> None:  # type: ignore[override]
         return None
 
-    def save_modules(self, path: str) -> tuple[None, None]:  # type: ignore[override]
-        return None, None
-
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SAEFeaturizer":
         raise NotImplementedError(
             "SAEFeaturizer cannot be reconstructed from a dict — load via sae_lens."
-        )
-
-    @classmethod
-    def load_modules(cls, path: str) -> "SAEFeaturizer":
-        raise NotImplementedError(
-            "SAEFeaturizer cannot be loaded from disk — load via sae_lens."
         )

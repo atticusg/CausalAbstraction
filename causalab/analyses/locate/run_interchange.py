@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 import torch
 
@@ -63,6 +63,7 @@ def run_interchange_scan(
     colormap: str | None = None,
     figure_format: str = "png",
     source_pipeline=None,
+    prescan: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run interchange score scan over a (layer × token_position) grid.
 
@@ -74,11 +75,19 @@ def run_interchange_scan(
         source_pipeline: If provided, activations are collected from this
             pipeline and patched into ``pipeline`` (cross-model patching).
             ``None`` (default) uses standard single-model patching.
+        prescan: Optional attribution-patching fail-fast gate (CAP3, #456):
+            ``{"enabled": bool, "top_k": int, "n_examples": int | None}``.
+            When enabled (``mode: pairwise`` only), a one-backward
+            gradient × Δactivation pre-scan scores every cell and exact
+            interchange runs only on the ``top_k`` survivors; both scores are
+            reported (``"prescan"`` result block) where both are computed.
 
     Returns:
         Dict with ``scores_per_cell`` (keys ``(layer, pos_id)``), summary
         ``scores_per_layer`` (best — highest — score over positions per layer),
-        ``base_accuracy``, and ``token_position_ids``.
+        ``base_accuracy``, ``token_position_ids``, and — when the gate ran —
+        ``prescan`` (approx scores for every cell, survivors, and
+        approx-vs-exact agreement diagnostics).
     """
     from causalab.methods.interchange import (
         run_centroid_layer_scan,
@@ -121,6 +130,57 @@ def run_interchange_scan(
     )
     token_position_ids = [tp.id for tp in token_positions]
 
+    # Optional attribution-patching fail-fast gate (CAP3, #456): approximate
+    # every cell with one forward+backward per batch, keep the top-k, and run
+    # exact interchange only on the survivors.
+    prescan_cfg = dict(prescan) if prescan is not None else {}
+    prescan_block: dict[str, Any] | None = None
+    if prescan_cfg.get("enabled"):
+        if mode != "pairwise":
+            raise ValueError(
+                "locate.prescan approximates pairwise interchange effects; it "
+                f"cannot gate mode={mode!r}. Use mode: pairwise or disable "
+                "the prescan."
+            )
+        if source_pipeline is not None:
+            raise ValueError(
+                "locate.prescan does not support cross-model patching — the "
+                "gradient × Δactivation approximation is defined on one "
+                "model's forward. Disable the prescan or source_model."
+            )
+        from causalab.methods.interchange import (
+            counterfactual_logit_diff_ids,
+            run_attribution_prescan,
+            select_top_k,
+        )
+
+        n_examples = prescan_cfg.get("n_examples")
+        subset = test_dataset if not n_examples else test_dataset[: int(n_examples)]
+        pair_ids = counterfactual_logit_diff_ids(pipeline, subset, task.causal_model)
+        approx_scores = run_attribution_prescan(
+            targets, subset, pipeline, batch_size, pair_ids
+        )
+        top_k = int(prescan_cfg.get("top_k", 10))
+        # Rank by |approx|: the linearization's sign is unreliable at early
+        # layers, but the magnitude separates live cells from dead ones (see
+        # causalab/methods/interchange/attribution.py).
+        survivors = select_top_k(approx_scores, top_k, by_abs=True)
+        logger.info(
+            "Attribution pre-scan: exact interchange runs on %d/%d cells "
+            "(top_k=%d over %d pairs)",
+            len(survivors),
+            len(targets),
+            top_k,
+            len(subset),
+        )
+        targets = {key: targets[key] for key in survivors}
+        prescan_block = {
+            "approx_scores_per_cell": approx_scores,
+            "survivors": survivors,
+            "top_k": top_k,
+            "n_examples": len(subset),
+        }
+
     ref_dists = None
     if mode == "centroid":
         if not task.intervention_values:
@@ -157,7 +217,7 @@ def run_interchange_scan(
             else None
         )
         raw_scores = run_layer_scan(
-            interchange_targets=targets,
+            targets,
             dataset=test_dataset,
             pipeline=pipeline,
             batch_size=batch_size,
@@ -174,7 +234,7 @@ def run_interchange_scan(
                 "have been computed above."
             )
         result = run_centroid_layer_scan(
-            interchange_targets=targets,
+            targets,
             dataset=train_dataset,
             pipeline=pipeline,
             batch_size=batch_size,
@@ -243,9 +303,34 @@ def run_interchange_scan(
                     "Patched heatmap for (L%d, %s) failed: %s", layer, pos_id, e
                 )
 
-    return {
+    result: dict[str, Any] = {
         "scores_per_cell": scores_per_cell,
         "scores_per_layer": scores_per_layer,
         "base_accuracy": base_accuracy,
         "token_position_ids": token_position_ids,
     }
+    if prescan_block is not None:
+        # Report approx and exact together wherever both were computed, so
+        # the approximation quality is visible (the #456 contract).
+        from causalab.methods.interchange import (
+            spearman_rank_correlation,
+            top_k_agreement,
+        )
+
+        approx_scores = prescan_block["approx_scores_per_cell"]
+        prescan_block["exact_and_approx"] = {
+            key: {"approx": approx_scores[key], "exact": exact}
+            for key, exact in scores_per_cell.items()
+        }
+        prescan_block["agreement_at_k"] = top_k_agreement(
+            approx_scores, scores_per_cell, prescan_block["top_k"], by_abs=True
+        )
+        prescan_block["rank_correlation"] = spearman_rank_correlation(
+            approx_scores, scores_per_cell
+        )
+        prescan_block["abs_rank_correlation"] = spearman_rank_correlation(
+            {key: abs(value) for key, value in approx_scores.items()},
+            scores_per_cell,
+        )
+        result["prescan"] = prescan_block
+    return result

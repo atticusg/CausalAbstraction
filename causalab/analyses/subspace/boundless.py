@@ -13,17 +13,17 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable, cast
+from typing import Any, Callable, Sequence, cast
 
 from causalab.causal.causal_model import CausalModel
-from causalab.neural.units import InterchangeTarget
+from causalab.neural.specs import SiteSpec
 from causalab.neural.pipeline import LMPipeline
 
 logger = logging.getLogger(__name__)
 
 
 def find_boundless_subspace(
-    target: InterchangeTarget,
+    sites: Sequence[Sequence[SiteSpec]],
     train_dataset: list,
     test_dataset: list,
     pipeline: LMPipeline,
@@ -41,7 +41,7 @@ def find_boundless_subspace(
     single-cell case.
 
     Args:
-        target: Interchange target.
+        sites: Nested spec groups (a grid cell value).
         train_dataset: Training counterfactual examples.
         test_dataset: Test counterfactual examples.
         pipeline: LM pipeline.
@@ -81,7 +81,7 @@ def find_boundless_subspace(
         raise ValueError("`metric` is required for find_boundless_subspace")
     result = train_interventions(
         causal_model=causal_model,
-        interchange_targets={("single",): target},
+        grid={("single",): sites},
         train_dataset=train_dataset,
         test_dataset=test_dataset,
         pipeline=pipeline,
@@ -102,8 +102,8 @@ def find_boundless_subspace(
     # Compute n_features_by_unit (number of selected dimensions per unit)
     feature_indices = single_result.get("feature_indices", {})
     n_features_by_unit = {
-        unit_id: len(indices) if indices is not None else 0
-        for unit_id, indices in feature_indices.items()
+        key: len(indices) if indices is not None else 0
+        for key, indices in feature_indices.items()
     }
 
     logger.info(

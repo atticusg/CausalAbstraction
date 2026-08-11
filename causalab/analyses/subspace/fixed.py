@@ -25,14 +25,14 @@ features, and projecting again raises a shape error.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, cast
+from typing import Any, Callable, Sequence, cast
 
 from torch import Tensor
 
 from causalab.analyses.subspace.artifacts import save_subspace_artifacts
 from causalab.analyses.subspace._visualization import save_features_visualization
 from causalab.methods.trained_subspace.subspace import SubspaceFeaturizer
-from causalab.neural.units import InterchangeTarget
+from causalab.neural.specs import SiteSpec
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.activations.collect import collect_features
 
@@ -217,7 +217,7 @@ def _orthonormalize_rotation(rotation: Tensor) -> Tensor:
 
 
 def find_fixed_subspace(
-    target: InterchangeTarget,
+    sites: Sequence[Sequence[SiteSpec]],
     train_dataset: list,
     pipeline: LMPipeline,
     rotation: Tensor,
@@ -237,16 +237,19 @@ def find_fixed_subspace(
     """Thread a given ``(d_model, k)`` rotation and project features through it.
 
     Collects RAW activations (no featurizer), projects them through the given
-    rotation, sets the subspace featurizer on the target, and writes the
-    canonical bundle. Mirrors :func:`find_pca_subspace` minus the PCA fit.
+    rotation, and writes the canonical bundle. Mirrors
+    :func:`find_pca_subspace` minus the PCA fit. The frozen subspace
+    featurizer is attached **functionally**: the returned ``spec`` carries it;
+    the caller's input specs are unchanged.
 
     ``k_features_hint`` is only consulted to disambiguate a **square** rotation
     (see :func:`orient_rotation`); non-square input is oriented from ``d_model``.
 
     Returns:
-        Dict with keys ``rotation``, ``features`` (``(N, k)``), ``k_features``.
+        Dict with keys ``rotation``, ``features`` (``(N, k)``),
+        ``k_features``, and ``spec`` (the updated :class:`SiteSpec`).
     """
-    unit = target.flatten()[0]
+    spec = sites[0][0]
     # Orient to (d_model, k) FIRST (idempotent), then orthonormalize. The order
     # matters: _orthonormalize_rotation assumes columns = k, and QR on a wide
     # (k, d_model) matrix would yield a wrong-shaped Q. The dispatch in main.py
@@ -267,18 +270,19 @@ def find_fixed_subspace(
         collect_features(
             dataset=train_dataset,
             pipeline=pipeline,
-            model_units=[unit],
+            sites=[spec],
             batch_size=batch_size,
         ),
     )
-    raw_features = raw_features_dict[unit.id].detach()
+    raw_features = raw_features_dict[spec.key].detach()
     rotation = rotation.to(raw_features.device)
     features = (raw_features.float() @ rotation.float()).detach()
 
-    # Set the featurizer now (after collection) so downstream decoding /
-    # reconstruction sees the same projection.
+    # Attach the featurizer now (after collection) so downstream decoding /
+    # reconstruction sees the same projection — functionally: the returned
+    # spec carries it, the input spec is unchanged.
     feat = SubspaceFeaturizer(rotation_subspace=rotation, trainable=False, id="PCA")
-    unit.set_featurizer(feat)
+    spec = spec.with_featurizer(feat)
 
     if output_dir:
         save_subspace_artifacts(
@@ -307,11 +311,12 @@ def find_fixed_subspace(
         "rotation": rotation,
         "features": features,
         "k_features": k_features,
+        "spec": spec,
     }
 
 
 def _score_single_cell(
-    target: InterchangeTarget,
+    sites: Sequence[Sequence[SiteSpec]],
     cell_key: tuple[Any, ...],
     dataset: list,
     pipeline: LMPipeline,
@@ -323,12 +328,12 @@ def _score_single_cell(
     """Run one single-cell interchange scan and return its mean score.
 
     Thin wrapper over :func:`causalab.methods.interchange.run_layer_scan` for a
-    one-cell target dict, mirroring the pairwise branch of
+    one-cell spec grid, mirroring the pairwise branch of
     ``locate.run_interchange_scan`` (causalab/analyses/locate/run_interchange.py).
-    When ``target`` carries a frozen ``SubspaceFeaturizer`` the patch is restricted
-    to that subspace; a featurizer-free target gives the full-cell (unrestricted)
-    control. The score's units are the task's ``intervention_metric`` (see
-    :func:`score_fixed_subspace`).
+    When the cell's spec carries a frozen ``SubspaceFeaturizer`` the patch is
+    restricted to that subspace; a featurizer-free spec gives the full-cell
+    (unrestricted) control. The score's units are the task's
+    ``intervention_metric`` (see :func:`score_fixed_subspace`).
 
     ``original_outputs`` is the base (un-intervened) forward pass, shared across
     cells by the caller (it depends only on ``dataset``/``pipeline``); pass ``None``
@@ -337,9 +342,9 @@ def _score_single_cell(
     from causalab.methods.interchange import run_layer_scan
 
     scores = run_layer_scan(
-        interchange_targets={cell_key: target},
-        dataset=dataset,
-        pipeline=pipeline,
+        {cell_key: sites},
+        dataset,
+        pipeline,
         batch_size=batch_size,
         metric=metric,
         output_scores=metric.needs_scores,
@@ -351,7 +356,7 @@ def _score_single_cell(
 
 def score_fixed_subspace(
     *,
-    target: InterchangeTarget,
+    sites: Sequence[Sequence[SiteSpec]],
     cell_key: tuple[Any, ...],
     layer: int,
     position_name: str,
@@ -363,10 +368,11 @@ def score_fixed_subspace(
 ) -> dict[str, Any]:
     """Score a threaded fixed subspace's causal mediation at one pinned cell.
 
-    ``target`` is the cell that :func:`find_fixed_subspace` already attached the
-    frozen ``SubspaceFeaturizer`` to, so the **subspace-restricted** scan patches
-    only within the given rotation. A fresh featurizer-free target at the same
-    ``(layer, position_name)`` gives the **full-cell** (unrestricted) control;
+    ``sites`` is the cell whose spec :func:`find_fixed_subspace` returned with
+    the frozen ``SubspaceFeaturizer`` attached, so the **subspace-restricted**
+    scan patches only within the given rotation. A fresh featurizer-free spec
+    at the same ``(layer, position_name)`` gives the **full-cell**
+    (unrestricted) control;
     ``score_ratio = subspace_score / full_cell_score`` is the fraction of the
     cell's mediation the subspace captures.
 
@@ -416,7 +422,7 @@ def score_fixed_subspace(
         intervention_metric,
     )
     subspace_score = _score_single_cell(
-        target, cell_key, dataset, pipeline, task, batch_size, metric, original_outputs
+        sites, cell_key, dataset, pipeline, task, batch_size, metric, original_outputs
     )
 
     # Full-cell (unrestricted) control: rebuild the same cell with no featurizer.

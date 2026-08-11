@@ -16,7 +16,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from causalab.runner.helpers import (
     resolve_task,
-    generate_datasets,
+    prepare_datasets,
     get_output_token_ids,
     resolve_intervention_metric,
     _task_config_for_metadata,  # pyright: ignore[reportPrivateUsage]
@@ -72,6 +72,7 @@ def _run_scan_for_variable(
     figure_format: str = "png",
     source_pipeline=None,
     dbm_cfg: Mapping[str, Any] | None = None,
+    prescan_cfg: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the task for one variable and run the configured scan."""
     if target_variable is None:
@@ -84,13 +85,14 @@ def _run_scan_for_variable(
         target_variable=target_variable,
         seed=cfg.seed,
     )
-    train_dataset, test_dataset = generate_datasets(
+    train_dataset, test_dataset = prepare_datasets(
         task,
         n_train=cfg.task.n_train,
         n_test=cfg.task.n_test,
         seed=cfg.seed,
         enumerate_all=cfg.task.enumerate_all,
         resample_variable=cfg.task.get("resample_variable", "all"),
+        filter_correct=False,
     )
 
     if layers is None:
@@ -142,6 +144,7 @@ def _run_scan_for_variable(
             colormap=resolve_task_colormap(cfg.task, None),
             figure_format=figure_format,
             source_pipeline=source_pipeline,
+            prescan=prescan_cfg,
         )
     elif method == "dbm_binary":
         from causalab.analyses.locate import run_dbm_binary_scan
@@ -195,8 +198,52 @@ def _save_variable_results(
         "base_accuracy": result.get("base_accuracy"),
         "token_position_ids": [str(p) for p in token_position_ids],
     }
+    prescan = result.get("prescan")
+    if prescan is not None:
+        results_data["prescan"] = {
+            "approx_scores_per_cell": {
+                f"{layer}|{pos_id}": score
+                for (layer, pos_id), score in prescan["approx_scores_per_cell"].items()
+            },
+            "survivors": [
+                f"{layer}|{pos_id}" for layer, pos_id in prescan["survivors"]
+            ],
+            "top_k": prescan["top_k"],
+            "n_examples": prescan["n_examples"],
+            "exact_and_approx": {
+                f"{layer}|{pos_id}": scores
+                for (layer, pos_id), scores in prescan["exact_and_approx"].items()
+            },
+            "agreement_at_k": prescan["agreement_at_k"],
+            "rank_correlation": prescan["rank_correlation"],
+            "abs_rank_correlation": prescan["abs_rank_correlation"],
+        }
     with open(os.path.join(var_out_dir, "results.json"), "w") as f:
         json.dump(results_data, f, indent=2)
+
+    if prescan is not None and prescan["approx_scores_per_cell"]:
+        approx = prescan["approx_scores_per_cell"]
+        try:
+            bound = max(abs(v) for v in approx.values()) or 1.0
+            plot_residual_stream_heatmap(
+                scores=approx,
+                layers=layers,
+                token_position_ids=token_position_ids,
+                title=f"Attribution pre-scan (approx): {variable_label}",
+                save_path=path_with_figure_format(
+                    os.path.join(var_out_dir, "prescan_heatmap"),
+                    figure_format,
+                ),
+                figure_format=figure_format,
+                cmap="seismic",
+                vmin=-bound,
+                vmax=bound,
+                cbar_label="approx Δ logit-diff",
+            )
+        except Exception as e:
+            logger.warning(
+                "Prescan heatmap render failed for %s: %s", variable_label, e
+            )
 
     if scores_per_cell:
         try:
@@ -250,13 +297,14 @@ def _run_single_pair_trace(
         target_variable=target_variable,
         seed=cfg.seed,
     )
-    train_dataset, _ = generate_datasets(
+    train_dataset, _ = prepare_datasets(
         task,
         n_train=cfg.task.n_train,
         n_test=cfg.task.n_test,
         seed=cfg.seed,
         enumerate_all=cfg.task.enumerate_all,
         resample_variable=cfg.task.get("resample_variable", "all"),
+        filter_correct=False,
     )
 
     example = train_dataset[0]
@@ -421,6 +469,12 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 OmegaConf.to_container(analysis.dbm, resolve=True),
             )
             if analysis.get("dbm") is not None
+            else None,
+            prescan_cfg=cast(
+                Mapping[str, Any],
+                OmegaConf.to_container(analysis.prescan, resolve=True),
+            )
+            if analysis.get("prescan") is not None
             else None,
         )
         results_data = _save_variable_results(

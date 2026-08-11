@@ -17,6 +17,11 @@ source_model: null         # set to a model name to enable cross-model patching;
                            # activations are then collected from this model and
                            # patched into the primary model (cfg.model.name).
 
+prescan:                   # attribution-patching fail-fast gate (#456), pairwise only
+  enabled: false           # one-backward gradient x delta-activation scores every cell;
+  top_k: 10                # exact interchange then runs only on the top-k survivors
+  n_examples: null         # cap on counterfactual pairs scored; null = full test set
+
 visualization:
   figure_format: ${figure_format}
   single_pair_trace: true

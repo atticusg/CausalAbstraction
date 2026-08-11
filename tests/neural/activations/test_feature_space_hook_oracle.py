@@ -27,11 +27,12 @@ from __future__ import annotations
 import pytest
 import torch
 
-from causalab.neural.LM_units import ResidualStream
+from causalab.neural.featurized_site import FeaturizedSite
 from causalab.neural.featurizer import Featurizer
 from causalab.neural.pipeline import LMPipeline
+from causalab.neural.site import Site
+from causalab.neural.specs import SiteSpec
 from causalab.neural.token_positions import TokenPosition
-from causalab.neural.units import InterchangeTarget
 from causalab.methods.steer.steer import run_steering_interventions
 
 from tests.neural.activations.hook_oracle import (
@@ -47,35 +48,32 @@ _POS = 1
 _BASE = "the quick brown fox jumps"
 
 
-def _target(pipeline: LMPipeline, featurizer: Featurizer) -> InterchangeTarget:
+def _site(pipeline: LMPipeline, featurizer: Featurizer) -> SiteSpec:
     tp = TokenPosition(lambda _x: [_POS], pipeline, id="pos1")
-    unit = ResidualStream(
-        layer=_LAYER,
-        token_indices=tp,
-        target_output=True,
-        shape=(pipeline.model.config.hidden_size,),
-        featurizer=featurizer,
+    return SiteSpec(
+        fsite=FeaturizedSite(Site("block_output", _LAYER), featurizer),
+        positions=tp,
+        key=f"residual.L{_LAYER}.pos1",
+        width=pipeline.model.config.hidden_size,
     )
-    return InterchangeTarget([[unit]])
 
 
 def _run_steer(
     pipeline: LMPipeline,
-    target: InterchangeTarget,
+    site: SiteSpec,
     vector: torch.Tensor,
     *,
     mode: str,
 ) -> torch.Tensor:
-    unit_id = target.flatten()[0].id
     result = run_steering_interventions(
         pipeline,
         [{"input": make_trace(_BASE), "counterfactual_inputs": []}],
-        target,
-        {unit_id: vector},
+        [site],
+        {site.key: vector},
         mode=mode,
         output_scores=True,
     )
-    return result["scores"][0][0]
+    return result.scores[0]  # first generated step, (1, vocab)
 
 
 class _SplitFeaturizerModule(torch.nn.Module):
@@ -116,14 +114,14 @@ class TestFeatureSpaceReplaceSteerHookOracle:
         hidden = oracle_pipeline.model.config.hidden_size
         R = random_rotation(hidden, seed=2)
         replacement = torch.linspace(-1.0, 1.0, hidden)
-        target = _target(oracle_pipeline, rotate_featurizer(R))
+        site = _site(oracle_pipeline, rotate_featurizer(R))
 
         base_inputs = oracle_pipeline.load([make_trace(_BASE)])
         patch = (replacement @ R.T).reshape(1, 1, hidden)
         manual = next_token_logits(oracle_pipeline, base_inputs, _LAYER, [_POS], patch)
         clean = next_token_logits(oracle_pipeline, base_inputs)
 
-        causalab = _run_steer(oracle_pipeline, target, replacement, mode="replace")
+        causalab = _run_steer(oracle_pipeline, site, replacement, mode="replace")
         assert not torch.allclose(causalab, clean, atol=1e-4)
         torch.testing.assert_close(causalab, manual, atol=1e-4, rtol=1e-3)
 
@@ -133,7 +131,7 @@ class TestFeatureSpaceReplaceSteerHookOracle:
         hidden = oracle_pipeline.model.config.hidden_size
         R = random_rotation(hidden, seed=3)
         vector = torch.linspace(0.2, 0.8, hidden)
-        target = _target(oracle_pipeline, rotate_featurizer(R))
+        site = _site(oracle_pipeline, rotate_featurizer(R))
 
         base_inputs = oracle_pipeline.load([make_trace(_BASE)])
         fb = capture_residual(oracle_pipeline, _LAYER, base_inputs)[:, _POS, :]
@@ -141,7 +139,7 @@ class TestFeatureSpaceReplaceSteerHookOracle:
         manual = next_token_logits(oracle_pipeline, base_inputs, _LAYER, [_POS], patch)
         clean = next_token_logits(oracle_pipeline, base_inputs)
 
-        causalab = _run_steer(oracle_pipeline, target, vector, mode="add")
+        causalab = _run_steer(oracle_pipeline, site, vector, mode="add")
         assert not torch.allclose(causalab, clean, atol=1e-4)
         torch.testing.assert_close(causalab, manual, atol=1e-4, rtol=1e-3)
 
@@ -161,7 +159,7 @@ class TestFeatureSpaceReplaceSteerHookOracle:
             inverse_featurizer=_SplitInverseFeaturizerModule(R),
             n_features=k,
         )
-        target = _target(oracle_pipeline, featurizer)
+        site = _site(oracle_pipeline, featurizer)
         replacement = torch.linspace(-2.0, 2.0, k)
 
         base_inputs = oracle_pipeline.load([make_trace(_BASE)])
@@ -172,6 +170,6 @@ class TestFeatureSpaceReplaceSteerHookOracle:
         manual = next_token_logits(oracle_pipeline, base_inputs, _LAYER, [_POS], patch)
         clean = next_token_logits(oracle_pipeline, base_inputs)
 
-        causalab = _run_steer(oracle_pipeline, target, replacement, mode="replace")
+        causalab = _run_steer(oracle_pipeline, site, replacement, mode="replace")
         assert not torch.allclose(causalab, clean, atol=1e-4)
         torch.testing.assert_close(causalab, manual, atol=1e-4, rtol=1e-3)

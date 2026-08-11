@@ -20,6 +20,7 @@ task:
   n_test: 2
 
 subspace:
+  filter_correct: false  # tiny-random solves ~nothing; correct-only filtering would empty the dataset
   method: fixed
   k_features: 8
   layers: [1]

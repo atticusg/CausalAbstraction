@@ -11,23 +11,23 @@
     "accuracy.accuracy": 1.0,
     "accuracy.correct": 49,
     "accuracy.total": 49,
-    "baseline.per_class_output_dists.dists.first": 3.3138556816307086e-15,
-    "baseline.per_class_output_dists.dists.last": 1.210808038033806e-12,
-    "baseline.per_class_output_dists.dists.mean": 9.372414817984329e-14,
+    "baseline.per_class_output_dists.dists.first": 3.432745226107322e-15,
+    "baseline.per_class_output_dists.dists.last": 1.0473755109735583e-12,
+    "baseline.per_class_output_dists.dists.mean": 8.636828367292529e-14,
     "baseline.per_class_output_dists.dists.shape": [
       2,
       12
     ],
-    "baseline.per_class_output_dists.dists.std": 2.6889452578622575e-13,
-    "baseline.per_class_output_dists.sha256": "441733057afb0b17df85b72e0b29005e17341aec9c25ce4065be430f5d20d154",
-    "full_output_dists.first": 6.224041421143411e-11,
-    "full_output_dists.last": 3.037974806072673e-14,
-    "full_output_dists.mean": 6.581718935194658e-06,
-    "full_output_dists.sha256": "5bb5ada24f67a13814c7f8c1ba38642101c06531d0849e088e3922154be80d45",
+    "baseline.per_class_output_dists.dists.std": 2.389611403717795e-13,
+    "baseline.per_class_output_dists.sha256": "55a0b2f343d1f6353d042718b6dfa368d24b9a71b866ad6c5037965c1732ae94",
+    "full_output_dists.first": 4.553644961102776e-11,
+    "full_output_dists.last": 2.8539131913815977e-14,
+    "full_output_dists.mean": 6.581718480447307e-06,
+    "full_output_dists.sha256": "04e58c6470b90b078170875a870767d8641c4d7301bc3d17b32dfbee989653d4",
     "full_output_dists.shape": [
       49,
       151936
     ],
-    "full_output_dists.std": 0.002564980648458004
+    "full_output_dists.std": 0.002565268659964204
   }
 }

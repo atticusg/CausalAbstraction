@@ -1,376 +1,277 @@
-# tests/test_pyvene_core/test_train_intervention.py
+"""Training-loop orchestration on the ED3 stack (MX2, #409).
+
+``_run_training_loop`` composes :mod:`causalab.neural.trainable`'s primitives
+(``das_edit`` / ``dbm_edit`` around shared featurizer/gate modules,
+``traced_label_loss`` under the saved-logits grad contract,
+``score_label_predictions`` for the in-loop accuracy) and owns only the
+orchestration around them. These tests pin that orchestration on the spec
+surface (WU4, #506 — initialization and the trained readout are functional):
+
+* ``property`` — real tiny-model runs: DAS actually moves the rotation, DBM
+  *returns* the hard-threshold ``feature_indices`` readout and trained specs
+  (per-feature list untied, ``None``/``[]`` tied; an all-off mask drops its
+  spec — the no-op-by-omission contract).
+* ``unit`` — scripted-boundary pins (``traced_label_loss`` patched at the
+  module seam): early stopping counts epochs-without-improvement, memory
+  cleanup fires per ``memory_cleanup_freq``.
+
+The pinned numerics of the primitives themselves (grad parity vs the raw-hook
+oracle, loss-slice faithfulness, anneal-to-end) live in
+``tests/neural/test_trainable.py``; the value-pinned end-to-end contract is
+the ``weekdays_subspace`` golden.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
-from unittest.mock import MagicMock, patch
 
+from causalab.causal.trace import CausalTrace, Mechanism
+from causalab.configs.train_config import merge_with_defaults
 from causalab.methods.trained_subspace.train import (
-    _run_training_loop as train_interventions,  # pyright: ignore[reportPrivateUsage]
+    _initialize_featurizers,  # pyright: ignore[reportPrivateUsage]
+    _run_training_loop,  # pyright: ignore[reportPrivateUsage]
 )
-from causalab.neural.units import InterchangeTarget
+from causalab.neural.featurized_site import FeaturizedSite
+from causalab.neural.pipeline import LMPipeline
+from causalab.neural.site import Site
+from causalab.neural.specs import SiteSpec
+
+from tests._helpers.tiny import fresh_tiny_random_llama
+
+_HIDDEN = 16  # tiny-random Llama hidden size
+_KEY = "residual.L0.p0"
 
 
-pytestmark = pytest.mark.unit
+def _sample(x: str) -> CausalTrace:
+    text = f"The next number after {x} is "
+    return CausalTrace(
+        mechanisms={
+            "raw_input": Mechanism(parents=[], compute=lambda t: t["raw_input"])
+        },
+        inputs={"raw_input": text},
+    )
 
 
-class MockTqdm:
-    """Mock tqdm that wraps an iterable and provides set_postfix method."""
-
-    def __init__(self, iterable, **kwargs):
-        self.iterable = iterable
-        self.kwargs = kwargs
-
-    def __iter__(self):
-        return iter(self.iterable)
-
-    def __len__(self):
-        return len(self.iterable)
-
-    def set_postfix(self, *args, **kwargs):
-        pass
-
-
-class TestTrainInterventions:
-    """Tests for train_interventions function."""
-
-    @pytest.fixture
-    def interchange_target(self):
-        """Create an InterchangeTarget for testing."""
-        model_unit1 = MagicMock()
-        model_unit1.id = "ResidualStream(Layer:0,Token:last_token)"
-        model_unit1.is_static.return_value = True
-        model_unit1.create_intervention_config.return_value = MagicMock()
-        model_unit1.set_feature_indices = MagicMock()
-        model_unit1.get_feature_indices.return_value = [0, 1, 2]
-
-        model_unit2 = MagicMock()
-        model_unit2.id = "ResidualStream(Layer:2,Token:last_token)"
-        model_unit2.is_static.return_value = True
-        model_unit2.create_intervention_config.return_value = MagicMock()
-        model_unit2.set_feature_indices = MagicMock()
-        model_unit2.get_feature_indices.return_value = [0, 1, 2]
-
-        target = InterchangeTarget([[model_unit1], [model_unit2]])
-        return target
-
-    @pytest.fixture
-    def mock_counterfactual_dataset(self):
-        """Create a mock counterfactual dataset."""
-        return [
-            {
-                "input": "input_0",
-                "counterfactual_inputs": ["cf_0_1", "cf_0_2"],
-                "label": "label_0",
-            },
-            {
-                "input": "input_1",
-                "counterfactual_inputs": ["cf_1_1"],
-                "label": "label_1",
-            },
-        ]
-
-    @pytest.fixture
-    def mock_intervenable_model(self):
-        """Create a mock intervenable model."""
-        model = MagicMock()
-        model.disable_model_gradients = MagicMock()
-        model.eval = MagicMock()
-        model.count_parameters = MagicMock(return_value=100)
-        model.set_zero_grad = MagicMock()
-
-        # Create mock intervention with parameters
-        mock_intervention = MagicMock()
-        mock_param = torch.nn.Parameter(torch.zeros(10))
-        mock_intervention.parameters.return_value = [mock_param]
-        mock_intervention.get_sparsity_loss.return_value = torch.tensor(0.1)
-        mock_intervention.set_temperature = MagicMock()
-        mock_intervention.mask = torch.nn.Parameter(torch.zeros(10))
-
-        model.interventions = {"test_intervention": mock_intervention}
-        return model
-
-    @pytest.fixture
-    def mock_loss_metric_fn(self):
-        """Create a mock loss and metric function."""
-        mock_fn = MagicMock()
-        mock_fn.return_value = (
-            torch.tensor(0.5, requires_grad=True),
-            {"accuracy": 0.75},
-            {"preds": ["pred1"], "labels": ["label1"]},
-        )
-        return mock_fn
-
-    @pytest.fixture
-    def mock_config(self):
-        """Create a config dictionary for testing."""
-        return {
-            "train_batch_size": 2,
-            "training_epoch": 2,
-            "init_lr": 1e-3,
-            "memory_cleanup_freq": 1,
-            "patience": None,
-            "scheduler_type": "constant",
-            "shuffle": True,
-            "masking": {
-                "regularization_coefficient": 0.1,
-                "temperature_schedule": (1.0, 0.01),
-                "temperature_annealing_fraction": 0.5,
-            },
-            "featurizer_kwargs": {"tie_masks": False},
+def _labeled_dataset(n: int = 4) -> list[dict[str, Any]]:
+    """Labeled counterfactual examples — same-length single-digit prompts so
+    the batch has no padding variance, with the ``label`` the loss slice
+    scores against."""
+    pairs = [("3", "7"), ("5", "2"), ("8", "4"), ("1", "9")]
+    return [
+        {
+            "input": _sample(base),
+            "counterfactual_inputs": [_sample(cf)],
+            "label": " 4",
         }
+        for base, cf in pairs[:n]
+    ]
 
-    def test_interchange_intervention_training(
-        self,
-        mock_tiny_lm,
-        interchange_target,
-        mock_counterfactual_dataset,
-        mock_intervenable_model,
-        mock_loss_metric_fn,
-        mock_config,
-    ):
-        """Test training with interchange intervention type."""
-        mock_scheduler = MagicMock()
-        mock_scheduler.get_last_lr.return_value = [0.001]
-        mock_scheduler._step_count = 0
 
-        with (
-            patch(
-                "causalab.methods.trained_subspace.train.prepare_intervenable_model",
-                return_value=mock_intervenable_model,
-            ) as mock_prepare,
-            patch("causalab.methods.trained_subspace.train.delete_intervenable_model"),
-            patch("causalab.methods.trained_subspace.train.tqdm", MockTqdm),
-            patch("torch.optim.AdamW", return_value=MagicMock()),
-            patch(
-                "causalab.methods.trained_subspace.train.transformers.get_scheduler",
-                return_value=mock_scheduler,
-            ),
-        ):
-            result = train_interventions(
-                pipeline=mock_tiny_lm,
-                interchange_target=interchange_target,
-                counterfactual_dataset=mock_counterfactual_dataset,
-                intervention_type="interchange",
-                config=mock_config,
-                loss_and_metric_fn=mock_loss_metric_fn,
-            )
+def _checker(neural_output: dict, expected: Any) -> bool:
+    expected_value = (
+        expected.get("string", expected) if isinstance(expected, dict) else expected
+    )
+    return neural_output["string"].strip() == str(expected_value).strip()
 
-            # Verify prepare_intervenable_model was called correctly
-            mock_prepare.assert_called_once_with(
-                mock_tiny_lm, interchange_target, intervention_type="interchange"
-            )
 
-            # Verify result is a summary string
-            assert isinstance(result, str)
-            assert "Trained intervention" in result
+def _groups() -> list[list[SiteSpec]]:
+    # Layer 0 of the 2-layer tiny model: its block output feeds layer 1's
+    # attention, so an edit at position 0 reaches the label-position logits
+    # (an edit at the LAST layer's position 0 could not — block outputs feed
+    # the unembed per-position — and the rotation would see zero gradient).
+    spec = SiteSpec(
+        fsite=FeaturizedSite(Site("block_output", 0)),
+        positions=(0,),
+        key=_KEY,
+        width=_HIDDEN,
+    )
+    return [[spec]]
 
-            # Verify model was put in eval mode
-            mock_intervenable_model.eval.assert_called()
-            mock_intervenable_model.disable_model_gradients.assert_called()
 
-    def test_mask_intervention_training(
-        self,
-        mock_tiny_lm,
-        interchange_target,
-        mock_counterfactual_dataset,
-        mock_intervenable_model,
-        mock_loss_metric_fn,
-        mock_config,
-    ):
-        """Test training with mask intervention type."""
-        mock_scheduler = MagicMock()
-        mock_scheduler.get_last_lr.return_value = [0.001]
-        mock_scheduler._step_count = 0
+def _config(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "train_batch_size": 2,
+        "training_epoch": 2,
+        "init_lr": 1e-2,
+        "DAS": {"n_features": 4},
+        "memory_cleanup_freq": 50,
+    }
+    base.update(overrides)
+    return dict(merge_with_defaults(base))  # pyright: ignore[reportArgumentType]
 
-        with (
-            patch(
-                "causalab.methods.trained_subspace.train.prepare_intervenable_model",
-                return_value=mock_intervenable_model,
-            ) as mock_prepare,
-            patch("causalab.methods.trained_subspace.train.delete_intervenable_model"),
-            patch("causalab.methods.trained_subspace.train.tqdm", MockTqdm),
-            patch("torch.optim.AdamW", return_value=MagicMock()),
-            patch(
-                "causalab.methods.trained_subspace.train.transformers.get_scheduler",
-                return_value=mock_scheduler,
-            ),
-        ):
-            result = train_interventions(
-                pipeline=mock_tiny_lm,
-                interchange_target=interchange_target,
-                counterfactual_dataset=mock_counterfactual_dataset,
-                intervention_type="mask",
-                config=mock_config,
-                loss_and_metric_fn=mock_loss_metric_fn,
-            )
 
-            # Verify prepare_intervenable_model was called with mask type
-            mock_prepare.assert_called_once_with(
-                mock_tiny_lm, interchange_target, intervention_type="mask"
-            )
+@pytest.fixture(scope="module")
+def pipe() -> LMPipeline:
+    raw, _tok = fresh_tiny_random_llama()
+    return LMPipeline(raw, max_new_tokens=1, padding_side="left")
 
-            # Verify result is a summary string
-            assert isinstance(result, str)
 
-    def test_early_stopping(
-        self,
-        mock_tiny_lm,
-        interchange_target,
-        mock_counterfactual_dataset,
-        mock_intervenable_model,
-        mock_config,
-    ):
-        """Test early stopping functionality."""
-        # Set patience to trigger early stopping
-        mock_config["patience"] = 1
-        mock_config["training_epoch"] = 10  # More epochs than we'll run
+def _train(
+    pipe: LMPipeline, groups: list[list[SiteSpec]], config: dict[str, Any]
+) -> tuple[list[list[SiteSpec]], dict[str, list[int] | None], str]:
+    initialized = _initialize_featurizers({("single",): groups}, config)[("single",)]
+    return _run_training_loop(
+        pipeline=pipe,
+        groups=initialized,
+        counterfactual_dataset=_labeled_dataset(),  # pyright: ignore[reportArgumentType]
+        intervention_type=config["intervention_type"],
+        config=config,
+        checker=_checker,
+    )
 
-        # Track loss values - start low then increase to trigger early stopping
-        loss_call_count = [0]
 
-        def increasing_loss(*args, **kwargs):
-            loss_call_count[0] += 1
-            # Return increasing loss to trigger early stopping
-            loss_value = 0.5 + (loss_call_count[0] * 0.1)
+class TestTrainingLoopRuns:
+    pytestmark = pytest.mark.property
+
+    def test_initialize_featurizers_is_functional(self, pipe: LMPipeline) -> None:
+        """Initialization returns new specs; the caller's specs are untouched
+        (the ``set_featurizer`` mutation is gone — WU4)."""
+        groups = _groups()
+        config = _config(intervention_type="interchange")
+        initialized = _initialize_featurizers({("single",): groups}, config)
+        original = groups[0][0]
+        new = initialized[("single",)][0][0]
+        assert original.fsite.featurizer.id == "null"  # untouched
+        assert new.fsite.featurizer.id == f"DAS_{_KEY}"
+        assert new.key == original.key
+
+    def test_das_training_moves_the_rotation(self, pipe: LMPipeline) -> None:
+        config = _config(intervention_type="interchange")
+        groups = _initialize_featurizers({("single",): _groups()}, config)[("single",)]
+        spec = groups[0][0]
+        before = spec.fsite.featurizer.featurizer.rotate.weight.detach().clone()  # type: ignore[attr-defined]
+
+        trained_groups, _indices, summary = _run_training_loop(
+            pipeline=pipe,
+            groups=groups,
+            counterfactual_dataset=_labeled_dataset(),  # pyright: ignore[reportArgumentType]
+            intervention_type="interchange",
+            config=config,
+            checker=_checker,
+        )
+
+        after = spec.fsite.featurizer.featurizer.rotate.weight.detach()  # type: ignore[attr-defined]
+        assert isinstance(summary, str) and "Trained intervention" in summary
+        assert not torch.allclose(before, after), "rotation never received a step"
+        # DAS returns the (shared-featurizer) specs unchanged in shape.
+        assert [[s.key for s in g] for g in trained_groups] == [[_KEY]]
+
+    def test_dbm_training_returns_per_feature_readout(self, pipe: LMPipeline) -> None:
+        config = _config(
+            intervention_type="mask", featurizer_kwargs={"tie_masks": False}
+        )
+        trained_groups, feature_indices, _ = _train(pipe, _groups(), config)
+        indices = feature_indices[_KEY]
+        # Untied hard-threshold readout: an explicit (possibly empty) index list.
+        assert isinstance(indices, list)
+        assert all(0 <= i < _HIDDEN for i in indices)
+        if indices:
+            # Trained spec carries the selection functionally.
+            assert trained_groups[0][0].fsite.feature_ids == tuple(indices)
+        else:
+            # All-off mask: the spec is dropped (no-op by omission) — an empty
+            # selection is not constructible as a spec.
+            assert trained_groups[0] == []
+
+    def test_dbm_tied_readout_is_all_or_nothing(self, pipe: LMPipeline) -> None:
+        config = _config(
+            intervention_type="mask", featurizer_kwargs={"tie_masks": True}
+        )
+        trained_groups, feature_indices, _ = _train(pipe, _groups(), config)
+        indices = feature_indices[_KEY]
+        # Tied gate keeps the legacy convention: None (= all features) or [].
+        assert indices is None or indices == []
+        if indices is None:
+            assert trained_groups[0][0].fsite.feature_ids is None
+        else:
+            assert trained_groups[0] == []  # all-off → dropped edit
+
+
+class TestOrchestration:
+    """Scripted-boundary pins: ``traced_label_loss`` is patched at the module
+    seam so the loop's control flow is observable without real forwards (the
+    raw-source collection still runs the real tiny model)."""
+
+    pytestmark = pytest.mark.unit
+
+    def _scripted(self, losses: list[float]):
+        calls = {"n": 0}
+
+        def fake_traced_label_loss(model, inputs, label_ids, edits, pad_token_id):
+            value = losses[min(calls["n"], len(losses) - 1)]
+            calls["n"] += 1
             return (
-                torch.tensor(loss_value, requires_grad=True),
-                {"accuracy": 0.5},
-                {},
+                torch.tensor(value, requires_grad=True),
+                label_ids.detach().cpu(),
             )
 
-        mock_scheduler = MagicMock()
-        mock_scheduler.get_last_lr.return_value = [0.001]
-        mock_scheduler._step_count = 0
+        return calls, fake_traced_label_loss
 
-        with (
-            patch(
-                "causalab.methods.trained_subspace.train.prepare_intervenable_model",
-                return_value=mock_intervenable_model,
-            ),
-            patch("causalab.methods.trained_subspace.train.delete_intervenable_model"),
-            patch("causalab.methods.trained_subspace.train.tqdm", MockTqdm),
-            patch("torch.optim.AdamW", return_value=MagicMock()),
-            patch(
-                "causalab.methods.trained_subspace.train.transformers.get_scheduler",
-                return_value=mock_scheduler,
-            ),
+    def test_early_stopping_counts_epochs_without_improvement(
+        self, pipe: LMPipeline
+    ) -> None:
+        # 1 batch/epoch; losses strictly increase, so with patience=1 the loop
+        # must stop after epoch 2 (one epoch without improvement).
+        calls, fake = self._scripted([0.5, 0.6, 0.7, 0.8, 0.9])
+        config = _config(
+            intervention_type="interchange",
+            train_batch_size=4,
+            training_epoch=10,
+            patience=1,
+        )
+        with patch(
+            "causalab.methods.trained_subspace.train.traced_label_loss",
+            side_effect=fake,
         ):
-            train_interventions(
-                pipeline=mock_tiny_lm,
-                interchange_target=interchange_target,
-                counterfactual_dataset=mock_counterfactual_dataset,
-                intervention_type="interchange",
-                config=mock_config,
-                loss_and_metric_fn=increasing_loss,
-            )
+            _train(pipe, _groups(), config)
+        assert calls["n"] == 2, "early stopping should end training after 2 epochs"
 
-            # Verify early stopping occurred by checking loss was called fewer times
-            # than full training (10 epochs * 1 batch = 10 calls without early stopping)
-            # With patience=1 and increasing loss, should stop after 2 epochs
-            assert loss_call_count[0] < 10, "Early stopping should have triggered"
-            assert loss_call_count[0] == 2, "Should stop after 2 epochs with patience=1"
-
-    def test_custom_loss_function(
-        self,
-        mock_tiny_lm,
-        interchange_target,
-        mock_counterfactual_dataset,
-        mock_intervenable_model,
-        mock_config,
-    ):
-        """Test using a custom loss function."""
-        # Track calls to custom loss function
-        custom_loss_called = [0]
-
-        def custom_loss_fn(
-            pipeline: MagicMock,
-            model: MagicMock,
-            batch: dict[str, list[str]],
-            target: InterchangeTarget,
-            source_pipeline: MagicMock | None = None,
-            source_intervenable_model: MagicMock | None = None,
-        ) -> tuple[torch.Tensor, dict[str, float], dict[str, str]]:
-            custom_loss_called[0] += 1
-            return (
-                torch.tensor(0.3, requires_grad=True),
-                {"custom_metric": 0.9},
-                {"custom_info": "test"},
-            )
-
-        mock_scheduler = MagicMock()
-        mock_scheduler.get_last_lr.return_value = [0.001]
-        mock_scheduler._step_count = 0
-
+    def test_memory_cleanup_fires_per_frequency(self, pipe: LMPipeline) -> None:
+        # is_available must read True for the cleanup branch, which would
+        # poison every real CUDA-checking path on a CPU box (nnsight traces,
+        # AdamW's graph-capture probe) — so everything that computes is
+        # scripted out at its seam and only the loop's control flow runs.
+        calls, fake = self._scripted([0.5])
+        config = _config(
+            intervention_type="interchange",
+            train_batch_size=4,
+            training_epoch=3,
+            memory_cleanup_freq=1,
+        )
+        # Initialize first: the functional initializer returns NEW specs, and
+        # the scripted raw-source dict must key on the ids the loop will see.
+        groups = _initialize_featurizers({("single",): _groups()}, config)[("single",)]
+        raw = {
+            id(spec): torch.zeros(4, 1, _HIDDEN) for group in groups for spec in group
+        }
         with (
             patch(
-                "causalab.methods.trained_subspace.train.prepare_intervenable_model",
-                return_value=mock_intervenable_model,
+                "causalab.methods.trained_subspace.train.traced_label_loss",
+                side_effect=fake,
             ),
-            patch("causalab.methods.trained_subspace.train.delete_intervenable_model"),
-            patch("causalab.methods.trained_subspace.train.tqdm", MockTqdm),
+            patch(
+                "causalab.methods.trained_subspace.train._collect_raw_sources",
+                return_value=raw,
+            ),
             patch("torch.optim.AdamW", return_value=MagicMock()),
             patch(
                 "causalab.methods.trained_subspace.train.transformers.get_scheduler",
-                return_value=mock_scheduler,
-            ),
-        ):
-            train_interventions(
-                pipeline=mock_tiny_lm,
-                interchange_target=interchange_target,
-                counterfactual_dataset=mock_counterfactual_dataset,
-                intervention_type="interchange",
-                config=mock_config,
-                loss_and_metric_fn=custom_loss_fn,
-            )
-
-            # Verify custom loss was called (epochs * batches = 2 * 1)
-            assert custom_loss_called[0] == 2
-
-    def test_memory_cleanup(
-        self,
-        mock_tiny_lm,
-        interchange_target,
-        mock_counterfactual_dataset,
-        mock_intervenable_model,
-        mock_loss_metric_fn,
-        mock_config,
-    ):
-        """Test memory cleanup during training."""
-        # Set memory cleanup frequency
-        mock_config["memory_cleanup_freq"] = 1
-
-        mock_scheduler = MagicMock()
-        mock_scheduler.get_last_lr.return_value = [0.001]
-        mock_scheduler._step_count = 0
-
-        with (
-            patch(
-                "causalab.methods.trained_subspace.train.prepare_intervenable_model",
-                return_value=mock_intervenable_model,
-            ),
-            patch("causalab.methods.trained_subspace.train.delete_intervenable_model"),
-            patch("causalab.methods.trained_subspace.train.tqdm", MockTqdm),
-            patch("torch.optim.AdamW", return_value=MagicMock()),
-            patch(
-                "causalab.methods.trained_subspace.train.transformers.get_scheduler",
-                return_value=mock_scheduler,
+                return_value=MagicMock(),
             ),
             patch("torch.cuda.is_available", return_value=True),
             patch("torch.cuda.empty_cache") as mock_empty_cache,
         ):
-            train_interventions(
-                pipeline=mock_tiny_lm,
-                interchange_target=interchange_target,
-                counterfactual_dataset=mock_counterfactual_dataset,
+            _run_training_loop(
+                pipeline=pipe,
+                groups=groups,
+                counterfactual_dataset=_labeled_dataset(),  # pyright: ignore[reportArgumentType]
                 intervention_type="interchange",
-                config=mock_config,
-                loss_and_metric_fn=mock_loss_metric_fn,
+                config=config,
+                checker=_checker,
             )
-
-            # Verify empty_cache was called (at least once per epoch for step 0)
-            assert mock_empty_cache.call_count >= 2
-
-
-# Run tests when file is executed directly
-if __name__ == "__main__":
-    pytest.main(["-xvs", __file__])
+        # One cleanup per epoch (1 batch/epoch, freq=1).
+        assert mock_empty_cache.call_count >= 3

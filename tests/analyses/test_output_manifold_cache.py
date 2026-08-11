@@ -314,7 +314,7 @@ class TestBuildBeliefArtifactsRefitOnly:
         monkeypatch.setattr(om_main, "resolve_task", lambda **kw: (task, None))
         monkeypatch.setattr(
             om_main,
-            "generate_datasets",
+            "prepare_datasets",
             lambda *a, **kw: ([{} for _ in range(n)], []),
         )
 

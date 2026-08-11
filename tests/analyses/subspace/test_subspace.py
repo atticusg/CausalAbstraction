@@ -6,7 +6,8 @@ by the smoke tier's function-level contract:
 * ``find_pca_subspace`` — the smoke chain (``configs/smoke/weekdays_subspace.yaml``)
   runs the PCA path end-to-end through the *runner* and asserts only that
   ``subspace/pca_k8/result/metadata.json`` exists. These tests pin the
-  *function's* contract directly: output shapes, the featurizer side-effect,
+  *function's* contract directly: output shapes, the functional featurizer
+  attach (the returned ``spec`` carries it; the input spec is unchanged),
   the rotation/feature artifacts it writes, and an equivalence check against
   a manual SVD reference (catches a transposed rotation or a dropped
   centering step, which the existence-only smoke run cannot).
@@ -41,8 +42,8 @@ pytestmark = pytest.mark.property
 TINY_MODEL = "hf-internal-testing/tiny-random-gpt2"
 
 
-def _build_last_token_target(pipeline):
-    from causalab.neural.activations.targets import build_residual_stream_targets
+def _build_last_token_sites(pipeline):
+    from causalab.neural.activations.site_grids import build_residual_stream_sites
     from causalab.neural.token_positions import TokenPosition, get_last_token_index
 
     last_pos = TokenPosition(
@@ -50,7 +51,7 @@ def _build_last_token_target(pipeline):
         pipeline=pipeline,
         id="last",
     )
-    targets = build_residual_stream_targets(
+    targets = build_residual_stream_sites(
         pipeline=pipeline,
         layers=[2],
         token_positions=[last_pos],
@@ -85,20 +86,20 @@ def _setup():
     causal_model = create_causal_model(gw_config)
     dataset = _make_dataset(causal_model, n=30)
     pipeline = LMPipeline(TINY_MODEL, max_new_tokens=1)
-    target = _build_last_token_target(pipeline)
-    return causal_model, dataset, pipeline, target
+    sites = _build_last_token_sites(pipeline)
+    return causal_model, dataset, pipeline, sites
 
 
 class TestFindPcaSubspace:
     def test_returns_features_and_rotation(self):
         from causalab.analyses.subspace import find_pca_subspace
 
-        causal_model, dataset, pipeline, target = _setup()  # pyright: ignore[reportUnusedVariable]
+        causal_model, dataset, pipeline, sites = _setup()  # pyright: ignore[reportUnusedVariable]
         k = 4
 
         with tempfile.TemporaryDirectory() as tmpdir:
             result = find_pca_subspace(
-                target,
+                sites,
                 dataset,
                 pipeline,
                 k,
@@ -121,17 +122,20 @@ class TestFindPcaSubspace:
                 os.path.join(tmpdir, "features", "training_features.safetensors")
             )
 
-    def test_sets_featurizer_on_target(self):
+    def test_returns_spec_with_featurizer_functionally(self):
         from causalab.analyses.subspace import find_pca_subspace
 
-        causal_model, dataset, pipeline, target = _setup()  # pyright: ignore[reportUnusedVariable]
-        unit = target.flatten()[0]
-        assert unit.featurizer is None or unit.featurizer.id != "PCA"
+        causal_model, dataset, pipeline, sites = _setup()  # pyright: ignore[reportUnusedVariable]
+        input_spec = sites[0][0]
+        assert input_spec.fsite.featurizer.id != "PCA"
 
-        find_pca_subspace(target, dataset, pipeline, 4, batch_size=8)
+        result = find_pca_subspace(sites, dataset, pipeline, 4, batch_size=8)
 
-        assert unit.featurizer is not None
-        assert unit.featurizer.id == "PCA"
+        # Functional attach: the RETURNED spec carries the PCA featurizer;
+        # the caller's input spec is a frozen value and stays unchanged.
+        assert result["spec"].fsite.featurizer.id == "PCA"
+        assert input_spec.fsite.featurizer.id != "PCA"
+        assert sites[0][0] is input_spec
 
     def test_matches_old_pipeline_pca(self):
         """PCA features match what the old fitting_pipeline produced."""
@@ -139,27 +143,27 @@ class TestFindPcaSubspace:
         from causalab.neural.activations.collect import collect_features
         from causalab.methods.pca import compute_svd
 
-        causal_model, dataset, pipeline, target = _setup()  # pyright: ignore[reportUnusedVariable]
-        unit = target.flatten()[0]
+        causal_model, dataset, pipeline, sites = _setup()  # pyright: ignore[reportUnusedVariable]
+        spec = sites[0][0]
         k = 4
 
         # Manual PCA (old approach)
         raw_dict = collect_features(
             dataset=dataset,
             pipeline=pipeline,
-            model_units=[unit],
+            sites=[spec],
             batch_size=8,
         )
         # collect_features returns dict when collect_output_logits=False (default)
         svd = compute_svd(raw_dict, n_components=k, preprocess="center")  # pyright: ignore[reportArgumentType]
-        manual_rotation = svd[unit.id]["rotation"]
+        manual_rotation = svd[spec.key]["rotation"]
         manual_features = (
-            raw_dict[unit.id].detach().float() @ manual_rotation.float()  # pyright: ignore[reportCallIssue, reportArgumentType]
+            raw_dict[spec.key].detach().float() @ manual_rotation.float()  # pyright: ignore[reportCallIssue, reportArgumentType]
         ).detach()
 
-        # Fresh target for subspace function
-        target2 = _build_last_token_target(pipeline)
-        result = find_pca_subspace(target2, dataset, pipeline, k, batch_size=8)
+        # Fresh sites for the subspace function
+        sites2 = _build_last_token_sites(pipeline)
+        result = find_pca_subspace(sites2, dataset, pipeline, k, batch_size=8)
 
         assert torch.allclose(result["rotation"], manual_rotation, atol=1e-5)
         assert torch.allclose(result["features"], manual_features, atol=1e-5)
@@ -169,7 +173,7 @@ class TestFindDasSubspace:
     def test_returns_features_and_das_result(self):
         from causalab.analyses.subspace import find_das_subspace
 
-        causal_model, dataset, pipeline, target = _setup()
+        causal_model, dataset, pipeline, sites = _setup()
 
         def metric(neural_output, causal_output):
             neural_str = neural_output["string"].strip().lower()
@@ -180,7 +184,7 @@ class TestFindDasSubspace:
         k = 4
         with tempfile.TemporaryDirectory() as tmpdir:
             result = find_das_subspace(
-                target,
+                sites,
                 dataset,
                 dataset,
                 pipeline,

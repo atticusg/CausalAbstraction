@@ -4,8 +4,9 @@
 > participate in the smoke + golden tiers (see docs/TESTS.md "Coverage-oriented
 > runners"). The shipped runner is **not scientifically meaningful** —
 > small `n_train` / `n_test`, single template, smallest production model.
-> The legacy `demo.ipynb` (against `gpt2`) is preserved as a historical
-> reference for attention-head-level IOI analyses.
+> The pyvene-era `demo.ipynb` (against `gpt2`) was removed in the #491
+> deletion sweep (PR #516) — it had been unrunnable since its imports were
+> retired; it lives in git history.
 
 ## Task
 
@@ -67,4 +68,8 @@ but available for ad-hoc work).
 | `counterfactuals.py` | `generate_dataset`, `flip_name_C`, `random_counterfactual` |
 | `token_positions.py` | `create_token_positions` (declarative-spec based) |
 | `names.json`, `objects.json`, `places.json`, `templates.json` | Domain vocab |
-| `demo.ipynb` | Historical end-to-end walkthrough on `gpt2`. May reference older API surface. |
+
+The pyvene-era `demo.ipynb` (end-to-end walkthrough on `gpt2`) was removed in
+the #491 deletion sweep (PR #516); it targeted the retired API and had been
+unrunnable since its imports were retired — recover it from git history if
+needed.

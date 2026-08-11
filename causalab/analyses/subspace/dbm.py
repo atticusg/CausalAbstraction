@@ -15,17 +15,17 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable, cast
+from typing import Any, Callable, Sequence, cast
 
 from causalab.causal.causal_model import CausalModel
-from causalab.neural.units import InterchangeTarget
+from causalab.neural.specs import SiteSpec
 from causalab.neural.pipeline import LMPipeline
 
 logger = logging.getLogger(__name__)
 
 
 def find_dbm_subspace(
-    target: InterchangeTarget,
+    sites: Sequence[Sequence[SiteSpec]],
     train_dataset: list,
     test_dataset: list,
     pipeline: LMPipeline,
@@ -40,7 +40,7 @@ def find_dbm_subspace(
     """Train DBM masks to identify which features (or units) encode the variable.
 
     Args:
-        target: Interchange target.
+        sites: Nested spec groups (a grid cell value).
         train_dataset: Training counterfactual examples.
         test_dataset: Test counterfactual examples.
         pipeline: LM pipeline.
@@ -95,7 +95,7 @@ def find_dbm_subspace(
         raise ValueError("`metric` is required for find_dbm_subspace")
     result = train_interventions(
         causal_model=causal_model,
-        interchange_targets={("single",): target},
+        grid={("single",): sites},
         train_dataset=train_dataset,
         test_dataset=test_dataset,
         pipeline=pipeline,
@@ -110,22 +110,33 @@ def find_dbm_subspace(
     test_score = single_result["test_score"]
     feature_indices = single_result.get("feature_indices", {})
     n_features_by_unit = {
-        unit_id: (len(indices) if indices is not None else 0)
-        for unit_id, indices in feature_indices.items()
+        key: (len(indices) if indices is not None else 0)
+        for key, indices in feature_indices.items()
     }
 
     if output_dir:
-        n_features_for_plot = {}
-        for unit in target.flatten():
-            if unit.featurizer.n_features is not None:
-                n_features_for_plot[unit.id] = unit.featurizer.n_features
+        # Plot axes come from the trained specs' structural records (never
+        # from parsing the opaque spec keys); n_features from each spec's
+        # trained featurizer, mirroring the legacy per-unit gate.
+        from causalab.analyses.subspace._trained import trained_specs
+        from causalab.io.plots.grid_cells import cells_from_site_grid
+
+        trained = trained_specs(single_result)
+        n_features_for_plot = {
+            spec.key: spec.fsite.featurizer.n_features
+            for spec in trained
+            if spec.fsite.featurizer.n_features is not None
+        }
         if n_features_for_plot:
+            component_type, cells = cells_from_site_grid(
+                {("single",): [trained]}, feature_indices, n_features_for_plot
+            )
             heatmap_dir = os.path.join(output_dir, "heatmaps")
             os.makedirs(heatmap_dir, exist_ok=True)
             plot_feature_counts(
-                feature_indices=feature_indices,
+                component_type,
+                cells,
                 scores=float(test_score),
-                n_features=n_features_for_plot,
                 title=f"DBM feature counts (tie_masks={tie_masks})",
                 save_path=os.path.join(
                     heatmap_dir, f"raw_output_features.{figure_format}"

@@ -21,12 +21,12 @@ from __future__ import annotations
 import pytest
 import torch
 
-from causalab.neural.LM_units import ResidualStream
+from causalab.neural.featurized_site import FeaturizedSite
 from causalab.neural.pipeline import LMPipeline
+from causalab.neural.site import Site
+from causalab.neural.specs import SiteSpec
 from causalab.neural.token_positions import TokenPosition
-from causalab.neural.units import InterchangeTarget
-from causalab.neural.activations.intervenable_model import prepare_intervenable_model
-from causalab.neural.activations.interpolate import batched_interpolation_intervention
+from causalab.neural.activations.interpolate import run_interpolation_interventions
 
 from tests.neural.activations.hook_oracle import (
     capture_residual,
@@ -47,34 +47,33 @@ def _linear_interp(
     return (1 - alpha) * f_base + alpha * f_src
 
 
-def _single_pos_unit(pipeline: LMPipeline) -> InterchangeTarget:
-    """A single-token ``ResidualStream`` unit at ``(_LAYER, _POS)``, identity
+def _single_pos_groups(pipeline: LMPipeline) -> list[list[SiteSpec]]:
+    """A single-token residual-stream site at ``(_LAYER, _POS)``, identity
     featurizer — so feature space equals activation space."""
     hidden = pipeline.model.config.hidden_size
     tp = TokenPosition(lambda _x: [_POS], pipeline, id="pos1")
-    unit = ResidualStream(
-        layer=_LAYER, token_indices=tp, target_output=True, shape=(hidden,)
+    site = SiteSpec(
+        fsite=FeaturizedSite(Site("block_output", _LAYER)),
+        positions=tp,
+        key=f"residual.L{_LAYER}.pos1",
+        width=hidden,
     )
-    return InterchangeTarget([[unit]])
+    return [[site]]
 
 
 def _run(pipeline: LMPipeline, fn, params: dict) -> torch.Tensor:
     """Run causalab's interpolation intervention on one example; return the
     first example's next-token logits ``(1, vocab)``."""
-    target = _single_pos_unit(pipeline)
-    model = prepare_intervenable_model(
-        pipeline, target, intervention_type="interpolation"
-    )
-    out = batched_interpolation_intervention(
+    out = run_interpolation_interventions(
         pipeline,
-        model,
         [cf_example(_BASE, _SOURCE)],
-        target,
+        _single_pos_groups(pipeline),
         fn=fn,
         params=params,
         output_scores=True,
     )
-    return out["scores"][0]
+    # Flat GenerationResult contract: first generated step -> (1, vocab).
+    return out.scores[0]
 
 
 class TestInterpolationHookOracle:
@@ -144,20 +143,7 @@ class TestInterpolationHookOracle:
             oracle_pipeline, base_inputs, _LAYER, [_POS], patched
         )
 
-        target = _single_pos_unit(oracle_pipeline)
-        model = prepare_intervenable_model(
-            oracle_pipeline, target, intervention_type="interpolation"
-        )
-        out = batched_interpolation_intervention(
-            oracle_pipeline,
-            model,
-            [cf_example(_BASE, _SOURCE)],
-            target,
-            fn=feature_max,
-            params={},
-            output_scores=True,
-        )
-        causalab = out["scores"][0]
+        causalab = _run(oracle_pipeline, feature_max, {})
         torch.testing.assert_close(causalab, manual, atol=1e-4, rtol=1e-3)
 
     # -- helper ----------------------------------------------------------- #

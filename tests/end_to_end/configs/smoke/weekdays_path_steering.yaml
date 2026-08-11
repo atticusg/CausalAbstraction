@@ -29,6 +29,7 @@ locate:
   batch_size: 8
 
 subspace:
+  filter_correct: false  # tiny-random solves ~nothing; correct-only filtering would empty the dataset
   k_features: 8
   layers: [1]
   token_positions: [last_token]   # explicit single-cell position (#257)

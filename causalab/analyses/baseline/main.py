@@ -34,7 +34,7 @@ from causalab.methods.metric import (
 )
 from causalab.runner.helpers import (
     _task_config_for_metadata,  # pyright: ignore[reportPrivateUsage]
-    generate_datasets,
+    prepare_datasets,
     get_output_token_ids,
     resolve_task,
 )
@@ -181,7 +181,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     )
 
     # --- Load dataset ---
-    train_dataset, test_dataset = generate_datasets(
+    train_dataset, test_dataset = prepare_datasets(
         task,
         n_train=cfg.task.n_train,
         n_test=cfg.task.n_test,
@@ -189,6 +189,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         balanced=cfg.task.get("balanced", False),
         enumerate_all=cfg.task.enumerate_all,
         resample_variable=cfg.task.get("resample_variable", "all"),
+        filter_correct=False,
     )
 
     # --- Save rendered train/test pairs for downstream inspection ---
@@ -248,7 +249,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             end = min(start + analysis.batch_size, len(train_dataset))
             batch_inputs = [ex["input"] for ex in train_dataset[start:end]]
             result = pipeline.generate(batch_inputs)
-            scores = result["scores"]
+            scores = result.scores or []
             for bi in range(len(batch_inputs)):
                 output_logits.append([s[bi].cpu() for s in scores])
         logger.info(

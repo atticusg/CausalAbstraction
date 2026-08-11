@@ -22,7 +22,7 @@ from causalab.runner.helpers import (
     resolve_task,
     build_targets_for_grid,
     _task_config_for_metadata,
-    generate_datasets,
+    prepare_datasets,
 )
 from causalab.io.pipelines import (
     load_pipeline,
@@ -30,7 +30,7 @@ from causalab.io.pipelines import (
     find_activation_manifold_dirs,
     load_subspace_metadata,
 )
-from causalab.neural.activations.intervenable_model import device_for_layer
+from causalab.neural.pipeline import device_for_layer
 from causalab.io.nested_artifacts import load_nested, save_nested
 from causalab.io.plots.figure_format import resolve_figure_format_from_analysis
 from causalab.io.plots.plot_utils import resolve_task_colormap
@@ -422,7 +422,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         )
 
     # ── Class-level natural distributions (always — needed for Hellinger viz) ──
-    _bm_train_ds, _ = generate_datasets(
+    _bm_train_ds, _ = prepare_datasets(
         task,
         n_train=cfg.task.n_train,
         n_test=cfg.task.n_test,
@@ -430,6 +430,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         balanced=cfg.task.get("balanced", False),
         enumerate_all=cfg.task.enumerate_all,
         resample_variable=cfg.task.get("resample_variable", "all"),
+        filter_correct=False,
     )
     _bm_class_assignments = torch.tensor(
         [task.intervention_value_index(ex) for ex in _bm_train_ds],
@@ -557,7 +558,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         if tv:
             manifold_out = os.path.join(manifold_out, tv)
 
-        from causalab.analyses.activation_manifold.loading import load_featurizer
+        from causalab.analyses.activation_manifold.loading import (
+            apply_loaded_featurizer,
+        )
         from causalab.io.counterfactuals import load_counterfactual_examples
 
         training_features = load_safetensors(
@@ -577,10 +580,11 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             [_tp_name] if _tp_name else None,
         )
         steered_tp = _tp_list[0]
-        interchange_target = next(iter(targets.values()))
+        spec = next(iter(targets.values()))[0][0]
 
-        featurizer = load_featurizer(
-            manifold_out, interchange_target, layer, steered_tp.id
+        # Constructive load: the returned spec carries the composed featurizer
+        spec, featurizer = apply_loaded_featurizer(
+            spec, manifold_out, layer, steered_tp.id
         )
         manifold_obj = featurizer.stages[-1].featurizer.manifold.to(device)
         std_stage = featurizer.stages[-2].featurizer
@@ -628,7 +632,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 _build_linear_path_kd,
             )
             from causalab.methods.steer.collect import collect_grid_distributions
-            from causalab.analyses.subspace import load_subspace_onto_target
+            from causalab.analyses.subspace import load_subspace_onto_spec
 
             def _append_other_bin(distributions: torch.Tensor) -> torch.Tensor:
                 """Append (1 - sum) bin so concept probs form a proper simplex."""
@@ -656,10 +660,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 )
                 with torch.no_grad():
                     geo_probs = collect_grid_distributions(
-                        pipeline=pipeline,
-                        grid_points=geo_grid,
-                        interchange_target=interchange_target,
-                        filtered_samples=pair_samples,
+                        pipeline,
+                        geo_grid,
+                        [[spec]],
+                        pair_samples,
                         var_indices=var_indices,
                         n_base_samples=len(pair_samples),
                         average=False,
@@ -682,8 +686,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             )
 
             # --- Pass 2: PCA featurizer → linear comparison + optimization ---
-            load_subspace_onto_target(
-                interchange_target,
+            # Functional view carrying the bare subspace featurizer; the
+            # composed-manifold `spec` above is untouched.
+            pca_spec = load_subspace_onto_spec(
+                spec,
                 subspace_out,
                 ss_meta.get("method", "pca"),
                 k_features,
@@ -711,10 +717,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 )
                 with torch.no_grad():
                     lin_probs = collect_grid_distributions(
-                        pipeline=pipeline,
-                        grid_points=lin_grid,
-                        interchange_target=interchange_target,
-                        filtered_samples=pair_samples,
+                        pipeline,
+                        lin_grid,
+                        [[pca_spec]],
+                        pair_samples,
                         var_indices=var_indices,
                         n_base_samples=len(pair_samples),
                         average=False,
@@ -731,17 +737,8 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 len(precomputed_comparisons),
             )
 
-            # FeatureInterpolateIntervention preserves base_err — needed for differentiable optim.
-            from causalab.neural.activations.intervenable_model import (
-                prepare_intervenable_model,
-                delete_intervenable_model,
-            )
-
-            intervenable_model = prepare_intervenable_model(
-                pipeline, interchange_target, intervention_type="interpolation"
-            )
-            intervenable_model.disable_model_gradients()
-            intervenable_model.eval()
+            # Differentiable optimization runs as traced edited forwards on the
+            # nnsight backbone (SH2, #411); base params are frozen at load.
 
             if emb_n_steps != belief_n_steps:
                 emb_t_values = torch.linspace(0, 1, emb_n_steps)
@@ -782,13 +779,12 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 optimizer_cfg_for_label = OmegaConf.create(_emb_dict)
 
                 results = run_pair_optimization(
-                    selected_pair_indices=selected_pair_indices,
-                    pair_groups=pair_groups,
-                    filtered_samples=filtered_samples,
-                    pipeline=pipeline,
-                    intervenable_model=intervenable_model,
-                    interchange_target=interchange_target,
-                    k=k,
+                    selected_pair_indices,
+                    pair_groups,
+                    filtered_samples,
+                    pipeline,
+                    [[pca_spec]],
+                    k,
                     var_indices=var_indices,
                     geodesic_paths=resampled_paths,
                     centroid_k=centroid_k,
@@ -813,8 +809,6 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 if summary is not None:
                     summary_by_kopt[label] = summary
                 results_by_kopt[label] = results
-
-            delete_intervenable_model(intervenable_model)
 
         # Persist metrics + cache. Runs in both branches so replot_only also
         # rewrites path_recapitulation_*.json from cached paths.

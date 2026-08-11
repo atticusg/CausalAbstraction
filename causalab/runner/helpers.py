@@ -547,20 +547,109 @@ def generate_datasets(
     return train, test
 
 
+def prepare_datasets(
+    task: Task,
+    n_train: int,
+    n_test: int,
+    seed: int,
+    *,
+    filter_correct: bool,
+    pipeline: Any = None,
+    metric: Any = None,
+    filter_batch_size: int = 32,
+    deduplicate: bool = True,
+    balanced: bool = False,
+    enumerate_all: bool = False,
+    resample_variable: str = "all",
+    dedup_warn_threshold: float = 0.2,
+) -> tuple[list, list]:
+    """Generate train/test datasets and (optionally) keep only correct pairs.
+
+    Thin neural-aware wrapper over :func:`generate_datasets`. ``generate_datasets``
+    is purely symbolic (no model forward — see :mod:`causalab.runner.task_setup_figure`);
+    this function adds the one thing that needs the model: dropping example pairs the
+    model answers *incorrectly*.
+
+    ``filter_correct`` is **required, with no default** — every analysis must state
+    whether it trains/evaluates on correct-only data. There is deliberately no silent
+    fallback: reusing the symbolic sampling default silently trained a DAS subspace on
+    prompts the model gets wrong, which cannot recover a real subspace. Trained
+    subspaces (DAS/DBM/boundless) and steering want ``filter_correct=True``; symbolic
+    or behavioural passes pass ``filter_correct=False`` explicitly.
+
+    When ``filter_correct=True``, ``pipeline`` and ``metric`` are required: each base
+    and counterfactual prompt is run through the model and only pairs the model answers
+    correctly (per ``metric`` against the causal model's gold output) are kept — see
+    :func:`causalab.methods.filter.filter_dataset`. ``metric`` is the task's own
+    correctness checker (pass ``task.checker``).
+
+    Raises ``ValueError`` if ``filter_correct=True`` without a pipeline/metric, or if
+    filtering removes every training example (the model answers none of the sampled
+    prompts correctly — widen the task or lower ``number_range``, don't train on noise).
+    """
+    train, test = generate_datasets(
+        task,
+        n_train=n_train,
+        n_test=n_test,
+        seed=seed,
+        deduplicate=deduplicate,
+        balanced=balanced,
+        enumerate_all=enumerate_all,
+        resample_variable=resample_variable,
+        dedup_warn_threshold=dedup_warn_threshold,
+    )
+    if not filter_correct:
+        return train, test
+
+    if pipeline is None or metric is None:
+        raise ValueError(
+            "prepare_datasets(filter_correct=True) requires `pipeline` and `metric` "
+            "to run prompts through the model and keep only correctly-answered pairs "
+            "(pass task.checker as `metric`)."
+        )
+
+    from causalab.methods.filter import filter_dataset
+
+    n_train_pre, n_test_pre = len(train), len(test)
+    train = filter_dataset(
+        train, pipeline, task.causal_model, metric, batch_size=filter_batch_size
+    )
+    if test:
+        test = filter_dataset(
+            test, pipeline, task.causal_model, metric, batch_size=filter_batch_size
+        )
+    logger.info(
+        "Correct-only filter: train %d -> %d, test %d -> %d",
+        n_train_pre,
+        len(train),
+        n_test_pre,
+        len(test),
+    )
+    if not train:
+        raise ValueError(
+            "Correct-only filtering removed every training example: the model answers "
+            "none of the sampled prompts correctly. Use a task/model the model can "
+            "solve (e.g. lower number_range) or pass filter_correct=False."
+        )
+    return train, test
+
+
 def build_targets_for_grid(
     pipeline,
     task: Task,
     layers: list[int],
     position_names: list[str] | None = None,
 ):
-    """Build residual stream interchange targets for a (layer × token_position) grid.
+    """Build a residual-stream spec grid for a (layer × token_position) grid.
 
     ``position_names=None`` uses all positions declared by the task; otherwise the
     names are looked up in ``task.create_token_positions(pipeline)``. Returns the
-    targets dict (keys ``(layer, pos_id)``) and the ordered list of TokenPositions
-    that the caller can use for plotting axes.
+    spec grid (keys ``(layer, pos_id)``, values single-group nested
+    ``[[SiteSpec]]`` lists — see
+    :mod:`causalab.neural.activations.site_grids`) and the ordered list of
+    TokenPositions that the caller can use for plotting axes.
     """
-    from causalab.neural.activations.targets import build_residual_stream_targets
+    from causalab.neural.activations.site_grids import build_residual_stream_sites
 
     token_position_lookup = task.create_token_positions(pipeline)
     if position_names is None:
@@ -574,7 +663,7 @@ def build_targets_for_grid(
             )
         token_positions = [token_position_lookup[n] for n in position_names]
 
-    targets = build_residual_stream_targets(
+    targets = build_residual_stream_sites(
         pipeline=pipeline,
         layers=layers,
         token_positions=token_positions,
@@ -584,7 +673,7 @@ def build_targets_for_grid(
 
 
 def build_targets_for_layers(pipeline, task: Task, layers: list[int]):
-    """Back-compat wrapper: single-position targets keyed (layer, pos_id).
+    """Back-compat wrapper: single-position spec grid keyed (layer, pos_id).
 
     Picks the first token position declared by the task. Prefer
     :func:`build_targets_for_grid` for new code.

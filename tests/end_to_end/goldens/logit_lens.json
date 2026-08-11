@@ -1,0 +1,61 @@
+{
+  "deterministic": false,
+  "model": "chat-coherent",
+  "runner": "golden/logit_lens",
+  "seed": 0,
+  "tolerance": {
+    "default": 1e-05
+  },
+  "values": {
+    "logit_lens.target_track.0__last.answer_mass.first": 1.3374773516261484e-05,
+    "logit_lens.target_track.0__last.answer_mass.last": 1.23317695397418e-05,
+    "logit_lens.target_track.0__last.answer_mass.mean": 1.3159655281924643e-05,
+    "logit_lens.target_track.0__last.answer_mass.shape": [
+      49
+    ],
+    "logit_lens.target_track.0__last.answer_mass.std": 7.052059913803532e-07,
+    "logit_lens.target_track.0__last.sha256": "37be84f973b801de6f92175b078c335ad87978bb05294ee3ecdae588438c850b",
+    "logit_lens.target_track.1__last.answer_mass.first": 2.1926607587374747e-05,
+    "logit_lens.target_track.1__last.answer_mass.last": 1.9287097529741004e-05,
+    "logit_lens.target_track.1__last.answer_mass.mean": 1.969637924048584e-05,
+    "logit_lens.target_track.1__last.answer_mass.shape": [
+      49
+    ],
+    "logit_lens.target_track.1__last.answer_mass.std": 1.386927351632039e-06,
+    "logit_lens.target_track.1__last.sha256": "e16f44afe4f1ce1fdb33c7afc1f2f016326af15638c11321755b4e4c77b3add6",
+    "logit_lens.top_k.0__last.probs.first": 0.016213348135352135,
+    "logit_lens.top_k.0__last.probs.last": 0.010382558219134808,
+    "logit_lens.top_k.0__last.probs.mean": 0.012755559757351875,
+    "logit_lens.top_k.0__last.probs.shape": [
+      49,
+      5
+    ],
+    "logit_lens.top_k.0__last.probs.std": 0.0029604199808090925,
+    "logit_lens.top_k.0__last.sha256": "464828380d66c7d73cb1e1a24a7bec0cb06492aa6eb53cf06b44f5ce4770efd8",
+    "logit_lens.top_k.0__last.token_ids.first": 66302.0,
+    "logit_lens.top_k.0__last.token_ids.last": 2491.0,
+    "logit_lens.top_k.0__last.token_ids.mean": 66716.9765625,
+    "logit_lens.top_k.0__last.token_ids.shape": [
+      49,
+      5
+    ],
+    "logit_lens.top_k.0__last.token_ids.std": 40673.9140625,
+    "logit_lens.top_k.1__last.probs.first": 0.023700781166553497,
+    "logit_lens.top_k.1__last.probs.last": 0.009763364680111408,
+    "logit_lens.top_k.1__last.probs.mean": 0.014453078620135784,
+    "logit_lens.top_k.1__last.probs.shape": [
+      49,
+      5
+    ],
+    "logit_lens.top_k.1__last.probs.std": 0.0049638208001852036,
+    "logit_lens.top_k.1__last.sha256": "3b6e56010df6c9b4f5d4e7c1ec2cef276d32c88e96f6fc6c818b444483b279a8",
+    "logit_lens.top_k.1__last.token_ids.first": 53015.0,
+    "logit_lens.top_k.1__last.token_ids.last": 142212.0,
+    "logit_lens.top_k.1__last.token_ids.mean": 92620.65625,
+    "logit_lens.top_k.1__last.token_ids.shape": [
+      49,
+      5
+    ],
+    "logit_lens.top_k.1__last.token_ids.std": 37209.16796875
+  }
+}

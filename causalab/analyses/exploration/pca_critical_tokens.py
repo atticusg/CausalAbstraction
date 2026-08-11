@@ -6,7 +6,7 @@ projection of all inputs onto the top-``n_components`` principal components.
 Those saved projections (plus per-PC explained variance) are everything the
 report and web app need to draw, per critical token at each layer, a scatter in
 any chosen pair/triple of PCs — colored by whatever per-input label schemes the
-caller supplies. Reuses ``build_residual_stream_targets`` + ``collect_features``
+caller supplies. Reuses ``build_residual_stream_sites`` + ``collect_features``
 + ``compute_svd`` directly.
 
 Memory is bounded by processing one token at a time (all its layers, then
@@ -43,7 +43,7 @@ from causalab.io.artifacts import (
 )
 from causalab.methods.pca import compute_svd
 from causalab.neural.activations.collect import collect_features
-from causalab.neural.activations.targets import build_residual_stream_targets
+from causalab.neural.activations.site_grids import build_residual_stream_sites
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_positions import TokenPosition, get_substring_token_ids
 
@@ -195,7 +195,7 @@ def run(pipeline, acfg: DictConfig, out_dir: str) -> str:
         token = tokens[ti]
         label = token["label"]
         tp = _make_token_position(token, prompts, positions, pipeline)
-        targets = build_residual_stream_targets(
+        targets = build_residual_stream_sites(
             pipeline, layers=layers, token_positions=[tp], mode="one_target_per_unit"
         )
 
@@ -203,16 +203,16 @@ def run(pipeline, acfg: DictConfig, out_dir: str) -> str:
         features_by_unit = collect_features(
             data,
             pipeline,
-            [u for t in targets.values() for u in t.flatten()],
+            [spec for groups in targets.values() for spec in groups[0]],
             batch_size=batch_size,
         )
         assert isinstance(features_by_unit, dict)
 
         safe_label = label.replace("/", "_").replace(" ", "_")
         token_dir = os.path.join(out_dir, safe_label)
-        for (layer, _pos_id), target in targets.items():
-            unit = target.flatten()[0]
-            feats = features_by_unit[unit.id].float()  # (n_inputs, hidden)
+        for (layer, _pos_id), groups in targets.items():
+            spec = groups[0][0]
+            feats = features_by_unit[spec.key].float()  # (n_inputs, hidden)
             svd = compute_svd(
                 {"f": feats}, n_components=n_components, preprocess="center"
             )["f"]

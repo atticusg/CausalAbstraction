@@ -73,7 +73,7 @@ def _generate_correct_examples(
             attempts += 1
             example = sampler()
             pred = pipeline.generate([example])
-            pred_str = pipeline.dump(pred["sequences"]).strip()
+            pred_str = pred.strings[0].strip()
             expected = str(example["raw_output"]).strip()
             # Use the task's own checker (#167) as the match authority, instead
             # of a hardcoded bidirectional-containment heuristic.
@@ -147,7 +147,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         max_new_tokens=cfg.task.max_new_tokens,
         device=cfg.model.device,
         dtype=cfg.model.get("dtype"),
-        eager_attn=cfg.model.get("eager_attn"),
+        # This analysis extracts attention probabilities (output_attentions=True),
+        # which sdpa/flash kernels never materialize — default to eager here even
+        # though the pipeline-wide default is sdpa (SH3, #424).
+        eager_attn=cfg.model.get("eager_attn", True),
         use_chat_template=cfg.model.get("chat_template", False),
         chat_answer_directive=cfg.model.get("chat_answer_directive"),
     )

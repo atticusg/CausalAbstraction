@@ -151,6 +151,8 @@ class TestComputeRefDistsMultiToken:
         call_count = [0]
 
         def mock_generate(inputs, **kwargs):
+            from causalab.neural.pipeline import GenerationResult
+
             bs = len(inputs)
             scores = []
             for step in range(n_steps):
@@ -158,7 +160,11 @@ class TestComputeRefDistsMultiToken:
                 torch.manual_seed(42 + call_count[0] * 100 + step)
                 scores.append(torch.randn(bs, vocab_size))
             call_count[0] += 1
-            return {"scores": scores}
+            return GenerationResult(
+                sequences=torch.zeros((bs, n_steps), dtype=torch.long),
+                strings=[""] * bs,
+                scores=scores,
+            )
 
         pipeline.generate = mock_generate
         return pipeline

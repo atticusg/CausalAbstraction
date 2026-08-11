@@ -13,14 +13,14 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, cast
+from typing import Any, Mapping, cast
 
 import torch
 from omegaconf import DictConfig, OmegaConf
 
 from causalab.runner.helpers import (
     resolve_task,
-    generate_datasets,
+    prepare_datasets,
     build_targets_for_grid,
     resolve_intervention_metric,
     _task_config_for_metadata,  # pyright: ignore[reportPrivateUsage]
@@ -50,12 +50,13 @@ def _build_targets_for_component(
     token_position: str | None,
     heads: list[int] | None,
 ):
-    """Dispatch to the right target builder based on component_type.
+    """Dispatch to the right spec-grid builder based on component_type.
 
-    Returns (targets, axes_meta) where axes_meta records the grid axes used
-    for downstream plotting/metadata. Score heatmaps are residual-stream-only;
-    attention_head and mlp build a single all-units target whose feature-count
-    heatmap is rendered later by ``plot_feature_counts``.
+    Returns (targets, axes_meta) where ``targets`` is a spec grid
+    (:mod:`causalab.neural.activations.site_grids`) and axes_meta records the
+    grid axes used for downstream plotting/metadata. Score heatmaps are
+    residual-stream-only; attention_head and mlp build a single fused grid
+    whose feature-count heatmap is rendered later by ``plot_feature_counts``.
     """
     if component_type == "residual_stream":
         targets, _tp_objs = build_targets_for_grid(
@@ -73,7 +74,7 @@ def _build_targets_for_component(
         return targets, axes_meta
 
     if component_type == "attention_head":
-        from causalab.neural.activations.targets import build_attention_head_targets
+        from causalab.neural.activations.site_grids import build_attention_head_sites
 
         token_position_lookup = task.create_token_positions(pipeline)
         if token_position is None:
@@ -101,7 +102,7 @@ def _build_targets_for_component(
                 )
             heads = list(range(int(num_heads)))
 
-        targets = build_attention_head_targets(
+        targets = build_attention_head_sites(
             pipeline=pipeline,
             layers=layers,
             heads=list(heads),
@@ -117,7 +118,7 @@ def _build_targets_for_component(
         return targets, axes_meta
 
     if component_type == "mlp":
-        from causalab.neural.activations.targets import build_mlp_targets
+        from causalab.neural.activations.site_grids import build_mlp_sites
 
         token_position_lookup = task.create_token_positions(pipeline)
         if token_positions is None:
@@ -131,7 +132,7 @@ def _build_targets_for_component(
                 )
             tp_list = [token_position_lookup[n] for n in token_positions]
 
-        targets = build_mlp_targets(
+        targets = build_mlp_sites(
             pipeline=pipeline,
             layers=layers,
             token_positions=tp_list,
@@ -152,6 +153,7 @@ def _build_targets_for_component(
 
 def _save_feature_count_heatmap(
     train_result: dict,
+    targets,
     output_dir: str,
     title: str,
     figure_format: str,
@@ -159,20 +161,19 @@ def _save_feature_count_heatmap(
 ) -> None:
     """Save the Boundless-DAS feature-count heatmap.
 
-    ``plot_feature_counts`` auto-detects component type from unit ids, so the
-    same call covers residual / attention / mlp. Aggregates feature_indices
-    across all keys in ``results_by_key`` into a single flat unit-id dict and
-    passes the average test score as the displayed accuracy.
+    Aggregates ``feature_indices`` (keyed by opaque ``spec.key``) across all
+    grid cells and joins each key's (component, layer, head/position)
+    structurally from the grid's own specs
+    (:func:`causalab.io.plots.grid_cells.cells_from_site_grid`) — the same
+    call covers residual / attention / mlp. Passes the average test score as
+    the displayed accuracy.
     """
     from causalab.io.plots.feature_masks import plot_feature_counts
+    from causalab.io.plots.grid_cells import cells_from_site_grid
 
     feature_indices: dict = {}
-    n_features_by_unit: dict[str, int] = {}
     for res in train_result["results_by_key"].values():
-        per_unit = res.get("feature_indices", {}) or {}
-        for unit_id, idxs in per_unit.items():
-            feature_indices[unit_id] = idxs
-            n_features_by_unit[unit_id] = n_features
+        feature_indices.update(res.get("feature_indices", {}) or {})
 
     if not feature_indices:
         logger.info("No feature_indices to plot; skipping feature_counts heatmap.")
@@ -186,10 +187,13 @@ def _save_feature_count_heatmap(
     )
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     try:
+        component_type, cells = cells_from_site_grid(
+            targets, feature_indices, n_features
+        )
         plot_feature_counts(
-            feature_indices=feature_indices,
+            component_type,
+            cells,
             scores=float(avg_score),
-            n_features=n_features_by_unit,
             title=title,
             save_path=save_path,
             figure_format=figure_format,
@@ -221,6 +225,7 @@ def _save_grid_results(
     title: str,
     figure_format: str = "png",
     train_scores: dict[tuple, float] | None = None,
+    prescan_block: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Save grid results.json and heatmaps.  Returns the results dict."""
     from causalab.io.plots.score_heatmap import plot_residual_stream_heatmap
@@ -239,6 +244,28 @@ def _save_grid_results(
             f"{layer}|{pos_id}": score for (layer, pos_id), score in scores.items()
         },
     }
+    if prescan_block is not None:
+        # Approx and exact side by side wherever both exist (#456).
+        results_data["prescan"] = {
+            "approx_scores_per_cell": {
+                f"{layer}|{pos_id}": score
+                for (layer, pos_id), score in prescan_block[
+                    "approx_scores_per_cell"
+                ].items()
+            },
+            "survivors": [
+                f"{layer}|{pos_id}" for layer, pos_id in prescan_block["survivors"]
+            ],
+            "top_k": prescan_block["top_k"],
+            "n_examples": prescan_block["n_examples"],
+            "exact_and_approx": {
+                f"{layer}|{pos_id}": pair
+                for (layer, pos_id), pair in prescan_block["exact_and_approx"].items()
+            },
+            "agreement_at_k": prescan_block["agreement_at_k"],
+            "rank_correlation": prescan_block["rank_correlation"],
+            "abs_rank_correlation": prescan_block["abs_rank_correlation"],
+        }
     with open(os.path.join(output_dir, "grid_results.json"), "w") as f:
         json.dump(results_data, f, indent=2)
 
@@ -275,6 +302,28 @@ def _save_grid_results(
             )
         except Exception as e:
             logger.warning("Train heatmap render failed: %s", e)
+
+    if prescan_block is not None and prescan_block["approx_scores_per_cell"]:
+        approx = prescan_block["approx_scores_per_cell"]
+        try:
+            bound = max(abs(v) for v in approx.values()) or 1.0
+            plot_residual_stream_heatmap(
+                scores=approx,
+                layers=layers,
+                token_position_ids=token_position_ids,
+                title=f"{title} — attribution pre-scan (approx)",
+                save_path=path_with_figure_format(
+                    os.path.join(heatmaps_dir, "prescan"),
+                    figure_format,
+                ),
+                figure_format=figure_format,
+                cmap="seismic",
+                vmin=-bound,
+                vmax=bound,
+                cbar_label="approx Δ logit-diff",
+            )
+        except Exception as e:
+            logger.warning("Prescan heatmap render failed: %s", e)
 
     if best_key is not None:
         logger.info(
@@ -409,8 +458,17 @@ def _run_grid(
     component_type: str = "residual_stream",
     heads: list[int] | None = None,
     token_position: str | None = None,
+    prescan: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run a grid scan across the component-appropriate axes."""
+    """Run a grid scan across the component-appropriate axes.
+
+    ``prescan`` (``{"enabled", "top_k", "n_examples"}``) is the optional
+    attribution-patching fail-fast gate (#456) for the trained grids
+    (``das`` / ``dbm`` / ``boundless``, residual stream): a one-backward
+    gradient × Δactivation pre-scan over the training pairs prunes the grid
+    to its top-k cells before any training runs; approximate and exact
+    scores are reported together in ``grid_results.json``.
+    """
     from causalab.analyses.subspace.grid import (
         run_das_grid,
         run_pca_grid,
@@ -432,6 +490,56 @@ def _run_grid(
         heads=list(heads) if heads is not None else None,
     )
     token_position_ids: list[Any] = list(axes_meta.get("token_position_ids", []) or [])
+
+    # Optional attribution-patching fail-fast gate (CAP3, #456): approximate
+    # each cell's interchange effect with one forward+backward per batch and
+    # train only the top-k surviving cells.
+    prescan_cfg = dict(prescan) if prescan is not None else {}
+    prescan_block: dict[str, Any] | None = None
+    if prescan_cfg.get("enabled"):
+        if method not in ("das", "dbm", "boundless"):
+            raise ValueError(
+                "subspace.prescan gates the trained grids (das / dbm / "
+                f"boundless), not method={method!r}. Disable the prescan."
+            )
+        if component_type != "residual_stream":
+            raise ValueError(
+                "subspace.prescan requires component_type: residual_stream — "
+                "non-residual components run as a single joint target, so "
+                "there is no per-cell grid to prune."
+            )
+        from causalab.methods.interchange import (
+            counterfactual_logit_diff_ids,
+            run_attribution_prescan,
+            select_top_k,
+        )
+
+        n_examples = prescan_cfg.get("n_examples")
+        subset = train_dataset if not n_examples else train_dataset[: int(n_examples)]
+        pair_ids = counterfactual_logit_diff_ids(pipeline, subset, task.causal_model)
+        approx_scores = run_attribution_prescan(
+            targets, subset, pipeline, batch_size, pair_ids
+        )
+        top_k = int(prescan_cfg.get("top_k", 10))
+        # Rank by |approx|: the linearization's sign is unreliable at early
+        # layers, but the magnitude separates live cells from dead ones (see
+        # causalab/methods/interchange/attribution.py).
+        survivors = select_top_k(approx_scores, top_k, by_abs=True)
+        logger.info(
+            "Attribution pre-scan: %s trains on %d/%d cells (top_k=%d over %d pairs)",
+            method,
+            len(survivors),
+            len(targets),
+            top_k,
+            len(subset),
+        )
+        targets = {key: targets[key] for key in survivors}
+        prescan_block = {
+            "approx_scores_per_cell": approx_scores,
+            "survivors": survivors,
+            "top_k": top_k,
+            "n_examples": len(subset),
+        }
 
     log_dir = os.path.join(out_dir, "logs")
 
@@ -520,6 +628,28 @@ def _run_grid(
     else:
         raise ValueError(f"Unknown subspace method: {method}")
 
+    if prescan_block is not None:
+        from causalab.methods.interchange import (
+            spearman_rank_correlation,
+            top_k_agreement,
+        )
+
+        approx_scores = prescan_block["approx_scores_per_cell"]
+        prescan_block["exact_and_approx"] = {
+            key: {"approx": approx_scores[key], "exact": exact}
+            for key, exact in test_scores.items()
+        }
+        prescan_block["agreement_at_k"] = top_k_agreement(
+            approx_scores, test_scores, prescan_block["top_k"], by_abs=True
+        )
+        prescan_block["rank_correlation"] = spearman_rank_correlation(
+            approx_scores, test_scores
+        )
+        prescan_block["abs_rank_correlation"] = spearman_rank_correlation(
+            {key: abs(value) for key, value in approx_scores.items()},
+            test_scores,
+        )
+
     if component_type == "residual_stream":
         grid_results_data = _save_grid_results(
             scores=test_scores,
@@ -529,6 +659,7 @@ def _run_grid(
             title=title,
             figure_format=figure_format,
             train_scores=train_scores,
+            prescan_block=prescan_block,
         )
     else:
         # Non-residual components run as one_target_all_units → single-cell
@@ -546,13 +677,14 @@ def _run_grid(
         with open(os.path.join(out_dir, "grid_results.json"), "w") as f:
             json.dump(grid_results_data, f, indent=2)
 
-    # Mask-based methods: save feature-count heatmap (auto-dispatches on
-    # component type via unit ids). For DBM with tie_masks=True this renders
+    # Mask-based methods: save feature-count heatmap (component type detected
+    # structurally from the grid specs). For DBM with tie_masks=True this renders
     # as a binary on/off heatmap per unit; for boundless / DBM with
     # tie_masks=False it shows the per-feature-dim count selected.
     if method in ("dbm", "boundless"):
         _save_feature_count_heatmap(
             train_result=grid_result["train_result"],
+            targets=targets,
             output_dir=out_dir,
             title=f"{method.upper()} feature counts (k={k_features})",
             figure_format=figure_format,
@@ -633,7 +765,7 @@ def _run_grid(
 def _run_best_cell_detail(  # pyright: ignore[reportUnusedFunction]
     cfg: DictConfig,
     method: str,
-    target,
+    sites,
     train_dataset: list,
     test_dataset: list,
     pipeline,
@@ -663,7 +795,7 @@ def _run_best_cell_detail(  # pyright: ignore[reportUnusedFunction]
     try:
         if method == "pca":
             sub = find_pca_subspace(
-                target,
+                sites,
                 train_dataset,
                 pipeline,
                 k_features,
@@ -681,7 +813,7 @@ def _run_best_cell_detail(  # pyright: ignore[reportUnusedFunction]
             }
         elif method == "das":
             sub = find_das_subspace(
-                target,
+                sites,
                 train_dataset,
                 test_dataset,
                 pipeline,
@@ -772,7 +904,7 @@ def _run_single_cell(
                 "(layer, token_position) from locate/ results."
             )
     targets, _tp_list = build_targets_for_grid(pipeline, task, [layer], position_names)
-    target = next(iter(targets.values()))
+    sites = next(iter(targets.values()))
 
     result: dict[str, Any] = {
         "method": method,
@@ -789,7 +921,7 @@ def _run_single_cell(
 
     if method == "pca":
         sub = find_pca_subspace(
-            target,
+            sites,
             train_dataset,
             pipeline,
             k_features,
@@ -812,7 +944,7 @@ def _run_single_cell(
         )
     elif method == "das":
         sub = find_das_subspace(
-            target,
+            sites,
             train_dataset,
             test_dataset,
             pipeline,
@@ -841,7 +973,7 @@ def _run_single_cell(
         )
     elif method == "dbm":
         sub = find_dbm_subspace(
-            target,
+            sites,
             train_dataset,
             test_dataset,
             pipeline,
@@ -863,7 +995,7 @@ def _run_single_cell(
         result.update({"dbm_result": sub["dbm_result"]})
     elif method == "boundless":
         sub = find_boundless_subspace(
-            target,
+            sites,
             train_dataset,
             test_dataset,
             pipeline,
@@ -892,7 +1024,7 @@ def _run_single_cell(
                 "rotation's column count."
             )
         sub = find_fixed_subspace(
-            target,
+            sites,
             train_dataset,
             pipeline,
             rotation,
@@ -915,14 +1047,15 @@ def _run_single_cell(
             }
         )
         # Optionally score the threaded subspace's interchange-IIA / mediation at
-        # this pinned cell (subspace.fixed.score). find_fixed_subspace already set
-        # the frozen featurizer on `target`, so the scan is RESTRICTED to the given
-        # rotation; score_fixed_subspace rebuilds a featurizer-free control for
-        # the full-cell IIA. Retires the session-local fixed_subspace_mediation (#262).
+        # this pinned cell (subspace.fixed.score). find_fixed_subspace RETURNS the
+        # spec carrying the frozen featurizer (functional attach), so thread that
+        # returned spec in — the scan is then RESTRICTED to the given rotation;
+        # score_fixed_subspace rebuilds a featurizer-free control for the
+        # full-cell IIA. Retires the session-local fixed_subspace_mediation (#262).
         if fixed_cfg is not None and bool(fixed_cfg.get("score", False)):
             score_dataset = test_dataset if test_dataset else train_dataset
             scores = score_fixed_subspace(
-                target=target,
+                sites=[[sub["spec"]]],
                 cell_key=next(iter(targets)),
                 layer=layer,
                 position_name=position_names[0],
@@ -1047,7 +1180,7 @@ def _dispatch_grid_or_single(
 
             # Save metadata for single-cell mode. For method=fixed the on-disk
             # artifact is a PCA-style rotation matrix, so record method="pca"
-            # (artifact-type semantics) — this is what load_subspace_onto_target
+            # (artifact-type semantics) — this is what load_subspace_onto_spec
             # branches on, so downstream consumers need no fixed-specific code.
             # The fixed origin is preserved under discovery/fixed_source.
             # _run_single_cell resolves the position (explicit name, the task's
@@ -1107,6 +1240,12 @@ def _dispatch_grid_or_single(
                 component_type=component_type,
                 heads=list(heads) if heads is not None else None,
                 token_position=token_position,
+                prescan=cast(
+                    Mapping[str, Any],
+                    OmegaConf.to_container(analysis.prescan, resolve=True),
+                )
+                if analysis.get("prescan") is not None
+                else None,
             )
     else:
         # Auto-resolve from locate/
@@ -1239,14 +1378,6 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         cfg.task.intervention_metric, checker=task.checker
     )
     intervention_metric = string_metric
-    train_dataset, test_dataset = generate_datasets(
-        task,
-        n_train=cfg.task.n_train,
-        n_test=cfg.task.n_test,
-        seed=cfg.seed,
-        enumerate_all=cfg.task.enumerate_all,
-        resample_variable=cfg.task.get("resample_variable", "all"),
-    )
     pipeline = load_pipeline(
         model_name=cfg.model.name,
         task=task,
@@ -1256,6 +1387,29 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         eager_attn=cfg.model.get("eager_attn"),
         use_chat_template=cfg.model.get("chat_template", False),
         chat_answer_directive=cfg.model.get("chat_answer_directive"),
+    )
+    # Correct-only filtering is a REQUIRED, explicit choice (no silent default):
+    # a trained subspace fit on prompts the model gets wrong cannot recover a real
+    # subspace (the causal signal isn't there to align to). Declare
+    # `subspace.filter_correct` in the runner config — there is no fallback.
+    if OmegaConf.is_missing(analysis, "filter_correct"):
+        raise ValueError(
+            "subspace.filter_correct is required (no default). Set it true "
+            "(correct-only — trained subspaces need it; matches the paper's "
+            "sampling) or false (e.g. tiny-random smoke, where the model solves "
+            "nothing so filtering would empty the dataset)."
+        )
+    train_dataset, test_dataset = prepare_datasets(
+        task,
+        n_train=cfg.task.n_train,
+        n_test=cfg.task.n_test,
+        seed=cfg.seed,
+        enumerate_all=cfg.task.enumerate_all,
+        resample_variable=cfg.task.get("resample_variable", "all"),
+        filter_correct=analysis.filter_correct,
+        pipeline=pipeline,
+        metric=task.checker,
+        filter_batch_size=analysis.batch_size,
     )
 
     try:

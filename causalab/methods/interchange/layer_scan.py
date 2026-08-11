@@ -1,14 +1,13 @@
 """Layer scan functions — distribution-level interchange interventions."""
 
 import logging
-import math
 from typing import Dict, Any, List, Callable
 
 import torch
 from tqdm import tqdm
 
-from causalab.neural.pipeline import LMPipeline
-from causalab.neural.units import InterchangeTarget
+from causalab.neural.activations.site_grids import SiteGrid
+from causalab.neural.pipeline import GenerationResult, LMPipeline
 from causalab.neural.activations.interchange_mode import run_interchange_interventions
 from causalab.causal.causal_model import CausalModel
 from causalab.causal.counterfactual_dataset import CounterfactualExample
@@ -23,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def run_layer_scan(
-    interchange_targets: Dict[tuple[Any, ...], InterchangeTarget],
+    grid: SiteGrid,
     dataset: list[CounterfactualExample],
     pipeline: LMPipeline,
     batch_size: int,
@@ -32,8 +31,9 @@ def run_layer_scan(
     causal_model: CausalModel | None = None,
     original_outputs: List[Dict[str, Any]] | None = None,
     source_pipeline: LMPipeline | None = None,
+    gen_kwargs: Dict[str, Any] | None = None,
 ) -> Dict[tuple[Any, ...], float]:
-    """Run interchange interventions across targets and score with a metric.
+    """Run interchange interventions across grid cells and score with a metric.
 
     Unlike ``run_interchange_custom_score_heatmap`` this function:
     - Accepts an in-memory dataset (no file path)
@@ -46,41 +46,61 @@ def run_layer_scan(
     task-specific pipelines that add their own visualization.
 
     Args:
-        interchange_targets: Dict mapping keys (e.g. ``(layer, pos_id)``)
-            to InterchangeTarget objects.
+        grid: :data:`~causalab.neural.activations.site_grids.SiteGrid` — dict
+            mapping cell keys (e.g. ``(layer, pos_id)``) to nested
+            ``SiteSpec`` groups (WU2 builder output).
         dataset: Counterfactual examples (in-memory).
         pipeline: Target LMPipeline.
         batch_size: Batch size for interventions.
         metric: InterchangeMetric whose ``fn`` receives the full per-example
             output dict (including ``"scores"`` when ``output_scores`` is
             truthy).
-        output_scores: Forwarded to ``run_interchange_interventions``.
-            ``True`` returns full vocab scores, an ``int`` returns top-k.
+        output_scores: Forwarded to ``run_interchange_interventions``. Use
+            ``True`` (full-vocab scores) when the metric reads scores; an
+            ``int`` compresses to top-k, which the scorer refuses — here
+            *before* the scan runs a single generation (the refusal is
+            statically known, so it fires ahead of the loop rather than
+            after the whole sweep).
         causal_model: Required when ``metric.needs_causal_expected``.
         original_outputs: Required when ``metric.needs_original_output``.
         source_pipeline: Optional source pipeline for cross-model patching.
+        gen_kwargs: Extra HF ``generate`` kwargs forwarded to
+            ``run_interchange_interventions`` (e.g. ``{"min_new_tokens": N}``
+            — the escape hatch the engine's ragged-scores refusal names).
 
     Returns:
-        Dict mapping target keys to mean metric scores.
+        Dict mapping grid keys to mean metric scores.
     """
-    raw_results: Dict[tuple[Any, ...], Dict[str, Any]] = {}
+    if not isinstance(output_scores, bool) and output_scores > 0:
+        # Fail fast: score_intervention_outputs refuses top-k-compressed
+        # scores unconditionally, so an int output_scores is a statically
+        # known poison combination — refuse it before any generation work
+        # (mirrors the scorer's wording, metric.py).
+        raise ValueError(
+            f"cannot score a layer scan run with output_scores={output_scores}: "
+            "an int compresses to top-k scores (scores_top_k), but metrics "
+            "consume full-vocabulary per-step tensors. Generate with "
+            "output_scores=True (not an int) for metric scoring."
+        )
+    results: Dict[tuple[Any, ...], GenerationResult] = {}
 
-    for key, target in tqdm(
-        interchange_targets.items(),
+    for key, groups in tqdm(
+        grid.items(),
         desc="Layer scan",
-        total=len(interchange_targets),
+        total=len(grid),
     ):
-        raw_results[key] = run_interchange_interventions(
+        results[key] = run_interchange_interventions(
             pipeline=pipeline,
             counterfactual_dataset=dataset,
-            interchange_target=target,
+            groups=groups,
             batch_size=batch_size,
             output_scores=output_scores,
             source_pipeline=source_pipeline,
+            gen_kwargs=gen_kwargs,
         )
 
     return score_intervention_outputs(
-        raw_results=raw_results,
+        results=results,
         dataset=dataset,
         metric=metric,
         causal_model=causal_model,
@@ -94,15 +114,15 @@ def run_layer_scan(
 
 
 def collect_all_features_cached(
-    interchange_targets: Dict[tuple[Any, ...], InterchangeTarget],
+    grid: SiteGrid,
     dataset: list[CounterfactualExample],
     pipeline: LMPipeline,
     batch_size: int,
     output_dir: str | None,
 ) -> Dict[tuple[Any, ...], torch.Tensor]:
-    """Collect features for all targets in a single forward pass, with per-layer caching.
+    """Collect features for all grid cells in a single forward pass, with per-layer caching.
 
-    Checks the cache for each target first.  Only targets with cache misses are
+    Checks the cache for each cell first.  Only cells with cache misses are
     collected, and those are collected together in one ``collect_features`` call
     so the model forward passes are shared across layers.
 
@@ -116,7 +136,7 @@ def collect_all_features_cached(
     uncached_keys: list[tuple[Any, ...]] = []
 
     # 1. Load what we can from cache
-    for key in interchange_targets:
+    for key in grid:
         layer, pos_id = key
         if output_dir is not None:
             cached = load_cached_features(output_dir, layer, pos_id, len(dataset))
@@ -128,31 +148,30 @@ def collect_all_features_cached(
     if not uncached_keys:
         return result
 
-    # 2. Collect all uncached targets in one pass
-    all_units = []
-    unit_id_to_key: dict[str, tuple[Any, ...]] = {}
+    # 2. Collect all uncached cells in one pass
+    all_specs = []
+    spec_key_to_cell: dict[str, tuple[Any, ...]] = {}
     for key in uncached_keys:
-        target = interchange_targets[key]
-        units = target.flatten()
-        for u in units:
-            unit_id_to_key[u.id] = key
-        all_units.extend(units)
+        specs = [spec for group in grid[key] for spec in group]
+        for spec in specs:
+            spec_key_to_cell[spec.key] = key
+        all_specs.extend(specs)
 
     logger.info(
         "Collecting features for %d targets in a single pass...", len(uncached_keys)
     )
     features_dict = collect_features(
-        dataset=dataset,
-        pipeline=pipeline,
-        model_units=all_units,
+        dataset,
+        pipeline,
+        all_specs,
         batch_size=batch_size,
     )
     # collect_output_logits is False (default), so the return is dict[str, Tensor]
     assert isinstance(features_dict, dict)
 
     # 3. Map back to keys and cache
-    for unit_id, features in features_dict.items():
-        key = unit_id_to_key[unit_id]
+    for spec_key, features in features_dict.items():
+        key = spec_key_to_cell[spec_key]
         result[key] = features
         if output_dir is not None:
             layer, pos_id = key
@@ -167,7 +186,7 @@ def collect_all_features_cached(
 
 
 def run_centroid_layer_scan(
-    interchange_targets: Dict[tuple[Any, ...], InterchangeTarget],
+    grid: SiteGrid,
     dataset: list[CounterfactualExample],
     pipeline: LMPipeline,
     batch_size: int,
@@ -182,6 +201,7 @@ def run_centroid_layer_scan(
     comparison_fn: Callable | None = None,
     return_patched_dists: bool = False,
     source_pipeline: LMPipeline | None = None,
+    gen_kwargs: Dict[str, Any] | None = None,
 ) -> (
     Dict[tuple[Any, ...], float]
     | tuple[Dict[tuple[Any, ...], float], Dict[tuple[Any, ...], torch.Tensor]]
@@ -199,7 +219,7 @@ def run_centroid_layer_scan(
 
     Args:
         precomputed_features: If provided, skip feature collection and use these
-            directly. Keys must match ``interchange_targets`` keys.
+            directly. Keys must match ``grid`` keys.
         comparison_fn: Distribution comparison function ``(N, C), (N, C) -> (N,)``.
         return_patched_dists: If True, also return per-layer mean patched
             distributions as ``(n_classes, n_score_tokens)`` tensors.
@@ -207,8 +227,11 @@ def run_centroid_layer_scan(
         source_pipeline: If provided, activations (centroids) are collected from
             this pipeline instead of ``pipeline``.  The centroids are then patched
             into ``pipeline`` (the target).  Enables cross-model patching.
+        gen_kwargs: Extra HF ``generate`` kwargs forwarded to
+            ``run_intervened_generation`` (e.g. ``{"min_new_tokens": N}`` —
+            the escape hatch its ragged-scores refusal names).
 
-    Returns dict mapping target keys to mean score across classes.
+    Returns dict mapping grid keys to mean score across classes.
     """
     if comparison_fn is None:
         raise ValueError(
@@ -216,13 +239,8 @@ def run_centroid_layer_scan(
             "Ensure the intervention_metric resolves to a distribution comparison."
         )
     cmp = comparison_fn
-    from causalab.neural.activations.interchange_mode import (
-        prepare_intervenable_model,
-        delete_intervenable_model,
-        prepare_intervenable_inputs,
-    )
-
-    from causalab.neural.activations.intervenable_model import device_for_layer
+    from causalab.neural.dataset import run_intervened_generation
+    from causalab.neural.specs import EditSpec
 
     token_seqs = _normalize_var_indices(score_token_ids)
     n_steps = max(len(seq) for seq in token_seqs)
@@ -242,37 +260,37 @@ def run_centroid_layer_scan(
         all_features = precomputed_features
     else:
         all_features = collect_all_features_cached(
-            interchange_targets,
+            grid,
             dataset,
             feature_pipeline,
             batch_size,
             output_dir,
         )
 
-    # Precompute class assignments (same for all targets)
+    # Precompute class assignments (same for all cells)
     example_classes = [example_to_class(ex) for ex in dataset]
     class_counts = torch.zeros(n_classes)
     for cls in example_classes:
         class_counts[cls] += 1
 
-    n_steer_batches = math.ceil(len(base_examples) / batch_size)
-
     scores: Dict[tuple[Any, ...], float] = {}
     patched_dists: Dict[tuple[Any, ...], torch.Tensor] = {}
 
-    for key, target in tqdm(
-        interchange_targets.items(),
+    for key, cell_groups in tqdm(
+        grid.items(),
         desc="Centroid layer scan",
-        total=len(interchange_targets),
+        total=len(grid),
     ):
         features = all_features[key]
 
-        # Project features through featurizer before averaging, so centroids
-        # are computed in the subspace (e.g. PCA) rather than raw activation
-        # space.  This avoids noise from discarded dimensions biasing the mean.
-        # Then inverse-project back to raw space for pyvene patching.
-        units = target.flatten()
-        featurizer = units[0].featurizer if units else None
+        # Centroids live in each site's FEATURE space (e.g. PCA), where the
+        # replace-mode edit writes; averaging there avoids noise from discarded
+        # dimensions biasing the mean. The engine re-featurizes the base at the
+        # write and keeps *base's* error term (the ST3 contract) — the class-
+        # average error the old raw-space roundtrip embedded was likewise
+        # dropped when the intervention re-featurized its source.
+        specs = [spec for group in cell_groups for spec in group]
+        featurizer = specs[0].fsite.featurizer if specs else None
         if featurizer is not None and hasattr(featurizer, "featurizer"):
             # Features may already be in feature space (e.g. PCA-projected)
             # if the collect intervention applied the featurizer during collection.
@@ -282,49 +300,19 @@ def run_centroid_layer_scan(
             )
             if already_projected:
                 projected = features
-                error = None
             else:
                 with torch.no_grad():
-                    projected, error = featurizer.featurizer(features)
-
-            # Average in projected space
-            centroids_proj = torch.zeros(n_classes, projected.shape[1])
-            error_accum = (
-                torch.zeros(n_classes, error.shape[1]) if error is not None else None
-            )
-            for i, cls in enumerate(example_classes):
-                centroids_proj[cls] += projected[i]
-                if error_accum is not None:
-                    assert error is not None  # error_accum non-None iff error non-None
-                    error_accum[cls] += error[i]
-            for c in range(n_classes):
-                if class_counts[c] > 0:
-                    centroids_proj[c] /= class_counts[c]
-                    if error_accum is not None:
-                        error_accum[c] /= class_counts[c]
-
-            # Inverse-project back to raw activation space
-            with torch.no_grad():
-                centroids = featurizer.inverse_featurizer(
-                    centroids_proj,
-                    error_accum,
-                )
+                    projected, _ = featurizer.featurizer(features)
         else:
-            # No featurizer — average directly in raw space
-            centroids = torch.zeros(n_classes, features.shape[1])
-            for i, cls in enumerate(example_classes):
-                centroids[cls] += features[i]
-            for c in range(n_classes):
-                if class_counts[c] > 0:
-                    centroids[c] /= class_counts[c]
+            # No featurizer — raw space is the (identity) feature space
+            projected = features
 
-        # For each class, patch its centroid into base examples and score
-        intervenable_model = prepare_intervenable_model(pipeline, target)
-        # Centroids are scattered into the target layer's tensor — they must
-        # live on that layer's device (which may differ across GPUs for
-        # sharded models).
-        target_layers = {u.layer for u in target.flatten()}
-        device = device_for_layer(pipeline, next(iter(target_layers)))
+        centroids = torch.zeros(n_classes, projected.shape[1])
+        for i, cls in enumerate(example_classes):
+            centroids[cls] += projected[i]
+        for c in range(n_classes):
+            if class_counts[c] > 0:
+                centroids[c] /= class_counts[c]
 
         n_score_tokens = len(token_seqs)
         patched_accum = (
@@ -337,49 +325,48 @@ def run_centroid_layer_scan(
             if class_counts[cls] == 0:
                 continue
 
-            centroid = centroids[cls]  # (hidden_dim,)
+            # Patch this class's centroid into every base example: one
+            # replace-mode edit per site (a broadcast feature-space vector
+            # needs no counterfactual forward), batched by the engine.
+            groups = [
+                [
+                    EditSpec(spec, mode="replace", vector=centroids[cls])
+                    for spec in group
+                ]
+                for group in cell_groups
+            ]
+            # The engine returns ONE flat GenerationResult; its per-step
+            # scores are (n_examples, vocab), so the retired per-batch score
+            # loop collapses to flat indexing (EU5b, #487). Ragged internal
+            # batches (one batch early-EOSing at fewer steps than another)
+            # refuse loudly inside run_intervened_generation rather than
+            # silently dropping the short batches the way the legacy loop
+            # did — the error message names the escape hatches
+            # (batch_size >= len(dataset), or min_new_tokens=max_new_tokens).
+            output = run_intervened_generation(
+                pipeline,
+                base_examples,  # pyright: ignore[reportArgumentType]  # constructed dicts conform to CounterfactualExample TypedDict at runtime
+                groups,
+                batch_size=batch_size,
+                output_scores=True,
+                **(gen_kwargs or {}),
+            )
 
-            # Patch centroid into all base examples
             cls_kls: list[float] = []
-            for bi in range(n_steer_batches):
-                batch = base_examples[bi * batch_size : (bi + 1) * batch_size]
-                bs = len(batch)
-
-                batched_base, _, inv_locations, feature_indices = (
-                    prepare_intervenable_inputs(
-                        pipeline,
-                        batch,  # pyright: ignore[reportArgumentType]  # constructed dicts conform to CounterfactualExample TypedDict at runtime
-                        target,
-                    )
-                )
-                # pyvene expects (batch, seq, dim) — add seq dim
-                source_repr = [centroid.view(1, 1, -1).expand(bs, 1, -1).to(device)]
-
-                gen_kwargs = {"output_scores": True}
-                output = pipeline.intervenable_generate(
-                    intervenable_model,
-                    batched_base,
-                    None,
-                    inv_locations,
-                    feature_indices,  # pyright: ignore[reportArgumentType]  # prepare_intervenable_inputs returns list[list[list[int]|None]]; intervenable_generate's signature expects list[list[int]] | None
-                    source_representations=source_repr,
-                    **gen_kwargs,
-                )
-
-                out_scores = output.get("scores", [])
-                if len(out_scores) <= score_token_index:
-                    continue
+            step_scores = output.scores or []
+            if len(step_scores) > score_token_index:
                 logits_per_step = [
-                    out_scores[score_token_index + k]
+                    step_scores[score_token_index + k]
                     for k in range(n_steps)
-                    if score_token_index + k < len(out_scores)
+                    if score_token_index + k < len(step_scores)
                 ]
                 probs = _logits_to_class_probs(logits_per_step, token_seqs).cpu()
+                n_examples = probs.shape[0]
 
                 # Compare ref vs patched for this class
-                ref = ref_dists[cls].unsqueeze(0).expand(bs, -1)
+                ref = ref_dists[cls].unsqueeze(0).expand(n_examples, -1)
                 per_example = cmp(ref, probs)
-                cls_kls.extend(per_example.tolist())
+                cls_kls = per_example.tolist()
 
                 # Accumulate patched distributions (full vocab softmax for heatmaps)
                 if patched_accum is not None:
@@ -388,12 +375,9 @@ def run_centroid_layer_scan(
                         logits_per_step, token_seqs, full_vocab_softmax=True
                     ).cpu()
                     patched_accum[cls] += probs_fvs.sum(dim=0)
-                    patched_counts[cls] += bs
-
+                    patched_counts[cls] += n_examples
             if cls_kls:
                 kl_per_class.append(sum(cls_kls) / len(cls_kls))
-
-        delete_intervenable_model(intervenable_model)
 
         scores[key] = (
             sum(kl_per_class) / len(kl_per_class) if kl_per_class else float("nan")

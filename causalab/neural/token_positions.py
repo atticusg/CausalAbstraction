@@ -34,6 +34,7 @@ Usage:
     task = Task(..., token_positions=factories)
 """
 
+import inspect
 import re
 from collections import OrderedDict
 from typing import Any, Callable, Dict, List, Mapping, Union, cast
@@ -41,8 +42,126 @@ from typing import Any, Callable, Dict, List, Mapping, Union, cast
 import torch
 
 from causalab.causal.trace import CausalTrace, Mechanism
-from causalab.neural.units import ComponentIndexer
 from causalab.neural.pipeline import LMPipeline
+
+
+def _indexer_accepts_is_original(indexer: Callable[..., Any]) -> bool:
+    """Whether ``indexer`` can be called with an ``is_original=...`` keyword.
+
+    Decided once from the signature — never by catching a ``TypeError`` at call
+    time. Catching the ``TypeError`` conflated "the indexer does not take the
+    flag" with "the indexer took the flag but a bug inside it raised", silently
+    re-running such an indexer *without* the flag; for a paired position that
+    returns base positions on a counterfactual read — a wrong-position
+    intervention instead of a crash (#430).
+
+    Returns ``True`` when the signature has a ``**kwargs`` catch-all, or a
+    parameter named ``is_original`` that is reachable by keyword
+    (``POSITIONAL_OR_KEYWORD`` or ``KEYWORD_ONLY``). A *positional-only*
+    ``is_original`` cannot be satisfied by the keyword call, so it counts as
+    unsupported. Callables whose signature is not introspectable (some C
+    builtins) are treated as unsupported.
+    """
+    try:
+        params = inspect.signature(indexer).parameters
+    except (TypeError, ValueError):
+        return False
+    for param in params.values():
+        if param.kind is inspect.Parameter.VAR_KEYWORD:
+            return True
+        if param.name == "is_original" and param.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            return True
+    return False
+
+
+class ComponentIndexer:
+    """Callable wrapper that returns location indices for a given *input*.
+    This is used to specify the *where* on the sequence axis to read or
+    intervene, e.g., the *input* might be a batch of tokenized text with
+    indices that are the positions of the tokens to be intervened upon.
+
+    :class:`TokenPosition`'s base class (relocated here from the retired
+    ``causalab.neural.units`` in the where-unification sweep, #508); it
+    satisfies the :class:`~causalab.neural.positions.PositionResolver`
+    protocol, so any instance binds directly as a
+    :attr:`~causalab.neural.specs.SiteSpec.positions` value.
+
+    Examples
+    --------
+    In practice, tasks build a dict of ready-made indexers via
+    ``create_token_positions(pipeline)``; each value is a
+    :class:`TokenPosition` (a subclass). Pick one by name and call ``.index``
+    on a causal trace::
+
+        all_token_positions = create_token_positions(pipeline)
+        indexer = all_token_positions["correct_symbol"]
+        indexer.index(original_causal_trace)  # -> e.g. [42]
+
+    For ad-hoc sites, wrap any ``input -> list[int]`` callable; ``id`` is
+    optional but useful for diagnostics::
+
+        indexer = ComponentIndexer(lambda _input: [0], id="first_token")
+        indexer.index(tokenized_prompt)  # -> [0]
+    """
+
+    def __init__(self, indexer: Callable[..., list[int]], id: str = "null") -> None:
+        """
+        Parameters
+        ----------
+        indexer :
+            A function `input -> List[int]` returning the indices.
+        id :
+            Human-readable identifier for diagnostics / printing.
+        """
+        self.indexer = indexer
+        self.id = id
+        # Detected once, at construction, from the signature — see
+        # `_indexer_accepts_is_original`. Dispatch reads this flag instead of
+        # probing the indexer with a try/except, so a `TypeError` raised inside
+        # the indexer propagates as the real bug it is (#430).
+        self._accepts_is_original = _indexer_accepts_is_original(indexer)
+
+    # ------------------------------------------------------------------ #
+    def index(
+        self, input: Any, batch: bool = False, is_original: bool | None = None
+    ) -> list[int] | list[list[int]]:
+        """Return indices for *input* by delegating to wrapped function.
+
+        Parameters
+        ----------
+        input :
+            The input to index.
+        batch : bool
+            Whether to process a batch of inputs.
+        is_original : bool or None
+            Whether this is an original input (True) or counterfactual (False).
+            Only passed to the indexer function if not None.
+        """
+        if batch:
+            return [self._call_indexer(i, is_original) for i in input]
+        return self._call_indexer(input, is_original)
+
+    def _call_indexer(self, input: Any, is_original: bool | None) -> list[int]:
+        """Call the wrapped indexer, threading ``is_original`` iff it accepts it.
+
+        Whether the indexer accepts ``is_original`` was decided once at
+        construction from its signature (``self._accepts_is_original``); this
+        never catches a ``TypeError`` to decide. So a ``TypeError`` raised
+        *inside* an ``is_original``-accepting indexer propagates like any other
+        bug, instead of being swallowed and the indexer silently re-invoked
+        without the flag — which for a paired position would read base positions
+        on a counterfactual pass (#430).
+        """
+        if is_original is not None and self._accepts_is_original:
+            return self.indexer(input, is_original=is_original)
+        return self.indexer(input)
+
+    # ------------------------------------------------------------------ #
+    def __repr__(self) -> str:
+        return f"ComponentIndexer(id='{self.id}')"
 
 
 class PromptTemplateMismatchError(ValueError):
@@ -71,7 +190,8 @@ def _load_for_indexing(
     """Tokenize for token-position resolution, enforcing the unpadded-frame invariant.
 
     Indexers return indices in each example's *unpadded* frame; the padded-batch shift
-    in ``units._apply_padding_shift`` depends on that. A non-None ``pipeline.max_length``
+    in :func:`causalab.neural.positions.shift_to_padded_frame` depends on that. A
+    non-None ``pipeline.max_length``
     pads each per-example load up to ``max_length``, pushing indices out of the unpadded
     frame and silently corrupting interventions. Refuse it loudly here.
     """
@@ -104,9 +224,28 @@ class TokenPosition(ComponentIndexer):
     *constructor* flag: it routed nothing and only duplicated that name (#430).
     """
 
-    def __init__(self, indexer, pipeline: LMPipeline, **kwargs):
+    def __init__(
+        self,
+        indexer,
+        pipeline: LMPipeline,
+        *,
+        spec: Union[Dict[str, Any], Callable, None] = None,
+        template: str | None = None,
+        paired: "tuple[TokenPosition, TokenPosition] | None" = None,
+        combined: "List[TokenPosition] | None" = None,
+        **kwargs,
+    ):
         super().__init__(indexer, **kwargs)
         self.pipeline = pipeline
+        # Declarative structure, when this position was built from one. The
+        # spec-built factories attach (spec, template); the combinators attach
+        # paired / combined. This is what lets `index_on_encoding` re-derive
+        # positions directly on a batch's run encoding (PL3, #405) instead of
+        # replaying the per-example indexer closures.
+        self.spec = spec
+        self.template = template
+        self.paired = paired
+        self.combined = combined
 
     def highlight_selected_token(self, input: CausalTrace) -> str:
         """Return *prompt* with selected token(s) wrapped in ``**bold**``.
@@ -131,6 +270,60 @@ class TokenPosition(ComponentIndexer):
             for i, t in enumerate(ids)
             if t != pad_token_id
         )
+
+    def index_on_encoding(
+        self,
+        traces: List[CausalTrace],
+        encoding: Mapping[str, Any],
+        *,
+        is_original: bool | None = None,
+    ) -> "List[List[int]] | None":
+        """Resolve positions for ``traces`` directly on their run ``encoding``.
+
+        ``encoding`` is the padded batch the model actually runs — one
+        ``pipeline.load(traces, return_offsets_mapping=True)`` for the whole
+        batch. Each declarative spec resolves as a pure function of its row
+        (offset row, attention-mask row, char range), so the returned indices
+        are **born in the padded frame**: no per-example re-tokenization, no
+        unpadded→padded shift, and no way to compute positions against a
+        different tokenization than the run (the #176 stale-index class).
+        Truncation is consistent by construction — positions resolve against
+        whatever the run encoding actually contains.
+
+        Returns one index row per trace (rows may be ragged), or ``None``
+        when this position carries no declarative structure (a hand-built
+        indexer closure) — callers then fall back to the legacy per-example
+        ``index`` + padded-frame shift, which remains the only path that must
+        keep the two frames aligned by convention.
+        """
+        if self.paired is not None:
+            original_position, counterfactual_position = self.paired
+            member = (
+                original_position
+                if is_original is None or is_original
+                else counterfactual_position
+            )
+            return member.index_on_encoding(traces, encoding, is_original=is_original)
+        if self.combined is not None:
+            member_rows = [
+                member.index_on_encoding(traces, encoding, is_original=is_original)
+                for member in self.combined
+            ]
+            if any(rows is None for rows in member_rows):
+                return None
+            return [
+                [index for rows in member_rows for index in rows[i]]
+                for i in range(len(traces))
+            ]
+        if self.spec is None:
+            return None
+        template_obj = Template(self.template) if self.template is not None else None
+        return [
+            _resolve_spec_on_row(
+                self.spec, template_obj, trace, encoding, row, self.pipeline
+            )
+            for row, trace in enumerate(traces)
+        ]
 
 
 # Convenience indexers
@@ -247,6 +440,7 @@ def rebase_char_range(
     end_char: int,
     expected: str,
     label: str,
+    row: int = 0,
 ) -> tuple[int, int]:
     """Shift a bare-text character range into chat-wrapped coordinates.
 
@@ -262,14 +456,17 @@ def rebase_char_range(
     some chat templates ``.strip()`` the content (Llama does), so a value that
     *is* or *borders* whitespace loses characters and every intervention index
     downstream would be off by the lost characters. Returns the original range
-    unchanged (a no-op) when chat templating is off.
+    unchanged (a no-op) when chat templating is off. ``row`` selects which
+    batch row's wrapped text to verify against — per-example loads (the
+    legacy path) have exactly one row; batch-first resolution passes the
+    example's row in its run encoding.
     """
     offset = tokenized.get("content_char_offset", 0)
     if not offset:
         return start_char, end_char
     wrapped_list = tokenized.get("wrapped_text")
     if wrapped_list is not None:
-        wrapped = wrapped_list[0]
+        wrapped = wrapped_list[row]
         got = wrapped[start_char + offset : end_char + offset]
         if got != expected:
             raise ValueError(
@@ -555,26 +752,21 @@ class Template:
         OrderedDict()
     )
 
-    def get_variable_positions(
-        self, values: Dict[str, Any], pipeline
-    ) -> Dict[str, List[int]]:
+    def fill_with_positions(
+        self, values: Dict[str, Any]
+    ) -> tuple[str, Dict[str, List[tuple[int, int, str]]]]:
+        """Fill the template, tracking each variable's character ranges.
+
+        Returns ``(full_text, char_positions)`` where ``char_positions`` maps
+        each variable name to its ``(start_char, end_char, value_str)`` ranges
+        (one per occurrence) in the *bare* filled text. This is the
+        tokenization-free half of :meth:`get_variable_positions`; batch-first
+        resolution overlaps these ranges with a run encoding's offsets instead
+        of tokenizing per example. Also runs the raw-input guard: the filled
+        text must equal the trace's own ``raw_input`` for any index computed
+        from it to be meaningful.
         """
-        Fill the template and track which tokens correspond to each variable.
-
-        This is the key method: we tokenize the template piece by piece,
-        tracking exactly where each variable's tokens appear.
-
-        Results are cached by the filled text to avoid re-tokenization.
-
-        Args:
-            values: Dictionary mapping variable names to their values
-            pipeline: The tokenization pipeline
-
-        Returns:
-            Dictionary mapping variable names to lists of token indices
-        """
-        # Build the full text while tracking character positions
-        char_positions = {}  # var_name -> [(start_char, end_char, value_str), ...]
+        char_positions: Dict[str, List[tuple[int, int, str]]] = {}
         current_pos = 0
         full_text = []
 
@@ -603,13 +795,35 @@ class Template:
         full_text_str = "".join(full_text)
 
         # Guardrail: ``full_text_str`` (this template filled with the example's
-        # variables) is what we tokenize below to locate variables, but the model
-        # actually runs the trace's ``raw_input``. They match by construction for
-        # causalab-sampled data; a pre-existing/externally-built example can carry
-        # a divergent ``raw_input`` that would make every index here land on the
-        # wrong token with no error. Validate before the cache lookup so cache
-        # hits are checked too.
+        # variables) is what gets tokenized / overlapped to locate variables,
+        # but the model actually runs the trace's ``raw_input``. They match by
+        # construction for causalab-sampled data; a pre-existing/externally-built
+        # example can carry a divergent ``raw_input`` that would make every
+        # index land on the wrong token with no error.
         _assert_raw_input_matches(values, full_text_str)
+        return full_text_str, char_positions
+
+    def get_variable_positions(
+        self, values: Dict[str, Any], pipeline
+    ) -> Dict[str, List[int]]:
+        """
+        Fill the template and track which tokens correspond to each variable.
+
+        This is the key method: we tokenize the template piece by piece,
+        tracking exactly where each variable's tokens appear.
+
+        Results are cached by the filled text to avoid re-tokenization.
+
+        Args:
+            values: Dictionary mapping variable names to their values
+            pipeline: The tokenization pipeline
+
+        Returns:
+            Dictionary mapping variable names to lists of token indices
+        """
+        # The raw-input guard runs inside fill_with_positions, before the
+        # cache lookup below, so cache hits are checked too.
+        full_text_str, char_positions = self.fill_with_positions(values)
 
         # Check cache first. Keyed on the tokenizer's *stable identity*
         # (``name_or_path``, not ``id()``) plus the chat-template flag, so bare
@@ -757,17 +971,28 @@ def _build_factory(
     """
     # Check if spec is a callable (dynamic spec generator)
     if callable(spec):
-        return _build_dynamic_factory(name, spec, template)
-
-    # Otherwise, it's a static declarative spec
-    spec_type = spec.get("type")
-
-    if spec_type == "index":
-        return _build_index_factory(name, spec, template)
-    elif spec_type == "variable":
-        return _build_variable_factory(name, spec, template)
+        inner = _build_dynamic_factory(name, spec, template)
     else:
-        raise ValueError(f"Unknown token position type: {spec_type}")
+        # Otherwise, it's a static declarative spec
+        spec_type = spec.get("type")
+
+        if spec_type == "index":
+            inner = _build_index_factory(name, spec, template)
+        elif spec_type == "variable":
+            inner = _build_variable_factory(name, spec, template)
+        else:
+            raise ValueError(f"Unknown token position type: {spec_type}")
+
+    def factory(pipeline):
+        # Attach the declarative structure at the single build chokepoint so
+        # every spec-built position supports batch-first resolution
+        # (TokenPosition.index_on_encoding) without each builder repeating it.
+        token_position = inner(pipeline)
+        token_position.spec = spec
+        token_position.template = template
+        return token_position
+
+    return factory
 
 
 def _build_dynamic_factory(name: str, spec_func: Callable, template: str) -> Callable:
@@ -1049,7 +1274,12 @@ def paired_token_position(
             return counterfactual_position.index(input_sample)
 
     # Use pipeline from original (they should be the same)
-    return TokenPosition(indexer, original_position.pipeline, id=id)
+    return TokenPosition(
+        indexer,
+        original_position.pipeline,
+        id=id,
+        paired=(original_position, counterfactual_position),
+    )
 
 
 def combined_token_position(
@@ -1084,4 +1314,150 @@ def combined_token_position(
             all_indices.extend(indices)
         return all_indices
 
-    return TokenPosition(indexer, token_positions[0].pipeline, id=id)
+    return TokenPosition(
+        indexer,
+        token_positions[0].pipeline,
+        id=id,
+        combined=list(token_positions),
+    )
+
+
+# --------------------------------------------------------------------------- #
+#  Batch-first resolution on the run encoding (PL3, #405)                      #
+# --------------------------------------------------------------------------- #
+
+
+def _content_region(attention_mask_row: torch.Tensor) -> tuple[int, int]:
+    """``(first content index, content length)`` of one padded row.
+
+    Assumes contiguous padding (the pipeline convention — a prefix of zeros
+    for left-pad or a suffix for right-pad), mirroring
+    :func:`causalab.neural.positions.shift_to_padded_frame`.
+    """
+    length = int(attention_mask_row.sum().item())
+    first = int(torch.argmax(attention_mask_row.int()).item()) if length else 0
+    return first, length
+
+
+def _variable_tokens_on_row(
+    var_name: str,
+    template_obj: "Template",
+    trace: CausalTrace,
+    encoding: Mapping[str, Any],
+    row: int,
+) -> List[int]:
+    """All padded-frame token indices of ``var_name`` in ``trace``'s row.
+
+    The template fill supplies the bare char ranges; the run encoding's own
+    ``offset_mapping`` row supplies the char→token overlap. Under a chat
+    template the range is rebased by the chat prefix and the substituted
+    value is verified verbatim in this row's wrapped prompt — the same
+    incident-hardened guards as the per-example path.
+    """
+    if var_name not in trace:
+        raise ValueError(
+            f"Variable '{var_name}' not found in input sample: {list(trace.keys())}"
+        )
+    full_text_str, char_positions = template_obj.fill_with_positions(trace)
+    if var_name not in char_positions:
+        raise ValueError(
+            f"Variable '{var_name}' was not found in tokenized output. "
+            f"This should not happen - template parsing may have failed."
+        )
+    if "offset_mapping" not in encoding:
+        raise ValueError(
+            "batch-first position resolution needs the run encoding's "
+            "offset_mapping; load the batch with "
+            "pipeline.load(traces, return_offsets_mapping=True)."
+        )
+    offsets = encoding["offset_mapping"][row]
+    tokens: List[int] = []
+    for start_char, end_char, value_str in char_positions[var_name]:
+        rebased_start, rebased_end = rebase_char_range(
+            encoding,
+            start_char,
+            end_char,
+            value_str,
+            f"variable {var_name!r}",
+            row=row,
+        )
+        tokens.extend(get_tokens_in_char_range(offsets, rebased_start, rebased_end))
+    return tokens
+
+
+def _resolve_spec_on_row(
+    spec: Union[Dict[str, Any], Callable],
+    template_obj: "Template | None",
+    trace: CausalTrace,
+    encoding: Mapping[str, Any],
+    row: int,
+    pipeline: LMPipeline,
+) -> List[int]:
+    """Resolve one declarative spec for one example, on its run-encoding row.
+
+    The row's attention mask and offsets are the only frame in play, so every
+    returned index is a padded-frame index by construction. Semantics mirror
+    the per-example factories exactly: negative absolute indices count from
+    the sequence end, non-negative ones are content-relative (skipping any
+    chat prefix), scoped/relative specs index into or off a variable's span.
+    """
+    if callable(spec):  # dynamic: per-example spec construction, tokenize-free
+        return _resolve_spec_on_row(
+            spec(trace), template_obj, trace, encoding, row, pipeline
+        )
+
+    spec_type = spec.get("type")
+    if spec_type == "variable":
+        assert template_obj is not None  # spec-built factories always attach it
+        return _variable_tokens_on_row(spec["name"], template_obj, trace, encoding, row)
+
+    if spec_type != "index":
+        raise ValueError(f"Unknown token position type: {spec_type}")
+
+    position = spec["position"]
+    scope = spec.get("scope")
+    relative_to = spec.get("relative_to")
+    first, length = _content_region(encoding["attention_mask"][row])
+
+    if scope is not None:
+        assert template_obj is not None
+        var_name = scope["variable"]
+        var_tokens = _variable_tokens_on_row(
+            var_name, template_obj, trace, encoding, row
+        )
+        actual_position = len(var_tokens) + position if position < 0 else position
+        if actual_position < 0 or actual_position >= len(var_tokens):
+            raise ValueError(
+                f"Position {position} out of range for variable '{var_name}' "
+                f"with {len(var_tokens)} tokens"
+            )
+        return [var_tokens[actual_position]]
+
+    if relative_to is not None:
+        assert template_obj is not None
+        var_name = relative_to["variable"]
+        var_tokens = _variable_tokens_on_row(
+            var_name, template_obj, trace, encoding, row
+        )
+        reference_pos = var_tokens[-1] if position >= 0 else var_tokens[0]
+        target_pos = reference_pos + position
+        if target_pos < first or target_pos >= first + length:
+            raise ValueError(
+                f"Relative position {position} from variable '{var_name}' "
+                f"results in index {target_pos}, out of range "
+                f"[{first}, {first + length})"
+            )
+        return [target_pos]
+
+    # Absolute index: negative counts from the end of the row's content;
+    # non-negative is content-relative, skipping any chat prefix (the prefix
+    # tokens are content in the run encoding, so the skip stays additive).
+    if position < 0:
+        actual_position = first + length + position
+    else:
+        actual_position = first + position + pipeline._chat_prefix_token_count()
+    if actual_position < first or actual_position >= first + length:
+        raise ValueError(
+            f"Position {position} out of range for sequence of length {length}"
+        )
+    return [actual_position]

@@ -27,11 +27,12 @@ from causalab.methods.ablation import (
     run_ablation_scan_multi,
 )
 from causalab.methods.metric import InterchangeMetric, compute_base_outputs
-from causalab.neural.activations.targets import (
-    build_attention_head_targets,
-    build_attention_output_targets,
-    build_mlp_targets,
+from causalab.neural.activations.site_grids import (
+    build_attention_head_sites,
+    build_attention_output_sites,
+    build_mlp_sites,
 )
+from causalab.neural.specs import SiteSpec
 from causalab.neural.pipeline import LMPipeline
 from causalab.neural.token_positions import (
     TokenPosition,
@@ -91,6 +92,11 @@ def _match_base_metric(pipeline: LMPipeline, dataset: list[dict[str, Any]]):
     return metric, base_outputs
 
 
+def _flat(groups: list[list[SiteSpec]]) -> list[SiteSpec]:
+    """Flatten a grid value's nested spec groups (single-group by WU2)."""
+    return [spec for group in groups for spec in group]
+
+
 def _last_token(pipeline: LMPipeline) -> TokenPosition:
     return TokenPosition(
         lambda inp: get_last_token_index(inp, pipeline),
@@ -138,13 +144,15 @@ class TestReferenceVectorShapes:
         head_dim = mock_tiny_lm.model.config.hidden_size // (
             mock_tiny_lm.model.config.num_attention_heads
         )
-        target = build_attention_head_targets(
-            mock_tiny_lm, [0], [0], _last_token(mock_tiny_lm)
-        )[(0, 0)]
+        sites = _flat(
+            build_attention_head_sites(
+                mock_tiny_lm, [0], [0], _last_token(mock_tiny_lm)
+            )[(0, 0)]
+        )
 
-        zeros = make_zero_vectors(target)
+        zeros = make_zero_vectors(sites)
 
-        (unit_id,) = [u.id for u in target.flatten()]
+        (unit_id,) = [s.key for s in sites]
         assert zeros[unit_id].shape == (head_dim,)
         assert torch.count_nonzero(zeros[unit_id]) == 0
 
@@ -152,29 +160,33 @@ class TestReferenceVectorShapes:
         head_dim = mock_tiny_lm.model.config.hidden_size // (
             mock_tiny_lm.model.config.num_attention_heads
         )
-        target = build_attention_head_targets(
-            mock_tiny_lm, [0], [0], _last_token(mock_tiny_lm)
-        )[(0, 0)]
-
-        means = make_mean_vectors(
-            mock_tiny_lm, _equal_length_dataset(), target, batch_size=2
+        sites = _flat(
+            build_attention_head_sites(
+                mock_tiny_lm, [0], [0], _last_token(mock_tiny_lm)
+            )[(0, 0)]
         )
 
-        (unit_id,) = [u.id for u in target.flatten()]
+        means = make_mean_vectors(
+            mock_tiny_lm, _equal_length_dataset(), sites, batch_size=2
+        )
+
+        (unit_id,) = [s.key for s in sites]
         assert means[unit_id].shape == (head_dim,)
         assert torch.isfinite(means[unit_id]).all()
 
     def test_mean_vectors_mlp_shape(self, mock_tiny_lm: LMPipeline) -> None:
         hidden = mock_tiny_lm.model.config.hidden_size
-        target = build_mlp_targets(mock_tiny_lm, [0], [_last_token(mock_tiny_lm)])[
-            (0, "last_token")
-        ]
-
-        means = make_mean_vectors(
-            mock_tiny_lm, _equal_length_dataset(), target, batch_size=2
+        sites = _flat(
+            build_mlp_sites(mock_tiny_lm, [0], [_last_token(mock_tiny_lm)])[
+                (0, "last_token")
+            ]
         )
 
-        (unit_id,) = [u.id for u in target.flatten()]
+        means = make_mean_vectors(
+            mock_tiny_lm, _equal_length_dataset(), sites, batch_size=2
+        )
+
+        (unit_id,) = [s.key for s in sites]
         assert means[unit_id].shape == (hidden,)
 
     def test_mean_vectors_attention_output_shape(
@@ -183,15 +195,17 @@ class TestReferenceVectorShapes:
         """Whole-attention-sublayer output is ``hidden_size``-wide (merged across
         heads), so its mean reference vector must match — not ``head_dim``."""
         hidden = mock_tiny_lm.model.config.hidden_size
-        target = build_attention_output_targets(
-            mock_tiny_lm, [0], [_last_token(mock_tiny_lm)]
-        )[(0, "last_token")]
-
-        means = make_mean_vectors(
-            mock_tiny_lm, _equal_length_dataset(), target, batch_size=2
+        sites = _flat(
+            build_attention_output_sites(
+                mock_tiny_lm, [0], [_last_token(mock_tiny_lm)]
+            )[(0, "last_token")]
         )
 
-        (unit_id,) = [u.id for u in target.flatten()]
+        means = make_mean_vectors(
+            mock_tiny_lm, _equal_length_dataset(), sites, batch_size=2
+        )
+
+        (unit_id,) = [s.key for s in sites]
         assert means[unit_id].shape == (hidden,)
         assert torch.isfinite(means[unit_id]).all()
 
@@ -205,11 +219,11 @@ class TestReferenceVectorShapes:
         )
         dataset = _dataset(["hello world foo", "a b", "one two three"])
         span = get_all_tokens(dataset[0]["input"], mock_tiny_lm)
-        target = build_attention_head_targets(mock_tiny_lm, [0], [0], span)[(0, 0)]
+        sites = _flat(build_attention_head_sites(mock_tiny_lm, [0], [0], span)[(0, 0)])
 
-        means = make_mean_vectors(mock_tiny_lm, dataset, target, batch_size=8)
+        means = make_mean_vectors(mock_tiny_lm, dataset, sites, batch_size=8)
 
-        (unit_id,) = [u.id for u in target.flatten()]
+        (unit_id,) = [s.key for s in sites]
         assert means[unit_id].shape == (head_dim,)
         assert torch.isfinite(means[unit_id]).all()
 
@@ -232,10 +246,10 @@ class TestReferenceVectorNumerics:
         dataset = _equal_length_dataset()  # equal length -> one bucket, fixed n_pos
         hidden = mock_tiny_lm.model.config.hidden_size
         span = get_all_tokens(dataset[0]["input"], mock_tiny_lm)
-        target = build_mlp_targets(mock_tiny_lm, [0], [span])[(0, "all_tokens")]
-        (unit_id,) = [u.id for u in target.flatten()]
+        sites = _flat(build_mlp_sites(mock_tiny_lm, [0], [span])[(0, "all_tokens")])
+        (unit_id,) = [s.key for s in sites]
 
-        multi = make_mean_vectors(mock_tiny_lm, dataset, target, batch_size=2)
+        multi = make_mean_vectors(mock_tiny_lm, dataset, sites, batch_size=2)
         assert multi[unit_id].shape == (hidden,)
         assert torch.isfinite(multi[unit_id]).all()
 
@@ -244,8 +258,8 @@ class TestReferenceVectorNumerics:
         per_pos = []
         for k in range(n_pos):
             tp = TokenPosition(lambda inp, _k=k: [_k], mock_tiny_lm, id=f"p{k}")
-            single = build_mlp_targets(mock_tiny_lm, [0], [tp])[(0, f"p{k}")]
-            (sid,) = [u.id for u in single.flatten()]
+            single = _flat(build_mlp_sites(mock_tiny_lm, [0], [tp])[(0, f"p{k}")])
+            (sid,) = [s.key for s in single]
             per_pos.append(make_mean_vectors(mock_tiny_lm, dataset, single, 2)[sid])
         expected = torch.stack(per_pos).mean(dim=0)
 
@@ -263,12 +277,12 @@ class TestReferenceVectorNumerics:
         dataset = _equal_length_dataset()  # equal length -> one bucket, fixed n_pos
         hidden = mock_tiny_lm.model.config.hidden_size
         span = get_all_tokens(dataset[0]["input"], mock_tiny_lm)
-        target = build_attention_output_targets(mock_tiny_lm, [0], [span])[
-            (0, "all_tokens")
-        ]
-        (unit_id,) = [u.id for u in target.flatten()]
+        sites = _flat(
+            build_attention_output_sites(mock_tiny_lm, [0], [span])[(0, "all_tokens")]
+        )
+        (unit_id,) = [s.key for s in sites]
 
-        multi = make_mean_vectors(mock_tiny_lm, dataset, target, batch_size=2)
+        multi = make_mean_vectors(mock_tiny_lm, dataset, sites, batch_size=2)
         assert multi[unit_id].shape == (hidden,)
         assert torch.isfinite(multi[unit_id]).all()
 
@@ -276,10 +290,10 @@ class TestReferenceVectorNumerics:
         per_pos = []
         for k in range(n_pos):
             tp = TokenPosition(lambda inp, _k=k: [_k], mock_tiny_lm, id=f"p{k}")
-            single = build_attention_output_targets(mock_tiny_lm, [0], [tp])[
-                (0, f"p{k}")
-            ]
-            (sid,) = [u.id for u in single.flatten()]
+            single = _flat(
+                build_attention_output_sites(mock_tiny_lm, [0], [tp])[(0, f"p{k}")]
+            )
+            (sid,) = [s.key for s in single]
             per_pos.append(make_mean_vectors(mock_tiny_lm, dataset, single, 2)[sid])
         expected = torch.stack(per_pos).mean(dim=0)
 
@@ -295,13 +309,13 @@ class TestAblationScanAndCombo:
     def test_scan_returns_one_accuracy_per_cell(self, mock_tiny_lm: LMPipeline) -> None:
         dataset = _equal_length_dataset()
         layers, heads = [0, 1], [0, 1, 2, 3]
-        targets = build_attention_head_targets(
+        targets = build_attention_head_sites(
             mock_tiny_lm, layers, heads, _last_token(mock_tiny_lm)
         )
         vectors = {
-            unit.id: vec
-            for target in targets.values()
-            for unit, vec in zip(target.flatten(), make_zero_vectors(target).values())
+            key: vec
+            for groups in targets.values()
+            for key, vec in make_zero_vectors(_flat(groups)).items()
         }
         metric, base_outputs = _match_base_metric(mock_tiny_lm, dataset)
 
@@ -325,14 +339,16 @@ class TestAblationScanAndCombo:
         """A one-unit combo must score identically to that cell in a scan —
         the combo and scan paths share the same intervention + scoring."""
         dataset = _equal_length_dataset()
-        target = build_attention_head_targets(
-            mock_tiny_lm, [0], [0], _last_token(mock_tiny_lm)
-        )[(0, 0)]
-        vectors = make_zero_vectors(target)
+        sites = _flat(
+            build_attention_head_sites(
+                mock_tiny_lm, [0], [0], _last_token(mock_tiny_lm)
+            )[(0, 0)]
+        )
+        vectors = make_zero_vectors(sites)
         metric, base_outputs = _match_base_metric(mock_tiny_lm, dataset)
 
         scan_acc = run_ablation_scan(
-            {(0, 0): target},
+            {(0, 0): [sites]},
             dataset,
             mock_tiny_lm,
             vectors,
@@ -341,7 +357,7 @@ class TestAblationScanAndCombo:
             original_outputs=base_outputs,
         )[(0, 0)]
         combo_acc = run_ablation_combo(
-            list(target.flatten()),
+            sites,
             dataset,
             mock_tiny_lm,
             vectors,
@@ -369,18 +385,18 @@ class TestAblationScanAndCombo:
         dataset = _equal_length_dataset()
         layers, heads = [0, 1], [0, 1, 2, 3]
         last = _last_token(mock_tiny_lm)
-        targets = build_attention_head_targets(mock_tiny_lm, layers, heads, last)
+        targets = build_attention_head_sites(mock_tiny_lm, layers, heads, last)
         vectors = {
-            unit.id: vec
-            for target in targets.values()
-            for unit, vec in zip(target.flatten(), make_zero_vectors(target).values())
+            key: vec
+            for groups in targets.values()
+            for key, vec in make_zero_vectors(_flat(groups)).items()
         }
         metric, base_outputs = _match_base_metric(mock_tiny_lm, dataset)
 
-        # Every (layer, head) unit ablated jointly.
-        all_units = [u for target in targets.values() for u in target.flatten()]
+        # Every (layer, head) site ablated jointly.
+        all_sites = [s for groups in targets.values() for s in _flat(groups)]
         combo_acc = run_ablation_combo(
-            all_units,
+            all_sites,
             dataset,
             mock_tiny_lm,
             vectors,
@@ -403,11 +419,11 @@ class TestAblationScanAndCombo:
         dataset = _equal_length_dataset()
         layers = [0, 1]
         last = _last_token(mock_tiny_lm)
-        targets = build_mlp_targets(mock_tiny_lm, layers, [last])
+        targets = build_mlp_sites(mock_tiny_lm, layers, [last])
         vectors = {
-            unit.id: vec
-            for target in targets.values()
-            for unit, vec in zip(target.flatten(), make_zero_vectors(target).values())
+            key: vec
+            for groups in targets.values()
+            for key, vec in make_zero_vectors(_flat(groups)).items()
         }
         metric, base_outputs = _match_base_metric(mock_tiny_lm, dataset)
 
@@ -432,12 +448,12 @@ class TestAblationScanAndCombo:
         the combo and scan paths share the same intervention + scoring."""
         dataset = _equal_length_dataset()
         last = _last_token(mock_tiny_lm)
-        target = build_mlp_targets(mock_tiny_lm, [0], [last])[(0, "last_token")]
-        vectors = make_zero_vectors(target)
+        sites = _flat(build_mlp_sites(mock_tiny_lm, [0], [last])[(0, "last_token")])
+        vectors = make_zero_vectors(sites)
         metric, base_outputs = _match_base_metric(mock_tiny_lm, dataset)
 
         scan_acc = run_ablation_scan(
-            {(0, "last_token"): target},
+            {(0, "last_token"): [sites]},
             dataset,
             mock_tiny_lm,
             vectors,
@@ -446,7 +462,7 @@ class TestAblationScanAndCombo:
             original_outputs=base_outputs,
         )[(0, "last_token")]
         combo_acc = run_ablation_combo(
-            list(target.flatten()),
+            sites,
             dataset,
             mock_tiny_lm,
             vectors,
@@ -466,13 +482,13 @@ class TestAblationScanAndCombo:
         caveat was overly conservative)."""
         dataset = _equal_length_dataset()
         layers = [0, 1]
-        targets = build_attention_output_targets(
+        targets = build_attention_output_sites(
             mock_tiny_lm, layers, [_last_token(mock_tiny_lm)]
         )
         vectors = {
-            unit.id: vec
-            for target in targets.values()
-            for unit, vec in zip(target.flatten(), make_zero_vectors(target).values())
+            key: vec
+            for groups in targets.values()
+            for key, vec in make_zero_vectors(_flat(groups)).items()
         }
         metric, base_outputs = _match_base_metric(mock_tiny_lm, dataset)
 
@@ -498,14 +514,14 @@ class TestAblationScanAndCombo:
         scoring."""
         dataset = _equal_length_dataset()
         last = _last_token(mock_tiny_lm)
-        target = build_attention_output_targets(mock_tiny_lm, [0], [last])[
-            (0, "last_token")
-        ]
-        vectors = make_zero_vectors(target)
+        sites = _flat(
+            build_attention_output_sites(mock_tiny_lm, [0], [last])[(0, "last_token")]
+        )
+        vectors = make_zero_vectors(sites)
         metric, base_outputs = _match_base_metric(mock_tiny_lm, dataset)
 
         scan_acc = run_ablation_scan(
-            {(0, "last_token"): target},
+            {(0, "last_token"): [sites]},
             dataset,
             mock_tiny_lm,
             vectors,
@@ -514,7 +530,7 @@ class TestAblationScanAndCombo:
             original_outputs=base_outputs,
         )[(0, "last_token")]
         combo_acc = run_ablation_combo(
-            list(target.flatten()),
+            sites,
             dataset,
             mock_tiny_lm,
             vectors,
@@ -532,11 +548,11 @@ class TestAblationScanAndCombo:
         dataset and an all-tokens span returns a finite per-cell accuracy."""
         dataset = _dataset(["hello world foo", "a b", "one two three", "x y z w"])
         span = get_all_tokens(dataset[0]["input"], mock_tiny_lm)
-        targets = build_attention_head_targets(mock_tiny_lm, [0], [0, 1], span)
+        targets = build_attention_head_sites(mock_tiny_lm, [0], [0, 1], span)
         vectors = {
-            unit.id: vec
-            for target in targets.values()
-            for unit, vec in zip(target.flatten(), make_zero_vectors(target).values())
+            key: vec
+            for groups in targets.values()
+            for key, vec in make_zero_vectors(_flat(groups)).items()
         }
         metric, base_outputs = _match_base_metric(mock_tiny_lm, dataset)
 
@@ -565,13 +581,13 @@ class TestMultiMetric:
         variant, so a one-entry ``metrics`` dict must reproduce it cell-for-cell."""
         dataset = _equal_length_dataset()
         layers, heads = [0, 1], [0, 1]
-        targets = build_attention_head_targets(
+        targets = build_attention_head_sites(
             mock_tiny_lm, layers, heads, _last_token(mock_tiny_lm)
         )
         vectors = {
-            unit.id: vec
-            for target in targets.values()
-            for unit, vec in zip(target.flatten(), make_zero_vectors(target).values())
+            key: vec
+            for groups in targets.values()
+            for key, vec in make_zero_vectors(_flat(groups)).items()
         }
         metric, base_outputs = _match_base_metric(mock_tiny_lm, dataset)
 
@@ -604,13 +620,13 @@ class TestMultiMetric:
         """Each cell carries every requested metric: a behavioural match fraction
         in ``[0, 1]`` and a finite (unbounded) predicted-token logit drop."""
         dataset = _equal_length_dataset()
-        targets = build_attention_head_targets(
+        targets = build_attention_head_sites(
             mock_tiny_lm, [0, 1], [0, 1], _last_token(mock_tiny_lm)
         )
         vectors = {
-            unit.id: vec
-            for target in targets.values()
-            for unit, vec in zip(target.flatten(), make_zero_vectors(target).values())
+            key: vec
+            for groups in targets.values()
+            for key, vec in make_zero_vectors(_flat(groups)).items()
         }
         match_metric, base_outputs = _match_base_metric(mock_tiny_lm, dataset)
         metrics = {"match_drop": match_metric, "logit_diff": _logit_diff_metric()}
@@ -637,15 +653,17 @@ class TestMultiMetric:
         """A one-unit combo scores identically to that cell in a scan, for every
         metric — combo and scan share the same generate-then-score path."""
         dataset = _equal_length_dataset()
-        target = build_attention_head_targets(
-            mock_tiny_lm, [0], [0], _last_token(mock_tiny_lm)
-        )[(0, 0)]
-        vectors = make_zero_vectors(target)
+        sites = _flat(
+            build_attention_head_sites(
+                mock_tiny_lm, [0], [0], _last_token(mock_tiny_lm)
+            )[(0, 0)]
+        )
+        vectors = make_zero_vectors(sites)
         match_metric, base_outputs = _match_base_metric(mock_tiny_lm, dataset)
         metrics = {"match_drop": match_metric, "logit_diff": _logit_diff_metric()}
 
         scan_cell = run_ablation_scan_multi(
-            {(0, 0): target},
+            {(0, 0): [sites]},
             dataset,
             mock_tiny_lm,
             vectors,
@@ -654,7 +672,7 @@ class TestMultiMetric:
             original_outputs=base_outputs,
         )[(0, 0)]
         combo = run_ablation_combo_multi(
-            list(target.flatten()),
+            sites,
             dataset,
             mock_tiny_lm,
             vectors,

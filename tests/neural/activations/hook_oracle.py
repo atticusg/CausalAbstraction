@@ -34,7 +34,8 @@ Design notes
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import contextlib
+from collections.abc import Iterator, Mapping
 from typing import Any, Callable
 
 import torch
@@ -186,8 +187,8 @@ def random_rotation(d: int, *, seed: int = 0) -> torch.Tensor:
 # --------------------------------------------------------------------------- #
 def _is_gpt2(pipeline: LMPipeline) -> bool:
     """True for the GPT-2 family (``transformer.h`` block list, fused QKV)."""
-    return hasattr(pipeline.model, "transformer") and hasattr(
-        pipeline.model.transformer, "h"
+    return hasattr(pipeline.hf_model, "transformer") and hasattr(
+        pipeline.hf_model.transformer, "h"
     )
 
 
@@ -195,8 +196,8 @@ def decoder_block(pipeline: LMPipeline, layer: int) -> torch.nn.Module:
     """The decoder block whose forward output is the residual stream after
     ``layer`` (matches ``ResidualStream(layer, target_output=True)``)."""
     if _is_gpt2(pipeline):
-        return pipeline.model.transformer.h[layer]
-    return pipeline.model.model.layers[layer]
+        return pipeline.hf_model.transformer.h[layer]
+    return pipeline.hf_model.model.layers[layer]
 
 
 def _attn_module(pipeline: LMPipeline, layer: int) -> torch.nn.Module:
@@ -214,10 +215,19 @@ def o_proj(pipeline: LMPipeline, layer: int) -> torch.nn.Module:
     return attn.c_proj if _is_gpt2(pipeline) else attn.o_proj
 
 
+def embed_module(pipeline: LMPipeline) -> torch.nn.Module:
+    """The token-embedding module whose *output* is the ``embeddings`` component
+    (``wte`` on GPT-2, ``embed_tokens`` on Llama-family) — what nnterp exposes as
+    the settable ``token_embeddings``."""
+    if _is_gpt2(pipeline):
+        return pipeline.hf_model.transformer.wte
+    return pipeline.hf_model.model.embed_tokens
+
+
 def head_dim(pipeline: LMPipeline) -> int:
     """Per-head width. Honours an explicit ``config.head_dim`` (e.g. Qwen3, which
     decouples it from ``hidden / n_head``); otherwise ``hidden / n_head``."""
-    cfg = pipeline.model.config
+    cfg = pipeline.hf_model.config
     return getattr(cfg, "head_dim", None) or (
         cfg.hidden_size // cfg.num_attention_heads
     )
@@ -235,6 +245,9 @@ def component_module(
     """Map a causalab ``component_type`` to ``(module, kind)`` — the module the
     backbone taps and whether it reads/writes the module's input or output.
     Mirrors the backbone's component→module table for both families."""
+    if component == "embeddings":
+        # Layer-less: the token-embedding output feeding the first block.
+        return embed_module(pipeline), "out"
     blk = decoder_block(pipeline, layer)
     attn = _attn_module(pipeline, layer)
     if component == "mlp_activation":
@@ -263,6 +276,39 @@ def hidden_of(out: Any) -> torch.Tensor:
 # --------------------------------------------------------------------------- #
 #  Capture — read an activation with our own hook, no pyvene                   #
 # --------------------------------------------------------------------------- #
+@contextlib.contextmanager
+def layer_fire_counts(pipeline: LMPipeline) -> Iterator[list[int]]:
+    """Raw-hook fire-counters on every decoder block, for the enclosed runs.
+
+    ``counts[L]`` is how many times block ``L``'s forward *completed* while
+    the context was open — the ground truth for the early-stop contract
+    (``tracer.stop()``, CAP6 #459): a stopped forward leaves every block past
+    the deepest tap at zero. The block that carries the deepest tap itself
+    still counts (its forward completes before nnsight's output hook raises
+    the stop); only the blocks *after* it never run. The counters register
+    before any trace opens, so nnsight's one-shot hooks (inserted in
+    mediator-index order behind pre-existing hooks) never shadow them.
+    """
+    blocks = (
+        pipeline.hf_model.transformer.h
+        if _is_gpt2(pipeline)
+        else pipeline.hf_model.model.layers
+    )
+    counts = [0] * len(blocks)
+    handles = []
+    for i, block in enumerate(blocks):
+
+        def hook(_m, _i, _o, i=i):
+            counts[i] += 1
+
+        handles.append(block.register_forward_hook(hook))
+    try:
+        yield counts
+    finally:
+        for h in handles:
+            h.remove()
+
+
 def capture_residual(pipeline: LMPipeline, layer: int, inputs: Mapping) -> torch.Tensor:
     """Residual stream after ``layer`` for ``inputs``, grabbed via our own
     forward hook — no pyvene involved."""
@@ -274,7 +320,7 @@ def capture_residual(pipeline: LMPipeline, layer: int, inputs: Mapping) -> torch
     handle = decoder_block(pipeline, layer).register_forward_hook(hook)
     try:
         with torch.no_grad():
-            pipeline.model(
+            pipeline.hf_model(
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
             )
@@ -304,7 +350,7 @@ def capture_component(
         handle = module.register_forward_pre_hook(pre_hook)
     try:
         with torch.no_grad():
-            pipeline.model(
+            pipeline.hf_model(
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
             )
@@ -329,7 +375,7 @@ def capture_head_value(
     handle = o_proj(pipeline, layer).register_forward_pre_hook(pre)
     try:
         with torch.no_grad():
-            pipeline.model(
+            pipeline.hf_model(
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
             )
@@ -366,7 +412,7 @@ def next_token_logits(
         handle = decoder_block(pipeline, layer).register_forward_hook(hook)
     try:
         with torch.no_grad():
-            logits = pipeline.model(
+            logits = pipeline.hf_model(
                 input_ids=base_inputs["input_ids"],
                 attention_mask=base_inputs["attention_mask"],
             ).logits[:, -1, :]
@@ -443,7 +489,7 @@ def run_with_edits(
     handles = [_install(m, kind, edit) for (m, kind, edit) in edits]
     try:
         with torch.no_grad():
-            logits = pipeline.model(
+            logits = pipeline.hf_model(
                 input_ids=base_inputs["input_ids"],
                 attention_mask=base_inputs["attention_mask"],
             ).logits[:, -1, :]
@@ -485,7 +531,7 @@ def capture_with_edits(
     edit_handles = [_install(m, kind, edit) for (m, kind, edit) in edits]
     try:
         with torch.no_grad():
-            pipeline.model(
+            pipeline.hf_model(
                 input_ids=base_inputs["input_ids"],
                 attention_mask=base_inputs["attention_mask"],
             )

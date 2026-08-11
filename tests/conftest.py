@@ -1,5 +1,7 @@
 # tests/conftest.py
 
+import gc
+
 import pytest
 import torch
 import random
@@ -8,7 +10,6 @@ import numpy as np
 from causalab.causal.causal_model import CausalModel
 from causalab.causal.trace import Mechanism, input_var
 from causalab.neural.pipeline import LMPipeline
-from causalab.neural.LM_units import ResidualStream
 from causalab.neural.token_positions import TokenPosition
 
 # Re-export so tests can do "from tests.conftest import assert_runner_completed".
@@ -86,11 +87,31 @@ def pytest_runtest_setup(item):
     _CURRENT_TEST_IS_SMOKE[0] = "smoke" in {m.name for m in item.iter_markers()}
 
 
+@pytest.hookimpl(wrapper=True)
 def pytest_runtest_teardown(item, nextitem):
     """Reset the smoke flag so off-test composition (e.g. fixture teardown
-    that happens to call ``load_runner_config``) defaults to non-smoke."""
-    del item, nextitem
+    that happens to call ``load_runner_config``) defaults to non-smoke.
+
+    After teardown, release GPU memory leaked by golden-tier tests (#442).
+    Golden tests load multi-GB coherent backbones as function locals or
+    module-scoped fixtures with no teardown of their own; the nnsight/nnterp
+    object graphs are cyclic, so those models survive the end of the test
+    until a full ``gc.collect()`` pass — which CPython triggers on object
+    counts, not GPU bytes, i.e. effectively never under this workload. In a
+    single-process ``pytest -m golden`` run the dead models accumulate until
+    whichever test loads a fresh backbone last OOMs. Running post-``yield``
+    puts the collection after fixture finalization, so module-scoped model
+    fixtures are reclaimed at module boundaries too. Gated on the ``golden``
+    marker (the sole GPU tier) so CPU tiers don't pay for per-test GC.
+    """
     _CURRENT_TEST_IS_SMOKE[0] = False
+    try:
+        return (yield)
+    finally:
+        if "golden" in {m.name for m in item.iter_markers()}:
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
 
 def pytest_collection_modifyitems(config, items):
@@ -415,118 +436,3 @@ def token_positions(mock_tiny_lm, mcqa_causal_model):
         TokenPosition(get_last_token, mock_tiny_lm, id="last_token"),
         TokenPosition(get_answer_symbol_position, mock_tiny_lm, id="answer_symbol"),
     ]
-
-
-@pytest.fixture(scope="function")
-def model_units_list(mock_tiny_lm, token_positions):
-    """Create model units list for testing."""
-    # Create a list of ResidualStream units for different layers and positions
-    units = []
-
-    # Use a subset of layers for testing
-    layers = [0, 2]
-
-    for layer in layers:
-        for token_position in token_positions:
-            # Create a ResidualStream unit
-            unit = ResidualStream(
-                layer=layer,
-                token_indices=token_position,
-                shape=(mock_tiny_lm.model.config.hidden_size,),
-                target_output=True,  # Use block output
-            )
-            units.append([unit])  # Each unit is wrapped in its own list
-
-    return units
-
-
-@pytest.fixture(scope="function")
-def mock_intervenable_model(mock_tiny_lm, model_units_list):
-    """Mock intervenable model for testing."""
-
-    class MockIntervenableModel:
-        def __init__(self):
-            self.model = mock_tiny_lm.model
-            self.interventions = {}
-
-            # Create mock interventions
-            for i, units in enumerate(model_units_list):
-                key = f"intervention_{i}"
-                self.interventions[key] = type(
-                    "MockIntervention",
-                    (object,),
-                    {
-                        "forward": lambda x, y, **kwargs: torch.randn_like(x),
-                        "parameters": lambda: [torch.nn.Parameter(torch.randn(10))],
-                        "state_dict": lambda: {"weight": torch.randn(10)},
-                        "load_state_dict": lambda x: None,
-                        "get_sparsity_loss": lambda: torch.tensor(0.1),
-                        "set_temperature": lambda x: None,
-                        "mask": torch.nn.Parameter(torch.randn(10)),
-                    },
-                )
-
-        def disable_model_gradients(self):
-            pass
-
-        def eval(self):
-            pass
-
-        def set_device(self, device, set_model=True):
-            pass
-
-        def set_zero_grad(self):
-            pass
-
-        def count_parameters(self):
-            return 100
-
-        def __call__(self, inputs, unit_locations=None, **kwargs):
-            # Mock forward pass
-            batch_size = inputs["input_ids"].shape[0]
-            hidden_size = self.model.config.hidden_size
-
-            # Create mock activations
-            activations = [torch.randn(1, hidden_size) for _ in range(10)]
-
-            # Create mock outputs
-            outputs = type(
-                "obj",
-                (object,),
-                {
-                    "hidden_states": torch.randn(batch_size, 10, hidden_size),
-                    "logits": torch.randn(batch_size, 10, 100),
-                },
-            )
-
-            return [(outputs, activations), None]
-
-        def generate(
-            self, inputs, sources=None, unit_locations=None, subspaces=None, **kwargs
-        ):
-            # Mock generation with interventions
-            batch_size = inputs["input_ids"].shape[0]
-            seq_len = 5  # Fixed output sequence length
-
-            if kwargs.get("output_scores", False):
-                # Return mock scores
-                scores = [torch.randn(batch_size, 100) for _ in range(seq_len)]
-                return [
-                    type(
-                        "GenerationOutput",
-                        (object,),
-                        {"sequences": None, "scores": scores},
-                    )
-                ]
-
-            # Return mock sequences
-            sequences = torch.randint(2, 99, (batch_size, seq_len))
-            return [
-                type(
-                    "GenerationOutput",
-                    (object,),
-                    {"sequences": sequences, "scores": None},
-                )
-            ]
-
-    return MockIntervenableModel()

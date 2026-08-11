@@ -30,6 +30,7 @@ baseline:
   batch_size: 8
 
 subspace:
+  filter_correct: false  # tiny-random solves ~nothing; correct-only filtering would empty the dataset
   method: fixed
   k_features: 8        # must equal the injected rotation's k
   layers: [1]          # fixed rotation is tied to one (layer, token_position)

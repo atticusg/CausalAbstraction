@@ -323,6 +323,14 @@ def compute_interchange_scores(
             # Process and decode model outputs from batch dictionaries
             dumped_outputs = []
             flattened_outputs = []
+            # ``raw_outputs`` is a legacy-artifact-only field: the stored
+            # per-batch ``raw_results`` schema — a LIST of per-batch dicts
+            # (``[{"string": ..., "sequences": ...}, ...]``). No current
+            # producer writes it (post-EU5a producers return the flat
+            # GenerationResult, #486, and nothing emits ``raw_outputs``);
+            # this loop only ever reads artifacts saved before EU5a, which
+            # may carry several batches and bare-str single-example entries
+            # — hence the tolerant reading below (no artifact migration).
             for batch_dict in raw_outputs:
                 # Use the string field that's already in batch_dict
                 batch_strings = batch_dict["string"]

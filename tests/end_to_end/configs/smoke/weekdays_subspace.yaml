@@ -27,6 +27,7 @@ locate:
   batch_size: 2
 
 subspace:
+  filter_correct: false  # tiny-random solves ~nothing; correct-only filtering would empty the dataset
   # tiny-random has hidden_size=16, so PCA can fit at most 16 components.
   k_features: 8
   layers: [1]

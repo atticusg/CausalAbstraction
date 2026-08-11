@@ -31,7 +31,7 @@ def run_dbm_binary_scan(
     """Run DBM binary masking over a (layer × token_position) grid.
 
     All cells are trained in a single ``train_interventions`` call by passing
-    the per-cell targets as a ``Dict[(layer, pos_id), InterchangeTarget]``.
+    the per-cell spec grid (``{(layer, pos_id): [[SiteSpec]]}``).
 
     Args:
         pipeline: LM pipeline.
@@ -90,7 +90,7 @@ def run_dbm_binary_scan(
 
     result = train_interventions(
         causal_model=task.causal_model,
-        interchange_targets=targets,
+        grid=targets,
         train_dataset=train_dataset,
         test_dataset=test_dataset,
         pipeline=pipeline,
@@ -112,10 +112,18 @@ def run_dbm_binary_scan(
     for res in result["results_by_key"].values():
         aggregated_feature_indices.update(res.get("feature_indices", {}))
     if aggregated_feature_indices:
+        # Plot axes come from the grid's own specs (structural join); the
+        # feature_indices keys are opaque spec keys and are never parsed.
+        from causalab.io.plots.grid_cells import cells_from_site_grid
+
+        component_type, cells = cells_from_site_grid(
+            targets, aggregated_feature_indices
+        )
         heatmap_dir = os.path.join(out_dir, "heatmaps")
         os.makedirs(heatmap_dir, exist_ok=True)
         plot_binary_mask(
-            feature_indices=aggregated_feature_indices,
+            component_type,
+            cells,
             title="DBM Selected Units (binary)",
             save_path=os.path.join(heatmap_dir, f"raw_output_mask.{figure_format}"),
             figure_format=figure_format,

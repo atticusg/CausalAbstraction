@@ -40,15 +40,16 @@ from causalab.methods.ablation import (
     run_ablation_scan,
 )
 from causalab.methods.metric import compute_base_accuracy, make_causal_metric
-from causalab.neural.activations.targets import (
-    build_attention_head_targets,
-    build_attention_output_targets,
-    build_mlp_targets,
-    build_residual_stream_targets,
+from causalab.neural.activations.site_grids import (
+    SiteGrid,
+    build_attention_head_sites,
+    build_attention_output_sites,
+    build_mlp_sites,
+    build_residual_stream_sites,
 )
-from causalab.neural.units import InterchangeTarget
+from causalab.neural.specs import SiteSpec
 from causalab.runner.helpers import (
-    generate_datasets,
+    prepare_datasets,
     resolve_task,
     _task_config_for_metadata,  # pyright: ignore[reportPrivateUsage]
 )
@@ -75,59 +76,57 @@ def _resolve_target_variable(cfg: DictConfig) -> str:
     return variable
 
 
-def _build_grid_targets(
+def _build_grid_sites(
     pipeline, component_type: str, layers: list[int], heads: list[int], span
-) -> dict[tuple[Any, ...], InterchangeTarget]:
-    """One single-unit target per grid cell, dispatched on component type.
+) -> SiteGrid:
+    """One single-spec grid cell per component, dispatched on component type.
 
     ``attention_head`` is keyed ``(layer, head)``; ``attention_output``, ``mlp``
     and ``residual`` are keyed ``(layer, span.id)`` (a layer × span grid).
     """
     if component_type == "attention_head":
-        return build_attention_head_targets(pipeline, layers, heads, span)
+        return build_attention_head_sites(pipeline, layers, heads, span)
     if component_type == "attention_output":
-        return build_attention_output_targets(pipeline, layers, [span])
+        return build_attention_output_sites(pipeline, layers, [span])
     if component_type == "residual":
-        return build_residual_stream_targets(pipeline, layers, [span])
-    return build_mlp_targets(pipeline, layers, [span])
+        return build_residual_stream_sites(pipeline, layers, [span])
+    return build_mlp_sites(pipeline, layers, [span])
 
 
-def _combo_units(pipeline, component_type: str, combo: list[Any], span) -> list[Any]:
-    """Materialize the units for one combo entry.
+def _combo_units(
+    pipeline, component_type: str, combo: list[Any], span
+) -> list[SiteSpec]:
+    """Materialize the specs for one combo entry.
 
     ``attention_head`` combos are ``[[layer, head], ...]``; ``attention_output`` /
-    ``mlp`` / ``residual`` combos are ``[layer, ...]``. Units are built via the
-    same target builders (one cell at a time) so they carry identical
-    featurizers/shapes to the grid units.
+    ``mlp`` / ``residual`` combos are ``[layer, ...]``. Specs are built via the
+    same grid builders (one cell at a time) so they carry identical
+    featurizers/widths to the grid specs.
     """
-    units: list[Any] = []
+    specs: list[SiteSpec] = []
     if component_type == "attention_head":
         for layer, head in combo:
-            target = build_attention_head_targets(pipeline, [layer], [head], span)
-            units.extend(target[(layer, head)].flatten())
+            grid = build_attention_head_sites(pipeline, [layer], [head], span)
+            specs.extend(grid[(layer, head)][0])
     else:
         for layer in combo:
-            target = _build_grid_targets(pipeline, component_type, [layer], [], span)
-            units.extend(target[(layer, span.id)].flatten())
-    return units
+            grid = _build_grid_sites(pipeline, component_type, [layer], [], span)
+            specs.extend(grid[(layer, span.id)][0])
+    return specs
 
 
 def _build_reference_vectors(
     mode: str,
     pipeline,
     dataset,
-    units: list[Any],
+    specs: list[SiteSpec],
     batch_size: int,
 ) -> dict[str, torch.Tensor]:
-    """Zero or corpus-mean reference vector per unit id, built once for all units.
-
-    Units are grouped one-per-group into a combined target so a single
-    ``make_*`` call covers the whole grid (plus any combo units).
-    """
-    combined_target = InterchangeTarget([[u] for u in units])
+    """Zero or corpus-mean reference vector per spec key, built once for all
+    grid (plus combo) specs in a single ``make_*`` call."""
     if mode == "zero":
-        return make_zero_vectors(combined_target)
-    return make_mean_vectors(pipeline, dataset, combined_target, batch_size=batch_size)
+        return make_zero_vectors(specs)
+    return make_mean_vectors(pipeline, dataset, specs, batch_size=batch_size)
 
 
 def main(cfg: DictConfig) -> dict[str, Any]:
@@ -179,13 +178,14 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         use_chat_template=cfg.model.get("chat_template", False),
         chat_answer_directive=cfg.model.get("chat_answer_directive"),
     )
-    train_dataset, test_dataset = generate_datasets(
+    train_dataset, test_dataset = prepare_datasets(
         task,
         n_train=cfg.task.n_train,
         n_test=cfg.task.n_test,
         seed=cfg.seed,
         enumerate_all=cfg.task.enumerate_all,
         resample_variable=cfg.task.get("resample_variable", "all"),
+        filter_correct=False,
     )
 
     base = compute_base_accuracy(
@@ -208,7 +208,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     )
     span = resolve_span(analysis.span, task, pipeline, test_dataset)
 
-    targets = _build_grid_targets(pipeline, component_type, layers, heads, span)
+    targets = _build_grid_sites(pipeline, component_type, layers, heads, span)
 
     # --- combos (optional) ----------------------------------------------------
     raw_combos = analysis.get("combos")
@@ -221,14 +221,16 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         _combo_units(pipeline, component_type, combo, span) for combo in combos
     ]
 
-    # --- reference vectors (one build covering grid + combo units) -----------
-    grid_units = [u for target in targets.values() for u in target.flatten()]
-    all_units = {u.id: u for u in grid_units}
-    for units in combo_unit_sets:
-        for u in units:
-            all_units[u.id] = u
+    # --- reference vectors (one build covering grid + combo specs) -----------
+    grid_specs = [
+        spec for groups in targets.values() for group in groups for spec in group
+    ]
+    all_specs = {spec.key: spec for spec in grid_specs}
+    for specs in combo_unit_sets:
+        for spec in specs:
+            all_specs[spec.key] = spec
     vectors = _build_reference_vectors(
-        mode, pipeline, train_dataset, list(all_units.values()), analysis.batch_size
+        mode, pipeline, train_dataset, list(all_specs.values()), analysis.batch_size
     )
 
     # --- scan -----------------------------------------------------------------
@@ -246,9 +248,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
 
     # --- combos ---------------------------------------------------------------
     combo_results = []
-    for combo, units in zip(combos, combo_unit_sets):
+    for combo, specs in zip(combos, combo_unit_sets):
         combo_acc = run_ablation_combo(
-            units,
+            specs,
             test_dataset,
             pipeline,
             vectors,
@@ -273,10 +275,11 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     if raw_keep is not None:
         keep_set = {int(k) for k in cast(list, OmegaConf.to_container(raw_keep))}
         complement_units = [
-            u
-            for key, target in targets.items()
+            spec
+            for key, groups in targets.items()
             if int(key[0]) not in keep_set
-            for u in target.flatten()
+            for group in groups
+            for spec in group
         ]
         if not complement_units:
             logger.warning(

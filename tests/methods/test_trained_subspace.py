@@ -1,13 +1,12 @@
 """Direct tests for ``causalab.methods.trained_subspace.subspace``.
 
 Covers the lossy projection round-trip (orthogonal-complement preserved via
-the error term) and the save/load path that round-trips a SubspaceFeaturizer
-through :meth:`Featurizer.save_modules`/:meth:`Featurizer.load_modules`.
+the error term) and the serialization path that round-trips a
+SubspaceFeaturizer through :meth:`Featurizer.to_dict`/:meth:`Featurizer.from_dict`
+(the bundle payload format of ``causalab.neural.specs.save_site_specs``).
 """
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import pytest
 import torch
@@ -42,8 +41,8 @@ class TestSubspaceFeaturizerProperty:
         x_rec = sub.inverse_featurize(f, err)
         assert torch.allclose(x, x_rec, atol=1e-5)
 
-    def test_save_load_roundtrip_preserves_reconstruction(
-        self, tmp_path: Path, rng: torch.Generator
+    def test_dict_roundtrip_preserves_reconstruction(
+        self, rng: torch.Generator
     ) -> None:
         x = randn((2, 4), rng)
         sub = SubspaceFeaturizer(shape=(4, 4), trainable=False)
@@ -51,10 +50,7 @@ class TestSubspaceFeaturizerProperty:
         f, err = sub.featurize(x)
         x_rec = sub.inverse_featurize(f, err)
 
-        path_root = tmp_path / "unit"
-        sub.save_modules(str(path_root))
-
-        loaded = Featurizer.load_modules(str(path_root))
+        loaded = Featurizer.from_dict(sub.to_dict())
         f2, err2 = loaded.featurize(x)
         x_rec2 = loaded.inverse_featurize(f2, err2)
 

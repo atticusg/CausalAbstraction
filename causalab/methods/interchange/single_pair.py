@@ -10,7 +10,7 @@ from causalab.neural.token_positions import TokenPosition
 from causalab.causal.counterfactual_dataset import CounterfactualExample
 from causalab.causal.trace import CausalTrace, Mechanism
 from causalab.neural.activations.interchange_mode import run_interchange_interventions
-from causalab.neural.activations.targets import build_residual_stream_targets
+from causalab.neural.activations.site_grids import build_residual_stream_sites
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +113,10 @@ def run_single_pair_trace(
 
     Returns:
         Dictionary containing:
-            - intervention_results: raw intervention outputs keyed by (layer, pos_id)
+            - intervention_results: one flat
+              :class:`~causalab.neural.pipeline.GenerationResult` per
+              (layer, pos_id) key (EU5b, #487; here a single-example run, so
+              ``result.strings[0]`` is the traced cell's decoded output)
             - metadata: experiment configuration
             - token_positions: the positions actually traced, after dropping any
               the counterfactual can't supply (#176). Use these — not the input
@@ -151,7 +154,7 @@ def run_single_pair_trace(
             dropped_ids,
         )
 
-    targets = build_residual_stream_targets(
+    grid = build_residual_stream_sites(
         pipeline=pipeline,
         layers=layers,
         token_positions=token_positions,
@@ -159,13 +162,13 @@ def run_single_pair_trace(
     )
 
     intervention_results = {}
-    for (layer, pos_id), target in tqdm(
-        targets.items(), desc="Running interventions", disable=not verbose
+    for (layer, pos_id), groups in tqdm(
+        grid.items(), desc="Running interventions", disable=not verbose
     ):
         outputs = run_interchange_interventions(
             pipeline=pipeline,
             counterfactual_dataset=counterfactual_dataset,
-            interchange_target=target,
+            groups=groups,
             batch_size=1,
             output_scores=False,
             source_pipeline=source_pipeline,

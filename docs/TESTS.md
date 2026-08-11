@@ -113,6 +113,7 @@ A runner-scope, full-pipeline, real-model end-to-end pin under `tests/end_to_end
    uv run python tests/end_to_end/update_goldens.py --baseline golden/age \
        --i-have-reviewed-the-diff
    ```
+8. **VRAM reclamation is gc-driven — no per-test model teardown needed.** A dropped nnterp `StandardizedTransformer` is never freed by refcount alone (its `__init__` accessors, e.g. `layers_output`, hold strong back-references — an instance↔accessor cycle), so a golden test's dead backbone survives until a cycle-collector pass. `tests/conftest.py::pytest_runtest_teardown` runs `gc.collect()` + `torch.cuda.empty_cache()` after every `golden`-marked test — the single chokepoint that keeps a serial one-process `pytest -m golden` run within VRAM. Guard: `tests/neural/test_pipeline.py::TestModelReclamationUnit` fails per-PR on CPU if a dep bump adds a global pin gc cannot reclaim.
 
 
 ## GitHub CI

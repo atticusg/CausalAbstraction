@@ -8,11 +8,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from .utils import create_heatmap
-from causalab.neural.activations.targets import (
-    detect_component_type_from_targets,
+from causalab.neural.activations.site_grids import (
+    SiteGrid,
     extract_grid_dimensions_from_targets,
+    grid_component,
 )
-from causalab.neural.units import InterchangeTarget
 
 
 def plot_attention_head_heatmap(
@@ -197,30 +197,31 @@ def plot_variable_localization_heatmap(
 
 def plot_score_heatmap(
     scores: Dict[Tuple[Any, ...], float],
-    interchange_targets: Dict[tuple[Any, ...], InterchangeTarget],
+    interchange_targets: SiteGrid,
     title: str,
     save_path: str,
     figure_format: str = "png",
 ) -> None:
     """
-    Plot score heatmap, auto-detecting component type from targets.
+    Plot score heatmap, auto-detecting component type from the spec grid.
 
-    This unified dispatcher automatically detects whether the targets represent
-    attention heads, residual stream positions, or MLPs, and calls the appropriate
-    plotting function.
+    This unified dispatcher structurally detects whether the grid targets
+    attention heads, residual stream positions, or MLPs, and calls the
+    appropriate plotting function.
 
     Args:
         scores: Dict mapping (layer, x) tuples to scores (0.0 to 1.0).
                 For attention heads: (layer, head) -> score
                 For residual stream/MLP: (layer, token_position_id) -> score
-        interchange_targets: Dict mapping keys to InterchangeTarget objects.
-                            Used to detect component type and extract grid dimensions.
+        interchange_targets: A built spec grid
+            (:mod:`causalab.neural.activations.site_grids`). Used to detect
+            component type and extract grid dimensions.
         title: Plot title.
         save_path: Path to save the figure.
         figure_format: ``png`` or ``pdf`` for static output.
     """
-    # Detect component type
-    component_type = detect_component_type_from_targets(interchange_targets)
+    # Detect component type (structural — reads the first spec's engine site)
+    component_type = grid_component(interchange_targets)
 
     # Extract grid dimensions
     grid_dims = extract_grid_dimensions_from_targets(
