@@ -9,7 +9,7 @@ from causalab.neural.token_positions import (
     build_token_positions,
     TokenPosition,
 )
-from causalab.neural.pipeline import LMPipeline
+from causalab.neural.token_positions import LMPipeline
 
 from typing import Any
 

@@ -42,7 +42,29 @@ from typing import Any, Callable, Dict, List, Mapping, Union, cast
 import torch
 
 from causalab.causal.trace import CausalTrace, Mechanism
-from causalab.neural.pipeline import LMPipeline
+from typing import Protocol, runtime_checkable
+
+
+@runtime_checkable
+class EncodingPipeline(Protocol):
+    """The structural surface this module needs from a pipeline: a
+    tokenizer, batch loading with offset mappings, and the chat-prefix
+    facts. The Plan-era ``LMPipeline`` satisfied it; any encoder that
+    tokenizes the way the run does (one padded frame, offset mappings,
+    optional chat prefix) can drive these utilities."""
+
+    tokenizer: Any
+    max_length: Any
+    use_chat_template: bool
+
+    def load(self, traces: Any, **kwargs: Any) -> Any: ...
+
+    def _chat_prefix_token_count(self) -> int: ...
+
+
+#: Historical name — the task packages' token_positions modules annotate
+#: against ``LMPipeline``; the structural protocol is the surviving contract.
+LMPipeline = EncodingPipeline
 
 
 def _indexer_accepts_is_original(indexer: Callable[..., Any]) -> bool:

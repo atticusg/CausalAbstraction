@@ -11,7 +11,7 @@ import torch
 
 from causalab.neural.pytorch_hooks.encoding import encode
 
-from tests.neural.activations import hook_oracle as oracle_lib
+from tests.neural.pytorch_hooks import hook_oracle_lib as oracle_lib
 from tests.neural.pytorch_hooks._drive import base_data_section, executor_for
 from tests.neural.pytorch_hooks.conftest import BASE_TEXT, SOURCE_TEXT, OracleShim
 

@@ -13,16 +13,15 @@ from __future__ import annotations
 
 import pytest
 
-from causalab.neural.pipeline import LMPipeline
-from tests._helpers.tiny import tiny_random_model
+from tests._helpers.pipeline_shim import PipelineShim
 
 
 @pytest.fixture(scope="session")
-def tiny_pipeline() -> LMPipeline:
+def tiny_pipeline() -> PipelineShim:
     """Session-scoped :class:`LMPipeline` backed by the tiny Llama stub.
 
     Reuses :func:`tests._helpers.tiny.tiny_random_model`'s ``lru_cache``d model
     instance so this fixture's only cost is the
     ``AutoTokenizer.from_pretrained`` call (sub-second, HF-cached).
     """
-    return LMPipeline(tiny_random_model(), max_new_tokens=1, padding_side="left")
+    return PipelineShim("hf-internal-testing/tiny-random-LlamaForCausalLM")

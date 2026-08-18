@@ -26,16 +26,3 @@ def path_with_figure_format(path: str, figure_format: str | None) -> str:
     fmt = normalize_figure_format(figure_format, default="png")
     root, _ext = os.path.splitext(path)
     return f"{root}.{fmt}"
-
-
-def resolve_figure_format_from_analysis(analysis) -> str:
-    """Read ``analysis.visualization.figure_format`` (Hydra / OmegaConf / dict)."""
-    vis = None
-    if hasattr(analysis, "get"):
-        vis = analysis.get("visualization")
-    if not vis:
-        return normalize_figure_format(None, default="png")
-    raw = (
-        vis.get("figure_format", "png") if hasattr(vis, "get") else vis["figure_format"]
-    )
-    return normalize_figure_format(raw, default="png")

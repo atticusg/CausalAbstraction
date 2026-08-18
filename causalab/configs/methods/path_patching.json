@@ -1,0 +1,39 @@
+{
+  "version": "1",
+  "description": "Path patching (IOI): sender -> receiver with off-path attention frozen; the receiver value is harvested in the patched intervened model and injected into an otherwise clean run.",
+  "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
+  "data": {
+    "base":   {"dataset": "ioi/test", "field": "input"},
+    "source": {"dataset": "ioi/test", "field": "counterfactual_inputs[0]"}
+  },
+  "sites": {
+    "sender":   {"component": "attention_value",  "layer": 9, "head": 9},
+    "receiver": {"component": "block_input",      "layer": 12},
+    "a10":      {"component": "attention_output", "layer": 10},
+    "a11":      {"component": "attention_output", "layer": 11},
+    "lm_head": {"component": "lm_head"}
+  },
+  "reads": {
+    "v_sender":   {"site": "sender",   "pos": -1, "model": "original", "input": "source"},
+    "v_a10":      {"site": "a10",      "pos": -1, "model": "original", "input": "base"},
+    "v_a11":      {"site": "a11",      "pos": -1, "model": "original", "input": "base"},
+    "v_receiver": {"site": "receiver", "pos": -1, "model": "patched", "input": "base"},
+    "logits":     {"site": "lm_head",  "pos": -1, "model": "final", "input": "base"}
+  },
+  "edits": {
+    "swap_sender": {"site": "sender",   "pos": -1, "do": {"swap": "v_sender"}},
+    "freeze_10":   {"site": "a10",      "pos": -1, "do": {"swap": "v_a10"}},
+    "freeze_11":   {"site": "a11",      "pos": -1, "do": {"swap": "v_a11"}},
+    "inject":      {"site": "receiver", "pos": -1, "do": {"swap": "v_receiver"}}
+  },
+  "intervened_models": {
+    "patched": {"input": "base", "edits": ["swap_sender", "freeze_10", "freeze_11"]},
+    "final":   {"input": "base", "edits": ["inject"]}
+  },
+  "metrics": {
+    "logit_diff": {"kind": "logit_diff", "of": "logits", "a": "answer", "b": "cf_answer"}
+  },
+  "save": [
+    {"value": "logit_diff", "model": "final", "input": "base", "file_path": "logit_diff.parquet"}
+  ]
+}
