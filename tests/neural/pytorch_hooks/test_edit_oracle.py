@@ -347,3 +347,46 @@ def test_reads_see_the_fully_edited_state(bundle, oracle: OracleShim):
         :, 1, :
     ]
     torch.testing.assert_close(executor.read_value("v_at")[:, 0, :], src_resid, **TOL)
+
+
+def test_composed_chain_sizes_stages_by_chain_width(llama_bundle):
+    """§2.5 composition: a gate after a k=3 rotation is a 3-wide gate, and
+    the composed swap equals the hand-rolled two-stage math — the source's
+    on-features replace the base's inside the rotated subspace, everything
+    else (the gate's off-features AND the rotation's complement) survives
+    from the base."""
+    d = llama_bundle.info.hidden_size
+    doc = interchange_doc()
+    doc["featurizers"] = {
+        "rot": {"kind": "subspace", "k": 3, "parametrization": "cayley"},
+        "gate": {"kind": "gate"},
+    }
+    doc["reads"]["v_src"]["featurizer"] = ["rot", "gate"]
+    doc["edits"]["patch"]["featurizer"] = ["rot", "gate"]
+    executor = executor_for(
+        doc, llama_bundle, base_texts=[BASE_TEXT], source_texts=[SOURCE_TEXT]
+    )
+    gate = executor.stage("gate")
+    assert tuple(gate.theta.shape) == (3,)  # chain width, not the site width d
+    with torch.no_grad():  # a non-trivial hard-eval mask: on for the last dim
+        gate.theta.copy_(torch.tensor([-2.0, -1.0, 2.0]))
+    rot_q = executor.stage("rot").slot_params()["weight"].detach()
+    assert tuple(rot_q.shape) == (d, 3)
+
+    have = executor.read_value("logits")[:, 0, :]
+    shim = OracleShim(hf_model=llama_bundle.model)
+    base_inputs = _inputs(llama_bundle, BASE_TEXT)
+    base_resid = oracle_lib.capture_residual(shim, 0, base_inputs)[:, 1:2, :]
+    src_resid = oracle_lib.capture_residual(
+        shim, 0, _inputs(llama_bundle, SOURCE_TEXT)
+    )[:, 1:2, :]
+    mask = (gate.theta > 0).float()
+    z_base, z_src = base_resid @ rot_q, src_resid @ rot_q
+    z_new = mask * z_src + (1.0 - mask) * z_base  # gate swap keeps off-features
+    patch = base_resid - z_base @ rot_q.T + z_new @ rot_q.T  # rot err survives
+    want = oracle_lib.next_token_logits(
+        shim, base_inputs, layer=0, positions=[1], patch_values=patch
+    )
+    clean = oracle_lib.next_token_logits(shim, base_inputs)
+    assert not torch.allclose(want, clean, atol=1e-4)  # non-vacuity
+    torch.testing.assert_close(have, want, **TOL)
