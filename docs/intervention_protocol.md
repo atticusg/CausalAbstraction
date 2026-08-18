@@ -1,29 +1,9 @@
 # Intervention Protocol — specification v1
 
-Self-contained specification of a declarative format for causal-intervention
-experiments on neural networks, and of the contract a backend (nnsight,
-Megatron, SGLang, …) implements to run it.
-(Design history: `intervention_protocol_readme.md` and the
-`intervention_protocol_*` series; worked files in `protocol_examples/` —
-neither is required reading.)
+The **Intervention Protocol** defines causal intervention experiments on neural networks, with some useful properties:
 
-## 0. Principles
-
-- **An experiment is a value, not a program.** One JSON document fully
-  describes an experiment: it can be hashed, diffed, shared, and re-run.
-  It never contains tensors, closures, resolved token indices, module
-  references, or anything only one backend could interpret.
-- **The parser owns execution.** The document says *what*; the parser/planner
-  derives *how* (forward count, fusion, batching, sweep parallelization) and
-  `explain` reports it.
-- **Everything declared must reach a sink; everything derivable is derived.**
-  Dead declarations are load errors. Authored files are minimal; the stamped
-  canonical form materializes every default (sec. 7).
-- **Format**: strict JSON (unknown keys = error). YAML is accepted at the
-  authoring surface; the object model is normative. JSON has no comments —
-  use `description`.
-- **v1 scope**: prefill-only. No generation, no decode-step edits, one neural
-  model per document.
+- **Serializable JSON document that's easily shareable and reproducible**: The intervention protocol is one JSON document that fully describes an experiment: it can be hashed, diffed, shared, and re-run. It is self-contained and enables exact reproduction.
+- **Agnostic to neural network interfaces.**: The intervention protocol defines the experiment, not the implementation. The protocol is passed to a separate parser/compiler compiling the protocol into runnable code of intervention backends (like pytorch-native hooks, NNsight/NNterp, SGLang, Megatron, etc.). The protocol says *what*; backend specific parser/planner derives *how* (forward count, fusion, batching, sweep parallelization) and execute an intervention protocol.
 
 ## 1. Document layout
 
@@ -375,6 +355,21 @@ A conforming loader rejects the document unless all of these hold:
 
 ## 7. Canonical form and digests
 
+- **An experiment is a value, not a program.** One JSON document fully
+  describes an experiment: it can be hashed, diffed, shared, and re-run.
+  It never contains tensors, closures, resolved token indices, module
+  references, or anything only one backend could interpret.
+- **The parser owns execution.** The document says *what*; the parser/planner
+  derives *how* (forward count, fusion, batching, sweep parallelization) and
+  `explain` reports it.
+- **Everything declared must reach a sink; everything derivable is derived.**
+  Dead declarations are load errors. Authored files are minimal; the stamped
+  canonical form materializes every default (sec. 7).
+- **Format**: strict JSON (unknown keys = error). YAML is accepted at the
+  authoring surface; the object model is normative. JSON has no comments —
+  use `description`.
+- **v1 scope**: prefill-only. No generation, no decode-step edits, one neural
+  model per document.
 - **Canonical-stamp principle**: the authored file may be minimal; the
   canonical form materializes *everything* — every default (constant LR,
   optimizer betas, dtypes), every resolved reference (dataset digests,
