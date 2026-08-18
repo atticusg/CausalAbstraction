@@ -706,3 +706,22 @@ def get_specific_path_filter(
         return False
 
     return check_path
+
+
+def form_groups(var_map: dict[Any, list[str]]) -> list[list[str]]:
+    """Distinct, order-stable form groups across a variable's values.
+
+    ``var_map`` is ``{value: [form, ...]}``. Values whose form lists are
+    identical collapse to a single group — this is where the dedup that
+    ``output_token_values`` used to encode emerges for free (e.g. many
+    ``(entity, group)`` tuples sharing one entity's forms).
+    """
+    groups: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for forms in var_map.values():
+        key = tuple(forms)
+        if key in seen:
+            continue
+        seen.add(key)
+        groups.append(list(forms))
+    return groups

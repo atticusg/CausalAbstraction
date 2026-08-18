@@ -11,7 +11,7 @@ handling the case where entities appear in both the statement and the question.
 import re
 from typing import Any, Callable, Dict, List, Optional
 
-from causalab.neural.pipeline import LMPipeline
+from causalab.neural.token_positions import LMPipeline
 from causalab.neural.token_positions import (
     TokenPosition,
     build_token_positions,

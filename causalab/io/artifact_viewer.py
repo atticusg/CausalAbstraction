@@ -107,11 +107,8 @@ from typing import Any
 
 try:
     import yaml
-except ImportError as exc:  # pragma: no cover - yaml ships transitively via hydra-core
-    raise ImportError(
-        "PyYAML is required for causalab.io.artifact_viewer "
-        "(normally present via hydra-core / omegaconf)."
-    ) from exc
+except ImportError as exc:  # pragma: no cover — pyyaml is a direct dependency
+    raise ImportError("PyYAML is required for causalab.io.artifact_viewer.") from exc
 
 try:
     import markdown as _markdown
