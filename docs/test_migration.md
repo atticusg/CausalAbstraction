@@ -267,7 +267,7 @@ file* paths are relative to `tests/`. Parametrized data dirs (`configs/`,
 
 ## Known coverage gaps
 
-- **Parity captured-goldens re-drive** — in progress on this branch:
+- **Parity captured-goldens re-drive** — landed on this branch:
   `neural/pytorch_hooks/test_parity_goldens.py` replays every portable pinned
   case, but 2 gqa `head_value` pins are explicitly skipped (the §2.4 vocabulary
   has no v_proj-output component) and the skip table is itself under audit.
