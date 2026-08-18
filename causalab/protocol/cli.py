@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-from causalab.protocol.backend import requires
+from causalab.protocol.backend import requires_campaign
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.loader import LoadedProtocol, check_data_columns, load
 from causalab.protocol.plan import plan_point
@@ -173,7 +173,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _run(loaded: LoadedProtocol, env: ResolutionEnv, backend: Any, out: Path) -> Any:
     from causalab.protocol.backend import ExecutionRequest, choose_backend
 
-    chosen = choose_backend(loaded.point_documents[0], [backend])
+    chosen = choose_backend(list(loaded.point_documents), [backend])
     request = ExecutionRequest(
         points=tuple(p.raw for p in loaded.expansion.points),
         canonical=loaded.canonical_points,
@@ -195,7 +195,8 @@ def _explain(loaded: LoadedProtocol) -> None:
             f"axes      {', '.join(f'{a.id} ({len(a.values)} values)' for a in axes)}"
         )
     print(f"points    {len(loaded.expansion.points)}")
-    print(f"requires  {sorted(requires(doc)) or 'nothing beyond a forward pass'}")
+    needed = requires_campaign(list(loaded.point_documents))
+    print(f"requires  {sorted(needed) or 'nothing beyond a forward pass'}")
     plan = plan_point(doc)
     print(f"forwards  {plan.num_forwards} per point")
     for group in plan.groups:

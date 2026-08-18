@@ -50,16 +50,67 @@ class LoadedProtocol:
 
 def load_text(path: Path) -> dict[str, Any]:
     """Read one authored file. JSON is the normative surface; ``.yaml`` /
-    ``.yml`` parse through ``yaml.safe_load`` into the same object model."""
+    ``.yml`` parse through a duplicate-key-rejecting SafeLoader into the
+    same object model (strict keys hold on both surfaces, §5.1)."""
     text = path.read_text()
     if path.suffix in (".yaml", ".yml"):
-        import yaml  # the optional authoring surface — not a load-path dependency
-
-        raw = yaml.safe_load(text)
+        raw = _load_yaml(text)
         if not isinstance(raw, dict):
             raise ParseError("P1", "the top level must be a mapping")
+        _check_json_values(raw)
         return raw
     return load_raw(text)
+
+
+def _load_yaml(text: str) -> Any:
+    import yaml  # the optional authoring surface — not a load-path dependency
+
+    class _StrictLoader(yaml.SafeLoader):
+        pass
+
+    def _mapping(loader: Any, node: Any) -> dict[Any, Any]:
+        out: dict[Any, Any] = {}
+        for key_node, value_node in node.value:
+            key = loader.construct_object(key_node)
+            if key in out:
+                raise ParseError("P2", f"duplicate key {key!r} in one object")
+            out[key] = loader.construct_object(value_node)
+        return out
+
+    _StrictLoader.add_constructor(
+        yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping
+    )
+    try:
+        return yaml.load(text, Loader=_StrictLoader)  # noqa: S506 — SafeLoader subclass
+    except yaml.YAMLError as err:
+        raise ParseError("P1", f"not valid YAML: {err}") from err
+
+
+def _check_json_values(raw: Any, *, _path: str = "") -> None:
+    """The JSON object model is normative (§0): every mapping key is a
+    string and every number is finite — whatever surface (YAML, an artifact
+    store) produced the tree."""
+    if isinstance(raw, Mapping):
+        for key, value in raw.items():
+            if not isinstance(key, str):
+                raise ParseError(
+                    "P2",
+                    f"mapping key {key!r} is not a string — quote it at the "
+                    "authoring surface",
+                    path=_path or None,
+                )
+            _check_json_values(value, _path=f"{_path}.{key}" if _path else str(key))
+    elif isinstance(raw, list):
+        for item in raw:
+            _check_json_values(item, _path=_path)
+    elif isinstance(raw, float) and (
+        raw != raw or raw in (float("inf"), float("-inf"))
+    ):
+        raise ParseError(
+            "P2",
+            f"non-finite number at {_path or '<root>'} — the object model is JSON",
+            path=_path or None,
+        )
 
 
 def load(
@@ -74,8 +125,11 @@ def load(
     raw = dict(load_text(source)) if isinstance(source, Path) else dict(source)
     if overrides:
         raw = apply_overrides(raw, overrides)
-    parse_document(raw)  # authored-form shape gate (wrappers intact)
+    # artifact fields resolve first (§1: legal anywhere a value is), then the
+    # strict parse gates the fully-literal authored form
     resolved = resolve_artifact_fields(raw, env)
+    _check_json_values(resolved)
+    parse_document(resolved)  # authored-form shape gate (sweeps intact)
     expansion = expand(resolved, point_cap=point_cap)
     point_documents: list[Document] = []
     for point in expansion.points:
@@ -100,13 +154,27 @@ def load(
 
 
 def _check_loaded_featurizers(doc: Document, env: ResolutionEnv) -> None:
-    """§2.5: a ``file_path`` featurizer's stamped ArtifactIdentity must match
-    what the document implies — model, site record, k, parametrization,
-    dtype. The expected site is the (single) site the featurizer's reads and
-    edits use."""
+    """§2.5/§8: every ``file_path`` load is checked at load time. A
+    featurizer bundle's stamped ArtifactIdentity must match what the
+    document implies (model, site record, k, parametrization, dtype); a
+    ``params`` entry's file must exist, and its identity — when stamped —
+    must name the same model (free constant tensors may come from outside
+    causalab, so an unstamped params file is existence-checked only; a
+    stamped one must not contradict the document)."""
     import dataclasses as _dc
 
     from causalab.protocol.resolve import check_artifact_identity
+
+    for pname, pspec in doc.params.items():
+        if not isinstance(pspec.file_path, str):
+            continue
+        stamped = env.artifacts.read_identity(pspec.file_path)  # V15 if missing
+        if stamped is not None:
+            check_artifact_identity(
+                stamped,
+                {"model_key": doc.model.key, "model_revision": doc.model.revision},
+                what=f"params entry {pname!r} ({pspec.file_path})",
+            )
 
     for fname, spec in doc.featurizers.items():
         if not isinstance(spec.file_path, str):

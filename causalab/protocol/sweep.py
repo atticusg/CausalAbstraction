@@ -33,6 +33,10 @@ __all__ = ["Axis", "Expansion", "Point", "expand", "find_axes"]
 #: (§5.14 — "may be capped without an explicit override flag").
 DEFAULT_POINT_CAP = 4096
 
+#: Hard sanity bound on one axis's value count, checked BEFORE the range
+#: sugar materializes — the point cap is overridable, this is not.
+MAX_AXIS_VALUES = 1_000_000
+
 
 @dataclasses.dataclass(frozen=True)
 class Axis:
@@ -109,6 +113,14 @@ def _sweep_values(node: Mapping[str, Any], path: tuple[str, ...]) -> tuple[Any, 
         if step == 0:
             raise ValidationError(
                 14, "sweep range step must be non-zero", path=".".join(path)
+            )
+        n = len(range(rng[0], rng[1], step))  # O(1) — no materialization yet
+        if n > MAX_AXIS_VALUES:
+            raise ValidationError(
+                14,
+                f"sweep range denotes {n} values, over the per-axis bound of "
+                f"{MAX_AXIS_VALUES} — refuse before materializing (§5.14)",
+                path=".".join(path),
             )
         values: tuple[Any, ...] = tuple(range(rng[0], rng[1], step))
     elif isinstance(spec, list):

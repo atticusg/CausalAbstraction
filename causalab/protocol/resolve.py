@@ -82,14 +82,35 @@ class ResolutionEnv:
 # --------------------------------------------------------------------------- #
 
 
-def resolve_artifact_fields(raw: Any, env: ResolutionEnv, *, _path: str = "") -> Any:
+def resolve_artifact_fields(
+    raw: Any,
+    env: ResolutionEnv,
+    *,
+    _path: str = "",
+    _seen: frozenset[tuple[str, str]] = frozenset(),
+) -> Any:
     """Replace every ``{"artifact": …, "key": …}`` node in a raw tree with
-    the value it reads. Runs before sweep expansion, so an artifact may
-    supply any leaf a document can author."""
+    the value it reads — recursively, so an artifact may itself store a
+    reference (a cycle is a load error, not a hang). Runs before the parse
+    gate, so a ref is legal anywhere a value is (§1); a mapping that
+    *looks* like a ref but is malformed refuses rather than loading as a
+    literal dict."""
     if isinstance(raw, Mapping):
-        if set(raw) == {"artifact", "key"}:
+        if isinstance(raw.get("artifact"), str):
+            if set(raw) != {"artifact", "key"} or not isinstance(raw.get("key"), str):
+                raise ValidationError(
+                    15,
+                    f"malformed artifact reference {dict(raw)!r} — the shape is "
+                    '{"artifact": "<ref>", "key": "<field>"} exactly (§1)',
+                    path=_path,
+                )
+            pair = (str(raw["artifact"]), str(raw["key"]))
+            if pair in _seen:
+                raise ValidationError(
+                    15, f"artifact reference cycle through {pair!r}", path=_path
+                )
             try:
-                return env.artifacts.read_value(str(raw["artifact"]), str(raw["key"]))
+                value = env.artifacts.read_value(*pair)
             except (FileNotFoundError, KeyError) as err:
                 raise ValidationError(
                     15,
@@ -97,14 +118,19 @@ def resolve_artifact_fields(raw: Any, env: ResolutionEnv, *, _path: str = "") ->
                     "artifact is a load error, never a default (§1)",
                     path=_path,
                 ) from err
+            return resolve_artifact_fields(
+                value, env, _path=_path, _seen=_seen | {pair}
+            )
         return {
             key: resolve_artifact_fields(
-                value, env, _path=f"{_path}.{key}" if _path else key
+                value, env, _path=f"{_path}.{key}" if _path else key, _seen=_seen
             )
             for key, value in raw.items()
         }
     if isinstance(raw, list):
-        return [resolve_artifact_fields(item, env, _path=_path) for item in raw]
+        return [
+            resolve_artifact_fields(item, env, _path=_path, _seen=_seen) for item in raw
+        ]
     return raw
 
 

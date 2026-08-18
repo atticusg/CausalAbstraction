@@ -43,8 +43,8 @@ COMPONENT_RANK: dict[str, int] = {
     "mlp_input": 50,
     "mlp_activation": 60,
     "mlp_output": 70,
-    "expert_output": 71,
-    "router_logits": 72,
+    "router_logits": 71,  # the router fires before the experts it routes to
+    "expert_output": 72,
     "block_output": 80,
     "ln_final": 90,
     "lm_head": 100,
@@ -123,10 +123,12 @@ def _build_group(
         for rname, read in doc.reads.items()
         if read.model == model and str(read.input) == input_role
     )
+    identity = dict(data_identity or {})
     body = {
-        "model": _model_closure(doc, model, set()),
+        "network": {"key": doc.model.key, "revision": doc.model.revision},
+        "model": _model_closure(doc, model, set(), identity),
         "input": input_role,
-        "data": dict(data_identity or {}).get(input_role),
+        "data": identity.get(input_role),
     }
     digest = hashlib.sha256(
         json.dumps(
@@ -136,11 +138,16 @@ def _build_group(
     return ForwardGroup(model=model, input=input_role, taps=taps, digest=digest)
 
 
-def closure_digest(doc: Document, read_name: str) -> str:
+def closure_digest(
+    doc: Document, read_name: str, *, data_identity: Mapping[str, Any] | None = None
+) -> str:
     """The content identity of one read's value: its address plus the full
     closure of the model it reads in. Equal digests across points mean one
     shared harvest (§3)."""
-    body = _read_closure(doc, read_name, set())
+    body = {
+        "network": {"key": doc.model.key, "revision": doc.model.revision},
+        "read": _read_closure(doc, read_name, set(), dict(data_identity or {})),
+    }
     return hashlib.sha256(
         json.dumps(
             body, sort_keys=True, separators=(",", ":"), default=_encode
@@ -158,7 +165,9 @@ def _depth(doc: Document, site_name: str) -> tuple[int, int]:
     return (layer, rank)
 
 
-def _model_closure(doc: Document, model: str, visiting: set[str]) -> Any:
+def _model_closure(
+    doc: Document, model: str, visiting: set[str], identity: Mapping[str, Any]
+) -> Any:
     """Everything that determines a model's activations: for an IM, the
     in-force edits and, recursively, their operand reads' closures. The
     validated acyclicity (§5.7) bounds the recursion; ``visiting`` is a
@@ -174,10 +183,12 @@ def _model_closure(doc: Document, model: str, visiting: set[str]) -> Any:
     edits: dict[str, Any] = {}
     for ename in sorted(im.edits if isinstance(im.edits, tuple) else ()):
         edit = doc.edits[ename]
-        operands = {}
+        operands: dict[str, Any] = {}
         for op in _edit_operand_names(doc, ename):
             if op in doc.reads:
-                operands[op] = _read_closure(doc, op, visiting | {model})
+                operands[op] = _read_closure(doc, op, visiting | {model}, identity)
+        for op in _edit_param_names(doc, ename):
+            operands[op] = _entry(doc.params, op) if op in doc.params else op
         edits[ename] = {
             "site": _entry(doc.sites, str(edit.site)),
             "pos": _pos_entry(doc, edit.pos),
@@ -190,7 +201,25 @@ def _model_closure(doc: Document, model: str, visiting: set[str]) -> Any:
             # a trained featurizer's weights are a function of the whole fit —
             # two points differing only in train.seed must never intern
             train_dep = dataclasses.asdict(doc.train)
-    return {"input": im.input, "edits": edits, "train": train_dep}
+    return {
+        "input": im.input,
+        "data": identity.get(str(im.input)),
+        "edits": edits,
+        "train": train_dep,
+    }
+
+
+def _edit_param_names(doc: Document, ename: str) -> tuple[str, ...]:
+    """Operand names that resolve to params entries or featurizer slots —
+    their specs are part of the written value's identity."""
+    do = doc.edits[ename].do
+    payload = do.payload
+    names: list[str] = []
+    if isinstance(payload, str):
+        names.append(payload)
+    elif isinstance(payload, Mapping):
+        names.extend(v for v in payload.values() if isinstance(v, str))
+    return tuple(n for n in names if n not in doc.reads)
 
 
 def _uses_trained_featurizer(doc: Document, ref: Any) -> bool:
@@ -201,7 +230,9 @@ def _uses_trained_featurizer(doc: Document, ref: Any) -> bool:
     return any(name in trained for name in chain)
 
 
-def _read_closure(doc: Document, read_name: str, visiting: set[str]) -> Any:
+def _read_closure(
+    doc: Document, read_name: str, visiting: set[str], identity: Mapping[str, Any]
+) -> Any:
     read = doc.reads[read_name]
     return {
         "site": _entry(doc.sites, str(read.site)),
@@ -209,7 +240,8 @@ def _read_closure(doc: Document, read_name: str, visiting: set[str]) -> Any:
         "featurizer": _featurizer_entry(doc, read.featurizer),
         "dims": read.dims,
         "input": read.input,
-        "model": _model_closure(doc, str(read.model), visiting),
+        "data": identity.get(str(read.input)),
+        "model": _model_closure(doc, str(read.model), visiting, identity),
         "train": dataclasses.asdict(doc.train)
         if doc.train is not None and _uses_trained_featurizer(doc, read.featurizer)
         else None,
