@@ -124,7 +124,7 @@ notebook.
 | `y` | heatmap ✓ — the second coordinate column |
 | `series` | lines – — one line per value of this coordinate column |
 | `value` | – the plotted column (default `value`), mean-aggregated over examples |
-| `file_path` | ✓ — `.png` or `.pdf`, within the step's output dir |
+| `file_path` | ✓ — `.png` or `.pdf`, within the step's output dir (relative, no parent escapes) |
 
 - Two plots cover the v1 pipeline: scan grids (`heatmap`) and
   metric-vs-axis curves (`lines`). Every other figure is post-hoc
@@ -185,23 +185,28 @@ One mechanism, inherited from the IM spec: **artifact references**.
 1. Strict keys everywhere; closed enums (`type`, `choose`, `plot`) reject
    with suggestions; derived fields may not be authored.
 2. Section order per §1; `save` last, non-empty.
-3. Step names unique and filesystem-safe; `save` file_paths unique.
+3. Step names unique and filesystem-safe; `save` file_paths unique,
+   contained (relative, no parent escapes), and colliding with neither a
+   step directory nor the reserved `workflow.json`.
 4. Every reference resolves: `from`/`after` name declared steps; every
    `document` file exists and **loads as a valid intervention protocol**
    (with the step's `set` applied); a save entry's `step`/`value` name an
    actual output.
 5. The derived step graph (artifact refs + `from` + `after`) is acyclic.
 6. Sink rule: every step is consumed by a later step or by `save`.
-7. `select`/`plot` column references (`x`, `y`, `series`, `emit` values)
-   must be sweep-coordinate columns (or `value`) of the referenced
-   table's producing document — checkable at load from the inner
-   document's axes.
+7. `select`/`plot` column references (`x`, `y`, `series`, the ranked
+   `value` column, `emit` values) must be sweep-coordinate columns (or
+   `value`) of the referenced table's producing document — checkable at
+   load from the inner document's axes; a plot must cover *every* axis of
+   its producer (an uncovered axis would collapse into duplicate cells).
 8. `select.table`/`plot.table` name `.parquet` outputs; plot `file_path`
    ends in `.png`/`.pdf`.
 9. A protocol step's `set` paths must exist in the target document (an
    override that would create structure is a typo).
-10. An artifact ref that names a step must reference a step that emits a
-    values table (`select`), or a file the step actually saves.
+10. An artifact ref that names a step must name a `select` step (only
+    they emit values tables), and a run-tree `file_path` load must name a
+    file its step actually saves — both checkable at load from the emit
+    table and the inner save manifests.
 
 ## 6. Derived — never authored
 

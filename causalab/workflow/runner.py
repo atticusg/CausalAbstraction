@@ -43,6 +43,7 @@ class OverlayArtifacts:
 
     run_root: Path
     outer: ArtifactStore
+    step_names: frozenset[str]
 
     def _local(self) -> Any:
         from causalab.protocol.resolve import FileArtifacts
@@ -50,8 +51,10 @@ class OverlayArtifacts:
         return FileArtifacts(root=self.run_root)
 
     def _in_run_tree(self, ref: str) -> bool:
-        head = ref.split("/", 1)[0]
-        return (self.run_root / head).exists()
+        # STEP NAMES shadow the external root (§3) — exactly the names,
+        # never mere directory existence: a rerun into a used output dir or
+        # an external ref matching a stray directory must not change resolution
+        return ref.split("/", 1)[0] in self.step_names
 
     def read_value(self, artifact: str, key: str) -> Any:
         if self._in_run_tree(artifact):
@@ -95,7 +98,11 @@ def run_workflow(
     backends: Sequence[Backend],
 ) -> WorkflowRunResult:
     output_dir.mkdir(parents=True, exist_ok=True)
-    overlay = OverlayArtifacts(run_root=output_dir, outer=env.artifacts)
+    overlay = OverlayArtifacts(
+        run_root=output_dir,
+        outer=env.artifacts,
+        step_names=frozenset(loaded.document.steps),
+    )
     run_env = ResolutionEnv(
         datasets=env.datasets, artifacts=overlay, model_info=env.model_info
     )
@@ -176,10 +183,12 @@ def _run_protocol_step(
     result = backend.execute(request)
     return {
         "type": "protocol",
+        "status": "completed",
         "document": step.document,
         "backend": backend.name,
         "document_digest": inner.document_digest,  # fully resolved (§7)
         "points": len(inner.expansion.points),
+        "point_digests": list(inner.point_digests),  # the provenance units (§7)
         "files": sorted(result.files),
     }
 
@@ -232,26 +241,31 @@ def _run_select_step(
     run_axes: Mapping[str, tuple[Any, ...]],
 ) -> dict[str, Any]:
     table = _aggregated(output_dir, step.from_, step.table, step.value, run_axes)
-    row = (
-        table.loc[table[step.value].idxmax()]
+    chosen_index = (
+        table[step.value].idxmax()
         if step.choose == "max"
-        else table.loc[table[step.value].idxmin()]
+        else table[step.value].idxmin()
     )
+    # single-row FRAME indexing: a row Series would upcast mixed dtypes and
+    # emit integer coordinates as floats, which the consuming document's
+    # strict parse then refuses
+    row = table.loc[[chosen_index]]
     values: dict[str, Any] = {}
     for key, column in step.emit.items():
-        if column not in row.index:
+        if column not in row.columns:
             raise ProtocolError(
                 "P2",
                 f"emit column {column!r} is not in the aggregated table "
-                f"({list(row.index)}) — the producing run carried no such axis",
+                f"({list(row.columns)}) — the producing run carried no such axis",
             )
-        values[key] = _decode_cell(row[column])
+        values[key] = _decode_cell(row[column].iloc[0])
     (step_dir / "values.json").write_text(json.dumps(values, indent=2) + "\n")
     return {
         "type": "select",
+        "status": "completed",
         "from": step.from_,
         "chosen": values,
-        "score": float(row[step.value]),
+        "score": float(row[step.value].iloc[0]),
     }
 
 
@@ -276,7 +290,9 @@ def _run_plot_step(
     figure, axes = plt.subplots(figsize=(7, 5), constrained_layout=True)
     if step.plot == "heatmap":
         assert step.y is not None  # parse guarantees it
-        grid = table.pivot(index=step.y, columns=step.x, values=step.value)
+        grid = table.pivot_table(
+            index=step.y, columns=step.x, values=step.value, aggfunc="mean"
+        )
         image = axes.imshow(grid.to_numpy(), aspect="auto", origin="lower")
         axes.set_xticks(range(len(grid.columns)), [str(c) for c in grid.columns])
         axes.set_yticks(range(len(grid.index)), [str(i) for i in grid.index])
@@ -306,6 +322,7 @@ def _run_plot_step(
     plt.close(figure)
     return {
         "type": "plot",
+        "status": "completed",
         "plot": step.plot,
         "from": step.from_,
         "file": step.file_path,
