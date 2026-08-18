@@ -1,6 +1,6 @@
 [
-  {"input": "If today is Monday, tomorrow is", "counterfactual_inputs": ["If today is Wednesday, tomorrow is"], "answer": " Tuesday", "base_answer": " Tuesday", "cf_answer": " Thursday", "label": " Thursday", "subject": "Monday"},
-  {"input": "If today is Tuesday, tomorrow is", "counterfactual_inputs": ["If today is Friday, tomorrow is"], "answer": " Wednesday", "base_answer": " Wednesday", "cf_answer": " Saturday", "label": " Saturday", "subject": "Tuesday"},
-  {"input": "If today is Thursday, tomorrow is", "counterfactual_inputs": ["If today is Sunday, tomorrow is"], "answer": " Friday", "base_answer": " Friday", "cf_answer": " Monday", "label": " Monday", "subject": "Thursday"},
-  {"input": "If today is Saturday, tomorrow is", "counterfactual_inputs": ["If today is Monday, tomorrow is"], "answer": " Sunday", "base_answer": " Sunday", "cf_answer": " Tuesday", "label": " Tuesday", "subject": "Saturday"}
+  {"input": "If today is Thursday, tomorrow is", "counterfactual_inputs": ["If today is Saturday, tomorrow is"], "answer": " Friday", "base_answer": " Friday", "cf_answer": " Sunday", "label": " Sunday", "subject": "Thursday"},
+  {"input": "If today is Friday, tomorrow is", "counterfactual_inputs": ["If today is Sunday, tomorrow is"], "answer": " Saturday", "base_answer": " Saturday", "cf_answer": " Monday", "label": " Monday", "subject": "Friday"},
+  {"input": "If today is Saturday, tomorrow is", "counterfactual_inputs": ["If today is Thursday, tomorrow is"], "answer": " Sunday", "base_answer": " Sunday", "cf_answer": " Friday", "label": " Friday", "subject": "Saturday"},
+  {"input": "If today is Sunday, tomorrow is", "counterfactual_inputs": ["If today is Friday, tomorrow is"], "answer": " Monday", "base_answer": " Monday", "cf_answer": " Saturday", "label": " Saturday", "subject": "Sunday"}
 ]

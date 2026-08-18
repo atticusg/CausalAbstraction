@@ -60,6 +60,8 @@ __all__ = [
     "SECTION_ORDER",
     "SaveEntry",
     "SiteSpec",
+    "concrete_int",
+    "concrete_str",
     "Sweep",
     "TrainSpec",
     "parse_document",
@@ -267,6 +269,20 @@ class ArtifactRef:
 
 #: A leaf that may still be swept or artifact-valued in the authored model.
 Leaf = Union[Any, Sweep, ArtifactRef]
+
+
+def concrete_int(value: Leaf, what: str) -> int:
+    """Narrow a leaf that must be concrete by now (a point document) to int."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    raise ParseError("P2", f"{what} is not a concrete integer (got {value!r})")
+
+
+def concrete_str(value: Leaf, what: str) -> str:
+    """Narrow a leaf that must be concrete by now (a point document) to str."""
+    if isinstance(value, str):
+        return value
+    raise ParseError("P2", f"{what} is not a concrete string (got {value!r})")
 
 
 # --------------------------------------------------------------------------- #

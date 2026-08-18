@@ -98,10 +98,39 @@ def _load(args: argparse.Namespace, env: ResolutionEnv) -> LoadedProtocol:
     )
 
 
+def _ensure_model_registered(args: argparse.Namespace) -> None:
+    """The run verb touches the model anyway, so an unregistered key is
+    resolved from its HF config and registered before canonicalization —
+    the pure verbs stay registry-only so digests never depend on the
+    network."""
+    from causalab.protocol.loader import apply_overrides, load_text
+    from causalab.protocol.registry import (
+        get_model_info,
+        model_info_from_hf_config,
+        register_model,
+    )
+
+    raw = apply_overrides(dict(load_text(args.document)), _parse_set(args.set))
+    model = raw.get("model", raw.get("neural_model", {}))
+    key = model.get("key") if isinstance(model, dict) else None
+    if not isinstance(key, str):
+        return
+    try:
+        get_model_info(key)
+    except ProtocolError:
+        from transformers import AutoConfig
+
+        revision = model.get("revision", "main") if isinstance(model, dict) else "main"
+        config = AutoConfig.from_pretrained(key, revision=revision)
+        register_model(model_info_from_hf_config(key, config))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     env = _env(args)
     try:
+        if args.verb == "run":
+            _ensure_model_registered(args)
         loaded = _load(args, env)
         if args.verb == "validate":
             if args.data:

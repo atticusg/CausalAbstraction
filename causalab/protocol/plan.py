@@ -22,12 +22,19 @@ from typing import Any, Mapping
 
 from causalab.protocol.schema import Document, PositionSpec
 
-__all__ = ["ForwardGroup", "PointPlan", "Tap", "plan_point", "closure_digest"]
+__all__ = [
+    "COMPONENT_RANK",
+    "ForwardGroup",
+    "PointPlan",
+    "Tap",
+    "plan_point",
+    "closure_digest",
+]
 
 #: Intra-block execution order of the component vocabulary — backend-free
 #: data used only to find a group's deepest tap (elision, §4). ``ln_final``
 #: and ``lm_head`` sort after every block.
-_COMPONENT_RANK: dict[str, int] = {
+COMPONENT_RANK: dict[str, int] = {
     "embeddings": 0,
     "block_input": 10,
     "attention_probs": 20,
@@ -145,7 +152,7 @@ def _depth(doc: Document, site_name: str) -> tuple[int, int]:
     site = doc.sites[site_name]
     layer = site.layer if isinstance(site.layer, int) else 0
     component = site.component if isinstance(site.component, str) else "lm_head"
-    rank = _COMPONENT_RANK.get(component, 100)
+    rank = COMPONENT_RANK.get(component, 100)
     if component in ("ln_final", "lm_head"):
         return (1_000_000, rank)  # after every block
     return (layer, rank)
