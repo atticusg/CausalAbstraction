@@ -1,5 +1,5 @@
 [
   {"input": "When Mary and John went to the store, John gave a drink to", "counterfactual_inputs": ["When Alice and John went to the store, John gave a drink to"], "answer": " Mary", "cf_answer": " Alice"},
-  {"input": "When Tom and Anna went to the park, Anna gave a ball to", "counterfactual_inputs": ["When Sara and Anna went to the park, Anna gave a ball to"], "answer": " Tom", "cf_answer": " Sara"},
-  {"input": "When Ben and Lucy went to the shop, Lucy gave a book to", "counterfactual_inputs": ["When Emma and Lucy went to the shop, Lucy gave a book to"], "answer": " Ben", "cf_answer": " Emma"}
+  {"input": "When Tom and Anna went to the park, Anna gave a ball to", "counterfactual_inputs": ["When Emma and Anna went to the park, Anna gave a ball to"], "answer": " Tom", "cf_answer": " Emma"},
+  {"input": "When Ben and Lucy went to the shop, Lucy gave a book to", "counterfactual_inputs": ["When Mary and Lucy went to the shop, Lucy gave a book to"], "answer": " Ben", "cf_answer": " Mary"}
 ]

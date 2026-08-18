@@ -1,0 +1,60 @@
+"""Drive a protocol document through the reference backend in-process.
+
+Test documents bypass dataset resolution: rows are handed to the executor
+directly (the executor's own seam), while the document still parses and
+validates through the real loader path — a test document is exactly as
+valid as a real one."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from causalab.neural.pytorch_hooks.executor import PointExecutor
+from causalab.neural.pytorch_hooks.loading import ModelBundle
+from causalab.protocol.schema import parse_document
+from causalab.protocol.validate import validate_document
+
+from tests.protocol._docs import in_order
+
+
+def executor_for(
+    doc_raw: dict[str, Any],
+    bundle: ModelBundle,
+    *,
+    base_texts: list[str],
+    source_texts: list[str] | None = None,
+    extra_columns: dict[str, list[Any]] | None = None,
+    load_tensors: Any = None,
+    grad_enabled: bool = False,
+) -> PointExecutor:
+    doc = parse_document(in_order(doc_raw))
+    validate_document(doc, backend_is_local=True)
+    rows: list[dict[str, Any]] = []
+    for i, text in enumerate(base_texts):
+        row: dict[str, Any] = {"input": text}
+        if source_texts is not None:
+            row["counterfactual_inputs"] = [source_texts[i]]
+        for column, values in (extra_columns or {}).items():
+            row[column] = values[i]
+        rows.append(row)
+    role_rows: dict[str, list[dict[str, Any]]] = {"base": rows}
+    role_fields = {"base": "input"}
+    if source_texts is not None:
+        role_rows["source"] = rows
+        role_fields["source"] = "counterfactual_inputs[0]"
+    return PointExecutor(
+        doc,
+        bundle,
+        role_rows=role_rows,
+        role_fields=role_fields,
+        load_tensors=load_tensors
+        or (lambda path: (_ for _ in ()).throw(KeyError(path))),
+        grad_enabled=grad_enabled,
+    )
+
+
+def base_data_section(with_source: bool) -> dict[str, Any]:
+    data: dict[str, Any] = {"base": {"dataset": "inline", "field": "input"}}
+    if with_source:
+        data["source"] = {"dataset": "inline", "field": "counterfactual_inputs[0]"}
+    return data
