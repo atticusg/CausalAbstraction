@@ -86,7 +86,9 @@ def suggest(unknown: str, known: Iterable[str]) -> str:
     Returns an empty string when nothing is close enough — the caller can
     always append the result unconditionally.
     """
-    candidates: Sequence[str] = difflib.get_close_matches(unknown, list(known), n=3)
+    candidates: Sequence[str] = difflib.get_close_matches(
+        str(unknown), [str(k) for k in known], n=3
+    )
     if not candidates:
         return ""
     quoted = ", ".join(repr(c) for c in candidates)

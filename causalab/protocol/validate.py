@@ -212,12 +212,15 @@ def _check_references(doc: Document, names: dict[str, str]) -> None:
             )
         of_read = doc.reads[str(metric.of)]
         of_site = doc.sites[str(of_read.site)]
-        if of_site.component != "lm_head":
+        if metric.kind != "kl" and of_site.component != "lm_head":
+            # not in the §5 checklist: the token-space kinds name vocab
+            # entries, which only lm_head produces (an interpretation this
+            # loader commits to; surfaced in the PR notes)
             raise ValidationError(
                 4,
-                f"metric {qname!r} reduces token-space values, but its read "
-                f"{metric.of!r} taps {of_site.component!r} — metrics bind to "
-                "lm_head reads (§2.10)",
+                f"metric {qname!r} names vocabulary tokens, but its read "
+                f"{metric.of!r} taps {of_site.component!r} — token-space metric "
+                "kinds bind to lm_head reads",
                 path=f"{p}.of",
             )
         if metric.kind == "kl":
@@ -225,6 +228,15 @@ def _check_references(doc: Document, names: dict[str, str]) -> None:
             if target not in doc.reads:
                 raise ValidationError(
                     4, f"kl target {target!r} is not a read (§2.10)", path=f"{p}.target"
+                )
+            target_site = doc.sites[str(doc.reads[str(target)].site)]
+            if target_site.component != of_site.component:
+                raise ValidationError(
+                    4,
+                    f"kl compares two reads' distributions, but {metric.of!r} taps "
+                    f"{of_site.component!r} and {target!r} taps "
+                    f"{target_site.component!r}",
+                    path=f"{p}.target",
                 )
 
     if doc.train is not None:
@@ -234,7 +246,8 @@ def _check_references(doc: Document, names: dict[str, str]) -> None:
         if (
             entry.value not in doc.reads
             and entry.value not in doc.metrics
-            and (entry.value not in doc.featurizers)
+            and entry.value not in doc.featurizers
+            and entry.value not in names  # declared-but-unsaveable is rule 10
         ):
             raise ValidationError(
                 4,
@@ -345,6 +358,24 @@ def _operand_names(do: Do) -> tuple[str, ...]:
 def _check_edits_inert(doc: Document, names: dict[str, str]) -> None:
     slot_names = _param_slot_names(doc)
     for ename, edit in doc.edits.items():
+        if edit.do.mechanism == "affine":
+            for field in ("A", "b"):
+                target = edit.do.payload.get(field)
+                if isinstance(target, str) and (
+                    target in doc.reads
+                    or (
+                        target in names
+                        and target not in doc.params
+                        and target not in slot_names
+                    )
+                ):
+                    raise ValidationError(
+                        6,
+                        f"affine {field!r} must name a param (§2.8 types both "
+                        f"fields as params); {target!r} is a "
+                        f"{names.get(target, 'read')}",
+                        path=f"edits.{ename}.do",
+                    )
         for operand in _operand_names(edit.do):
             if operand in doc.reads or operand in doc.params or operand in slot_names:
                 continue
@@ -454,6 +485,10 @@ def _provably_disjoint(a: PositionSpec, b: PositionSpec) -> bool:
     if a_index is not None and b_index is not None:
         return a_index != b_index and (a_index < 0) == (b_index < 0)
     if a_span is not None and b_span is not None:
+        # comparable only within one sign regime (end-relative bounds are a
+        # different frame; mixed-sign pairs are unknowable at load)
+        if _span_regime(a_span) is None or _span_regime(a_span) != _span_regime(b_span):
+            return False
         (a0, a1), (b0, b1) = a_span, b_span
         return a1 <= b0 or b1 <= a0
     if a_index is not None and b_span is not None:
@@ -463,11 +498,30 @@ def _provably_disjoint(a: PositionSpec, b: PositionSpec) -> bool:
     return False
 
 
-def _index_outside_span(index: int, span: tuple[int, int]) -> bool:
+def _span_regime(span: tuple[int, int]) -> str | None:
+    """ "forward" for fully non-negative spans, "end" for fully end-relative
+    ones, None for mixed (incomparable at load)."""
     lo, hi = span
-    if index < 0:
-        return False  # end-relative index vs a fixed window — unknowable
-    return not lo <= index < hi
+    if lo >= 0 and hi >= 0:
+        return "forward"
+    if lo < 0 and hi <= 0:
+        return "end"
+    return None
+
+
+def _index_outside_span(index: int, span: tuple[int, int]) -> bool:
+    regime = _span_regime(span)
+    if regime == "forward":
+        if index < 0:
+            return False  # end-relative index vs a forward window — unknowable
+        lo, hi = span
+        return not lo <= index < hi
+    if regime == "end":
+        if index >= 0:
+            return False  # forward index vs an end-relative window — unknowable
+        lo, hi = span
+        return not lo <= index < (hi if hi != 0 else 0)
+    return False  # mixed-sign span — unknowable
 
 
 def _is_absolute(edit: EditSpec) -> bool:
@@ -492,21 +546,26 @@ def _check_edit_collisions(doc: Document) -> None:
                     continue
                 if _provably_disjoint(_pos_key(doc, a.pos), _pos_key(doc, b.pos)):
                     continue
+                both_dims = isinstance(a.dims, tuple) and isinstance(b.dims, tuple)
+                if both_dims and _dims_intersect(a, b):
+                    # §5.9, read literally: explicit dims selections at one
+                    # address are pairwise disjoint — additive included
+                    # (surfaced as a spec question; a steer inside a swapped
+                    # subspace needs featurizer composition instead)
+                    raise ValidationError(
+                        9,
+                        f"edits {name_a!r} and {name_b!r} select intersecting dims "
+                        f"at site {a.site!r} in model {mname!r} — co-occurring "
+                        "dims selections must be disjoint (§5.9)",
+                    )
                 if not (_is_absolute(a) and _is_absolute(b)):
-                    continue  # additive deltas compose with anything (§2.8)
-                if a.dims is None and b.dims is None:
+                    continue  # one absolute + additive deltas is the §2.8 class order
+                if not both_dims:
                     raise ValidationError(
                         8,
                         f"edits {name_a!r} and {name_b!r} are two absolute edits at "
                         f"site {a.site!r} with overlapping positions in model "
                         f"{mname!r} — at most one absolute edit per address (§2.8)",
-                    )
-                if _dims_intersect(a, b):
-                    raise ValidationError(
-                        9,
-                        f"absolute edits {name_a!r} and {name_b!r} write intersecting "
-                        f"dims at site {a.site!r} in model {mname!r} — co-occurring "
-                        "dims selections must be disjoint (§5.9)",
                     )
 
 
@@ -529,8 +588,17 @@ def _trained_featurizers(doc: Document) -> set[str]:
 def _check_save(doc: Document) -> None:
     trained = _trained_featurizers(doc)
     seen_values: set[str] = set()
+    seen_paths: set[str] = set()
     for i, entry in enumerate(doc.save):
         p = f"save[{i}]"
+        if entry.file_path in seen_paths:
+            raise ValidationError(
+                10,
+                f"two save entries write {entry.file_path!r} — one file per "
+                "entry, or the later silently clobbers the earlier",
+                path=p,
+            )
+        seen_paths.add(entry.file_path)
         if entry.value in seen_values:
             raise ValidationError(
                 10,
@@ -754,6 +822,16 @@ def _check_trainability(doc: Document) -> None:
                 path=f"featurizers.{fname}",
             )
     if doc.train is not None:
+        for pname in doc.train.params:
+            spec = doc.params.get(pname)
+            if spec is not None and spec.file_path is not None:
+                raise ValidationError(
+                    12,
+                    f"params entry {pname!r} is a loaded constant (file_path) and "
+                    "appears in train.params — loading and fitting the same "
+                    "tensor is a contradiction (§2.6)",
+                    path=f"params.{pname}",
+                )
         for pname, spec in doc.params.items():
             if spec.shape is not None and pname not in doc.train.params:
                 raise ValidationError(

@@ -27,6 +27,7 @@ __all__ = [
     "RunResult",
     "choose_backend",
     "requires",
+    "requires_campaign",
 ]
 
 #: The closed capability vocabulary (§8).
@@ -49,8 +50,11 @@ def requires(doc: Document) -> frozenset[str]:
     if doc.train is not None:
         needed.add("grad")
     for im in doc.intervened_models.values():
-        edits = im.edits if isinstance(im.edits, tuple) else ()
-        for ename in edits:
+        if not isinstance(im.edits, tuple):
+            raise AssertionError(
+                "requires() takes a concrete point document — expand sweeps first"
+            )
+        for ename in im.edits:
             edit = doc.edits[ename]
             payload = edit.do.payload
             operand_names = (
@@ -125,10 +129,22 @@ class Backend(abc.ABC):
         """Run every point and write everything the save manifests name."""
 
 
-def choose_backend(doc: Document, backends: Sequence[Backend]) -> Backend:
-    """The first backend whose capabilities cover the document's needs;
-    the refusal message is generated from the missing capabilities (§8)."""
-    needed = requires(doc)
+def requires_campaign(docs: Sequence[Document]) -> frozenset[str]:
+    """The union of every point's capability needs — a heterogeneous sweep
+    routes on the whole campaign, not its first point."""
+    needed: frozenset[str] = frozenset()
+    for doc in docs:
+        needed |= requires(doc)
+    return needed
+
+
+def choose_backend(
+    doc: Document | Sequence[Document], backends: Sequence[Backend]
+) -> Backend:
+    """The first backend whose capabilities cover the document's (or the
+    whole campaign's) needs; the refusal message is generated from the
+    missing capabilities (§8)."""
+    needed = requires(doc) if isinstance(doc, Document) else requires_campaign(doc)
     shortfalls: list[str] = []
     for backend in backends:
         missing = needed - backend.capabilities

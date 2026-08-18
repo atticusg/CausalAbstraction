@@ -569,26 +569,23 @@ def _wrapped(
     path: str,
     *,
     allow_sweep: bool = True,
-    allow_artifact: bool = True,
 ) -> Any:
-    """Parse a leaf that may be a ``{"sweep": …}`` or ``{"artifact": …}``
-    wrapper around ``elem``-typed values (§3, §1)."""
+    """Parse a leaf that may be a ``{"sweep": …}`` wrapper around
+    ``elem``-typed values (§3). Artifact references (§1) resolve *before*
+    the parse gate (loader.load), so one reaching the parser is a loader
+    misuse, not an authoring surface."""
     if isinstance(value, dict) and "sweep" in value:
         if not allow_sweep:
             raise ValidationError(14, "a sweep wrapper is not allowed here", path=path)
         _check_keys(value, ("sweep",), path)
         return _parse_sweep(value["sweep"], elem, path)
-    if isinstance(value, dict) and "artifact" in value:
-        if not allow_artifact:
-            raise ParseError(
-                "P2", "an artifact-valued field is not allowed here", path=path
-            )
-        _check_keys(value, ("artifact", "key"), path)
-        if "key" not in value:
-            raise ParseError("P2", "artifact reference needs a 'key' field", path=path)
-        if not isinstance(value["artifact"], str) or not isinstance(value["key"], str):
-            raise ParseError("P2", "artifact and key must be strings", path=path)
-        return ArtifactRef(artifact=value["artifact"], key=value["key"])
+    if isinstance(value, dict) and isinstance(value.get("artifact"), str):
+        raise ParseError(
+            "P2",
+            "unresolved artifact reference reached the parser — load through "
+            "causalab.protocol.loader.load, which resolves artifact fields first",
+            path=path,
+        )
     return elem(value, path)
 
 
@@ -611,6 +608,13 @@ def _parse_sweep(spec: Any, elem: Callable[[Any, str], Any], path: str) -> Sweep
         if step == 0:
             raise ValidationError(
                 14, "sweep range step must be non-zero", path=f"{path}.sweep"
+            )
+        if len(range(start, stop, step)) > 1_000_000:  # O(1); before materializing
+            raise ValidationError(
+                14,
+                "sweep range denotes over 1,000,000 values — refuse before "
+                "materializing (§5.14)",
+                path=f"{path}.sweep",
             )
         values = list(range(start, stop, step))
     elif isinstance(spec, list):
@@ -763,6 +767,23 @@ def _parse_position_spec(raw: Any, path: str) -> PositionSpec:
         raise ParseError(
             "P2", "scope and relative_to are mutually exclusive", path=path
         )
+    if isinstance(span, tuple):
+        lo, hi = span
+        if scope is None and (lo < 0 or hi <= lo):
+            raise ParseError(
+                "P2",
+                f"span [{lo}, {hi}) is not a forward window — unscoped spans are "
+                "content-frame, non-negative, non-empty",
+                path=path,
+            )
+        if (
+            scope is not None
+            and (lo < 0) == (hi < 0 or hi == 0 and lo < 0)
+            and lo >= hi
+        ):
+            raise ParseError(
+                "P2", f"scoped span [{lo}, {hi}) is statically empty", path=path
+            )
     return PositionSpec(
         index=index, span=span, variable=variable, scope=scope, relative_to=relative_to
     )
@@ -802,7 +823,6 @@ def _parse_site(raw: Any, path: str) -> SiteSpec:
         obj["component"],
         lambda v, p: _enum(v, COMPONENTS, p),
         f"{path}.component",
-        allow_artifact=False,
     )
     layer = (
         _wrapped(obj["layer"], _scalar_int, f"{path}.layer") if "layer" in obj else None
@@ -839,7 +859,6 @@ def _parse_featurizer(raw: Any, path: str) -> FeaturizerSpec:
         kind_raw,
         lambda v, p: _enum(v, FEATURIZER_KINDS, p),
         f"{path}.kind",
-        allow_artifact=False,
     )
     kind_key = kind if isinstance(kind, str) else "identity"
     allowed = {"kind", "file_path", "dtype", "description"} | set(
@@ -852,7 +871,6 @@ def _parse_featurizer(raw: Any, path: str) -> FeaturizerSpec:
             obj["parametrization"],
             lambda v, p: _enum(v, PARAMETRIZATIONS, p),
             f"{path}.parametrization",
-            allow_artifact=False,
         )
     return FeaturizerSpec(
         kind=kind,
@@ -1015,7 +1033,6 @@ def _parse_do(raw: Any, path: str) -> Do:
                     options["axis"],
                     lambda v, pp: _enum(v, ("tp_duplicated", "tp_split"), pp),
                     f"{p}.axis",
-                    allow_artifact=False,
                 ),
             },
         )
@@ -1197,6 +1214,25 @@ def _parse_train(raw: Any, path: str) -> TrainSpec:
             "P2", "train.optimizer needs 'name' and 'lr'", path=f"{path}.optimizer"
         )
     _enum(optimizer["name"], tuple(OPTIMIZER_DEFAULTS), f"{path}.optimizer.name")
+    for field in ("lr", "weight_decay", "eps", "momentum", "clip_grad_norm"):
+        if field in optimizer:
+            _wrapped(optimizer[field], _scalar_number, f"{path}.optimizer.{field}")
+    if "betas" in optimizer:
+        betas = optimizer["betas"]
+        if (
+            not isinstance(betas, list)
+            or len(betas) != 2
+            or not all(
+                isinstance(b, (int, float)) and not isinstance(b, bool) for b in betas
+            )
+        ):
+            raise ParseError(
+                "P2",
+                "optimizer betas is a two-number list",
+                path=f"{path}.optimizer.betas",
+            )
+    if "schedule" in optimizer:
+        _wrapped(optimizer["schedule"], _scalar_str, f"{path}.optimizer.schedule")
     steps = _parse_counter(obj["steps"], f"{path}.steps")
     batch = _require_mapping(obj["batch"], f"{path}.batch")
     _check_keys(batch, ("pairs",), f"{path}.batch")
@@ -1263,7 +1299,6 @@ def _parse_train(raw: Any, path: str) -> TrainSpec:
                 es_raw["mode"],
                 lambda v, p: _enum(v, ("min", "max"), p),
                 f"{path}.early_stop.mode",
-                allow_artifact=False,
             ),
         }
     checkpoint = None

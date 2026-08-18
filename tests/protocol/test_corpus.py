@@ -97,6 +97,17 @@ class TestCorpusUnit:
         assert len(harvest) == 1
 
 
+class TestCorpusCompleteness:
+    pytestmark = pytest.mark.unit
+
+    def test_every_corpus_file_is_covered(self):
+        """A new *_im.json must enter CORPUS_SHAPE and the pins file — the
+        corpus, the shape table, and the digests move together."""
+        files = sorted(path.name for path in CORPUS_DIR.glob("*_im.json"))
+        assert files == sorted(row[0] for row in CORPUS_SHAPE)
+        assert files == sorted(PINS)
+
+
 class TestCorpusProperty:
     pytestmark = pytest.mark.property
 

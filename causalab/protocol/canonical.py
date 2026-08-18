@@ -50,14 +50,37 @@ __all__ = ["canonical_bytes", "canonicalize", "digest"]
 
 def canonical_bytes(canonical: Mapping[str, Any]) -> bytes:
     """Serialize a canonical form to its digestable bytes: sorted keys,
-    minimal separators, UTF-8, no NaN/Inf."""
-    return json.dumps(
-        canonical,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
+    minimal separators, UTF-8, no NaN/Inf, numbers normalized (an integral
+    float digests as its integer — ``1`` and ``1.0`` are one value across
+    the JSON and YAML surfaces; ``-0.0`` digests as ``0``)."""
+    try:
+        return json.dumps(
+            _normalize_numbers(canonical),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except ValueError as err:
+        raise ValidationError(
+            15, f"canonical form holds a non-finite number: {err}"
+        ) from err
+
+
+def _normalize_numbers(node: Any) -> Any:
+    if isinstance(node, bool):
+        return node
+    if isinstance(node, float):
+        if node != node or node in (float("inf"), float("-inf")):
+            raise ValidationError(15, "canonical form holds a non-finite number")
+        if node.is_integer() and abs(node) <= 2**53:
+            return int(node)
+        return node
+    if isinstance(node, Mapping):
+        return {key: _normalize_numbers(value) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_normalize_numbers(item) for item in node]
+    return node
 
 
 def digest(canonical: Mapping[str, Any]) -> str:
@@ -123,16 +146,28 @@ def canonicalize(raw: Mapping[str, Any], env: ResolutionEnv) -> dict[str, Any]:
             out["intervened_models"] = {
                 name: {
                     "input": entry["input"],
-                    "edits": sorted(entry["edits"])
-                    if isinstance(entry["edits"], list)
-                    else entry["edits"],
+                    "edits": _canon_edit_list(entry["edits"]),
                 }
                 for name, entry in value.items()
+            }
+        elif section == "params":
+            out["params"] = {
+                name: _canon_param(entry, env) for name, entry in value.items()
             }
         elif section == "train":
             out["train"] = _canon_train(value, info, env)
         else:
             out[section] = value
+    return out
+
+
+def _canon_param(entry: Mapping[str, Any], env: ResolutionEnv) -> dict[str, Any]:
+    """§7: "each param replaced by its content hash" — a loaded constant's
+    bytes are its identity (this also makes a missing file a load error)."""
+    out = dict(entry)
+    file_path = out.get("file_path")
+    if isinstance(file_path, str):
+        out["content_digest"] = env.artifacts.file_digest(file_path)
     return out
 
 
@@ -154,6 +189,18 @@ def _canon_data(data: Mapping[str, Any], env: ResolutionEnv) -> dict[str, Any]:
         src = data["source"]
         out["source"] = [one(s) for s in src] if isinstance(src, list) else one(src)
     return out
+
+
+def _canon_edit_list(edits: Any) -> Any:
+    """IM edit lists are unordered (§6.8) — sorted concrete, and sorted
+    per-value inside a sweep wrapper, so one campaign has one spelling."""
+    if isinstance(edits, list):
+        return sorted(edits)
+    if _is_sweep(edits) and isinstance(edits["sweep"], list):
+        return {
+            "sweep": [sorted(v) if isinstance(v, list) else v for v in edits["sweep"]]
+        }
+    return edits
 
 
 def _canon_position_spec(value: Any) -> Any:
@@ -205,9 +252,10 @@ def _canon_site(
 def _canon_read_or_edit(entry: Mapping[str, Any]) -> dict[str, Any]:
     out = dict(entry)
     if "pos" in out:
-        pos = out["pos"]
         out["pos"] = (
-            pos if isinstance(pos, str) or _is_sweep(pos) else _canon_position_spec(pos)
+            out["pos"]
+            if isinstance(out["pos"], str)
+            else _canon_position_entry(out["pos"])  # sugar expands inside sweeps too
         )
     return out
 
@@ -258,6 +306,12 @@ def _canon_featurizer(
             )
         shapes["weight"] = [width, k]
     elif kind == "pca" and isinstance(k, int):
+        if not 0 < k <= width:
+            raise ValidationError(
+                4,
+                f"featurizer {name!r}: k={k} exceeds the width {width}",
+                path=f"featurizers.{name}.k",
+            )
         shapes["weight"] = [width, k]
     elif kind == "gate":
         shapes["theta"] = [width]
