@@ -195,6 +195,9 @@ def _parse_step(name: str, raw: Any, path: str) -> Step:
             f"unknown step type {step_type!r}{suggest(str(step_type), STEP_TYPES)}",
             path=f"{path}.type",
         )
+    description = raw.get("description")
+    if description is not None and not isinstance(description, str):
+        raise WorkflowError(1, "a step description is free text", path=path)
     common = ("type", "after", "description")
     if step_type == "protocol":
         _check_keys(raw, (*common, "document", "set", "max_points"), path)
@@ -263,6 +266,13 @@ def _parse_step(name: str, raw: Any, path: str) -> Step:
         )
     if plot == "heatmap" and "y" not in raw:
         raise WorkflowError(1, "a heatmap needs 'y'", path=path)
+    if plot == "heatmap" and "series" in raw:
+        raise WorkflowError(1, "'series' belongs to lines plots", path=path)
+    if plot == "lines" and "y" in raw:
+        raise WorkflowError(
+            1, "'y' belongs to heatmaps ('series' splits lines)", path=path
+        )
+    _check_contained_path(str(raw["file_path"]), 8, path)
     return PlotStep(
         type="plot",
         plot=str(plot),
@@ -276,6 +286,17 @@ def _parse_step(name: str, raw: Any, path: str) -> Step:
         after=_after(raw, path),
         description=raw.get("description"),
     )
+
+
+def _check_contained_path(value: str, rule: int, path: str) -> None:
+    """A workflow-owned file path stays inside its root: relative, no
+    parent escapes (§2.4 "within the step's output dir", §2.5 "under the
+    workflow's output root")."""
+    parts = Path(value).parts
+    if Path(value).is_absolute() or ".." in parts:
+        raise WorkflowError(
+            rule, f"file_path {value!r} escapes its output root", path=path
+        )
 
 
 def parse_workflow(raw: Mapping[str, Any]) -> WorkflowDocument:
@@ -328,6 +349,17 @@ def parse_workflow(raw: Mapping[str, Any]) -> WorkflowDocument:
             raise WorkflowError(
                 3, f"two save entries write {entry.file_path!r}", path=path
             )
+        _check_contained_path(entry.file_path, 3, path)
+        if (
+            entry.file_path.split("/", 1)[0] in steps
+            or entry.file_path == "workflow.json"
+        ):
+            raise WorkflowError(
+                3,
+                f"save file_path {entry.file_path!r} collides with a step "
+                "directory or the reserved run manifest (workflow.json)",
+                path=path,
+            )
         seen_paths.add(entry.file_path)
         save.append(entry)
     description = raw.get("description")
@@ -346,8 +378,11 @@ def parse_workflow(raw: Mapping[str, Any]) -> WorkflowDocument:
 @dataclasses.dataclass(frozen=True)
 class DeferredArtifacts:
     """Wraps an outer store for workflow-load-time inner validation:
-    step-refs answer with representative values, run-tree paths defer
-    their file checks to run time."""
+    step-refs answer with representative values, and every ``file_path``
+    check defers to run time — a representative-substituted document may
+    carry representative values in exactly the fields an ArtifactIdentity
+    is checked against (the site record), so a load-time identity
+    comparison would be against the wrong document."""
 
     outer: ArtifactStore
     step_names: frozenset[str]
@@ -357,7 +392,8 @@ class DeferredArtifacts:
         return ref.split("/", 1)[0]
 
     def defers(self, file_path: str) -> bool:
-        return self._head(file_path) in self.step_names
+        del file_path
+        return True  # all file checks re-run with real values at run time
 
     def read_value(self, artifact: str, key: str) -> Any:
         if self._head(artifact) in self.step_names:
@@ -371,14 +407,12 @@ class DeferredArtifacts:
         return self.outer.read_value(artifact, key)
 
     def file_digest(self, file_path: str) -> str:
-        if self.defers(file_path):
-            return "0" * 64  # placeholder; the run stamps the real digest
-        return self.outer.file_digest(file_path)
+        del file_path
+        return "0" * 64  # placeholder; the digest of a deferred doc is discarded
 
     def read_identity(self, file_path: str) -> Mapping[str, Any] | None:
-        if self.defers(file_path):
-            return None  # loader skips the check for deferring stores
-        return self.outer.read_identity(file_path)
+        del file_path
+        return None  # loader skips the check for deferring stores
 
 
 # --------------------------------------------------------------------------- #
@@ -404,20 +438,26 @@ def _walk_step_refs(node: Any, step_names: frozenset[str]) -> set[tuple[str, str
 
 
 def _walk_run_tree_paths(node: Any, step_names: frozenset[str]) -> set[str]:
-    """Every ``file_path`` string under a step's run tree."""
+    """Every ``file_path`` the inner document LOADS from a step's run tree.
+
+    The IM spec has exactly two file_path *load* sites — featurizer specs
+    and params entries (§2.5, §2.6); an inner document's ``save`` section
+    also carries ``file_path`` keys, but those are outputs, never loads —
+    walking them would fabricate dependency edges (and even self-cycles)
+    out of a step's own products."""
     paths: set[str] = set()
-    if isinstance(node, Mapping):
-        for key, value in node.items():
-            if (
-                key == "file_path"
-                and isinstance(value, str)
-                and value.split("/", 1)[0] in step_names
-            ):
+    if not isinstance(node, Mapping):
+        return paths
+    for section in ("featurizers", "params"):
+        table = node.get(section)
+        if not isinstance(table, Mapping):
+            continue
+        for entry in table.values():
+            if not isinstance(entry, Mapping):
+                continue
+            value = entry.get("file_path")
+            if isinstance(value, str) and value.split("/", 1)[0] in step_names:
                 paths.add(value)
-            paths |= _walk_run_tree_paths(value, step_names)
-    elif isinstance(node, list):
-        for item in node:
-            paths |= _walk_run_tree_paths(item, step_names)
     return paths
 
 
@@ -448,7 +488,9 @@ def load_workflow(
     # ---- rule 4 (references) + derived dependency edges (§3) -------------- #
     overridden_raw: dict[str, dict[str, Any]] = {}
     deps: dict[str, set[str]] = {name: set() for name in steps}
+    data_deps: dict[str, set[str]] = {name: set() for name in steps}
     step_refs: dict[str, set[tuple[str, str]]] = {}
+    run_tree_loads: dict[str, set[str]] = {name: set() for name in steps}
     for name, step in steps.items():
         for other in step.after:
             if other not in steps:
@@ -469,6 +511,7 @@ def load_workflow(
                     path=f"steps.{name}",
                 )
             deps[name].add(step.from_)
+            data_deps[name].add(step.from_)
             if not step.table.endswith(".parquet"):
                 raise WorkflowError(
                     8,
@@ -498,10 +541,25 @@ def load_workflow(
             overridden_raw[name] = inner_raw
             refs = _walk_step_refs(inner_raw, step_names)
             step_refs[name] = refs
+            run_tree_loads[name] = _walk_run_tree_paths(inner_raw, step_names)
             for artifact, _key in refs:
-                deps[name].add(artifact.split("/", 1)[0])
-            for run_path in _walk_run_tree_paths(inner_raw, step_names):
-                deps[name].add(run_path.split("/", 1)[0])
+                producer = artifact.split("/", 1)[0]
+                deps[name].add(producer)
+                data_deps[name].add(producer)
+                # rule 10, ref half: a step-artifact ref reads a values
+                # table, which only select steps emit
+                if not isinstance(steps[producer], SelectStep):
+                    raise WorkflowError(
+                        10,
+                        f"artifact ref {artifact!r} names a "
+                        f"{steps[producer].type} step — only select steps emit "
+                        "values tables (§2.3)",
+                        path=f"steps.{name}",
+                    )
+            for run_path in run_tree_loads[name]:
+                producer = run_path.split("/", 1)[0]
+                deps[name].add(producer)
+                data_deps[name].add(producer)
 
     # ---- rule 5: acyclicity + the schedule --------------------------------- #
     order: list[str] = []
@@ -623,10 +681,31 @@ def load_workflow(
 
     for name, step in steps.items():
         if isinstance(step, SelectStep):
-            check_columns(name, step.from_, step.table, list(step.emit.values()))
+            check_columns(
+                name, step.from_, step.table, [*step.emit.values(), step.value]
+            )
         elif isinstance(step, PlotStep):
-            columns = [step.x] + [c for c in (step.y, step.series) if c is not None]
+            columns = [step.x, step.value] + [
+                c for c in (step.y, step.series) if c is not None
+            ]
             check_columns(name, step.from_, step.table, columns)
+            # a figure must account for every axis of what it renders — an
+            # uncovered axis would collapse into duplicate cells (§2.4)
+            axis_ids = {axis.id for axis in inner[step.from_].expansion.axes}
+            covered = (
+                {step.x}
+                | ({step.y} if step.y else set())
+                | ({step.series} if step.series else set())
+            )
+            uncovered = axis_ids - covered
+            if uncovered:
+                raise WorkflowError(
+                    7,
+                    f"plot {name!r} leaves the axes {sorted(uncovered)} of "
+                    f"{step.from_!r}'s document uncovered — every axis must be "
+                    "x, y, or series",
+                    path=f"steps.{name}",
+                )
 
     # ---- rule 4 tail: save entries name real outputs ------------------------ #
     def outputs_of(name: str) -> set[str]:
@@ -636,6 +715,25 @@ def load_workflow(
         if isinstance(step, SelectStep):
             return {"values.json"}
         return {step.file_path}
+
+    for name, paths in run_tree_loads.items():
+        for run_path in sorted(paths):
+            producer, _, rest = run_path.partition("/")
+            producer_step = steps[producer]
+            if isinstance(producer_step, ProtocolStep):
+                produced = {e.file_path for e in inner[producer].document.save}
+            elif isinstance(producer_step, SelectStep):
+                produced = {"values.json"}
+            else:
+                produced = {producer_step.file_path}  # a plot's figure
+            if rest not in produced:
+                raise WorkflowError(
+                    10,
+                    f"{name!r} loads {run_path!r}, but {producer!r} saves no "
+                    f"{rest!r} (has {sorted(produced)}) — a run-tree file_path "
+                    "must name a file the step actually saves (§5.10)",
+                    path=f"steps.{name}",
+                )
 
     for i, entry in enumerate(document.save):
         if entry.step not in steps:
@@ -653,7 +751,7 @@ def load_workflow(
     # ---- rule 6: sinks ------------------------------------------------------ #
     consumed: set[str] = {entry.step for entry in document.save}
     for name in steps:
-        consumed |= deps[name] - set(steps[name].after)  # `after` is not data flow
+        consumed |= data_deps[name]  # `after` orders, it never consumes
     for name in steps:
         if name not in consumed:
             raise WorkflowError(

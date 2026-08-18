@@ -215,7 +215,9 @@ def test_save_manifest_published_and_stamped(pipeline_run):
     manifest = json.loads((out / "workflow.json").read_text())
     assert len(manifest["workflow_digest"]) == 64
     assert manifest["steps"]["locate"]["points"] == 4
+    assert len(manifest["steps"]["locate"]["point_digests"]) == 4  # provenance units
     assert manifest["steps"]["fit"]["backend"] == "pytorch_hooks"
+    assert all(entry["status"] == "completed" for entry in manifest["steps"].values())
     # the run manifest stamps the fully resolved inner digests (§7)
     assert len(manifest["steps"]["apply"]["document_digest"]) == 64
     assert manifest["steps"]["best"]["chosen"] == json.loads(
