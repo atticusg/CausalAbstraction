@@ -72,6 +72,10 @@ exclude_lines = [
     "if __name__ == .__main__.:",
 ]
 
+[project.scripts]
+# The protocol CLI (docs/intervention_protocol.md §9): run / validate / explain / digest
+causalab = "causalab.protocol.cli:main"
+
 [tool.uv.build-backend]
 module-name = ["causalab"]
 module-root = ""

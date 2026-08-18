@@ -1,0 +1,4 @@
+[
+  {"input": "If today is Wednesday, tomorrow is", "counterfactual_inputs": ["If today is Saturday, tomorrow is"], "answer": " Thursday", "base_answer": " Thursday", "cf_answer": " Sunday", "label": " Sunday", "subject": "Wednesday"},
+  {"input": "If today is Friday, tomorrow is", "counterfactual_inputs": ["If today is Tuesday, tomorrow is"], "answer": " Saturday", "base_answer": " Saturday", "cf_answer": " Wednesday", "label": " Wednesday", "subject": "Friday"}
+]
