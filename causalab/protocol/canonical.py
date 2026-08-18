@@ -260,17 +260,32 @@ def _canon_read_or_edit(entry: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _featurizer_sites_raw(name: str, normalized: Mapping[str, Any]) -> list[Any]:
-    used: list[Any] = []
+def _featurizer_chains_raw(
+    name: str, normalized: Mapping[str, Any]
+) -> list[tuple[Any, list[str]]]:
+    """Every (site, chain) a featurizer participates in."""
+    used: list[tuple[Any, list[str]]] = []
     for section in ("reads", "edits"):
         for entry in normalized.get(section, {}).values():
             ref = entry.get("featurizer")
-            chain = [ref] if isinstance(ref, str) else (ref or [])
+            chain = [ref] if isinstance(ref, str) else list(ref or [])
             if name in chain:
-                site = entry.get("site")
-                if site not in used:
-                    used.append(site)
+                pair = (entry.get("site"), chain)
+                if pair not in used:
+                    used.append(pair)
     return used
+
+
+def _raw_stage_output_width(spec: Mapping[str, Any], input_width: int) -> int | None:
+    """The §2.5 chain rule on a raw featurizer entry (mirrors
+    ``pytorch_hooks.featurizers.stage_output_width``)."""
+    kind = spec.get("kind", "identity")
+    if kind in ("subspace", "pca"):
+        k = spec.get("k")
+        return k if isinstance(k, int) else None
+    if kind == "sae":
+        return None
+    return input_width
 
 
 def _canon_featurizer(
@@ -330,7 +345,7 @@ def _derived_width(
     use (§2.5). Unmaterializable (None) when a needed field is swept;
     ambiguous multi-width use is an error."""
     widths: set[int] = set()
-    for site_name in _featurizer_sites_raw(name, normalized):
+    for site_name, chain in _featurizer_chains_raw(name, normalized):
         if not isinstance(site_name, str):
             return None
         site = normalized.get("sites", {}).get(site_name)
@@ -342,11 +357,19 @@ def _derived_width(
             return None
         if not isinstance(component, str):
             return None
-        widths.add(
-            component_width(
-                info, component, head=head if isinstance(head, int) else None
-            )
+        running: int | None = component_width(
+            info, component, head=head if isinstance(head, int) else None
         )
+        for member in chain:
+            if member == name:
+                break
+            member_spec = normalized.get("featurizers", {}).get(member, {})
+            if running is None or _is_sweep(member_spec.get("k")):
+                return None
+            running = _raw_stage_output_width(member_spec, running)
+        if running is None:
+            return None
+        widths.add(running)
     if not widths:
         return None
     if len(widths) > 1:

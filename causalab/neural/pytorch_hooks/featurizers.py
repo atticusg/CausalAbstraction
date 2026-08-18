@@ -227,6 +227,32 @@ class FeaturizerStack:
         return all(isinstance(s, Identity) for s in self.stages)
 
 
+def stage_output_width(spec: FeaturizerSpec, input_width: int) -> int | None:
+    """The feature width a stage emits, given its input width — the chain
+    rule of §2.5's composition: subspace/pca project to ``k``, the
+    width-preserving kinds pass ``input_width`` through, and a loaded SAE's
+    dictionary size is unknowable from the spec alone (``None``)."""
+    kind = spec.kind if isinstance(spec.kind, str) else "identity"
+    if kind in ("subspace", "pca"):
+        return spec.k if isinstance(spec.k, int) else None
+    if kind == "sae":
+        return None  # the dictionary size lives in the bundle, not the spec
+    return input_width
+
+
+def _stage_width(stage: Stage) -> int | None:
+    """The input width a built stage was sized for (for cache-reuse checks)."""
+    params = stage.slot_params()
+    if isinstance(stage, (Subspace, LoadedLinear)):
+        weight = stage.weight if isinstance(stage, LoadedLinear) else params["weight"]
+        return int(weight.shape[0])
+    if isinstance(stage, Gate):
+        return int(stage.theta.shape[0])
+    if isinstance(stage, Standardize):
+        return int(stage.mu.shape[0])
+    return None
+
+
 def build_stack(
     ref: Any,
     specs: dict[str, FeaturizerSpec],
@@ -236,21 +262,45 @@ def build_stack(
     stage_cache: dict[str, Stage],
 ) -> FeaturizerStack:
     """Build (or reuse from ``stage_cache``) the stack a read/edit
-    references. ``load_tensors(file_path) -> dict[str, Tensor]`` supplies
+    references. ``width`` is the SITE width; each later stage in a
+    composition is sized to the *previous stage's output* (the §2.5 chain —
+    a gate after a k=3 rotation is a 3-wide gate). ``load_tensors`` supplies
     loaded bundles; caching by name keeps one stage instance per declared
-    featurizer, so training one featurizer updates every use site."""
+    featurizer, so training one featurizer updates every use site — a name
+    reused at a different chain width is a contradiction and refuses."""
     if ref is None:
         return FeaturizerStack(names=(), stages=(Identity(),))
     chain = (ref,) if isinstance(ref, str) else tuple(ref)
     stages: list[Stage] = []
+    running: int | None = width
     for name in chain:
-        if name in stage_cache:
-            stages.append(stage_cache[name])
-            continue
         spec = specs[name]
-        stage = _build_stage(name, spec, width=width, load_tensors=load_tensors)
-        stage_cache[name] = stage
+        if name in stage_cache:
+            stage = stage_cache[name]
+            built_for = _stage_width(stage)
+            if built_for is not None and running is not None and built_for != running:
+                raise ProtocolError(
+                    "P2",
+                    f"featurizer {name!r} is used at width {running} here but was "
+                    f"built for width {built_for} — one featurizer, one width",
+                )
+        else:
+            if running is None:
+                raise ProtocolError(
+                    "P2",
+                    f"cannot size featurizer {name!r}: the preceding stage's "
+                    "output width is not derivable from its spec",
+                )
+            stage = _build_stage(name, spec, width=running, load_tensors=load_tensors)
+            # inference documents get eval semantics (a gate's hard split);
+            # the train loop flips modes around its steps explicitly
+            stage.eval()
+            stage_cache[name] = stage
         stages.append(stage)
+        if isinstance(stage, Sae):
+            running = int(stage.enc.shape[1])
+        elif running is not None:
+            running = stage_output_width(spec, running)
     return FeaturizerStack(names=chain, stages=tuple(stages))
 
 

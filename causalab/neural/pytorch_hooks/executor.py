@@ -144,8 +144,11 @@ class PointExecutor:
         return self.stage_cache[name]
 
     def _featurizer_width(self, name: str) -> int:
-        """The feature width of one declared featurizer: the width at the
-        site its reads/edits use (validation guarantees one width)."""
+        """The input width of one declared featurizer: the site width of a
+        chain that uses it, folded through the stages before it (§2.5
+        composition — a gate after a k=3 rotation is 3-wide)."""
+        from causalab.neural.pytorch_hooks.featurizers import stage_output_width
+
         for entry in (*self.doc.reads.values(), *self.doc.edits.values()):
             ref = entry.featurizer
             chain = (
@@ -155,11 +158,25 @@ class PointExecutor:
                 if isinstance(ref, tuple)
                 else ()
             )
-            if name in chain:
-                site = resolve_site(self.bundle, self.doc.sites[str(entry.site)])
-                if site.feature_slice is not None:
-                    return site.feature_slice.stop - site.feature_slice.start
-                return component_width(self.bundle.info, site.component, head=None)
+            if name not in chain:
+                continue
+            site = resolve_site(self.bundle, self.doc.sites[str(entry.site)])
+            running = (
+                site.feature_slice.stop - site.feature_slice.start
+                if site.feature_slice is not None
+                else component_width(self.bundle.info, site.component, head=None)
+            )
+            for member in chain:
+                if member == name:
+                    return running
+                out = stage_output_width(self.doc.featurizers[member], running)
+                if out is None:
+                    raise ProtocolError(
+                        "P2",
+                        f"cannot size {name!r}: {member!r} before it in the "
+                        "chain has no spec-derivable output width",
+                    )
+                running = out
         raise ProtocolError("P2", f"featurizer {name!r} is used by no read or edit")
 
     def rows_for_metrics(self) -> list[dict[str, Any]]:
