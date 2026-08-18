@@ -236,10 +236,14 @@ def _resolve_roles(
 
 def _load_tensors(request: ExecutionRequest, file_path: str) -> dict[str, torch.Tensor]:
     """Load a tensor bundle referenced by a featurizer/params file_path,
-    relative to the artifacts root."""
+    resolved through the artifact store (which owns the run-tree/external
+    overlay inside a workflow)."""
     from safetensors.torch import load_file
 
     artifacts = request.env.artifacts
+    resolve = getattr(artifacts, "resolve_path", None)
+    if resolve is not None:
+        return load_file(str(resolve(file_path)))
     root = getattr(artifacts, "root", None)
     if root is None:
         raise ProtocolError("P2", "artifact store exposes no filesystem root")

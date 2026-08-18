@@ -1,4 +1,4 @@
-# Workflow Protocol — specification v1 (draft, gate review pending)
+# Workflow Protocol — specification v1
 
 Self-contained specification of the second config type: a declarative
 format for **chains of intervention-protocol executions plus their IO** —
@@ -45,12 +45,12 @@ Sections in this order (order enforced; `save` last):
 
 ### 2.1 `steps` — common fields
 
-Every step is an object with a `kind` from the closed set
+Every step is an object with a `type` from the closed set
 `protocol · select · plot`, plus:
 
 | field | meaning |
 |---|---|
-| `kind` | ✓ — the step vocabulary below |
+| `type` | ✓ — the step vocabulary below |
 | `description` | – free text |
 | `after` | – step names that must complete first, beyond the derived data dependencies (pure ordering; rare) |
 
@@ -61,7 +61,7 @@ without data flow.
 ### 2.2 `protocol` steps — run one intervention protocol
 
 ```json
-"locate": {"kind": "protocol", "document": "protocols/locate_scan.json"}
+"locate": {"type": "protocol", "document": "protocols/locate_scan.json"}
 ```
 
 | field | meaning |
@@ -84,7 +84,7 @@ notebook.
 
 ```json
 "best": {
-  "kind": "select", "from": "locate", "table": "iia.parquet",
+  "type": "select", "from": "locate", "table": "iia.parquet",
   "choose": "max", "value": "value",
   "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}
 }
@@ -103,14 +103,15 @@ notebook.
   aggregated by **mean** over examples — v1's one aggregation. `choose`
   then picks the best group; `emit` reads that group's coordinate (or
   value) columns.
-- Output: `<run>/<step>.json` — an artifact **values table** in exactly
-  the shape the IM spec's artifact-valued fields read
-  (`{"artifact": "<step>", "key": "<emit key>"}`).
+- Output: `<run>/<step>/values.json` — an artifact **values table** in
+  exactly the shape the IM spec's artifact-valued fields read
+  (`{"artifact": "<step>", "key": "<emit key>"}`; the store resolves a
+  step name to its `values.json`).
 
 ### 2.4 `plot` steps — closed figure vocabulary
 
 ```json
-"scan": {"kind": "plot", "plot": "heatmap", "from": "locate",
+"scan": {"type": "plot", "plot": "heatmap", "from": "locate",
           "table": "iia.parquet", "x": "sites.target.layer",
           "y": "positions.tap", "value": "value", "file_path": "scan_iia.png"}
 ```
@@ -169,7 +170,7 @@ One mechanism, inherited from the IM spec: **artifact references**.
 ## 4. Execution semantics
 
 - Steps run in a topological order of the derived graph; each step's
-  outputs land under `<run>/<step>/` (select: `<run>/<step>.json`).
+  outputs land under `<run>/<step>/`.
 - A protocol step executes through the standard backend routing (IM spec
   §8) — capabilities derive from the union over the inner document's
   points.
@@ -181,7 +182,7 @@ One mechanism, inherited from the IM spec: **artifact references**.
 
 ## 5. Validation — load-error checklist
 
-1. Strict keys everywhere; closed enums (`kind`, `choose`, `plot`) reject
+1. Strict keys everywhere; closed enums (`type`, `choose`, `plot`) reject
    with suggestions; derived fields may not be authored.
 2. Section order per §1; `save` last, non-empty.
 3. Step names unique and filesystem-safe; `save` file_paths unique.
@@ -215,9 +216,13 @@ One mechanism, inherited from the IM spec: **artifact references**.
 
 - The canonical form materializes every default (`value: "value"`, the
   mean aggregation), sorts `after` lists, and **stamps each protocol
-  step with its document's campaign digest** (the IM spec §7 document
-  digest, computed with `set` applied) — so the workflow digest changes
-  exactly when the campaign it runs changes, without inlining documents.
+  step with its document's digest**, computed with `set` applied: for a
+  document with no in-run references this is the IM spec §7 campaign
+  digest; a document that references step outputs (its values exist only
+  at run time) stamps the digest of its overridden authored form, and
+  the fully resolved per-point digests land in the run manifest. Either
+  way the workflow digest changes exactly when the campaign it runs
+  changes, without inlining documents.
 - `digest = sha256(canonical bytes)`, same byte rules as the IM spec.
 
 ## 8. Runner contract
@@ -257,22 +262,22 @@ split), as one workflow over the golden-corpus documents 07/08/09:
   "version": "1",
   "description": "weekdays-8b: locate -> DAS k x seed fits at the best cell -> apply on test; scan heatmap + IIA-vs-k curves.",
   "steps": {
-    "locate": {"kind": "protocol", "document": "../methods/weekdays_locate_scan.json"},
+    "locate": {"type": "protocol", "document": "../methods/weekdays_locate_scan.json"},
     "best": {
-      "kind": "select", "from": "locate", "table": "iia.parquet",
+      "type": "select", "from": "locate", "table": "iia.parquet",
       "choose": "max",
       "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}
     },
-    "fit": {"kind": "protocol", "document": "../methods/weekdays_das_sweep.json",
+    "fit": {"type": "protocol", "document": "../methods/weekdays_das_sweep.json",
              "set": {"positions.best": {"artifact": "best", "key": "best_pos"},
                      "sites.target.layer": {"artifact": "best", "key": "best_layer"}}},
-    "apply": {"kind": "protocol", "document": "../methods/weekdays_das_apply.json",
+    "apply": {"type": "protocol", "document": "../methods/weekdays_das_apply.json",
                "set": {"featurizers.rot.file_path": "fit/rot.safetensors"}},
-    "scan_heatmap": {"kind": "plot", "plot": "heatmap", "from": "locate",
+    "scan_heatmap": {"type": "plot", "plot": "heatmap", "from": "locate",
                       "table": "iia.parquet", "x": "sites.target.layer",
                       "y": "positions.tap", "value": "value",
                       "file_path": "scan_iia.png"},
-    "iia_by_k": {"kind": "plot", "plot": "lines", "from": "fit",
+    "iia_by_k": {"type": "plot", "plot": "lines", "from": "fit",
                   "table": "iia.parquet", "x": "featurizers.rot.k",
                   "series": "train.seed", "value": "value",
                   "file_path": "iia_by_k.png"}

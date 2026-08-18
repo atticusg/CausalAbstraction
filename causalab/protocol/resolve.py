@@ -183,6 +183,9 @@ class FileArtifacts:
             )
         return read_safetensors_metadata(target)
 
+    def resolve_path(self, file_path: str) -> Path:
+        return self.root / file_path
+
 
 def read_safetensors_metadata(path: Path) -> Mapping[str, Any] | None:
     """The ``__metadata__`` table of a safetensors file — a pure header read

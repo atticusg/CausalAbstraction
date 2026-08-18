@@ -165,9 +165,13 @@ def _check_loaded_featurizers(doc: Document, env: ResolutionEnv) -> None:
 
     from causalab.protocol.resolve import check_artifact_identity
 
+    defers = getattr(env.artifacts, "defers", None)
+
     for pname, pspec in doc.params.items():
         if not isinstance(pspec.file_path, str):
             continue
+        if defers is not None and defers(pspec.file_path):
+            continue  # a run-tree path inside a workflow — checked at run time
         stamped = env.artifacts.read_identity(pspec.file_path)  # V15 if missing
         if stamped is not None:
             check_artifact_identity(
@@ -179,6 +183,8 @@ def _check_loaded_featurizers(doc: Document, env: ResolutionEnv) -> None:
     for fname, spec in doc.featurizers.items():
         if not isinstance(spec.file_path, str):
             continue
+        if defers is not None and defers(spec.file_path):
+            continue  # a run-tree path inside a workflow — checked at run time
         used_sites: list[str] = []
         for entry in (*doc.reads.values(), *doc.edits.values()):
             ref = entry.featurizer

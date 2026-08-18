@@ -104,13 +104,18 @@ def _ensure_model_registered(args: argparse.Namespace) -> None:
     the pure verbs stay registry-only so digests never depend on the
     network."""
     from causalab.protocol.loader import apply_overrides, load_text
+
+    raw = apply_overrides(dict(load_text(args.document)), _parse_set(args.set))
+    _register_model_key(raw)
+
+
+def _register_model_key(raw: dict[str, Any]) -> None:
     from causalab.protocol.registry import (
         get_model_info,
         model_info_from_hf_config,
         register_model,
     )
 
-    raw = apply_overrides(dict(load_text(args.document)), _parse_set(args.set))
     model = raw.get("model", raw.get("neural_model", {}))
     key = model.get("key") if isinstance(model, dict) else None
     if not isinstance(key, str):
@@ -129,6 +134,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     env = _env(args)
     try:
+        from causalab.protocol.loader import load_text as _load_text
+        from causalab.protocol.workflow import is_workflow
+
+        if is_workflow(_load_text(args.document)):
+            return _workflow_main(args, env)
         if args.verb == "run":
             _ensure_model_registered(args)
         loaded = _load(args, env)
@@ -219,3 +229,92 @@ def _explain(loaded: LoadedProtocol) -> None:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# --------------------------------------------------------------------------- #
+# workflow documents (docs/workflow_protocol.md §9) — dispatch on `steps`
+# --------------------------------------------------------------------------- #
+
+
+def _workflow_main(args: argparse.Namespace, env: ResolutionEnv) -> int:
+    from causalab.protocol.loader import apply_overrides as _apply
+    from causalab.protocol.loader import load_text as _load_text
+    from causalab.protocol.workflow import ProtocolStep, load_workflow
+
+    if args.verb == "run":
+        # the run verb touches models anyway: pre-register every inner model
+        # key BEFORE loading (canonicalization derives widths from the registry)
+        raw_wf = _apply(dict(_load_text(args.document)), _parse_set(args.set))
+        workflow_dir = args.document.resolve().parent
+        for step_raw in raw_wf.get("steps", {}).values():
+            if not isinstance(step_raw, dict) or step_raw.get("type") != "protocol":
+                continue
+            document = step_raw.get("document")
+            if not isinstance(document, str):
+                continue  # malformed shapes refuse properly in load_workflow
+            doc_path = (workflow_dir / document).resolve()
+            if not doc_path.is_file():
+                continue
+            try:
+                inner_raw = _apply(
+                    dict(_load_text(doc_path)), dict(step_raw.get("set", {}) or {})
+                )
+            except ProtocolError:
+                continue
+            _register_model_key(inner_raw)
+
+    loaded = load_workflow(args.document.resolve(), env, overrides=_parse_set(args.set))
+    if args.verb == "validate":
+        if getattr(args, "data", False):
+            for name in loaded.order:
+                inner = loaded.inner.get(name)
+                if inner is not None:
+                    check_data_columns(inner, env)
+        print(
+            f"OK: {args.document} — {len(loaded.document.steps)} steps, "
+            f"digest {loaded.digest[:16]}…"
+        )
+        return 0
+    if args.verb == "digest":
+        print(loaded.digest)
+        return 0
+    if args.verb == "explain":
+        print(f"digest    {loaded.digest}")
+        print(f"schedule  {len(loaded.levels)} levels")
+        for i, level in enumerate(loaded.levels):
+            print(f"  level {i}: {', '.join(level)}")
+        for name in loaded.order:
+            step = loaded.document.steps[name]
+            if isinstance(step, ProtocolStep):
+                inner = loaded.inner[name]
+                kind = loaded.inner_digest_kind[name]
+                print(
+                    f"  {name}: protocol {step.document} — "
+                    f"{len(inner.expansion.points)} point(s), "
+                    f"{kind} digest {loaded.inner_digests[name][:16]}…"
+                )
+            else:
+                print(f"  {name}: {step.type}")
+        print("save")
+        for entry in loaded.document.save:
+            print(f"  {entry.step}/{entry.value} -> {entry.file_path}")
+        return 0
+    # run
+    import importlib
+
+    try:
+        hooks = importlib.import_module("causalab.neural.pytorch_hooks")
+    except ModuleNotFoundError as err:
+        print(
+            f"refused: no execution backend available ({err}) — 'run' needs "
+            "the reference backend causalab.neural.pytorch_hooks",
+            file=sys.stderr,
+        )
+        return 1
+    from causalab.workflow import run_workflow
+
+    result = run_workflow(loaded, env, args.out, [hooks.PytorchHooksBackend()])
+    for file_path, disk_path in sorted(result.published.items()):
+        print(f"published {file_path} -> {disk_path}")
+    print(f"manifest {args.out / 'workflow.json'}")
+    return 0
