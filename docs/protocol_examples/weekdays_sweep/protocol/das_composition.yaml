@@ -1,0 +1,34 @@
+# @package protocol
+# Stage 2 (subspace): DAS at the located cell — composition variant.
+version: "1"
+
+sites:
+  target: {component: block_output, layer: ${scan.layer}}
+
+featurizers:
+  rot: {kind: subspace, shape: [${facts.hidden}, 8], parametrization: cayley}
+
+compositions:
+  patched: {edits: [patch]}
+
+reads:
+  v_src:  {site: target,  pos: ${scan.pos}, in: source, featurizer: rot}
+  logits: {site: lm_head, pos: last,        in: patched}
+
+edits:
+  patch: {site: target, pos: ${scan.pos}, featurizer: rot, do: {swap: v_src}}
+
+metrics:
+  iia: {kind: logit_diff,    of: logits, a: cf_answer, b: base_answer}
+  ce:  {kind: cross_entropy, of: logits, target: label}
+
+train:
+  objective:  [[1.0, ce]]
+  params:     [rot.weight]
+  optimizer:  {name: adamw, lr: 1.0e-3, weight_decay: 0.0}
+  steps:      {epochs: 10}
+  batch:      {pairs: 16}
+  precision:  {feature: fp32, loss: fp32, model: bf16}
+  eval:       {every: {epochs: 1}, split: ${task.eval_split}, metrics: [iia]}
+  early_stop: {metric: iia, patience: 3, mode: max}
+  seed: 0

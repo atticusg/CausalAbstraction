@@ -1,0 +1,16 @@
+# @package _global_
+protocol:
+  high_level: {key: weekdays.causal_model}
+  data:
+    base:   {dataset: "weekdays/train@9ab2", field: input}
+    source: {dataset: "weekdays/train@9ab2", field: "counterfactual_inputs[0]"}
+  positions:
+    last:    {type: index, position: -1}
+    subject: {type: variable, name: subject}
+
+# The task interface: what protocol templates may reference. validate checks
+# template references against this at compose time.
+task:
+  columns: [base_answer, cf_answer, label]
+  variables: [subject]
+  eval_split: "weekdays/test@9ab2"

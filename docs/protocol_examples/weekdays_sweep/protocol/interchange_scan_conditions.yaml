@@ -1,0 +1,18 @@
+# @package protocol
+# Stage 1 (locate): interchange scored per cell. The scanned cell is
+# (scan.layer, scan.pos) — two override axes, each with one address.
+# The logits read stays pinned to the answer slot regardless of the scanned
+# tap position.
+version: "1"
+
+sites:
+  target: {component: block_output, layer: ${scan.layer}}
+
+interventionals:
+  v_src:  {site: target,  pos: ${scan.pos}, input: source}
+  patch:  {site: target,  pos: ${scan.pos}, input: base, do: {swap: v_src}}
+  logits: {site: lm_head, pos: last,        input: base, conditions: [patch]}
+
+metrics:
+  iia:        {kind: match,      of: logits, expected: cf_answer}
+  logit_diff: {kind: logit_diff, of: logits, a: cf_answer, b: base_answer}

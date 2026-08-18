@@ -1,0 +1,22 @@
+# Interchange intervention (activation patching) — "conditions" variant.
+# Swap the L18 residual at the answer slot from the counterfactual source into
+# the base run; score against the high-level model's counterfactual prediction.
+version: "1"
+model:      {key: meta-llama/Llama-3.1-8B, revision: main}
+high_level: {key: weekdays.causal_model}
+
+data:
+  base:   {dataset: "weekdays/train@9ab2", field: input}
+  source: {dataset: "weekdays/train@9ab2", field: "counterfactual_inputs[0]"}
+
+sites:
+  target: {component: block_output, layer: 18}
+
+interventionals:
+  v_src:  {site: target,  pos: -1, input: source}
+  patch:  {site: target,  pos: -1, input: base, do: {swap: v_src}}
+  logits: {site: lm_head, pos: -1, input: base, conditions: [patch]}
+
+metrics:
+  iia:        {kind: match,      of: logits, expected: cf_answer}
+  logit_diff: {kind: logit_diff, of: logits, a: cf_answer, b: base_answer}

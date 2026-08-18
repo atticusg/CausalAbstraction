@@ -1,0 +1,20 @@
+# @package protocol
+# Stage 1 (locate): interchange scored per cell — composition variant.
+version: "1"
+
+sites:
+  target: {component: block_output, layer: ${scan.layer}}
+
+compositions:
+  patched: {edits: [patch]}
+
+reads:
+  v_src:  {site: target,  pos: ${scan.pos}, in: source}
+  logits: {site: lm_head, pos: last,        in: patched}
+
+edits:
+  patch: {site: target, pos: ${scan.pos}, do: {swap: v_src}}
+
+metrics:
+  iia:        {kind: match,      of: logits, expected: cf_answer}
+  logit_diff: {kind: logit_diff, of: logits, a: cf_answer, b: base_answer}

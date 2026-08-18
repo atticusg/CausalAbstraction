@@ -1,0 +1,33 @@
+# Path patching (IOI) — "conditions" variant, after the readme's own §6.
+# sender -> receiver with off-path attention frozen; the receiver value is
+# harvested under those conditions and injected into an otherwise clean run.
+version: "1"
+model: {key: meta-llama/Llama-3.1-8B, revision: main}
+
+data:
+  base:   {dataset: "ioi/test@3f1c", field: input}
+  source: {dataset: "ioi/test@3f1c", field: "counterfactual_inputs[0]"}
+
+sites:
+  sender:   {component: attention_value,  layer: 9, head: 9}
+  receiver: {component: block_input,      layer: 12}
+  a10:      {component: attention_output, layer: 10}
+  a11:      {component: attention_output, layer: 11}
+
+interventionals:
+  # harvest, un-intervened
+  v_sender:    {site: sender,   pos: -1, input: source}
+  v_a10:       {site: a10,      pos: -1, input: base}
+  v_a11:       {site: a11,      pos: -1, input: base}
+  # the patched condition set
+  swap_sender: {site: sender,   pos: -1, input: base, do: {swap: v_sender}}
+  freeze_10:   {site: a10,      pos: -1, input: base, do: {swap: v_a10}}
+  freeze_11:   {site: a11,      pos: -1, input: base, do: {swap: v_a11}}
+  # read the receiver UNDER those conditions, inject into a clean run
+  v_receiver:  {site: receiver, pos: -1, input: base,
+                conditions: [swap_sender, freeze_10, freeze_11]}
+  inject:      {site: receiver, pos: -1, input: base, do: {swap: v_receiver}}
+  logits:      {site: lm_head,  pos: -1, input: base, conditions: [inject]}
+
+metrics:
+  logit_diff: {kind: logit_diff, of: logits, a: answer, b: cf_answer}

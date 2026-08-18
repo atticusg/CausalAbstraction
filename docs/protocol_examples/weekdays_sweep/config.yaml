@@ -1,0 +1,21 @@
+# Sweeping variant of runners/weekdays/weekdays_8b_pipeline.yaml as a hydra
+# composition of protocol documents (a composition of multiple yamls — the
+# OTHER sense of "composition"; see the materialization doc on the collision).
+#
+# One protocol per run; the merged, resolved document is the hashed value.
+# This file is the interactive single-point entry. Full experiments — fixed
+# hyperparameters AND sweep axes — live in exp_locate.yaml / exp_subspace.yaml,
+# so sharing YAML alone reproduces them (RUN.md); CLI overrides are possible
+# but never the record.
+defaults:
+  - model: llama31_8b
+  - task: weekdays
+  - protocol: interchange_scan_composition   # stage 1; stage 2 overrides protocol=das_*
+  - _self_
+
+# Compose-time sweep namespace: every axis a scan varies gets exactly ONE
+# stable override address here, interpolated into the protocol. Never part of
+# the protocol schema (strict parsing keeps it out).
+scan:
+  layer: ${facts.mid_layer}
+  pos: last

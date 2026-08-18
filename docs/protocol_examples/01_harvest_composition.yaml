@@ -1,0 +1,22 @@
+# Activation harvesting — "composition" variant.
+# No edits, so the compositions table is empty and omitted; reads name the
+# implicit un-intervened composition of the input row: in: base.
+version: "1"
+model: {key: meta-llama/Llama-3.1-8B, revision: main}
+
+data:
+  base: {dataset: "weekdays/train@9ab2", field: input}
+
+positions:
+  answer_tok: {type: index, position: -1}
+  subject:    {type: variable, name: subject}
+
+sites:
+  L8:  {component: block_output, layer: 8}
+  L24: {component: block_output, layer: 24}
+
+reads:
+  acts_L8_ans:  {site: L8,  pos: answer_tok, in: base}
+  acts_L8_sub:  {site: L8,  pos: subject,    in: base}
+  acts_L24_ans: {site: L24, pos: answer_tok, in: base}
+  acts_L24_sub: {site: L24, pos: subject,    in: base}

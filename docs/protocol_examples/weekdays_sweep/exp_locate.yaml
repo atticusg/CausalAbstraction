@@ -1,0 +1,26 @@
+# Stage 1 experiment file: the layer x position interchange scan, fully
+# specified in YAML. Sharing this file (plus the model/task/protocol groups it
+# names) is the complete, reproducible experiment spec — nothing rides the CLI.
+#
+#   causalab run --config-dir . --config-name exp_locate
+#
+# hydra.mode + hydra.sweeper.params need hydra >= 1.2. CLI overrides remain
+# possible (they compose on top of this file) but are never required.
+defaults:
+  - model: llama31_8b
+  - task: weekdays
+  - protocol: interchange_scan_composition
+  - _self_
+
+# ??? = mandatory: the sweep below must supply these. If someone strips the
+# sweep block, composition fails loudly instead of running a silent default.
+scan:
+  layer: ???
+  pos: ???
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      scan.layer: range(0,32)
+      scan.pos: last,subject

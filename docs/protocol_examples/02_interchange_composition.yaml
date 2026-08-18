@@ -1,0 +1,25 @@
+# Interchange intervention (activation patching) — "composition" variant.
+version: "1"
+model:      {key: meta-llama/Llama-3.1-8B, revision: main}
+high_level: {key: weekdays.causal_model}
+
+data:
+  base:   {dataset: "weekdays/train@9ab2", field: input}
+  source: {dataset: "weekdays/train@9ab2", field: "counterfactual_inputs[0]"}
+
+sites:
+  target: {component: block_output, layer: 18}
+
+compositions:
+  patched: {edits: [patch]}         # input: base is the default
+
+reads:
+  v_src:  {site: target,  pos: -1, in: source}
+  logits: {site: lm_head, pos: -1, in: patched}
+
+edits:
+  patch: {site: target, pos: -1, do: {swap: v_src}}
+
+metrics:
+  iia:        {kind: match,      of: logits, expected: cf_answer}
+  logit_diff: {kind: logit_diff, of: logits, a: cf_answer, b: base_answer}

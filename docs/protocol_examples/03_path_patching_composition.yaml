@@ -1,0 +1,35 @@
+# Path patching (IOI) — "composition" variant.
+# The four forwards are the two implicit compositions (source, base) plus the
+# two authored ones (patched, final).
+version: "1"
+model: {key: meta-llama/Llama-3.1-8B, revision: main}
+
+data:
+  base:   {dataset: "ioi/test@3f1c", field: input}
+  source: {dataset: "ioi/test@3f1c", field: "counterfactual_inputs[0]"}
+
+sites:
+  sender:   {component: attention_value,  layer: 9, head: 9}
+  receiver: {component: block_input,      layer: 12}
+  a10:      {component: attention_output, layer: 10}
+  a11:      {component: attention_output, layer: 11}
+
+compositions:
+  patched: {edits: [swap_sender, freeze_10, freeze_11]}
+  final:   {edits: [inject]}
+
+reads:
+  v_sender:   {site: sender,   pos: -1, in: source}
+  v_a10:      {site: a10,      pos: -1, in: base}
+  v_a11:      {site: a11,      pos: -1, in: base}
+  v_receiver: {site: receiver, pos: -1, in: patched}   # collect-under-intervention
+  logits:     {site: lm_head,  pos: -1, in: final}
+
+edits:
+  swap_sender: {site: sender,   pos: -1, do: {swap: v_sender}}
+  freeze_10:   {site: a10,      pos: -1, do: {swap: v_a10}}
+  freeze_11:   {site: a11,      pos: -1, do: {swap: v_a11}}
+  inject:      {site: receiver, pos: -1, do: {swap: v_receiver}}
+
+metrics:
+  logit_diff: {kind: logit_diff, of: logits, a: answer, b: cf_answer}

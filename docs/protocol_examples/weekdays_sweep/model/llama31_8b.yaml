@@ -1,0 +1,10 @@
+# @package _global_
+protocol:
+  model: {key: meta-llama/Llama-3.1-8B, revision: main}
+
+# Model FACTS: compose-time only, consumed by interpolation; never enter the
+# protocol schema. The method template hardcodes neither d nor a layer count.
+facts:
+  hidden: 4096
+  layers: 32
+  mid_layer: 18

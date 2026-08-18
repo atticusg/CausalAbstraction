@@ -1,0 +1,25 @@
+# Activation harvesting — "conditions" variant.
+# Pure collects (do: Identity default) at two layers x two positions over one
+# dataset column. No edits, so no conditions appear; the compiler groups all
+# four nodes into one forward, early-stopped after layer 24.
+version: "1"
+model: {key: meta-llama/Llama-3.1-8B, revision: main}
+
+data:
+  base: {dataset: "weekdays/train@9ab2", field: input}
+
+positions:
+  answer_tok: {type: index, position: -1}
+  subject:    {type: variable, name: subject}   # all tokens of the task variable
+
+sites:
+  L8:  {component: block_output, layer: 8}
+  L24: {component: block_output, layer: 24}
+
+interventionals:
+  acts_L8_ans:  {site: L8,  pos: answer_tok, input: base}
+  acts_L8_sub:  {site: L8,  pos: subject,    input: base}
+  acts_L24_ans: {site: L24, pos: answer_tok, input: base}
+  acts_L24_sub: {site: L24, pos: subject,    input: base}
+
+# outputs: defaults to the four unconsumed reads

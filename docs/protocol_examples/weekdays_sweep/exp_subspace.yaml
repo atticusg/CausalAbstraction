@@ -1,0 +1,26 @@
+# Stage 2 experiment file: DAS at the cell stage 1 located, k x seed sweep,
+# fully specified in YAML.
+#
+#   causalab run --config-dir . --config-name exp_subspace
+#
+# The located cell arrives through the ${artifact:} resolver at compose time —
+# in YAML, not on the CLI. Reproducibility: given the artifact tree (or just
+# stage 1's locate.result), this file reproduces the runs exactly; each point
+# run additionally stamps its resolved protocol + digest next to its results,
+# so even without the tree the materialized protocols are the full record.
+defaults:
+  - model: llama31_8b
+  - task: weekdays
+  - protocol: das_composition
+  - _self_
+
+scan:
+  layer: ${artifact:artifacts/weekdays/llama31_8b/locate:best_layer}
+  pos:   ${artifact:artifacts/weekdays/llama31_8b/locate:best_pos}
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      protocol.featurizers.rot.shape.1: 4,8,16,32
+      protocol.train.seed: 0,1,2

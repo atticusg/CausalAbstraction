@@ -1,0 +1,66 @@
+# The Hydra effect (McGrath et al. 2023, arXiv:2307.15771), main experiment —
+# "conditions" variant.
+# Resample-ablate one attention layer's output at the final token (swap in its
+# value from an unrelated prompt), then measure how the DIRECT EFFECT of
+# downstream attention layers shifts between the clean and ablated runs.
+# Direct effect = the layer's contribution unembedded alone: inject it as the
+# final residual and read lm_head (the readme's logit-lens recipe, §3.9).
+# Approximation: ln_final renormalizes the injected contribution; the paper
+# freezes the clean run's norm scale instead.
+#
+# One ablation layer (13) and two probe layers (14, 20) are written out. The
+# paper's full ablation-layer x probe-layer grid is generated YAML plus a
+# multirun axis over the ablation layer — see weekdays_sweep/RUN.md for the
+# sweep idiom and the materialization doc for why the grid is not an IR
+# construct.
+version: "1"
+model: {key: meta-llama/Llama-3.1-8B, revision: main}
+
+data:
+  base:   {dataset: "pile/sample@71e0", field: input}
+  source: {dataset: "pile/sample@71e0", field: resample_input}   # unrelated prompt, paired at dataset build
+
+sites:
+  abl:         {component: attention_output, layer: 13}
+  probe14:     {component: attention_output, layer: 14}
+  probe20:     {component: attention_output, layer: 20}
+  resid_final: {component: block_output, layer: 31}              # ln_final's input
+
+interventionals:
+  # the resample ablation
+  v_noise:      {site: abl, pos: -1, input: source}
+  resample:     {site: abl, pos: -1, input: base, do: {swap: v_noise}}
+
+  # total effect: full logits, clean and ablated
+  logits_clean: {site: lm_head, pos: -1, input: base}
+  logits_abl:   {site: lm_head, pos: -1, input: base, conditions: [resample]}
+
+  # per-layer contributions, clean and ablated
+  a14_clean:    {site: probe14, pos: -1, input: base}
+  a20_clean:    {site: probe20, pos: -1, input: base}
+  a14_abl:      {site: probe14, pos: -1, input: base, conditions: [resample]}
+  a20_abl:      {site: probe20, pos: -1, input: base, conditions: [resample]}
+
+  # unembed each contribution alone: inject as the final residual, read lm_head
+  inj14_clean:  {site: resid_final, pos: -1, input: base, do: {swap: a14_clean}}
+  inj20_clean:  {site: resid_final, pos: -1, input: base, do: {swap: a20_clean}}
+  inj14_abl:    {site: resid_final, pos: -1, input: base, do: {swap: a14_abl}}
+  inj20_abl:    {site: resid_final, pos: -1, input: base, do: {swap: a20_abl}}
+
+  de14_clean:   {site: lm_head, pos: -1, input: base, conditions: [inj14_clean]}
+  de20_clean:   {site: lm_head, pos: -1, input: base, conditions: [inj20_clean]}
+  de14_abl:     {site: lm_head, pos: -1, input: base, conditions: [inj14_abl]}
+  de20_abl:     {site: lm_head, pos: -1, input: base, conditions: [inj20_abl]}
+
+metrics:
+  # token_logit is a PROPOSED metric kind (per-example token ids are a metric
+  # concern, §3.4). ml_token = the clean run's maximum-likelihood token, a
+  # dataset column computed at build time. Differences across reads — total
+  # effect, delta direct effect — are plain arithmetic over these outputs and
+  # stay post hoc.
+  te_clean: {kind: token_logit, of: logits_clean, token: ml_token}
+  te_abl:   {kind: token_logit, of: logits_abl,   token: ml_token}
+  de14_c:   {kind: token_logit, of: de14_clean,   token: ml_token}
+  de20_c:   {kind: token_logit, of: de20_clean,   token: ml_token}
+  de14_a:   {kind: token_logit, of: de14_abl,     token: ml_token}
+  de20_a:   {kind: token_logit, of: de20_abl,     token: ml_token}
