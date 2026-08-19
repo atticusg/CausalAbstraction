@@ -265,16 +265,39 @@ file* paths are relative to `tests/`. Parametrized data dirs (`configs/`,
 | `test_logit_lens.py` | replaced interface | `neural/pytorch_hooks/test_read_oracle.py::test_lm_head_read_is_the_model_logits` | the method module died; the lens is a document spelling (corpus 06 injects a residual and reads `lm_head`) |
 | `test_runner_env.py` | retired | retired | `.env` loading at runner entry died with the runner |
 
+## Production modules retired without a test successor
+
+The tables above ledger *tests*; these `causalab/` production modules were
+deleted by the same refactor and are recorded here so nothing is dropped
+silently. Rationale for the execution stack: this is now a public repository —
+cluster-specific machinery does not belong in it, documents and workflows are
+scheduler-agnostic by design (spec §8, "Execution scale"), and job dispatch is
+site tooling that hooks in via the CLI's `--points` shard selector.
+
+| module | role | disposition |
+|---|---|---|
+| `scripts/run_exp.sh` | runner-config discovery + inline/sbatch dispatch | retired; the CLI verbs replace inline runs, site tooling owns dispatch |
+| `causalab/runner/slurm_args.py` | GPU/time/job-name resolution for sbatch | retired with the SLURM path |
+| `causalab/runner/fanout.py` | shard fan-out (SLURM array + local CUDA_VISIBLE_DEVICES pool) and `--collect` recombination | retired; in-document sweep expansion + `--points` replace the manifest fan-out (the SLURM array backend was already broken at base — `scripts/fanout_array.sbatch` never existed); cross-point parallelism *inside* a backend is epic objective I11 |
+| `causalab/runner/run_pipeline.sh` | serial analysis chain with free-GPU pick | retired with the analyses chains; workflow documents are the successor |
+| `causalab/configs/cluster/*.yaml` | site directives (partition/account/qos) | retired; site configuration lives outside the repo |
+| `causalab/io/pipelines.py::load_pipeline` | `device_map="auto"` + bf16 + chat-template loading (the 70B path) | replaced by `neural/pytorch_hooks/loading.py` (single device via `--device`/`--dtype`); multi-GPU sharding is epic objective I10, the chat-template path is an acknowledged fidelity gap |
+| `causalab/tasks/subject_object_relations/data/curation_sweep.py` | per-relation curation gate on the chat-coherent pipeline | retired with its three deleted imports while its measured table stays load-bearing (task README, `config.py` default); re-expressing it needs the dataset-serialization seam + a first-token metric kind (epic I1) |
+
 ## Known coverage gaps
 
 - **Parity captured-goldens re-drive** — landed on this branch:
   `neural/pytorch_hooks/test_parity_goldens.py` replays every portable pinned
   case, but 2 gqa `head_value` pins are explicitly skipped (the §2.4 vocabulary
   has no v_proj-output component) and the skip table is itself under audit.
-- **Chat-coherent GPU golden tier** — `parity/test_chat_coherent_parity.py`,
-  `end_to_end/test_goldens.py` and the runner golden pins retired with the
-  analyses; a protocol-native golden-tier decision (what runs nightly on GPU,
-  pinned against what) is still owed.
+- **Chat-coherent GPU golden tier** — discharged on this branch by
+  `tests/golden/`: paper-provenance goldens (`test_paper_goldens.py`, values
+  from published papers / the VeriFires task packages, never a stack run) and
+  the drift tier (`tests/golden/drift/`, Qwen3-4B value pins captured by a
+  reviewed GPU run — the retired tier's role). Remaining slivers: the drift
+  pins await their first cuda capture (the replay skips until then), and the
+  old tier's chat template + answer directive are inexpressible in v1 (no
+  chat-template code path), so the drift documents use raw completions.
 - **Per-head query receivers** — no spec component for the pre-attention
   q_h = W_Q^h·x receiver (`test_head_receivers_hook_oracle.py`'s query half);
   path patching onto query receivers is inexpressible in v1.
