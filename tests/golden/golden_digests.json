@@ -1,19 +1,20 @@
 {
   "drift_interchange_im.json": {
-    "document": "b3481a20a36ee1d43461a712f138fedc36723a83cf6745515c4ab8a82ec5a6d7",
+    "document": "88a016f8561249e6225ca67533f0a95ec85bda099bfa5472f0ff9695452e62a6",
     "points": [
-      "b3481a20a36ee1d43461a712f138fedc36723a83cf6745515c4ab8a82ec5a6d7"
+      "88a016f8561249e6225ca67533f0a95ec85bda099bfa5472f0ff9695452e62a6"
     ]
   },
   "drift_locate_scan_im.json": {
-    "document": "4f3199f0eb4243d570e92c738c38cec343a64baa1d5e92ec52a08ffdf546bf93",
+    "document": "4dafb6c00f701946b362bbfd324495ca914898281abbedb8138bcd72a368a480",
     "points": [
       "25522f8927239912f3dffce987ce5d703de504309cb71a728d3798a9fbc04cda",
       "052f1f5f7e18a354565f70caa9b354fcd9d0f55ca858a11329a643c2c8e70ee3",
       "258efa054ca79bc7382dbdb24488e40241fdbcc7461a244fe9344258cc1c0949",
       "f203c5f37526a1ab0d124346f8f57d6620dfcb0c25b261ddb2990a036da06976",
       "dd5820e0c5b84311d7849efa7eec176349947b8078626498369633f4089e59d9",
-      "fe1319c8c375455893a7f6235fab8afe28f1378bc6eea758117f18e95114b3d2"
+      "fe1319c8c375455893a7f6235fab8afe28f1378bc6eea758117f18e95114b3d2",
+      "0dd46b2417eb3d951b7da16b5b9477f271f28a3fb93bd876c9d3024b52431b6a"
     ]
   },
   "hours_baseline_im.json": {
@@ -26,6 +27,38 @@
     "document": "7ae145915b98ffc8b1ca25eb87c66ad3b8e752983c5a28766cfe1ba84a9450b4",
     "points": [
       "7ae145915b98ffc8b1ca25eb87c66ad3b8e752983c5a28766cfe1ba84a9450b4"
+    ]
+  },
+  "rome_ate_w2_im.json": {
+    "document": "6c5b70d2db571e27508d2798b00e67c1d33ee9d8d8000c2fce834fc51a7b0a4f",
+    "points": [
+      "af94401a9b8ffb6c47de3aada4371a9d407176dee7ff6bed4e30b689d1c752ea",
+      "fd06c11f7d9db60e5c13d17d26930f366c04eab79e7e09b8b64723be4d5a6cf9",
+      "375381474054dc5f077e5ba6c29523657c7a2ad42fc492cfe3948482cc726b22"
+    ]
+  },
+  "rome_ate_w3_im.json": {
+    "document": "e240df8743c9831df20fe61c9eb1c1a344877d1ecdec10cc5d3baa0db01be7f8",
+    "points": [
+      "7f525e4dc6a0591aa977d0ca748933f1956c547ea76466bcbb37ff1d0ac1ce41",
+      "1fb1f25df967faca5c4bd0a12eddaaafaa947fc7b7a8b6f33c30edcdbd13722b",
+      "1ff988828413823788606b053c79fd9eac87c714753d7f41077566d1454ffd88"
+    ]
+  },
+  "rome_ate_w4_im.json": {
+    "document": "2bbe72507b530d620444e42ca97c931db8a5b8ac424c9dcc6fed7bf306699ee3",
+    "points": [
+      "c1e6bfea93e008d8d13f88be10844485691377730575b700f1c44464808ba21f",
+      "63a047b2b5271b5f4efd4148574c845e493db9a0907ef673c27e73ad6dc9acbe",
+      "aa240fed049e31eb9a32e821d70c41abb056bb582148399a49c8bc1d7f460d4a"
+    ]
+  },
+  "rome_ate_w5_im.json": {
+    "document": "a1710dadec2e6967e398bb6c3edc65e02405b177698872f478f876574a9620e8",
+    "points": [
+      "27f7d3f50eff9d6d2bb55adad052802bc0944be223082c11d35dad78b01c580c",
+      "07662ea7a31ed0b3e1b3249579742b9fdc9c94c3e2b17b74909e5904b41eea5f",
+      "2195b152aa6e426d7e0f63771acd5cdb441cb968d830804cb3d7448ac8037354"
     ]
   }
 }

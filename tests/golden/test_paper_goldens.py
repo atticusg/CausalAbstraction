@@ -39,6 +39,7 @@ GOLDENS = json.loads(GOLDENS_FILE.read_text())["goldens"]
 COVERED: dict[str, tuple[str, ...]] = {
     "test_ioi_clean_logit_diff": ("ioi.clean_logit_diff", "ioi.io_over_s_rate"),
     "test_hours_baseline_accuracy": ("arithmetic.hours_baseline_acc",),
+    "test_rome_average_total_effect": ("rome.ate",),
 }
 
 
@@ -100,3 +101,37 @@ def test_hours_baseline_accuracy(tmp_path):
     acc = pd.read_parquet(tmp_path / "acc.parquet")["value"]
     assert len(acc) == 1152
     assert_golden("arithmetic.hours_baseline_acc", float(acc.mean()))
+
+
+def test_rome_average_total_effect(tmp_path):
+    """ATE = mean over facts and noise seeds of P_clean - P_corrupted,
+    recovered from the cross_entropy parquets (p = exp(-ce)); the clean
+    read is off the seed axis, so its per-seed rows are identical and the
+    per-example mean collapses them.
+
+    One document per subject-token width (the backend refuses ragged
+    edits); pooling the per-fact effects across the width shards restores
+    the loose-filter width distribution — a single-width sample biases the
+    ATE (diagnosed +16pts on the width-4 bucket alone)."""
+    import numpy as np
+
+    effects = []
+    clean_all, corr_all = [], []
+    for width in (2, 3, 4, 5):
+        out = tmp_path / f"w{width}"
+        run_document(f"rome_ate_w{width}_im.json", out)
+        ce_clean = pd.read_parquet(out / "ce_clean.parquet")
+        ce_corr = pd.read_parquet(out / "ce_corr.parquet")
+        p_clean = np.exp(-ce_clean.groupby("example")["value"].mean())
+        p_corr = (
+            ce_corr.assign(p=np.exp(-ce_corr["value"])).groupby("example")["p"].mean()
+        )
+        effects.append(p_clean - p_corr)
+        clean_all.append(p_clean)
+        corr_all.append(p_corr)
+    pooled = pd.concat(effects)
+    print(
+        f"n={len(pooled)}; clean baseline {pd.concat(clean_all).mean():.4f}, "
+        f"corrupted {pd.concat(corr_all).mean():.4f} (paper: 0.270 / 0.0847)"
+    )
+    assert_golden("rome.ate", float(pooled.mean() * 100))

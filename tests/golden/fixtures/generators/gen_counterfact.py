@@ -1,47 +1,56 @@
-"""CounterFact fixture generator (ROME, Meng et al. 2022, arXiv:2202.05262).
+"""ROME causal-tracing fixture generator (Meng et al. 2022, arXiv:2202.05262).
 
-Writes tests/golden/fixtures/data/counterfact/facts.json: a seeded sample of
-CounterFact facts (via NeelNanda/counterfact-tracing) that gpt2-xl answers
-correctly, for the causal-tracing golden documents. Also prints the noise
-scale the documents pin: nu = 3 * sigma, where sigma is the standard
-deviation of gpt2-xl's token-embedding matrix (the paper's corruption
-scale — 3*sigma, not sqrt(3*sigma)).
+Writes tests/golden/fixtures/data/counterfact/facts_w{2,3,4,5}.json from the
+paper's own tracing dataset — the 1,209 facts of ``known_1000.json``
+(https://rome.baulab.info/data/dsets/known_1000.json), the set the paper's
+§2 numbers (ATE 18.6, clean 27.0, corrupted 8.47) are measured on. An
+earlier draft of this fixture sampled NeelNanda/counterfact-tracing and
+measured ATE ≈ 36 — a regime mismatch (shorter templated prompts, a more
+confident correct-fact distribution), not a tolerance problem; the golden
+keeps the paper's facts instead.
+
+Also prints the noise scale the documents pin: nu = 3 * sigma, where sigma
+is the standard deviation of gpt2-xl's token-embedding matrix (0.048227,
+so 3*sigma = 0.144681 — the paper's 3*sigma, not sqrt(3*sigma); the
+subject-token-restricted sigma is within 6%, measured 0.045470).
 
 Selection rules, all load-bearing for the golden band:
 
-- **Loose correctness filter** (the VeriFires prompt's stated trap): keep a
-  fact when the object's first token is the argmax next token — never a
-  high-confidence filter, which would inflate the clean baseline and move
-  the ATE with it.
-- **Single-token objects by construction**: the answer column holds the
-  object's first token's decoded form and must round-trip to one token
-  (space-prefixed first, the repo's column_token_id rule).
-- **One subject-width bucket**: the reference backend refuses ragged edits,
-  and the noise edit targets the subject-token window, so every kept row's
-  subject must span the same number of tokens inside its prompt. The
-  largest bucket among correct facts is kept.
-- N = 200 facts, seed 0, from the dataset's train split in dataset order
-  (shuffled once with the seed before filtering caps the compute).
+- **The paper's fact set, unfiltered**: known_1000.json already encodes
+  "facts GPT-2 XL predicts correctly" by the paper's construction; rows
+  are kept as-is (the gpt2-xl first-token argmax rate is printed for
+  information, not used as a filter). The only drop is an answer whose
+  first token fails the repo's single-token column round-trip.
+- **One dataset per subject width, pooled proportionally**: the reference
+  backend refuses ragged edits and the noise edit targets the
+  subject-token window, so a single document needs equal-width subjects.
+  Widths 2-5 are each written as their own dataset, sized proportionally
+  to the width distribution, ~200 facts total; the golden test runs one
+  document per width and pools the per-fact effects.
+- Seed 0 shuffles once before the proportional cut.
 
-Run (downloads gpt2-xl ~6.4GB on first use; ~minutes of inference):
-    uv run python tests/golden/fixtures/generators/gen_counterfact.py [--device mps]
+Run (gpt2-xl for the info rate; ~a minute once cached):
+    uv run python tests/golden/fixtures/generators/gen_counterfact.py --device mps
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
+import urllib.request
 from pathlib import Path
 
 import torch
 
-OUT = Path(__file__).resolve().parents[1] / "data" / "counterfact" / "facts.json"
+OUT_DIR = Path(__file__).resolve().parents[1] / "data" / "counterfact"
 MODEL_KEY = "gpt2-xl"
 N_KEEP = 200
 SEED = 0
-CANDIDATE_CAP = 3000  # facts scored before bucketing; caps one-time compute
 BATCH = 16
+KNOWN_1000_URL = "https://rome.baulab.info/data/dsets/known_1000.json"
+KNOWN_1000_SHA256 = "61daca55318bb5260c1e62e133debef9102c7b278bbc7b19dd2ac655543f333a"
 
 
 def object_first_token(tokenizer, target: str) -> tuple[int, str] | None:
@@ -83,33 +92,24 @@ def main() -> None:
     parser.add_argument("--device", default="cpu")
     args = parser.parse_args()
 
-    from datasets import load_dataset
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    # right padding + per-row last-real-token gather: gpt2 computes position
-    # ids as arange, so left padding without explicit position_ids garbles
-    # shorter rows (the executor passes position_ids; this script must not
-    # rely on that)
+    raw = urllib.request.urlopen(KNOWN_1000_URL, timeout=60).read()
+    digest = hashlib.sha256(raw).hexdigest()
+    print(f"known_1000.json sha256 {digest}")
+    if KNOWN_1000_SHA256 and digest != KNOWN_1000_SHA256:
+        raise RuntimeError("known_1000.json changed upstream — do not regenerate silently")
+    facts = json.loads(raw)
+    assert len(facts) == 1209, f"expected the paper's 1209 facts, got {len(facts)}"
+
     tokenizer = AutoTokenizer.from_pretrained(MODEL_KEY)
     tokenizer.padding_side = "right"
     tokenizer.pad_token = tokenizer.eos_token
-    model = AutoModelForCausalLM.from_pretrained(MODEL_KEY, torch_dtype=torch.float32)
-    model.to(torch.device(args.device)).eval().requires_grad_(False)
-
-    sigma = float(model.get_input_embeddings().weight.std())
-    print(f"embedding sigma = {sigma:.6f}; noise scale 3*sigma = {3 * sigma:.6f}")
-
-    dataset = load_dataset("NeelNanda/counterfact-tracing", split="train")
-    order = list(range(len(dataset)))
-    random.Random(SEED).shuffle(order)
 
     candidates = []
-    for idx in order[:CANDIDATE_CAP]:
-        row = dataset[idx]
-        # dataset strings carry leading spaces ("' Danielle Darrieux'");
-        # the fixture stores the subject as it reads inside the prompt
-        prompt, subject = row["prompt"].rstrip(), row["subject"].strip()
-        resolved = object_first_token(tokenizer, row["target_true"])
+    for fact in facts:
+        prompt, subject = fact["prompt"].rstrip(), fact["subject"].strip()
+        resolved = object_first_token(tokenizer, fact["attribute"])
         width = subject_width(tokenizer, prompt, subject)
         if resolved is None or width is None or not prompt:
             continue
@@ -123,8 +123,14 @@ def main() -> None:
                 "width": width,
             }
         )
+    print(f"{len(candidates)}/{len(facts)} facts pass the single-token round-trip")
 
-    correct = []
+    # informational only: the paper's set is kept regardless
+    model = AutoModelForCausalLM.from_pretrained(MODEL_KEY, torch_dtype=torch.float32)
+    model.to(torch.device(args.device)).eval().requires_grad_(False)
+    sigma = float(model.get_input_embeddings().weight.std())
+    print(f"embedding sigma = {sigma:.6f}; noise scale 3*sigma = {3 * sigma:.6f}")
+    hits = 0
     with torch.no_grad():
         for i in range(0, len(candidates), BATCH):
             chunk = candidates[i : i + BATCH]
@@ -132,31 +138,37 @@ def main() -> None:
                 [c["input"] for c in chunk], return_tensors="pt", padding=True
             ).to(model.device)
             logits = model(**enc).logits
-            last = enc["attention_mask"].sum(dim=1) - 1  # last real token per row
+            last = enc["attention_mask"].sum(dim=1) - 1
             argmax = logits[torch.arange(len(chunk)), last, :].argmax(dim=-1)
-            for c, a in zip(chunk, argmax):
-                if int(a) == c["answer_id"]:
-                    correct.append(c)
+            hits += sum(int(a) == c["answer_id"] for c, a in zip(chunk, argmax))
+    print(f"gpt2-xl first-token argmax rate: {hits}/{len(candidates)} (informational)")
 
+    rng = random.Random(SEED)
+    rng.shuffle(candidates)
     by_width: dict[int, list[dict]] = {}
-    for c in correct:
+    for c in candidates:
         by_width.setdefault(c["width"], []).append(c)
-    width, bucket = max(by_width.items(), key=lambda kv: len(kv[1]))
-    kept = bucket[:N_KEEP]
-    print(
-        f"{len(candidates)} candidates, {len(correct)} gpt2-xl-correct "
-        f"({len(correct) / len(candidates):.1%}); widths "
-        f"{ {w: len(v) for w, v in sorted(by_width.items())} }; "
-        f"kept width={width} n={len(kept)}"
-    )
+    print(f"widths { {w: len(v) for w, v in sorted(by_width.items())} }")
 
-    rows = [
-        {"input": c["input"], "subject": c["subject"], "answer": c["answer"]}
-        for c in kept
-    ]
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps(rows, indent=1) + "\n")
-    print(f"wrote {OUT} ({len(rows)} rows, subject width {width})")
+    widths = [2, 3, 4, 5]
+    covered = sum(len(by_width.get(w, [])) for w in widths)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    total = 0
+    for w in widths:
+        bucket = by_width.get(w, [])
+        n = min(len(bucket), round(N_KEEP * len(bucket) / covered))
+        rows = [
+            {"input": c["input"], "subject": c["subject"], "answer": c["answer"]}
+            for c in bucket[:n]
+        ]
+        out = OUT_DIR / f"facts_w{w}.json"
+        out.write_text(json.dumps(rows, indent=1) + "\n")
+        total += len(rows)
+        print(f"wrote {out} ({len(rows)} rows, subject width {w})")
+    print(
+        f"total {total} facts; widths 2-5 cover {covered}/{len(candidates)} "
+        f"({covered / len(candidates):.0%}) of the paper's usable facts"
+    )
 
 
 if __name__ == "__main__":

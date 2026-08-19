@@ -30,7 +30,7 @@ DOCS = ("drift_interchange_im.json", "drift_locate_scan_im.json")
 ACCURACY_GATE = 0.9  # the old tier's baseline gate, kept verbatim
 PINS = Path(__file__).parent / "drift_goldens.json"
 
-_META_COLUMNS = {"value", "example", "point", "point_digest", "metric", "name"}
+_META_COLUMNS = {"value", "example", "point", "produced_by", "metric", "name"}
 
 
 def run_drift_documents(out_root: Path, device: str, dtype: str) -> dict[str, Path]:

@@ -1,13 +1,13 @@
 {
   "version": "1",
-  "description": "Chat-coherent drift tier, point document (successor to the retired Qwen golden tier): weekday-successor task on Qwen3-4B in raw completion form (protocol v1 has no chat-template path - a recorded fidelity gap vs the old tier). Pins: baseline accuracy (gated >= 0.9 like the old tier), IIA and logit_diff under a mid-layer interchange, and tensor statistics of the harvested mid-layer residual. Values are captured on the canonical GPU by tests/golden/drift/update_drift_goldens.py, never asserted from papers.",
+  "description": "Chat-coherent drift tier, point document (successor to the retired Qwen golden tier): weekday-successor task on Qwen3-4B in raw completion form (protocol v1 has no chat-template path - a recorded fidelity gap vs the old tier). Pins: baseline accuracy (gated >= 0.9 like the old tier), IIA and logit_diff under an interchange at layer 26 (where the MPS scout run localizes Qwen3-4B's last-token binding signal - layers <= 22 give IIA 0), and tensor statistics of the harvested residual. Values are captured on the canonical GPU by tests/golden/drift/update_drift_goldens.py, never asserted from papers.",
   "model": {"key": "Qwen/Qwen3-4B-Instruct-2507", "revision": "main"},
   "data": {
     "base":   {"dataset": "drift/weekdays", "field": "input"},
     "source": {"dataset": "drift/weekdays", "field": "counterfactual_inputs[0]"}
   },
   "sites": {
-    "target": {"component": "block_output", "layer": 18},
+    "target": {"component": "block_output", "layer": 26},
     "lm_head": {"component": "lm_head"}
   },
   "reads": {
