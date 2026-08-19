@@ -28,7 +28,7 @@ def harvest_doc() -> dict:
     return {
         "version": "1",
         "model": {"key": "test", "revision": "main"},
-        "data": base_data_section(with_source=False),
+        "data": base_data_section(with_counterfactual=False),
         "sites": {
             "s_in0": {"component": "block_input", "layer": 0},
             "s_out0": {"component": "block_output", "layer": 0},
@@ -106,7 +106,7 @@ def test_every_component_matches_oracle(bundle, oracle: OracleShim, component: s
     doc = {
         "version": "1",
         "model": {"key": "test", "revision": "main"},
-        "data": base_data_section(with_source=False),
+        "data": base_data_section(with_counterfactual=False),
         "sites": {"tap": site},
         "reads": {
             "r": {
@@ -137,7 +137,7 @@ def test_head_value_read_matches_oracle(llama_bundle):
     doc = {
         "version": "1",
         "model": {"key": "test", "revision": "main"},
-        "data": base_data_section(with_source=False),
+        "data": base_data_section(with_counterfactual=False),
         "sites": {"h": {"component": "attention_value", "layer": 0, "head": 1}},
         "reads": {
             "r": {
@@ -172,7 +172,7 @@ def test_lm_head_read_is_the_model_logits(bundle, oracle: OracleShim):
     doc = {
         "version": "1",
         "model": {"key": "test", "revision": "main"},
-        "data": base_data_section(with_source=False),
+        "data": base_data_section(with_counterfactual=False),
         "sites": {"lm_head": {"component": "lm_head"}},
         "reads": {
             "logits": {
@@ -203,7 +203,7 @@ def test_variable_position_reads_the_substring_tokens(llama_bundle):
     doc = {
         "version": "1",
         "model": {"key": "test", "revision": "main"},
-        "data": base_data_section(with_source=False),
+        "data": base_data_section(with_counterfactual=False),
         "positions": {"v": {"variable": "animal"}},
         "sites": {"emb": {"component": "embeddings"}},
         "reads": {

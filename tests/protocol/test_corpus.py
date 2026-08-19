@@ -68,26 +68,26 @@ class TestCorpusUnit:
         assert len(set(loaded.point_digests)) == 64
 
     def test_das_sweep_interns_one_harvest(self, env):
-        """§3's forcing example: 9 fits (k × seed) share ONE source harvest —
-        the original/source forward group has one content digest across all
+        """§3's forcing example: 9 fits (k × seed) share ONE counterfactual harvest —
+        the original/counterfactual forward group has one content digest across all
         points, while the patched groups are 9 distinct fits."""
         loaded = load(CORPUS_DIR / "08_weekdays_das_sweep_im.json", env)
-        harvest, patched, v_src = set(), set(), set()
-        identity = {"base": "d", "source": "d"}
+        harvest, patched, v_cf = set(), set(), set()
+        identity = {"base": "d", "counterfactual": "d"}
         for pdoc in loaded.point_documents:
             for group in plan_point(pdoc, data_identity=identity).groups:
                 (harvest if group.model == "original" else patched).add(group.digest)
-            v_src.add(closure_digest(pdoc, "v_src"))
+            v_cf.add(closure_digest(pdoc, "v_cf"))
         assert len(harvest) == 1
         assert len(patched) == 9
-        assert len(v_src) == 9
+        assert len(v_cf) == 9
 
     def test_locate_scan_shares_per_layer_harvests(self, env):
-        """07: the 64 points span 32 layers × 2 positions; the source-side
+        """07: the 64 points span 32 layers × 2 positions; the counterfactual-side
         harvest group of a point depends on nothing swept (taps differ, the
-        forward doesn't), so all 64 original/source groups intern to one."""
+        forward doesn't), so all 64 original/counterfactual groups intern to one."""
         loaded = load(CORPUS_DIR / "07_weekdays_locate_scan_im.json", env)
-        identity = {"base": "d", "source": "d"}
+        identity = {"base": "d", "counterfactual": "d"}
         harvest = {
             group.digest
             for pdoc in loaded.point_documents

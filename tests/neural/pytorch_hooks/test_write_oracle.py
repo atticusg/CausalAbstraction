@@ -1,4 +1,4 @@
-"""Edit semantics vs the raw-hook oracle — interchange, feature space +
+"""Write semantics vs the raw-hook oracle — interchange, feature space +
 error term, additive steer, gaussian determinism, cross-model two-pass
 path patching. Assertions and tolerances follow the oracle suites
 (stack-vs-oracle atol=1e-5 rtol=1e-4; wrapper-level cases atol=1e-4
@@ -13,7 +13,11 @@ from causalab.neural.pytorch_hooks.encoding import encode
 
 from tests.neural.pytorch_hooks import hook_oracle_lib as oracle_lib
 from tests.neural.pytorch_hooks._drive import base_data_section, executor_for
-from tests.neural.pytorch_hooks.conftest import BASE_TEXT, SOURCE_TEXT, OracleShim
+from tests.neural.pytorch_hooks.conftest import (
+    BASE_TEXT,
+    COUNTERFACTUAL_TEXT,
+    OracleShim,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -29,17 +33,17 @@ def interchange_doc(pos: int = 1) -> dict:
     return {
         "version": "1",
         "model": {"key": "test", "revision": "main"},
-        "data": base_data_section(with_source=True),
+        "data": base_data_section(with_counterfactual=True),
         "sites": {
             "tgt": {"component": "block_output", "layer": 0},
             "lm_head": {"component": "lm_head"},
         },
         "reads": {
-            "v_src": {
+            "v_cf": {
                 "site": "tgt",
                 "pos": {"index": pos},
                 "model": "original",
-                "input": "source",
+                "input": "counterfactual",
             },
             "logits": {
                 "site": "lm_head",
@@ -48,10 +52,10 @@ def interchange_doc(pos: int = 1) -> dict:
                 "input": "base",
             },
         },
-        "edits": {
-            "patch": {"site": "tgt", "pos": {"index": pos}, "do": {"swap": "v_src"}}
+        "writes": {
+            "patch": {"site": "tgt", "pos": {"index": pos}, "do": {"swap": "v_cf"}}
         },
-        "intervened_models": {"patched": {"input": "base", "edits": ["patch"]}},
+        "intervened_models": {"patched": {"input": "base", "writes": ["patch"]}},
         "save": [
             {
                 "value": "logits",
@@ -64,18 +68,23 @@ def interchange_doc(pos: int = 1) -> dict:
 
 
 def test_interchange_matches_oracle(bundle, oracle: OracleShim):
-    """The corpus-02 shape: swap the source residual into base at (L0, p1);
+    """The corpus-02 shape: swap the counterfactual residual into base at (L0, p1);
     the patched logits equal the oracle's hand-rolled patch, and differ
     from clean (non-vacuity)."""
     executor = executor_for(
-        interchange_doc(), bundle, base_texts=[BASE_TEXT], source_texts=[SOURCE_TEXT]
+        interchange_doc(),
+        bundle,
+        base_texts=[BASE_TEXT],
+        counterfactual_texts=[COUNTERFACTUAL_TEXT],
     )
     have = executor.read_value("logits")[:, 0, :]
 
     base_inputs = _inputs(bundle, BASE_TEXT)
-    src_resid = oracle_lib.capture_residual(oracle, 0, _inputs(bundle, SOURCE_TEXT))
+    cf_resid = oracle_lib.capture_residual(
+        oracle, 0, _inputs(bundle, COUNTERFACTUAL_TEXT)
+    )
     want = oracle_lib.next_token_logits(
-        oracle, base_inputs, layer=0, positions=[1], patch_values=src_resid[:, 1:2, :]
+        oracle, base_inputs, layer=0, positions=[1], patch_values=cf_resid[:, 1:2, :]
     )
     clean = oracle_lib.next_token_logits(oracle, base_inputs)
     assert not torch.allclose(want, clean, atol=1e-4)  # non-vacuity
@@ -92,10 +101,13 @@ def test_feature_space_swap_keeps_the_complement(llama_bundle):
     doc["featurizers"] = {
         "rot": {"kind": "subspace", "k": k, "parametrization": "cayley"}
     }
-    doc["reads"]["v_src"]["featurizer"] = "rot"
-    doc["edits"]["patch"]["featurizer"] = "rot"
+    doc["reads"]["v_cf"]["featurizer"] = "rot"
+    doc["writes"]["patch"]["featurizer"] = "rot"
     executor = executor_for(
-        doc, llama_bundle, base_texts=[BASE_TEXT], source_texts=[SOURCE_TEXT]
+        doc,
+        llama_bundle,
+        base_texts=[BASE_TEXT],
+        counterfactual_texts=[COUNTERFACTUAL_TEXT],
     )
     have = executor.read_value("logits")[:, 0, :]
 
@@ -104,10 +116,10 @@ def test_feature_space_swap_keeps_the_complement(llama_bundle):
     shim = OracleShim(hf_model=llama_bundle.model)
     base_inputs = _inputs(llama_bundle, BASE_TEXT)
     base_resid = oracle_lib.capture_residual(shim, 0, base_inputs)[:, 1:2, :]
-    src_resid = oracle_lib.capture_residual(
-        shim, 0, _inputs(llama_bundle, SOURCE_TEXT)
+    cf_resid = oracle_lib.capture_residual(
+        shim, 0, _inputs(llama_bundle, COUNTERFACTUAL_TEXT)
     )[:, 1:2, :]
-    patch = base_resid - (base_resid @ q) @ q.T + (src_resid @ q) @ q.T
+    patch = base_resid - (base_resid @ q) @ q.T + (cf_resid @ q) @ q.T
     want = oracle_lib.next_token_logits(
         shim, base_inputs, layer=0, positions=[1], patch_values=patch
     )
@@ -118,23 +130,26 @@ def test_feature_space_swap_keeps_the_complement(llama_bundle):
 
 def test_dims_swap_is_a_subspace_swap(llama_bundle):
     """A dims selection swaps only those feature coordinates — raw space,
-    dims [0, 2]: untouched dims come from the pre-edit value."""
+    dims [0, 2]: untouched dims come from the pre-write value."""
     doc = interchange_doc()
-    doc["edits"]["patch"]["dims"] = [0, 2]
-    doc["reads"]["v_src"]["dims"] = [0, 2]
+    doc["writes"]["patch"]["dims"] = [0, 2]
+    doc["reads"]["v_cf"]["dims"] = [0, 2]
     executor = executor_for(
-        doc, llama_bundle, base_texts=[BASE_TEXT], source_texts=[SOURCE_TEXT]
+        doc,
+        llama_bundle,
+        base_texts=[BASE_TEXT],
+        counterfactual_texts=[COUNTERFACTUAL_TEXT],
     )
     have = executor.read_value("logits")[:, 0, :]
 
     shim = OracleShim(hf_model=llama_bundle.model)
     base_inputs = _inputs(llama_bundle, BASE_TEXT)
     base_resid = oracle_lib.capture_residual(shim, 0, base_inputs)[:, 1:2, :].clone()
-    src_resid = oracle_lib.capture_residual(
-        shim, 0, _inputs(llama_bundle, SOURCE_TEXT)
+    cf_resid = oracle_lib.capture_residual(
+        shim, 0, _inputs(llama_bundle, COUNTERFACTUAL_TEXT)
     )[:, 1:2, :]
     patch = base_resid.clone()
-    patch[..., [0, 2]] = src_resid[..., [0, 2]]
+    patch[..., [0, 2]] = cf_resid[..., [0, 2]]
     want = oracle_lib.next_token_logits(
         shim, base_inputs, layer=0, positions=[1], patch_values=patch
     )
@@ -145,19 +160,21 @@ def test_add_scaled_matches_oracle_steer(bundle, oracle: OracleShim):
     """add_scaled with a literal-alpha scalar operand == the oracle's
     additive steer of a constant (broadcast scalar) vector."""
     doc = interchange_doc()
-    doc["edits"]["patch"]["do"] = {"add_scaled": {"op": 2.5, "alpha": 1.0}}
-    del doc["reads"]["v_src"]
-    doc["data"] = base_data_section(with_source=False)
+    doc["writes"]["patch"]["do"] = {"add_scaled": {"op": 2.5, "alpha": 1.0}}
+    del doc["reads"]["v_cf"]
+    doc["data"] = base_data_section(with_counterfactual=False)
     executor = executor_for(doc, bundle, base_texts=[BASE_TEXT])
     have = executor.read_value("logits")[:, 0, :]
 
     base_inputs = _inputs(bundle, BASE_TEXT)
 
-    def edit(hidden: torch.Tensor) -> None:
+    def write_fn(hidden: torch.Tensor) -> None:
         hidden[:, 1, :] = hidden[:, 1, :] + 2.5
 
     block = oracle_lib.decoder_block(oracle, 0)
-    want = oracle_lib.component_edited_logits(oracle, base_inputs, block, "out", edit)
+    want = oracle_lib.component_written_logits(
+        oracle, base_inputs, block, "out", write_fn
+    )
     torch.testing.assert_close(have, want, **TOL)
 
 
@@ -167,11 +184,11 @@ def test_gaussian_contract(llama_bundle):
 
     def run(seed: int, scale: float) -> torch.Tensor:
         doc = interchange_doc()
-        doc["edits"]["patch"]["do"] = {
+        doc["writes"]["patch"]["do"] = {
             "gaussian": {"seed": seed, "scale": scale, "axis": "tp_duplicated"}
         }
-        del doc["reads"]["v_src"]
-        doc["data"] = base_data_section(with_source=False)
+        del doc["reads"]["v_cf"]
+        doc["data"] = base_data_section(with_counterfactual=False)
         executor = executor_for(doc, llama_bundle, base_texts=[BASE_TEXT])
         return executor.read_value("logits")[:, 0, :]
 
@@ -189,11 +206,11 @@ def test_gaussian_draw_realization(llama_bundle):
     Generator().manual_seed(seed) → randn((batch, n_pos, width)), made
     outside the model."""
     doc = interchange_doc()
-    doc["edits"]["patch"]["do"] = {
+    doc["writes"]["patch"]["do"] = {
         "gaussian": {"seed": 7, "scale": 3.0, "axis": "tp_duplicated"}
     }
-    del doc["reads"]["v_src"]
-    doc["data"] = base_data_section(with_source=False)
+    del doc["reads"]["v_cf"]
+    doc["data"] = base_data_section(with_counterfactual=False)
     executor = executor_for(doc, llama_bundle, base_texts=[BASE_TEXT])
     have = executor.read_value("logits")[:, 0, :]
 
@@ -208,11 +225,11 @@ def test_gaussian_draw_realization(llama_bundle):
     torch.testing.assert_close(have, want, **TOL)
 
 
-def test_renormalize_restores_the_pre_edit_norm(llama_bundle):
+def test_renormalize_restores_the_pre_write_norm(llama_bundle):
     """add_scaled + renormalize at one address: the delta applies, then the
-    feature vector is rescaled to the pre-edit norm."""
+    feature vector is rescaled to the pre-write norm."""
     doc = interchange_doc()
-    doc["edits"] = {
+    doc["writes"] = {
         "nudge": {
             "site": "tgt",
             "pos": {"index": 1},
@@ -220,9 +237,9 @@ def test_renormalize_restores_the_pre_edit_norm(llama_bundle):
         },
         "renorm": {"site": "tgt", "pos": {"index": 1}, "do": {"renormalize": True}},
     }
-    doc["intervened_models"]["patched"]["edits"] = ["nudge", "renorm"]
-    del doc["reads"]["v_src"]
-    doc["data"] = base_data_section(with_source=False)
+    doc["intervened_models"]["patched"]["writes"] = ["nudge", "renorm"]
+    del doc["reads"]["v_cf"]
+    doc["data"] = base_data_section(with_counterfactual=False)
     executor = executor_for(doc, llama_bundle, base_texts=[BASE_TEXT])
     have = executor.read_value("logits")[:, 0, :]
 
@@ -247,7 +264,7 @@ def test_two_pass_path_patching_matches_oracle(bundle, oracle: OracleShim):
     doc = {
         "version": "1",
         "model": {"key": "test", "revision": "main"},
-        "data": base_data_section(with_source=True),
+        "data": base_data_section(with_counterfactual=True),
         "sites": {
             "sender": {"component": "block_output", "layer": 0},
             "receiver": {"component": "block_output", "layer": 1},
@@ -258,7 +275,7 @@ def test_two_pass_path_patching_matches_oracle(bundle, oracle: OracleShim):
                 "site": "sender",
                 "pos": {"index": -1},
                 "model": "original",
-                "input": "source",
+                "input": "counterfactual",
             },
             "v_receiver": {
                 "site": "receiver",
@@ -273,7 +290,7 @@ def test_two_pass_path_patching_matches_oracle(bundle, oracle: OracleShim):
                 "input": "base",
             },
         },
-        "edits": {
+        "writes": {
             "swap_sender": {
                 "site": "sender",
                 "pos": {"index": -1},
@@ -286,8 +303,8 @@ def test_two_pass_path_patching_matches_oracle(bundle, oracle: OracleShim):
             },
         },
         "intervened_models": {
-            "patched": {"input": "base", "edits": ["swap_sender"]},
-            "final": {"input": "base", "edits": ["inject"]},
+            "patched": {"input": "base", "writes": ["swap_sender"]},
+            "final": {"input": "base", "writes": ["inject"]},
         },
         "save": [
             {
@@ -299,21 +316,27 @@ def test_two_pass_path_patching_matches_oracle(bundle, oracle: OracleShim):
         ],
     }
     executor = executor_for(
-        doc, bundle, base_texts=[BASE_TEXT], source_texts=[SOURCE_TEXT]
+        doc, bundle, base_texts=[BASE_TEXT], counterfactual_texts=[COUNTERFACTUAL_TEXT]
     )
     have = executor.read_value("logits")[:, 0, :]
 
     base_inputs = _inputs(bundle, BASE_TEXT)
-    src_resid = oracle_lib.capture_residual(oracle, 0, _inputs(bundle, SOURCE_TEXT))
+    cf_resid = oracle_lib.capture_residual(
+        oracle, 0, _inputs(bundle, COUNTERFACTUAL_TEXT)
+    )
     sender_block = oracle_lib.decoder_block(oracle, 0)
     receiver_block = oracle_lib.decoder_block(oracle, 1)
-    patch_last = src_resid[:, -1, :]
+    patch_last = cf_resid[:, -1, :]
 
-    def sender_edit(hidden: torch.Tensor) -> None:
+    def sender_write(hidden: torch.Tensor) -> None:
         hidden[:, -1, :] = patch_last
 
-    v_star = oracle_lib.capture_with_edits(
-        oracle, base_inputs, receiver_block, "out", [(sender_block, "out", sender_edit)]
+    v_star = oracle_lib.capture_with_writes(
+        oracle,
+        base_inputs,
+        receiver_block,
+        "out",
+        [(sender_block, "out", sender_write)],
     )[:, -1:, :]
     want = oracle_lib.next_token_logits(
         oracle, base_inputs, layer=1, positions=[-1], patch_values=v_star
@@ -323,8 +346,8 @@ def test_two_pass_path_patching_matches_oracle(bundle, oracle: OracleShim):
     torch.testing.assert_close(have, want, atol=1e-4, rtol=1e-3)
 
 
-def test_reads_see_the_fully_edited_state(bundle, oracle: OracleShim):
-    """§2.7: a read in model M at the edited address sees the write."""
+def test_reads_see_the_fully_written_state(bundle, oracle: OracleShim):
+    """§2.7: a read in model M at the written address sees the write."""
     doc = interchange_doc()
     doc["reads"]["v_at"] = {
         "site": "tgt",
@@ -341,17 +364,17 @@ def test_reads_see_the_fully_edited_state(bundle, oracle: OracleShim):
         }
     )
     executor = executor_for(
-        doc, bundle, base_texts=[BASE_TEXT], source_texts=[SOURCE_TEXT]
+        doc, bundle, base_texts=[BASE_TEXT], counterfactual_texts=[COUNTERFACTUAL_TEXT]
     )
-    src_resid = oracle_lib.capture_residual(oracle, 0, _inputs(bundle, SOURCE_TEXT))[
-        :, 1, :
-    ]
-    torch.testing.assert_close(executor.read_value("v_at")[:, 0, :], src_resid, **TOL)
+    cf_resid = oracle_lib.capture_residual(
+        oracle, 0, _inputs(bundle, COUNTERFACTUAL_TEXT)
+    )[:, 1, :]
+    torch.testing.assert_close(executor.read_value("v_at")[:, 0, :], cf_resid, **TOL)
 
 
 def test_composed_chain_sizes_stages_by_chain_width(llama_bundle):
     """§2.5 composition: a gate after a k=3 rotation is a 3-wide gate, and
-    the composed swap equals the hand-rolled two-stage math — the source's
+    the composed swap equals the hand-rolled two-stage math — the counterfactual's
     on-features replace the base's inside the rotated subspace, everything
     else (the gate's off-features AND the rotation's complement) survives
     from the base."""
@@ -361,10 +384,13 @@ def test_composed_chain_sizes_stages_by_chain_width(llama_bundle):
         "rot": {"kind": "subspace", "k": 3, "parametrization": "cayley"},
         "gate": {"kind": "gate"},
     }
-    doc["reads"]["v_src"]["featurizer"] = ["rot", "gate"]
-    doc["edits"]["patch"]["featurizer"] = ["rot", "gate"]
+    doc["reads"]["v_cf"]["featurizer"] = ["rot", "gate"]
+    doc["writes"]["patch"]["featurizer"] = ["rot", "gate"]
     executor = executor_for(
-        doc, llama_bundle, base_texts=[BASE_TEXT], source_texts=[SOURCE_TEXT]
+        doc,
+        llama_bundle,
+        base_texts=[BASE_TEXT],
+        counterfactual_texts=[COUNTERFACTUAL_TEXT],
     )
     gate = executor.stage("gate")
     assert tuple(gate.theta.shape) == (3,)  # chain width, not the site width d
@@ -377,12 +403,12 @@ def test_composed_chain_sizes_stages_by_chain_width(llama_bundle):
     shim = OracleShim(hf_model=llama_bundle.model)
     base_inputs = _inputs(llama_bundle, BASE_TEXT)
     base_resid = oracle_lib.capture_residual(shim, 0, base_inputs)[:, 1:2, :]
-    src_resid = oracle_lib.capture_residual(
-        shim, 0, _inputs(llama_bundle, SOURCE_TEXT)
+    cf_resid = oracle_lib.capture_residual(
+        shim, 0, _inputs(llama_bundle, COUNTERFACTUAL_TEXT)
     )[:, 1:2, :]
     mask = (gate.theta > 0).float()
-    z_base, z_src = base_resid @ rot_q, src_resid @ rot_q
-    z_new = mask * z_src + (1.0 - mask) * z_base  # gate swap keeps off-features
+    z_base, z_cf = base_resid @ rot_q, cf_resid @ rot_q
+    z_new = mask * z_cf + (1.0 - mask) * z_base  # gate swap keeps off-features
     patch = base_resid - z_base @ rot_q.T + z_new @ rot_q.T  # rot err survives
     want = oracle_lib.next_token_logits(
         shim, base_inputs, layer=0, positions=[1], patch_values=patch

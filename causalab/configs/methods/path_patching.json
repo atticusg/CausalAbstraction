@@ -4,7 +4,7 @@
   "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
   "data": {
     "base":   {"dataset": "ioi/test", "field": "input"},
-    "source": {"dataset": "ioi/test", "field": "counterfactual_inputs[0]"}
+    "counterfactual": {"dataset": "ioi/test", "field": "counterfactual_inputs[0]"}
   },
   "sites": {
     "sender":   {"component": "attention_value",  "layer": 9, "head": 9},
@@ -14,21 +14,21 @@
     "lm_head": {"component": "lm_head"}
   },
   "reads": {
-    "v_sender":   {"site": "sender",   "pos": -1, "model": "original", "input": "source"},
+    "v_sender":   {"site": "sender",   "pos": -1, "model": "original", "input": "counterfactual"},
     "v_a10":      {"site": "a10",      "pos": -1, "model": "original", "input": "base"},
     "v_a11":      {"site": "a11",      "pos": -1, "model": "original", "input": "base"},
     "v_receiver": {"site": "receiver", "pos": -1, "model": "patched", "input": "base"},
     "logits":     {"site": "lm_head",  "pos": -1, "model": "final", "input": "base"}
   },
-  "edits": {
+  "writes": {
     "swap_sender": {"site": "sender",   "pos": -1, "do": {"swap": "v_sender"}},
     "freeze_10":   {"site": "a10",      "pos": -1, "do": {"swap": "v_a10"}},
     "freeze_11":   {"site": "a11",      "pos": -1, "do": {"swap": "v_a11"}},
     "inject":      {"site": "receiver", "pos": -1, "do": {"swap": "v_receiver"}}
   },
   "intervened_models": {
-    "patched": {"input": "base", "edits": ["swap_sender", "freeze_10", "freeze_11"]},
-    "final":   {"input": "base", "edits": ["inject"]}
+    "patched": {"input": "base", "writes": ["swap_sender", "freeze_10", "freeze_11"]},
+    "final":   {"input": "base", "writes": ["inject"]}
   },
   "metrics": {
     "logit_diff": {"kind": "logit_diff", "of": "logits", "a": "answer", "b": "cf_answer"}

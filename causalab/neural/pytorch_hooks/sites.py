@@ -25,7 +25,7 @@ Two semantics deliberately preserved from the oracle:
 Unsupported components refuse with the registry-extension message style —
 ``attention_probs`` needs an attention-internal tap this backend does not
 implement (its capability is absent, so routing already refuses documents
-that edit it), and MoE components await an MoE family in the tree table.
+that write to it), and MoE components await an MoE family in the tree table.
 """
 
 from __future__ import annotations
@@ -117,7 +117,7 @@ def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
         raise NotImplementedError(
             f"the pytorch_hooks backend has no tap for {component!r} yet — "
             "attention_probs needs an attention-internal surface (this backend "
-            "declares no editable_attention_probs capability), and the MoE "
+            "declares no writable_attention_probs capability), and the MoE "
             "components await an MoE entry in the family table (sites.py)."
         )
 

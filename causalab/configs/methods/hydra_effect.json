@@ -4,7 +4,7 @@
   "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
   "data": {
     "base":   {"dataset": "pile/sample", "field": "input"},
-    "source": {"dataset": "pile/sample", "field": "resample_input"}
+    "counterfactual": {"dataset": "pile/sample", "field": "resample_input"}
   },
   "sites": {
     "abl":         {"component": "attention_output", "layer": 13},
@@ -14,7 +14,7 @@
     "lm_head": {"component": "lm_head"}
   },
   "reads": {
-    "v_noise":      {"site": "abl",     "pos": -1, "model": "original", "input": "source"},
+    "v_noise":      {"site": "abl",     "pos": -1, "model": "original", "input": "counterfactual"},
     "logits_clean": {"site": "lm_head", "pos": -1, "model": "original", "input": "base"},
     "logits_abl":   {"site": "lm_head", "pos": -1, "model": "ablated", "input": "base"},
     "a14_clean":    {"site": "probe14", "pos": -1, "model": "original", "input": "base"},
@@ -26,7 +26,7 @@
     "de14_abl":     {"site": "lm_head", "pos": -1, "model": "with_inj14_abl", "input": "base"},
     "de20_abl":     {"site": "lm_head", "pos": -1, "model": "with_inj20_abl", "input": "base"}
   },
-  "edits": {
+  "writes": {
     "resample":    {"site": "abl",         "pos": -1, "do": {"swap": "v_noise"}},
     "inj14_clean": {"site": "resid_final", "pos": -1, "do": {"swap": "a14_clean"}},
     "inj20_clean": {"site": "resid_final", "pos": -1, "do": {"swap": "a20_clean"}},
@@ -34,11 +34,11 @@
     "inj20_abl":   {"site": "resid_final", "pos": -1, "do": {"swap": "a20_abl"}}
   },
   "intervened_models": {
-    "ablated": {"input": "base", "edits": ["resample"]},
-    "with_inj14_clean":   {"input": "base", "edits": ["inj14_clean"]},
-    "with_inj20_clean":   {"input": "base", "edits": ["inj20_clean"]},
-    "with_inj14_abl":   {"input": "base", "edits": ["inj14_abl"]},
-    "with_inj20_abl":   {"input": "base", "edits": ["inj20_abl"]}
+    "ablated": {"input": "base", "writes": ["resample"]},
+    "with_inj14_clean":   {"input": "base", "writes": ["inj14_clean"]},
+    "with_inj20_clean":   {"input": "base", "writes": ["inj20_clean"]},
+    "with_inj14_abl":   {"input": "base", "writes": ["inj14_abl"]},
+    "with_inj20_abl":   {"input": "base", "writes": ["inj20_abl"]}
   },
   "metrics": {
     "te_clean": {"kind": "token_logit", "of": "logits_clean", "token": "ml_token"},

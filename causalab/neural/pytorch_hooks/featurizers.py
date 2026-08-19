@@ -2,7 +2,7 @@
 ``inverse(f, err) → x̂``, per kind, plus composition.
 
 The error-term contract is the load-bearing rule: ``err`` and unselected
-dims always come from the **pre-edit** value at the address, so a zero
+dims always come from the **pre-write** value at the address, so a zero
 write ablates only the feature contribution and a ``dims`` write is a
 subspace swap. One deliberate interpretation (surfaced in the PR): the
 spec's kind table writes ``(Qᵀx, 0)`` for ``subspace``, but the contract
@@ -261,7 +261,7 @@ def build_stack(
     load_tensors: Any,
     stage_cache: dict[str, Stage],
 ) -> FeaturizerStack:
-    """Build (or reuse from ``stage_cache``) the stack a read/edit
+    """Build (or reuse from ``stage_cache``) the stack a read/write
     references. ``width`` is the SITE width; each later stage in a
     composition is sized to the *previous stage's output* (the §2.5 chain —
     a gate after a k=3 rotation is a 3-wide gate). ``load_tensors`` supplies

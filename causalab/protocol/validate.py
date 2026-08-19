@@ -17,9 +17,9 @@ Interpretations this module commits to (each surfaced in the PR notes):
   prompt variables (template variables occupy disjoint spans). An index
   compared against a variable window is unknowable at load and treated as
   overlapping — refuse-before-run rather than collide-at-run.
-* **Rules 8 and 9 compose.** Full-width edits have ``dims = all``. At one
+* **Rules 8 and 9 compose.** Full-width writes have ``dims = all``. At one
   (site, overlapping pos, model) address: at most one full-width absolute
-  edit (rule 8), and no two *absolute* writes may intersect in dims
+  write (rule 8), and no two *absolute* writes may intersect in dims
   (rule 9) — additive deltas may overlap anything, absolute-then-additive
   order is the mechanism-class rule (§2.8).
 * **Dead declarations** (§0) are reported under rule 11 — the sink rule
@@ -38,7 +38,7 @@ from causalab.protocol.schema import (
     FEATURIZER_SLOTS,
     Do,
     Document,
-    EditSpec,
+    WriteSpec,
     NAMED_SECTIONS,
     PositionSpec,
     RESERVED_NAMES,
@@ -47,7 +47,7 @@ from causalab.protocol.schema import (
 
 __all__ = ["validate_document"]
 
-_SOURCE_INDEXED = re.compile(r"^source\[(\d+)\]$")
+_COUNTERFACTUAL_INDEXED = re.compile(r"^counterfactual\[(\d+)\]$")
 
 #: Trainable featurizer kinds — the ones with gradient-trainable slots
 #: (§5.12). ``pca`` / ``standardize`` are computed from data, ``identity``
@@ -60,9 +60,9 @@ def validate_document(doc: Document, *, backend_is_local: bool | None = None) ->
     given). Raises :class:`ValidationError` on the first violation."""
     names = _check_namespace(doc)  # rule 3
     _check_references(doc, names)  # rule 4 (+ the rule-5 read bindings)
-    _check_edits_inert(doc, names)  # rule 6
+    _check_writes_inert(doc, names)  # rule 6
     _check_membership_and_acyclic(doc)  # rule 7
-    _check_edit_collisions(doc)  # rules 8 + 9
+    _check_write_collisions(doc)  # rules 8 + 9
     _check_save(doc)  # rule 10
     _check_sinks(doc)  # rule 11
     _check_trainability(doc)  # rule 12
@@ -80,7 +80,7 @@ def _check_namespace(doc: Document) -> dict[str, str]:
     for section in NAMED_SECTIONS:
         table = getattr(doc, section)
         for name in table:
-            if name in RESERVED_NAMES or _SOURCE_INDEXED.match(name):
+            if name in RESERVED_NAMES or _COUNTERFACTUAL_INDEXED.match(name):
                 raise ValidationError(
                     3, f"{name!r} is a reserved name", path=f"{section}.{name}"
                 )
@@ -102,14 +102,14 @@ def _check_namespace(doc: Document) -> dict[str, str]:
 
 def _valid_roles(doc: Document) -> set[str]:
     roles = {"base"}
-    source = doc.data.get("source")
-    if source is None:
+    counterfactual = doc.data.get("counterfactual")
+    if counterfactual is None:
         return roles
-    if isinstance(source, tuple):
-        roles.update(f"source[{j}]" for j in range(len(source)))
-        # a singular reference to an array-valued source is not a role
+    if isinstance(counterfactual, tuple):
+        roles.update(f"counterfactual[{j}]" for j in range(len(counterfactual)))
+        # a singular reference to an array-valued counterfactual is not a role
     else:
-        roles.add("source")
+        roles.add("counterfactual")
     return roles
 
 
@@ -181,14 +181,14 @@ def _check_references(doc: Document, names: dict[str, str]) -> None:
                 )
         _check_featurizer_ref(doc, read.featurizer, f"{p}.featurizer")
 
-    for ename, edit in doc.edits.items():
-        p = f"edits.{ename}"
-        if edit.site not in doc.sites:
+    for ename, write in doc.writes.items():
+        p = f"writes.{ename}"
+        if write.site not in doc.sites:
             raise ValidationError(
-                4, f"site {edit.site!r} is not declared", path=f"{p}.site"
+                4, f"site {write.site!r} is not declared", path=f"{p}.site"
             )
-        _check_pos_ref(doc, edit.pos, f"{p}.pos")
-        _check_featurizer_ref(doc, edit.featurizer, f"{p}.featurizer")
+        _check_pos_ref(doc, write.pos, f"{p}.pos")
+        _check_featurizer_ref(doc, write.featurizer, f"{p}.featurizer")
 
     for mname, im in doc.intervened_models.items():
         p = f"intervened_models.{mname}"
@@ -198,10 +198,10 @@ def _check_references(doc: Document, names: dict[str, str]) -> None:
                 f"intervened_model input {im.input!r} is not a valid role",
                 path=f"{p}.input",
             )
-        for ename in _im_edits(im.edits):
-            if ename not in doc.edits:
+        for ename in _im_writes(im.writes):
+            if ename not in doc.writes:
                 raise ValidationError(
-                    4, f"edit {ename!r} is not declared", path=f"{p}.edits"
+                    4, f"write {ename!r} is not declared", path=f"{p}.writes"
                 )
 
     for qname, metric in doc.metrics.items():
@@ -332,7 +332,7 @@ def _check_train_references(doc: Document) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# rule 6 — edits are inert; operands are reads, params, or literal scalars
+# rule 6 — writes are inert; operands are reads, params, or literal scalars
 # --------------------------------------------------------------------------- #
 
 
@@ -355,12 +355,12 @@ def _operand_names(do: Do) -> tuple[str, ...]:
     return ()
 
 
-def _check_edits_inert(doc: Document, names: dict[str, str]) -> None:
+def _check_writes_inert(doc: Document, names: dict[str, str]) -> None:
     slot_names = _param_slot_names(doc)
-    for ename, edit in doc.edits.items():
-        if edit.do.mechanism == "affine":
+    for ename, write in doc.writes.items():
+        if write.do.mechanism == "affine":
             for field in ("A", "b"):
-                target = edit.do.payload.get(field)
+                target = write.do.payload.get(field)
                 if isinstance(target, str) and (
                     target in doc.reads
                     or (
@@ -374,20 +374,22 @@ def _check_edits_inert(doc: Document, names: dict[str, str]) -> None:
                         f"affine {field!r} must name a param (§2.8 types both "
                         f"fields as params); {target!r} is a "
                         f"{names.get(target, 'read')}",
-                        path=f"edits.{ename}.do",
+                        path=f"writes.{ename}.do",
                     )
-        for operand in _operand_names(edit.do):
+        for operand in _operand_names(write.do):
             if operand in doc.reads or operand in doc.params or operand in slot_names:
                 continue
             if operand in names:
                 raise ValidationError(
                     6,
-                    f"edit operand {operand!r} names a {names[operand]} entry — "
+                    f"write operand {operand!r} names a {names[operand]} entry — "
                     "operands are reads, params, or literal scalars (§2.8)",
-                    path=f"edits.{ename}.do",
+                    path=f"writes.{ename}.do",
                 )
             raise ValidationError(
-                4, f"edit operand {operand!r} is not declared", path=f"edits.{ename}.do"
+                4,
+                f"write operand {operand!r} is not declared",
+                path=f"writes.{ename}.do",
             )
 
 
@@ -396,20 +398,20 @@ def _check_edits_inert(doc: Document, names: dict[str, str]) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _im_edits(edits: Any) -> tuple[str, ...]:
-    return tuple(edits) if isinstance(edits, tuple) else ()
+def _im_writes(writes: Any) -> tuple[str, ...]:
+    return tuple(writes) if isinstance(writes, tuple) else ()
 
 
 def _check_membership_and_acyclic(doc: Document) -> None:
-    in_force: dict[str, set[str]] = {ename: set() for ename in doc.edits}
+    in_force: dict[str, set[str]] = {ename: set() for ename in doc.writes}
     for mname, im in doc.intervened_models.items():
         seen: set[str] = set()
-        for ename in _im_edits(im.edits):
+        for ename in _im_writes(im.writes):
             if ename in seen:
                 raise ValidationError(
                     7,
-                    f"edit {ename!r} listed twice",
-                    path=f"intervened_models.{mname}.edits",
+                    f"write {ename!r} listed twice",
+                    path=f"intervened_models.{mname}.writes",
                 )
             seen.add(ename)
             in_force[ename].add(mname)
@@ -417,17 +419,17 @@ def _check_membership_and_acyclic(doc: Document) -> None:
         if not hosts:
             raise ValidationError(
                 7,
-                f"edit {ename!r} appears in no intervened_model — every declared "
-                "edit must be in force somewhere (§2.9)",
-                path=f"edits.{ename}",
+                f"write {ename!r} appears in no intervened_model — every declared "
+                "write must be in force somewhere (§2.9)",
+                path=f"writes.{ename}",
             )
 
-    # model graph: an edge M -> M' when a read in M' is an operand of an edit
+    # model graph: an edge M -> M' when a read in M' is an operand of a write
     # in force in M (M' must run first). 'original' has no out-edges.
     graph: dict[str, set[str]] = {m: set() for m in doc.intervened_models}
     for mname, im in doc.intervened_models.items():
-        for ename in _im_edits(im.edits):
-            for operand in _operand_names(doc.edits[ename].do):
+        for ename in _im_writes(im.writes):
+            for operand in _operand_names(doc.writes[ename].do):
                 read = doc.reads.get(operand)
                 if read is not None and read.model != "original":
                     graph[mname].add(str(read.model))
@@ -455,7 +457,7 @@ def _check_membership_and_acyclic(doc: Document) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# rules 8 + 9 — absolute-edit and dims collisions per address
+# rules 8 + 9 — absolute-write and dims collisions per address
 # --------------------------------------------------------------------------- #
 
 
@@ -524,11 +526,11 @@ def _index_outside_span(index: int, span: tuple[int, int]) -> bool:
     return False  # mixed-sign span — unknowable
 
 
-def _is_absolute(edit: EditSpec) -> bool:
-    return edit.do.mechanism not in ADDITIVE_MECHANISMS
+def _is_absolute(write: WriteSpec) -> bool:
+    return write.do.mechanism not in ADDITIVE_MECHANISMS
 
 
-def _dims_intersect(a: EditSpec, b: EditSpec) -> bool:
+def _dims_intersect(a: WriteSpec, b: WriteSpec) -> bool:
     a_dims = a.dims if isinstance(a.dims, tuple) else None
     b_dims = b.dims if isinstance(b.dims, tuple) else None
     if a_dims is None or b_dims is None:
@@ -536,12 +538,12 @@ def _dims_intersect(a: EditSpec, b: EditSpec) -> bool:
     return bool(set(a_dims) & set(b_dims))
 
 
-def _check_edit_collisions(doc: Document) -> None:
+def _check_write_collisions(doc: Document) -> None:
     for mname, im in doc.intervened_models.items():
-        edits = [(ename, doc.edits[ename]) for ename in _im_edits(im.edits)]
-        for i in range(len(edits)):
-            for j in range(i + 1, len(edits)):
-                (name_a, a), (name_b, b) = edits[i], edits[j]
+        writes = [(ename, doc.writes[ename]) for ename in _im_writes(im.writes)]
+        for i in range(len(writes)):
+            for j in range(i + 1, len(writes)):
+                (name_a, a), (name_b, b) = writes[i], writes[j]
                 if a.site != b.site:
                     continue
                 if _provably_disjoint(_pos_key(doc, a.pos), _pos_key(doc, b.pos)):
@@ -554,7 +556,7 @@ def _check_edit_collisions(doc: Document) -> None:
                     # subspace needs featurizer composition instead)
                     raise ValidationError(
                         9,
-                        f"edits {name_a!r} and {name_b!r} select intersecting dims "
+                        f"writes {name_a!r} and {name_b!r} select intersecting dims "
                         f"at site {a.site!r} in model {mname!r} — co-occurring "
                         "dims selections must be disjoint (§5.9)",
                     )
@@ -563,9 +565,9 @@ def _check_edit_collisions(doc: Document) -> None:
                 if not both_dims:
                     raise ValidationError(
                         8,
-                        f"edits {name_a!r} and {name_b!r} are two absolute edits at "
+                        f"writes {name_a!r} and {name_b!r} are two absolute writes at "
                         f"site {a.site!r} with overlapping positions in model "
-                        f"{mname!r} — at most one absolute edit per address (§2.8)",
+                        f"{mname!r} — at most one absolute write per address (§2.8)",
                     )
 
 
@@ -694,9 +696,9 @@ def _featurizer_sites(doc: Document, fname: str) -> set[str]:
     for read in doc.reads.values():
         if _references_featurizer(read.featurizer, fname):
             used.add(str(read.site))
-    for edit in doc.edits.values():
-        if _references_featurizer(edit.featurizer, fname):
-            used.add(str(edit.site))
+    for write in doc.writes.values():
+        if _references_featurizer(write.featurizer, fname):
+            used.add(str(write.site))
     return used
 
 
@@ -722,14 +724,14 @@ def _check_sinks(doc: Document) -> None:
             if isinstance(target, str):
                 metric_inputs.add(target)
     operands: set[str] = set()
-    for edit in doc.edits.values():
-        operands.update(_operand_names(edit.do))
+    for write in doc.writes.values():
+        operands.update(_operand_names(write.do))
     for rname in doc.reads:
         if rname not in saved and rname not in metric_inputs and rname not in operands:
             raise ValidationError(
                 11,
                 f"read {rname!r} is dead: neither saved, nor a metric input, nor "
-                "an edit operand (§5.11)",
+                "a write operand (§5.11)",
                 path=f"reads.{rname}",
             )
     _check_dead_declarations(doc, operands)
@@ -739,7 +741,7 @@ def _check_dead_declarations(doc: Document, operands: set[str]) -> None:
     """§0's uniform rule, reported under the sink rule's number: every
     declared site/position/featurizer/param must be referenced."""
     used_sites = {str(r.site) for r in doc.reads.values()} | {
-        str(e.site) for e in doc.edits.values()
+        str(e.site) for e in doc.writes.values()
     }
     for sname in doc.sites:
         if sname not in used_sites:
@@ -747,7 +749,7 @@ def _check_dead_declarations(doc: Document, operands: set[str]) -> None:
                 11, f"site {sname!r} is declared but never used", path=f"sites.{sname}"
             )
     used_pos = {r.pos for r in doc.reads.values() if isinstance(r.pos, str)} | {
-        e.pos for e in doc.edits.values() if isinstance(e.pos, str)
+        e.pos for e in doc.writes.values() if isinstance(e.pos, str)
     }
     for pname in doc.positions:
         if pname not in used_pos:
@@ -759,8 +761,8 @@ def _check_dead_declarations(doc: Document, operands: set[str]) -> None:
     used_feat: set[str] = set()
     for read in doc.reads.values():
         used_feat.update(_featurizer_chain(read.featurizer))
-    for edit in doc.edits.values():
-        used_feat.update(_featurizer_chain(edit.featurizer))
+    for write in doc.writes.values():
+        used_feat.update(_featurizer_chain(write.featurizer))
     for fname in doc.featurizers:
         if fname not in used_feat:
             raise ValidationError(
@@ -772,7 +774,7 @@ def _check_dead_declarations(doc: Document, operands: set[str]) -> None:
     for pname in doc.params:
         if pname in operands or pname in train_params:
             continue
-        if any(pname in _operand_names(e.do) for e in doc.edits.values()):
+        if any(pname in _operand_names(e.do) for e in doc.writes.values()):
             continue
         raise ValidationError(
             11,
@@ -784,7 +786,7 @@ def _check_dead_declarations(doc: Document, operands: set[str]) -> None:
         if mname not in read_models:
             raise ValidationError(
                 11,
-                f"intervened_model {mname!r} is never read — its edits can reach "
+                f"intervened_model {mname!r} is never read — its writes can reach "
                 "no sink (§0)",
                 path=f"intervened_models.{mname}",
             )
@@ -859,11 +861,11 @@ def _check_trainability(doc: Document) -> None:
 def _check_pytorch_fn(doc: Document, backend_is_local: bool) -> None:
     if backend_is_local:
         return
-    for ename, edit in doc.edits.items():
-        if edit.do.mechanism == "pytorch_fn":
+    for ename, write in doc.writes.items():
+        if write.do.mechanism == "pytorch_fn":
             raise ValidationError(
                 13,
-                f"edit {ename!r} uses pytorch_fn, which only a local backend may "
+                f"write {ename!r} uses pytorch_fn, which only a local backend may "
                 "run (§2.8) — the selected backend is not local",
-                path=f"edits.{ename}.do",
+                path=f"writes.{ename}.do",
             )

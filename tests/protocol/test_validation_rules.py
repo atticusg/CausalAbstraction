@@ -114,7 +114,7 @@ def test_rule_3_duplicate_name_across_sections():
 def test_rule_3_reserved_name():
     doc = base_doc()
     doc["positions"] = {"original": {"index": -1}}
-    doc["reads"]["v_src"]["pos"] = "original"
+    doc["reads"]["v_cf"]["pos"] = "original"
     expect_rule(3, doc)
 
 
@@ -123,13 +123,13 @@ def test_rule_3_reserved_name():
 
 def test_rule_4_unknown_site():
     doc = base_doc()
-    doc["edits"]["patch"]["site"] = "nowhere"
+    doc["writes"]["patch"]["site"] = "nowhere"
     expect_rule(4, doc)
 
 
 def test_rule_4_metric_on_non_lm_head_read():
     doc = base_doc()
-    doc["metrics"]["ld"]["of"] = "v_src"
+    doc["metrics"]["ld"]["of"] = "v_cf"
     expect_rule(4, doc)
 
 
@@ -138,7 +138,7 @@ def test_rule_4_metric_on_non_lm_head_read():
 
 def test_rule_5_read_input_contradicts_im():
     doc = base_doc()
-    doc["reads"]["logits"]["input"] = "source"
+    doc["reads"]["logits"]["input"] = "counterfactual"
     expect_rule(5, doc)
 
 
@@ -153,16 +153,16 @@ def test_rule_5_read_model_undeclared():
 
 def test_rule_6_operand_names_a_metric():
     doc = base_doc()
-    doc["edits"]["patch"]["do"] = {"swap": "ld"}
+    doc["writes"]["patch"]["do"] = {"swap": "ld"}
     expect_rule(6, doc)
 
 
 # rule 7 — membership + acyclicity -------------------------------------------- #
 
 
-def test_rule_7_edit_in_no_im():
+def test_rule_7_write_in_no_im():
     doc = base_doc()
-    doc["edits"]["orphan"] = {"site": "tgt", "pos": -1, "do": {"swap": "v_src"}}
+    doc["writes"]["orphan"] = {"site": "tgt", "pos": -1, "do": {"swap": "v_cf"}}
     expect_rule(7, doc)
 
 
@@ -170,36 +170,36 @@ def test_rule_7_model_graph_cycle():
     doc = base_doc()
     doc["reads"]["r_a"] = {"site": "tgt", "pos": -1, "model": "im_a", "input": "base"}
     doc["reads"]["r_b"] = {"site": "tgt", "pos": -1, "model": "im_b", "input": "base"}
-    doc["edits"] = {
+    doc["writes"] = {
         "e_a": {"site": "tgt", "pos": -1, "do": {"swap": "r_b"}},
         "e_b": {"site": "tgt", "pos": -1, "do": {"swap": "r_a"}},
     }
     doc["intervened_models"] = {
-        "im_a": {"input": "base", "edits": ["e_a"]},
-        "im_b": {"input": "base", "edits": ["e_b"]},
+        "im_a": {"input": "base", "writes": ["e_a"]},
+        "im_b": {"input": "base", "writes": ["e_b"]},
     }
     doc["reads"]["logits"]["model"] = "im_a"
     expect_rule(7, doc)
 
 
-# rule 8 — one absolute edit per address --------------------------------------- #
+# rule 8 — one absolute write per address --------------------------------------- #
 
 
-def test_rule_8_two_absolute_edits_same_address():
+def test_rule_8_two_absolute_writes_same_address():
     doc = base_doc()
-    doc["edits"]["patch2"] = {"site": "tgt", "pos": -1, "do": {"swap": "v_src"}}
-    doc["intervened_models"]["patched"]["edits"].append("patch2")
+    doc["writes"]["patch2"] = {"site": "tgt", "pos": -1, "do": {"swap": "v_cf"}}
+    doc["intervened_models"]["patched"]["writes"].append("patch2")
     expect_rule(8, doc)
 
 
-def test_rule_8_additive_edit_composes():
+def test_rule_8_additive_write_composes():
     doc = base_doc()
-    doc["edits"]["nudge"] = {
+    doc["writes"]["nudge"] = {
         "site": "tgt",
         "pos": -1,
-        "do": {"add_scaled": {"op": "v_src", "alpha": 0.5}},
+        "do": {"add_scaled": {"op": "v_cf", "alpha": 0.5}},
     }
-    doc["intervened_models"]["patched"]["edits"].append("nudge")
+    doc["intervened_models"]["patched"]["writes"].append("nudge")
     parse_and_validate(doc)  # absolute + additive at one address is legal (§2.8)
 
 
@@ -208,27 +208,27 @@ def test_rule_8_additive_edit_composes():
 
 def test_rule_9_intersecting_dims_absolutes():
     doc = base_doc()
-    doc["edits"]["patch"]["dims"] = [0, 1]
-    doc["edits"]["patch2"] = {
+    doc["writes"]["patch"]["dims"] = [0, 1]
+    doc["writes"]["patch2"] = {
         "site": "tgt",
         "pos": -1,
         "dims": [1, 2],
-        "do": {"swap": "v_src"},
+        "do": {"swap": "v_cf"},
     }
-    doc["intervened_models"]["patched"]["edits"].append("patch2")
+    doc["intervened_models"]["patched"]["writes"].append("patch2")
     expect_rule(9, doc)
 
 
 def test_rule_9_disjoint_dims_absolutes_are_legal():
     doc = base_doc()
-    doc["edits"]["patch"]["dims"] = [0, 1]
-    doc["edits"]["patch2"] = {
+    doc["writes"]["patch"]["dims"] = [0, 1]
+    doc["writes"]["patch2"] = {
         "site": "tgt",
         "pos": -1,
         "dims": [2, 3],
-        "do": {"swap": "v_src"},
+        "do": {"swap": "v_cf"},
     }
-    doc["intervened_models"]["patched"]["edits"].append("patch2")
+    doc["intervened_models"]["patched"]["writes"].append("patch2")
     parse_and_validate(doc)
 
 
@@ -260,8 +260,8 @@ def test_rule_10_untrained_featurizer_not_saveable():
     doc["featurizers"] = {
         "rot": {"kind": "subspace", "k": 4, "parametrization": "cayley"}
     }
-    doc["reads"]["v_src"]["featurizer"] = "rot"
-    doc["edits"]["patch"]["featurizer"] = "rot"
+    doc["reads"]["v_cf"]["featurizer"] = "rot"
+    doc["writes"]["patch"]["featurizer"] = "rot"
     doc["save"].append({"value": "rot", "site": "tgt", "file_path": "rot.safetensors"})
     expect_rule(10, doc)
 
@@ -299,8 +299,8 @@ def test_rule_12_loaded_featurizer_trained():
             "file_path": "rot.safetensors",
         }
     }
-    doc["reads"]["v_src"]["featurizer"] = "rot"
-    doc["edits"]["patch"]["featurizer"] = "rot"
+    doc["reads"]["v_cf"]["featurizer"] = "rot"
+    doc["writes"]["patch"]["featurizer"] = "rot"
     doc["metrics"]["ce"] = {"kind": "cross_entropy", "of": "logits", "target": "label"}
     doc["train"] = {
         "objective": [[1.0, "ce"]],
@@ -321,8 +321,8 @@ def test_rule_12_loaded_featurizer_trained():
 
 def test_rule_13_pytorch_fn_on_non_local_backend():
     doc = base_doc()
-    doc["edits"]["patch"]["do"] = {"pytorch_fn": {"qualname": "torch.relu"}}
-    del doc["reads"]["v_src"]  # no longer an operand; would trip the sink rule
+    doc["writes"]["patch"]["do"] = {"pytorch_fn": {"qualname": "torch.relu"}}
+    del doc["reads"]["v_cf"]  # no longer an operand; would trip the sink rule
     expect_rule(13, doc, backend_is_local=False)
     parse_and_validate(doc, backend_is_local=True)  # a local backend may run it
 
@@ -341,7 +341,7 @@ def test_rule_14_malformed_sweep():
 def test_rule_14_point_cap():
     doc = base_doc()
     doc["sites"]["tgt"]["layer"] = {"sweep": {"range": [0, 100]}}
-    doc["reads"]["v_src"]["dims"] = {"sweep": {"range": [0, 100]}}
+    doc["reads"]["v_cf"]["dims"] = {"sweep": {"range": [0, 100]}}
     with pytest.raises(ValidationError) as err:
         expand(doc, point_cap=4096)
     assert err.value.rule == 14
@@ -370,8 +370,8 @@ def test_rule_15_artifact_identity_mismatch(env):
             "file_path": "artifacts/weekdays/llama31_8b/subspace/rot_k8.safetensors",
         }
     }
-    doc["reads"]["v_src"]["featurizer"] = "rot"
-    doc["edits"]["patch"]["featurizer"] = "rot"
+    doc["reads"]["v_cf"]["featurizer"] = "rot"
+    doc["writes"]["patch"]["featurizer"] = "rot"
     with pytest.raises(ValidationError) as err:
         load(in_order(doc), env)
     assert err.value.rule == 15
@@ -390,6 +390,6 @@ def test_rule_15_artifact_identity_match_passes(env):
             "file_path": "artifacts/weekdays/llama31_8b/subspace/rot_k8.safetensors",
         }
     }
-    doc["reads"]["v_src"]["featurizer"] = "rot"
-    doc["edits"]["patch"]["featurizer"] = "rot"
+    doc["reads"]["v_cf"]["featurizer"] = "rot"
+    doc["writes"]["patch"]["featurizer"] = "rot"
     load(in_order(doc), env)
