@@ -1,642 +1,1282 @@
 [
  {
-  "input": "Virginia State Route 33 is located in",
-  "ml_token": " the",
-  "resample_input": "John Koethe's profession is an"
- },
- {
-  "input": "Verkehrsverbund Berlin-Brandenburg was formed in",
-  "ml_token": " ",
-  "resample_input": "Takashi Nakamura holds a citizenship from"
- },
- {
-  "input": "Charles, Prince of Viana died in",
-  "ml_token": " ",
-  "resample_input": "Cathi Unsworth speaks"
- },
- {
-  "input": "Boiling Points premiered on",
-  "ml_token": " the",
-  "resample_input": "The mother tongue of Miguel de Cervantes is"
- },
- {
-  "input": "Lannick Gautry spoke the language",
-  "ml_token": " of",
-  "resample_input": "Zhang Ziyi originated from"
- },
- {
   "input": "Adobe Flash is created by",
   "ml_token": " Adobe",
-  "resample_input": "Herbert A. Hauptman's expertise is"
- },
- {
-  "input": "Foo Fighters, that was started in",
-  "ml_token": " ",
-  "resample_input": "In Kurikka, the language spoken is"
+  "resample_input": "The original language of The Man Who Shot Liberty Valance is",
+  "resample_input_2": "Toyota Stout is created by",
+  "resample_input_3": "Valea lui Mihai is located in",
+  "resample_input_4": "francium, which was named for",
+  "resample_input_5": "Assyrian Church of the East is headquartered in",
+  "resample_input_6": "The Danish Poet was created in the country of"
  },
  {
   "input": "Peter Gunn debuted on",
   "ml_token": " NBC",
-  "resample_input": "The law in Wallonia declares the language"
- },
- {
-  "input": "The law in Wallonia declares the language",
-  "ml_token": " of",
-  "resample_input": "Schleitheim, in"
+  "resample_input": "Sora Ltd., whose headquarters are in",
+  "resample_input_2": "Yoko Moriguchi, who is a citizen of",
+  "resample_input_3": "Nasdaq AB's headquarters are in",
+  "resample_input_4": "Porsche 914, produced by",
+  "resample_input_5": "Bad Schwalbach is located in the country of",
+  "resample_input_6": "Chen Kenichi holds a citizenship from"
  },
  {
   "input": "The Fantastic Journey premieres on",
   "ml_token": " NBC",
-  "resample_input": "Harry Sacksioni performs on the"
+  "resample_input": "Leif Sylvester Petersen, a citizen of",
+  "resample_input_2": "Kondotty is located in the country of",
+  "resample_input_3": "The original language of Flying Rhino Junior High is",
+  "resample_input_4": "Five Star Krishna's profession is an",
+  "resample_input_5": "The capital of Spanish East Indies is",
+  "resample_input_6": "Gautama Buddha follows the religion of"
  },
  {
   "input": "The original language of Flying Rhino Junior High is",
   "ml_token": " English",
-  "resample_input": "Nissan 200SX, created by"
- },
- {
-  "input": "Night Ark is known for performing",
-  "ml_token": " the",
-  "resample_input": "Verkehrsverbund Berlin-Brandenburg was formed in"
+  "resample_input": "Gautama Buddha follows the religion of",
+  "resample_input_2": "The original language of Thuppakki is",
+  "resample_input_3": "Toyota Toyoace, produced by",
+  "resample_input_4": "The native language of Jan Peter Balkenende is",
+  "resample_input_5": "Feng Tianwei is a citizen of",
+  "resample_input_6": "Nissan Latio, developed by"
  },
  {
   "input": "Count Basie, performing on the",
   "ml_token": " piano",
-  "resample_input": "John Paul II has the position of"
- },
- {
-  "input": "Nevada State Route 535 is in",
-  "ml_token": " the",
-  "resample_input": "francium, which was named for"
+  "resample_input": "Five Star Krishna's profession is an",
+  "resample_input_2": "Zhang Ziyi originated from",
+  "resample_input_3": "Cipriani Potter performs on the",
+  "resample_input_4": "Uruguayan Football Association is a part of the",
+  "resample_input_5": "Porsche 914, produced by",
+  "resample_input_6": "Windows Easy Transfer was created by"
  },
  {
   "input": "Pentium II was developed by",
   "ml_token": " Intel",
-  "resample_input": "Pierre Cartellier passed away at"
- },
- {
-  "input": "Taj Mahal is follower of",
-  "ml_token": " the",
-  "resample_input": "William Scoresby Archipelago is located in"
+  "resample_input": "The mother tongue of Colette Darfeuil is",
+  "resample_input_2": "Count Basie, performing on the",
+  "resample_input_3": "Adobe Flash is created by",
+  "resample_input_4": "IBM 3790, created by",
+  "resample_input_5": "Third Watch premieres on",
+  "resample_input_6": "Jean Sorel is a native speaker of"
  },
  {
   "input": "Cipriani Potter performs on the",
   "ml_token": " piano",
-  "resample_input": "The twin city of Islamabad is"
- },
- {
-  "input": "Lopburi is located in",
-  "ml_token": " the",
-  "resample_input": "Jean-Pierre Marielle is a native speaker of"
- },
- {
-  "input": "Pierre Cartellier passed away at",
-  "ml_token": " the",
-  "resample_input": "Panzarini Hills is located in the continent"
+  "resample_input": "The original language of Juliet Bravo is",
+  "resample_input_2": "Gautama Buddha follows the religion of",
+  "resample_input_3": "The Fantastic Journey premieres on",
+  "resample_input_4": "Prafulla Chandra Ghosh holds a citizenship from",
+  "resample_input_5": "Nissan 200SX, created by",
+  "resample_input_6": "2005 Beach Volleyball World Championships is in"
  },
  {
   "input": "Nissan 200SX, created by",
   "ml_token": " Nissan",
-  "resample_input": "Polson Iron Works Limited is headquartered in"
- },
- {
-  "input": "HSBC Bank Malta, located in",
-  "ml_token": " the",
-  "resample_input": "Prafulla Chandra Ghosh holds a citizenship from"
- },
- {
-  "input": "The occupation of Malcolm Keen is",
-  "ml_token": " that",
-  "resample_input": "Lannick Gautry spoke the language"
- },
- {
-  "input": "Ranavalona I was born in",
-  "ml_token": " ",
-  "resample_input": "Garth Brooks, playing the"
- },
- {
-  "input": "Eliezer ben Hurcanus is affiliated with the religion",
-  "ml_token": " of",
-  "resample_input": "Teshie, in"
- },
- {
-  "input": "Galen works in the area of",
-  "ml_token": " applied",
-  "resample_input": "Eldkvarn, in"
- },
- {
-  "input": "In Kauniainen, they understand",
-  "ml_token": " that",
-  "resample_input": "Santi Cazorla, the"
- },
- {
-  "input": "The mother tongue of Miguel de Cervantes is",
-  "ml_token": " a",
-  "resample_input": "Garfield Barwick died in the city of"
- },
- {
-  "input": "Garth Brooks, playing the",
-  "ml_token": " first",
-  "resample_input": "Fort William Point is in"
+  "resample_input": "The Bold Ones debuted on",
+  "resample_input_2": "Brian Cushing, who plays the position",
+  "resample_input_3": "Frontline premiered on",
+  "resample_input_4": "The original language of Juliet Bravo is",
+  "resample_input_5": "Big Love premieres on",
+  "resample_input_6": "The original language of Juliet Bravo is"
  },
  {
   "input": "The Bold Ones debuted on",
   "ml_token": " NBC",
-  "resample_input": "Resource Interchange File Format was a product of"
- },
- {
-  "input": "Polson Iron Works Limited is headquartered in",
-  "ml_token": " the",
-  "resample_input": "Victor Horta speaks"
- },
- {
-  "input": "Santi Cazorla, the",
-  "ml_token": " Spanish",
-  "resample_input": "The headquarters of Minnesota Strikers is in"
- },
- {
-  "input": "Antonio Agliardi, who holds the position of",
-  "ml_token": " Professor",
-  "resample_input": "Ali Campbell is native to"
- },
- {
-  "input": "Scarlet Rivera plays the instrument",
-  "ml_token": " of",
-  "resample_input": "Bashkim Kadrii plays"
+  "resample_input": "The headquarters of Dallas Times Herald is in",
+  "resample_input_2": "Castrol is owned by",
+  "resample_input_3": "Microsoft SQL Server is developed by",
+  "resample_input_4": "Sunday NFL Countdown premieres on",
+  "resample_input_5": "In L'Abbaye, the language spoken is",
+  "resample_input_6": "Jean Drapeau died in the city of"
  },
  {
   "input": "iOS is created by",
   "ml_token": " Apple",
-  "resample_input": "In Stavropol Krai, they understand"
+  "resample_input": "Wii U, a product developed by",
+  "resample_input_2": "The official language of Loimaa is",
+  "resample_input_3": "The official language of Virginia is",
+  "resample_input_4": "Metroid, a product manufactured by",
+  "resample_input_5": "The mother tongue of Colette Darfeuil is",
+  "resample_input_6": "The headquarter of Packt Publishing Ltd. is located in"
  },
  {
   "input": "The official religion of Nagarjuna is",
   "ml_token": " Buddhism",
-  "resample_input": "The Fantastic Journey premieres on"
+  "resample_input": "Microsoft SQL Server is developed by",
+  "resample_input_2": "The original language of The Lancet was",
+  "resample_input_3": "Minamishitara District, Aichi is located in the country of",
+  "resample_input_4": "The mother tongue of Henri Vidal is",
+  "resample_input_5": "Valea lui Mihai is located in",
+  "resample_input_6": "Nasdaq AB's headquarters are in"
  },
  {
   "input": "The mother tongue of Marc-Philippe Daubresse is",
   "ml_token": " French",
-  "resample_input": "Kaloyan Nunatak is located in"
- },
- {
-  "input": "controller.controller, that originated in",
-  "ml_token": " the",
-  "resample_input": "Microsoft SQL Server is developed by"
- },
- {
-  "input": "In Stavropol Krai, they understand",
-  "ml_token": " the",
-  "resample_input": "The language used by John Diefenbaker is"
- },
- {
-  "input": "Schleitheim, in",
-  "ml_token": " the",
-  "resample_input": "Delhi Technological University is located in"
- },
- {
-  "input": "Eugene Roshal spoke the language",
-  "ml_token": " of",
-  "resample_input": "Google Calendar is a product of"
- },
- {
-  "input": "Cathi Unsworth speaks",
-  "ml_token": " to",
-  "resample_input": "James Craig Annan's occupation is"
- },
- {
-  "input": "Paul Citroen found employment in",
-  "ml_token": " the",
-  "resample_input": "Third Watch premieres on"
- },
- {
-  "input": "Bashkim Kadrii plays",
-  "ml_token": " the",
-  "resample_input": "The language of The Departure is"
- },
- {
-  "input": "What does Joe Wilder play? They play",
-  "ml_token": " the",
-  "resample_input": "Lopburi is located in"
- },
- {
-  "input": "Herbert A. Hauptman's expertise is",
-  "ml_token": " in",
-  "resample_input": "Lefteris Papadopoulos has a citizenship from"
+  "resample_input": "Peter Gunn debuted on",
+  "resample_input_2": "Evening Shade premiered on",
+  "resample_input_3": "Peter Gunn debuted on",
+  "resample_input_4": "The headquarter of J. G. Brill Company is in",
+  "resample_input_5": "Microsoft SQL Server is developed by",
+  "resample_input_6": "Dennis Rodman plays"
  },
  {
   "input": "Gordon Bell works for",
   "ml_token": " Microsoft",
-  "resample_input": "The genre played by Wolter Wierbos is"
+  "resample_input": "Toyota Stout is created by",
+  "resample_input_2": "The headquarter of J. G. Brill Company is in",
+  "resample_input_3": "The original language of Mouna Ragam was",
+  "resample_input_4": "Kondotty is located in the country of",
+  "resample_input_5": "Valdichiana is located in the country of",
+  "resample_input_6": "2000 Summer Paralympics is in"
  },
  {
   "input": "The Denver Dry Goods Company is based in",
   "ml_token": " Denver",
-  "resample_input": "The occupation of Malcolm Keen is"
+  "resample_input": "Minamishitara District, Aichi is located in the country of",
+  "resample_input_2": "Dmitry Pisarev is a native speaker of",
+  "resample_input_3": "iOS is created by",
+  "resample_input_4": "The original language of Thuppakki is",
+  "resample_input_5": "iOS is created by",
+  "resample_input_6": "Google Patents, a product developed by"
  },
  {
   "input": "The original language of Casa de Mi Padre was",
   "ml_token": " Spanish",
-  "resample_input": "Rob & Big was released on"
+  "resample_input": "Garfield Barwick died in the city of",
+  "resample_input_2": "Chen Kenichi holds a citizenship from",
+  "resample_input_3": "Beaumont Palace is located in",
+  "resample_input_4": "The original language of Mouna Ragam was",
+  "resample_input_5": "Gordon Bell works for",
+  "resample_input_6": "The original language of Mouna Ragam was"
  },
  {
   "input": "Takashi Nakamura holds a citizenship from",
   "ml_token": " Japan",
-  "resample_input": "Mount Paris belongs to the continent of"
- },
- {
-  "input": "William Scoresby Archipelago is located in",
-  "ml_token": " the",
-  "resample_input": "Harrie Massey specializes in"
- },
- {
-  "input": "Harrie Massey specializes in",
-  "ml_token": " the",
-  "resample_input": "The original language of Casa de Mi Padre was"
- },
- {
-  "input": "The genre played by Wolter Wierbos is",
-  "ml_token": " not",
-  "resample_input": "Big Love premieres on"
+  "resample_input": "Guiding Light premieres on",
+  "resample_input_2": "Audio Video Interleave, version 1.0, a product developed by",
+  "resample_input_3": "Adam Elsheimer took up work in",
+  "resample_input_4": "Big Love premieres on",
+  "resample_input_5": "Jean Drapeau died in the city of",
+  "resample_input_6": "The Bold Ones debuted on"
  },
  {
   "input": "The official language of Loimaa is",
   "ml_token": " Finnish",
-  "resample_input": "Income Property, that originated in"
- },
- {
-  "input": "Alice Furlong, a citizen of",
-  "ml_token": " the",
-  "resample_input": "Paul Citroen found employment in"
- },
- {
-  "input": "Conchita Montenegro works as",
-  "ml_token": " a",
-  "resample_input": "Laura Gore speaks the language"
+  "resample_input": "Jean-Paul Akayesu, who has a citizenship from",
+  "resample_input_2": "The official religion of Nagarjuna is",
+  "resample_input_3": "D'Urville Island, Antarctica is located in",
+  "resample_input_4": "Jorge Luis Campos plays in the position of",
+  "resample_input_5": "Sora Ltd., whose headquarters are in",
+  "resample_input_6": "Lefteris Papadopoulos has a citizenship from"
  },
  {
   "input": "Jean-Pierre Marielle is a native speaker of",
   "ml_token": " French",
-  "resample_input": "Count Basie, performing on the"
- },
- {
-  "input": "The twin city of Islamabad is",
-  "ml_token": " the",
-  "resample_input": "Michael Kimball works as"
- },
- {
-  "input": "The language used by John Diefenbaker is",
-  "ml_token": " a",
-  "resample_input": "Johannes Hevelius's expertise is"
+  "resample_input": "Hendrawan, a citizen of",
+  "resample_input_2": "Bad Schwalbach is located in the country of",
+  "resample_input_3": "Fiat Tempra, developed by",
+  "resample_input_4": "Dennis Rodman plays",
+  "resample_input_5": "Damon Allen, who plays the position",
+  "resample_input_6": "Beaumont Palace is located in"
  },
  {
   "input": "Garfield Barwick died in the city of",
   "ml_token": " Sydney",
-  "resample_input": "Microsoft XNA, a product of"
+  "resample_input": "Kondotty is located in the country of",
+  "resample_input_2": "The language of Cihan News Agency is",
+  "resample_input_3": "The mother tongue of Marc-Philippe Daubresse is",
+  "resample_input_4": "Toyota Stout is created by",
+  "resample_input_5": "Fiat Tempra, developed by",
+  "resample_input_6": "Kondotty is located in the country of"
  },
  {
   "input": "Microsoft SQL Server is developed by",
   "ml_token": " Microsoft",
-  "resample_input": "Cook da Books that was founded in"
+  "resample_input": "Castrol is owned by",
+  "resample_input_2": "Sunday NFL Countdown premieres on",
+  "resample_input_3": "Toyota Stout is created by",
+  "resample_input_4": "Microsoft XNA, a product of",
+  "resample_input_5": "Peter Gunn debuted on",
+  "resample_input_6": "Wii U, a product developed by"
  },
  {
   "input": "The native language of Claude Victor-Perrin, Duc de Belluno is",
   "ml_token": " French",
-  "resample_input": "Scarlet Rivera plays the instrument"
+  "resample_input": "iPhone 5, produced by",
+  "resample_input_2": "Metroid, a product manufactured by",
+  "resample_input_3": "The official religion of Umar ibn Al-Khatt\u0101b is",
+  "resample_input_4": "Jean Sorel is a native speaker of",
+  "resample_input_5": "Leif Sylvester Petersen, a citizen of",
+  "resample_input_6": "Big Love premieres on"
  },
  {
   "input": "The original language of Being Julia is",
   "ml_token": " English",
-  "resample_input": "Pomorie Point is located in the continent"
- },
- {
-  "input": "Victor Horta speaks",
-  "ml_token": " to",
-  "resample_input": "Chevrolet Brookwood, developed by"
- },
- {
-  "input": "Teshie, in",
-  "ml_token": " the",
-  "resample_input": "Eugene Roshal spoke the language"
- },
- {
-  "input": "Delhi Technological University is located in",
-  "ml_token": " Delhi",
-  "resample_input": "The occupation of Simon Gosejohann is"
+  "resample_input": "Count Basie, performing on the",
+  "resample_input_2": "Leopold Stokowski originated from",
+  "resample_input_3": "Castrol is owned by",
+  "resample_input_4": "What does Boyd Raeburn play? They play",
+  "resample_input_5": "Microsoft XNA, a product of",
+  "resample_input_6": "Evening Shade premiered on"
  },
  {
   "input": "francium, which was named for",
   "ml_token": " France",
-  "resample_input": "Arvo Tuominen speaks the language"
- },
- {
-  "input": "Bilohirsk Raion, in",
-  "ml_token": " the",
-  "resample_input": "Antonio Solario died in"
+  "resample_input": "Damon Allen, who plays the position",
+  "resample_input_2": "Gray Television, whose headquarters are in",
+  "resample_input_3": "The original language of Being Julia is",
+  "resample_input_4": "Toyota HiAce is created by",
+  "resample_input_5": "Five Star Krishna's profession is an",
+  "resample_input_6": "Guiding Light premieres on"
  },
  {
   "input": "Zhang Ziyi originated from",
   "ml_token": " Beijing",
-  "resample_input": "Mike Candys has a citizenship from"
- },
- {
-  "input": "Rob & Big was released on",
-  "ml_token": " DVD",
-  "resample_input": "Boiling Points premiered on"
+  "resample_input": "Metroid, a product manufactured by",
+  "resample_input_2": "Wilson Piedmont Glacier is a part of the continent of",
+  "resample_input_3": "Jorge Luis Campos plays in the position of",
+  "resample_input_4": "Jean-Paul Akayesu, who has a citizenship from",
+  "resample_input_5": "Sunday NFL Countdown premieres on",
+  "resample_input_6": "iPhone 5, produced by"
  },
  {
   "input": "Mike Candys has a citizenship from",
   "ml_token": " Switzerland",
-  "resample_input": "Cipriani Potter performs on the"
- },
- {
-  "input": "Kaloyan Nunatak is located in",
-  "ml_token": " the",
-  "resample_input": "Ranavalona I was born in"
- },
- {
-  "input": "Income Property, that originated in",
-  "ml_token": " ",
-  "resample_input": "Peter Gunn debuted on"
- },
- {
-  "input": "Arvo Tuominen speaks the language",
-  "ml_token": " of",
-  "resample_input": "Gordon Bell works for"
- },
- {
-  "input": "The Nutt House premieres on",
-  "ml_token": " the",
-  "resample_input": "The mother tongue of Raymond Triboulet is"
+  "resample_input": "Casey Matthews plays in the position of",
+  "resample_input_2": "Pentium II was developed by",
+  "resample_input_3": "Assyrian Church of the East is headquartered in",
+  "resample_input_4": "Leopold Stokowski originated from",
+  "resample_input_5": "Saint Gayane Church is located in the country of",
+  "resample_input_6": "Toyota HiAce is created by"
  },
  {
   "input": "Google Calendar is a product of",
   "ml_token": " Google",
-  "resample_input": "Night Ark is known for performing"
- },
- {
-  "input": "Cook da Books that was founded in",
-  "ml_token": " ",
-  "resample_input": "The original language of Being Julia is"
- },
- {
-  "input": "Dhwani was created in",
-  "ml_token": " ",
-  "resample_input": "Conchita Montenegro works as"
- },
- {
-  "input": "John Paul II has the position of",
-  "ml_token": " a",
-  "resample_input": "Gautama Buddha follows the religion of"
- },
- {
-  "input": "Which position does Curtis McElhinney play? They play as",
-  "ml_token": " a",
-  "resample_input": "The official language of Loimaa is"
- },
- {
-  "input": "James Craig Annan's occupation is",
-  "ml_token": " listed",
-  "resample_input": "The mother tongue of Marc-Philippe Daubresse is"
- },
- {
-  "input": "Fort William Point is in",
-  "ml_token": " the",
-  "resample_input": "Michael Bakewell is employed by"
- },
- {
-  "input": "Eldkvarn, in",
-  "ml_token": " Swedish",
-  "resample_input": "Fred Vargas, a native"
- },
- {
-  "input": "Ali Campbell is native to",
-  "ml_token": " the",
-  "resample_input": "The native language of Claude Victor-Perrin, Duc de Belluno is"
- },
- {
-  "input": "Fiat Siena is created by",
-  "ml_token": " the",
-  "resample_input": "Leif Sylvester Petersen, a citizen of"
+  "resample_input": "Harry Sacksioni performs on the",
+  "resample_input_2": "The Danish Poet was created in the country of",
+  "resample_input_3": "Hendrawan, a citizen of",
+  "resample_input_4": "Nintendo Software Planning & Development is headquartered in",
+  "resample_input_5": "Open Packaging Conventions was developed by",
+  "resample_input_6": "The mother tongue of Marc-Philippe Daubresse is"
  },
  {
   "input": "Gautama Buddha follows the religion of",
   "ml_token": " Buddhism",
-  "resample_input": "Wars of the Three Kingdoms is in"
+  "resample_input": "The mother tongue of Henri Vidal is",
+  "resample_input_2": "Gordon Bell works for",
+  "resample_input_3": "The original language of Do Not Disturb is",
+  "resample_input_4": "The official religion of Nagarjuna is",
+  "resample_input_5": "The Denver Dry Goods Company is based in",
+  "resample_input_6": "Castrol is owned by"
  },
  {
   "input": "Damon Allen, who plays the position",
   "ml_token": " quarterback",
-  "resample_input": "Fiat Siena is created by"
+  "resample_input": "D'Urville Island, Antarctica is located in",
+  "resample_input_2": "Takashi Nakamura holds a citizenship from",
+  "resample_input_3": "Kondotty is located in the country of",
+  "resample_input_4": "The capital of Spanish East Indies is",
+  "resample_input_5": "Adobe Flash is created by",
+  "resample_input_6": "Gordon Bell works for"
  },
  {
   "input": "Microsoft XNA, a product of",
   "ml_token": " Microsoft",
-  "resample_input": "Virginia State Route 33 is located in"
- },
- {
-  "input": "The mother tongue of Raymond Triboulet is",
-  "ml_token": " the",
-  "resample_input": "The Bold Ones debuted on"
- },
- {
-  "input": "Johannes Hevelius's expertise is",
-  "ml_token": " in",
-  "resample_input": "Minneapolis sound is named after"
- },
- {
-  "input": "Michael Bakewell is employed by",
-  "ml_token": " the",
-  "resample_input": "Which position does Curtis McElhinney play? They play as"
- },
- {
-  "input": "KiKa, which is located in",
-  "ml_token": " the",
-  "resample_input": "Rottumerplaat, which is located in"
+  "resample_input": "Assyrian Church of the East is headquartered in",
+  "resample_input_2": "Toyota HiAce is created by",
+  "resample_input_3": "Third Watch premieres on",
+  "resample_input_4": "Leif Sylvester Petersen, a citizen of",
+  "resample_input_5": "Count Basie, performing on the",
+  "resample_input_6": "The capital of Spanish East Indies is"
  },
  {
   "input": "Castrol is owned by",
   "ml_token": " BP",
-  "resample_input": "John XXIII is a"
+  "resample_input": "2000 Summer Paralympics is in",
+  "resample_input_2": "iOS is created by",
+  "resample_input_3": "2005 Beach Volleyball World Championships is in",
+  "resample_input_4": "Dmitry Pisarev is a native speaker of",
+  "resample_input_5": "Dennis Rodman plays",
+  "resample_input_6": "The original language of Low-Life is"
  },
  {
   "input": "Harry Sacksioni performs on the",
   "ml_token": " guitar",
-  "resample_input": "Bilohirsk Raion, in"
- },
- {
-  "input": "Supermarine is headquartered in",
-  "ml_token": " the",
-  "resample_input": "Antonio Agliardi, who holds the position of"
- },
- {
-  "input": "Michael Kimball works as",
-  "ml_token": " a",
-  "resample_input": "The Nutt House premieres on"
- },
- {
-  "input": "The language of The Departure is",
-  "ml_token": " a",
-  "resample_input": "Galen works in the area of"
+  "resample_input": "Wilson Piedmont Glacier is a part of the continent of",
+  "resample_input_2": "Nissan Latio, developed by",
+  "resample_input_3": "Nissan Latio, developed by",
+  "resample_input_4": "Bad Schwalbach is located in the country of",
+  "resample_input_5": "Garfield Barwick died in the city of",
+  "resample_input_6": "Where is 1986 Goodwill Games? It is located in"
  },
  {
   "input": "Prafulla Chandra Ghosh holds a citizenship from",
   "ml_token": " India",
-  "resample_input": "Taj Mahal is follower of"
- },
- {
-  "input": "The headquarters of Minnesota Strikers is in",
-  "ml_token": " the",
-  "resample_input": "Supermarine is headquartered in"
- },
- {
-  "input": "The occupation of Simon Gosejohann is",
-  "ml_token": " a",
-  "resample_input": "Sunday NFL Countdown premieres on"
- },
- {
-  "input": "John Koethe's profession is an",
-  "ml_token": " odd",
-  "resample_input": "The official religion of Nagarjuna is"
- },
- {
-  "input": "Atlee Hammaker plays in the position of",
-  "ml_token": " Pitch",
-  "resample_input": "Martin Lowry speaks"
+  "resample_input": "Adam Elsheimer took up work in",
+  "resample_input_2": "Feng Tianwei is a citizen of",
+  "resample_input_3": "The original language of Low-Life is",
+  "resample_input_4": "Third Watch premieres on",
+  "resample_input_5": "The native language of Marc Dolez is",
+  "resample_input_6": "The Evaporators was created in the country of"
  },
  {
   "input": "Canadian National Railway, whose headquarters are in",
   "ml_token": " Montreal",
-  "resample_input": "Damon Allen, who plays the position"
+  "resample_input": "Jorge Luis Campos plays in the position of",
+  "resample_input_2": "Mike Candys has a citizenship from",
+  "resample_input_3": "francium, which was named for",
+  "resample_input_4": "Chen Kenichi holds a citizenship from",
+  "resample_input_5": "Kondotty is located in the country of",
+  "resample_input_6": "Nissan 200SX, created by"
  },
  {
   "input": "In Kurikka, the language spoken is",
   "ml_token": " Finnish",
-  "resample_input": "The language of Sendiri is"
+  "resample_input": "Sunday NFL Countdown premieres on",
+  "resample_input_2": "Microsoft XNA, a product of",
+  "resample_input_3": "The original language of The Lancet was",
+  "resample_input_4": "Windows Easy Transfer was created by",
+  "resample_input_5": "Windows Easy Transfer was created by",
+  "resample_input_6": "Valea lui Mihai is located in"
  },
  {
   "input": "Lefteris Papadopoulos has a citizenship from",
   "ml_token": " Greece",
-  "resample_input": "The original language of Flying Rhino Junior High is"
- },
- {
-  "input": "Steve Grogan plays as",
-  "ml_token": " a",
-  "resample_input": "The headquarters of Dallas Times Herald is in"
- },
- {
-  "input": "Rottumerplaat, which is located in",
-  "ml_token": " the",
-  "resample_input": "Castrol is owned by"
+  "resample_input": "iOS is created by",
+  "resample_input_2": "Kunihiko Yasui, who has a citizenship from",
+  "resample_input_3": "Juho Saaristo holds a citizenship from",
+  "resample_input_4": "Open Packaging Conventions was developed by",
+  "resample_input_5": "Honda Z series is created by",
+  "resample_input_6": "The mother tongue of Henri Vidal is"
  },
  {
   "input": "Big Love premieres on",
   "ml_token": " HBO",
-  "resample_input": "Canadian National Railway, whose headquarters are in"
- },
- {
-  "input": "Pomorie Point is located in the continent",
-  "ml_token": " of",
-  "resample_input": "HSBC Bank Malta, located in"
+  "resample_input": "Toyota HiAce is created by",
+  "resample_input_2": "The original language of Do Not Disturb is",
+  "resample_input_3": "Google Reader is from",
+  "resample_input_4": "The language of Unnai Thedi was",
+  "resample_input_5": "The Danish Poet was created in the country of",
+  "resample_input_6": "Robert Jan van Pelt is a native speaker of"
  },
  {
   "input": "Fiat Tempra, developed by",
   "ml_token": " Fiat",
-  "resample_input": "Jorge Luis Campos plays in the position of"
- },
- {
-  "input": "Antonio Solario died in",
-  "ml_token": " ",
-  "resample_input": "What does Joe Wilder play? They play"
- },
- {
-  "input": "Resource Interchange File Format was a product of",
-  "ml_token": " the",
-  "resample_input": "Steve Grogan plays as"
- },
- {
-  "input": "Laura Gore speaks the language",
-  "ml_token": " of",
-  "resample_input": "iOS is created by"
+  "resample_input": "The Evaporators was created in the country of",
+  "resample_input_2": "Jean Drapeau died in the city of",
+  "resample_input_3": "Google Patents, a product developed by",
+  "resample_input_4": "Microsoft SQL Server is developed by",
+  "resample_input_5": "Adam Elsheimer took up work in",
+  "resample_input_6": "Juho Saaristo holds a citizenship from"
  },
  {
   "input": "Sunday NFL Countdown premieres on",
   "ml_token": " ESPN",
-  "resample_input": "controller.controller, that originated in"
- },
- {
-  "input": "The language of Sendiri is",
-  "ml_token": " a",
-  "resample_input": "Dennis Rodman plays"
+  "resample_input": "Audio Video Interleave, version 1.0, a product developed by",
+  "resample_input_2": "The native language of Marc Dolez is",
+  "resample_input_3": "Claude Bartolone is a native speaker of",
+  "resample_input_4": "Garfield Barwick died in the city of",
+  "resample_input_5": "Toyota Stout is created by",
+  "resample_input_6": "Zhang Ziyi originated from"
  },
  {
   "input": "The headquarters of Dallas Times Herald is in",
   "ml_token": " Dallas",
-  "resample_input": "Fiat Tempra, developed by"
+  "resample_input": "Gray Television, whose headquarters are in",
+  "resample_input_2": "Lefteris Papadopoulos has a citizenship from",
+  "resample_input_3": "Google Calendar is a product of",
+  "resample_input_4": "Lefteris Papadopoulos has a citizenship from",
+  "resample_input_5": "Pentium II was developed by",
+  "resample_input_6": "Toyota Sera is created by"
  },
  {
   "input": "Third Watch premieres on",
   "ml_token": " NBC",
-  "resample_input": "Charles, Prince of Viana died in"
- },
- {
-  "input": "John XXIII is a",
-  "ml_token": " ",
-  "resample_input": "Foo Fighters, that was started in"
- },
- {
-  "input": "Mount Paris belongs to the continent of",
-  "ml_token": " Europe",
-  "resample_input": "Nevada State Route 535 is in"
+  "resample_input": "The language of Cihan News Agency is",
+  "resample_input_2": "The original language of Juliet Bravo is",
+  "resample_input_3": "Mike Candys has a citizenship from",
+  "resample_input_4": "In L'Abbaye, the language spoken is",
+  "resample_input_5": "Juho Saaristo holds a citizenship from",
+  "resample_input_6": "Takashi Nakamura holds a citizenship from"
  },
  {
   "input": "Leif Sylvester Petersen, a citizen of",
   "ml_token": " Denmark",
-  "resample_input": "KiKa, which is located in"
- },
- {
-  "input": "Argentine National Anthem, which is located in",
-  "ml_token": " the",
-  "resample_input": "The Denver Dry Goods Company is based in"
- },
- {
-  "input": "Wars of the Three Kingdoms is in",
-  "ml_token": " the",
-  "resample_input": "Eliezer ben Hurcanus is affiliated with the religion"
- },
- {
-  "input": "Chevrolet Brookwood, developed by",
-  "ml_token": " the",
-  "resample_input": "Argentine National Anthem, which is located in"
- },
- {
-  "input": "Fred Vargas, a native",
-  "ml_token": " of",
-  "resample_input": "Dhwani was created in"
+  "resample_input": "Valdichiana is located in the country of",
+  "resample_input_2": "What does Boyd Raeburn play? They play",
+  "resample_input_3": "The official language of Loimaa is",
+  "resample_input_4": "Jean-Pierre Marielle is a native speaker of",
+  "resample_input_5": "D'Urville Island, Antarctica is located in",
+  "resample_input_6": "The official language of Virginia is"
  },
  {
   "input": "Dennis Rodman plays",
   "ml_token": " basketball",
-  "resample_input": "Pentium II was developed by"
- },
- {
-  "input": "Martin Lowry speaks",
-  "ml_token": " to",
-  "resample_input": "Alice Furlong, a citizen of"
- },
- {
-  "input": "Panzarini Hills is located in the continent",
-  "ml_token": " of",
-  "resample_input": "In Kauniainen, they understand"
- },
- {
-  "input": "Minneapolis sound is named after",
-  "ml_token": " the",
-  "resample_input": "Adobe Flash is created by"
+  "resample_input": "Toyota Toyoace, produced by",
+  "resample_input_2": "The headquarter of Army of the Guardians of the Islamic Revolution is located in",
+  "resample_input_3": "Harry Sacksioni performs on the",
+  "resample_input_4": "The original language of The Man Who Shot Liberty Valance is",
+  "resample_input_5": "Chen Kenichi holds a citizenship from",
+  "resample_input_6": "CarPlay was developed by"
  },
  {
   "input": "Jorge Luis Campos plays in the position of",
   "ml_token": " midfielder",
-  "resample_input": "Atlee Hammaker plays in the position of"
+  "resample_input": "The headquarters of Rolex is in",
+  "resample_input_2": "Windows Easy Transfer was created by",
+  "resample_input_3": "Dennis Rodman plays",
+  "resample_input_4": "The original language of Low-Life is",
+  "resample_input_5": "Wilson Piedmont Glacier is a part of the continent of",
+  "resample_input_6": "Honda Z series is created by"
+ },
+ {
+  "input": "John Cheever was born in",
+  "ml_token": " Quincy",
+  "resample_input": "Jean-Pierre Marielle is a native speaker of",
+  "resample_input_2": "The original language of Flying Rhino Junior High is",
+  "resample_input_3": "Kunihiko Yasui, who has a citizenship from",
+  "resample_input_4": "Hendrawan, a citizen of",
+  "resample_input_5": "Dmitry Pisarev is a native speaker of",
+  "resample_input_6": "Wilson Piedmont Glacier is a part of the continent of"
+ },
+ {
+  "input": "The mother tongue of Colette Darfeuil is",
+  "ml_token": " French",
+  "resample_input": "The Danish Poet was created in the country of",
+  "resample_input_2": "Third Watch premieres on",
+  "resample_input_3": "Nintendo Software Planning & Development is headquartered in",
+  "resample_input_4": "Robert Jan van Pelt is a native speaker of",
+  "resample_input_5": "Toyota Sera is created by",
+  "resample_input_6": "Open Packaging Conventions was developed by"
+ },
+ {
+  "input": "The Andy Milonakis Show is to debut on",
+  "ml_token": " MTV",
+  "resample_input": "Toyota Sera is created by",
+  "resample_input_2": "Open Packaging Conventions was developed by",
+  "resample_input_3": "The headquarters of Rolex is in",
+  "resample_input_4": "Beaumont Palace is located in",
+  "resample_input_5": "In Kurikka, the language spoken is",
+  "resample_input_6": "Casey Matthews plays in the position of"
+ },
+ {
+  "input": "Saint Gayane Church is located in the country of",
+  "ml_token": " Armenia",
+  "resample_input": "The original language of Being Julia is",
+  "resample_input_2": "The Denver Dry Goods Company is based in",
+  "resample_input_3": "The original language of The Man Who Shot Liberty Valance is",
+  "resample_input_4": "The original language of Do Not Disturb is",
+  "resample_input_5": "Gray Television, whose headquarters are in",
+  "resample_input_6": "The original language of Casa de Mi Padre was"
+ },
+ {
+  "input": "Chen Kenichi holds a citizenship from",
+  "ml_token": " Japan",
+  "resample_input": "Jean Drapeau died in the city of",
+  "resample_input_2": "Google Calendar is a product of",
+  "resample_input_3": "The original language of Casa de Mi Padre was",
+  "resample_input_4": "Castrol is owned by",
+  "resample_input_5": "Gautama Buddha follows the religion of",
+  "resample_input_6": "Toyota Stout is created by"
+ },
+ {
+  "input": "Sora Ltd., whose headquarters are in",
+  "ml_token": " Tokyo",
+  "resample_input": "The headquarter of J. G. Brill Company is in",
+  "resample_input_2": "Minamishitara District, Aichi is located in the country of",
+  "resample_input_3": "Casey Matthews plays in the position of",
+  "resample_input_4": "The original language of Being Julia is",
+  "resample_input_5": "The mother tongue of Henri Vidal is",
+  "resample_input_6": "Leopold Stokowski originated from"
+ },
+ {
+  "input": "Guiding Light premieres on",
+  "ml_token": " CBS",
+  "resample_input": "The headquarter of Army of the Guardians of the Islamic Revolution is located in",
+  "resample_input_2": "Prafulla Chandra Ghosh holds a citizenship from",
+  "resample_input_3": "Gordon Bell works for",
+  "resample_input_4": "The original language of The Lancet was",
+  "resample_input_5": "Google Patents, a product developed by",
+  "resample_input_6": "Saint Gayane Church is located in the country of"
+ },
+ {
+  "input": "The headquarter of Army of the Guardians of the Islamic Revolution is located in",
+  "ml_token": " Tehran",
+  "resample_input": "Chen Kenichi holds a citizenship from",
+  "resample_input_2": "Claude Bartolone is a native speaker of",
+  "resample_input_3": "Porsche 914, produced by",
+  "resample_input_4": "The mother tongue of Colette Darfeuil is",
+  "resample_input_5": "Wii U, a product developed by",
+  "resample_input_6": "Count Basie, performing on the"
+ },
+ {
+  "input": "Toyota Sera is created by",
+  "ml_token": " Toyota",
+  "resample_input": "The original language of Mouna Ragam was",
+  "resample_input_2": "Google Reader is from",
+  "resample_input_3": "Final Fantasy Legend III is created by",
+  "resample_input_4": "The official language of Loimaa is",
+  "resample_input_5": "The official language of Loimaa is",
+  "resample_input_6": "Prafulla Chandra Ghosh holds a citizenship from"
+ },
+ {
+  "input": "Jean Sorel is a native speaker of",
+  "ml_token": " French",
+  "resample_input": "The original language of The Lancet was",
+  "resample_input_2": "Wii U, a product developed by",
+  "resample_input_3": "Gautama Buddha follows the religion of",
+  "resample_input_4": "Claude Bartolone is a native speaker of",
+  "resample_input_5": "Hendrawan, a citizen of",
+  "resample_input_6": "VP9 is created by"
+ },
+ {
+  "input": "Google Reader is from",
+  "ml_token": " Google",
+  "resample_input": "Dennis Rodman plays",
+  "resample_input_2": "Porsche 914, produced by",
+  "resample_input_3": "Evening Shade premiered on",
+  "resample_input_4": "The Fantastic Journey premieres on",
+  "resample_input_5": "Abbas Ahmed Atwi originates from",
+  "resample_input_6": "The original language of Being Julia is"
+ },
+ {
+  "input": "Kunihiko Yasui, who has a citizenship from",
+  "ml_token": " Japan",
+  "resample_input": "Nissan Latio, developed by",
+  "resample_input_2": "John Cheever was born in",
+  "resample_input_3": "In Tuusula, an official language is",
+  "resample_input_4": "The language of Cihan News Agency is",
+  "resample_input_5": "2005 Beach Volleyball World Championships is in",
+  "resample_input_6": "The original language of The Lancet was"
+ },
+ {
+  "input": "Hendrawan, a citizen of",
+  "ml_token": " Indonesia",
+  "resample_input": "Gordon Bell works for",
+  "resample_input_2": "Casey Matthews plays in the position of",
+  "resample_input_3": "Windows Easy Transfer was created by",
+  "resample_input_4": "The official language of Virginia is",
+  "resample_input_5": "Takashi Nakamura holds a citizenship from",
+  "resample_input_6": "francium, which was named for"
+ },
+ {
+  "input": "Jean-Paul Akayesu, who has a citizenship from",
+  "ml_token": " Rwanda",
+  "resample_input": "Juho Saaristo holds a citizenship from",
+  "resample_input_2": "Leif Sylvester Petersen, a citizen of",
+  "resample_input_3": "The headquarter of J. G. Brill Company is in",
+  "resample_input_4": "Cipriani Potter performs on the",
+  "resample_input_5": "Uruguayan Football Association is a part of the",
+  "resample_input_6": "Audio Video Interleave, version 1.0, a product developed by"
+ },
+ {
+  "input": "Audio Video Interleave, version 1.0, a product developed by",
+  "ml_token": " Microsoft",
+  "resample_input": "Brian Cushing, who plays the position",
+  "resample_input_2": "Robert Jan van Pelt is a native speaker of",
+  "resample_input_3": "Valdichiana is located in the country of",
+  "resample_input_4": "CarPlay was developed by",
+  "resample_input_5": "Castrol is owned by",
+  "resample_input_6": "Fiat Tempra, developed by"
+ },
+ {
+  "input": "The mother tongue of Henri Vidal is",
+  "ml_token": " French",
+  "resample_input": "Google Patents, a product developed by",
+  "resample_input_2": "Honda Z series is created by",
+  "resample_input_3": "Five Star Krishna's profession is an",
+  "resample_input_4": "VP9 is created by",
+  "resample_input_5": "The native language of Jan Peter Balkenende is",
+  "resample_input_6": "Sora Ltd., whose headquarters are in"
+ },
+ {
+  "input": "The Evaporators was created in the country of",
+  "ml_token": " Canada",
+  "resample_input": "Where is 1986 Goodwill Games? It is located in",
+  "resample_input_2": "The original language of The Man Who Shot Liberty Valance is",
+  "resample_input_3": "Lefteris Papadopoulos has a citizenship from",
+  "resample_input_4": "Takashi Nakamura holds a citizenship from",
+  "resample_input_5": "Jorge Luis Campos plays in the position of",
+  "resample_input_6": "The language of Cihan News Agency is"
+ },
+ {
+  "input": "Beaumont Palace is located in",
+  "ml_token": " Oxford",
+  "resample_input": "Canadian National Railway, whose headquarters are in",
+  "resample_input_2": "The mother tongue of Colette Darfeuil is",
+  "resample_input_3": "The original language of Thuppakki is",
+  "resample_input_4": "Frontline premiered on",
+  "resample_input_5": "Jean-Pierre Marielle is a native speaker of",
+  "resample_input_6": "Frontline premiered on"
+ },
+ {
+  "input": "Uruguayan Football Association is a part of the",
+  "ml_token": " FIFA",
+  "resample_input": "Yoko Moriguchi, who is a citizen of",
+  "resample_input_2": "Adam Elsheimer took up work in",
+  "resample_input_3": "Leopold Stokowski originated from",
+  "resample_input_4": "Valdichiana is located in the country of",
+  "resample_input_5": "Audio Video Interleave, version 1.0, a product developed by",
+  "resample_input_6": "Pentium II was developed by"
+ },
+ {
+  "input": "2000 Summer Paralympics is in",
+  "ml_token": " Sydney",
+  "resample_input": "VP9 is created by",
+  "resample_input_2": "The capital of Spanish East Indies is",
+  "resample_input_3": "Garfield Barwick died in the city of",
+  "resample_input_4": "The native language of Claude Victor-Perrin, Duc de Belluno is",
+  "resample_input_5": "Yoko Moriguchi, who is a citizen of",
+  "resample_input_6": "Microsoft XNA, a product of"
+ },
+ {
+  "input": "Metroid, a product manufactured by",
+  "ml_token": " Nintendo",
+  "resample_input": "Third Watch premieres on",
+  "resample_input_2": "Sora Ltd., whose headquarters are in",
+  "resample_input_3": "Jean-Pierre Marielle is a native speaker of",
+  "resample_input_4": "John Cheever was born in",
+  "resample_input_5": "The original language of Mouna Ragam was",
+  "resample_input_6": "In L'Abbaye, the language spoken is"
+ },
+ {
+  "input": "Gray Television, whose headquarters are in",
+  "ml_token": " Atlanta",
+  "resample_input": "Robert Jan van Pelt is a native speaker of",
+  "resample_input_2": "Toyota Sera is created by",
+  "resample_input_3": "The language of Cihan News Agency is",
+  "resample_input_4": "Abbas Ahmed Atwi originates from",
+  "resample_input_5": "The headquarter of J. G. Brill Company is in",
+  "resample_input_6": "Kunihiko Yasui, who has a citizenship from"
+ },
+ {
+  "input": "Minamishitara District, Aichi is located in the country of",
+  "ml_token": " Japan",
+  "resample_input": "In L'Abbaye, the language spoken is",
+  "resample_input_2": "CarPlay was developed by",
+  "resample_input_3": "The original language of Juliet Bravo is",
+  "resample_input_4": "The headquarters of Rolex is in",
+  "resample_input_5": "Canadian National Railway, whose headquarters are in",
+  "resample_input_6": "Assyrian Church of the East is headquartered in"
+ },
+ {
+  "input": "Valea lui Mihai is located in",
+  "ml_token": " Romania",
+  "resample_input": "The capital of Spanish East Indies is",
+  "resample_input_2": "IBM 3790, created by",
+  "resample_input_3": "Bad Schwalbach is located in the country of",
+  "resample_input_4": "Nissan Latio, developed by",
+  "resample_input_5": "Toyota HiAce is created by",
+  "resample_input_6": "The Andy Milonakis Show is to debut on"
+ },
+ {
+  "input": "Five Star Krishna's profession is an",
+  "ml_token": " actor",
+  "resample_input": "The original language of Thuppakki is",
+  "resample_input_2": "Guiding Light premieres on",
+  "resample_input_3": "Takashi Nakamura holds a citizenship from",
+  "resample_input_4": "Adobe Flash is created by",
+  "resample_input_5": "The original language of Being Julia is",
+  "resample_input_6": "Gray Television, whose headquarters are in"
+ },
+ {
+  "input": "Jean Drapeau died in the city of",
+  "ml_token": " Montreal",
+  "resample_input": "The original language of Flying Rhino Junior High is",
+  "resample_input_2": "The headquarter of Packt Publishing Ltd. is located in",
+  "resample_input_3": "The native language of Jan Peter Balkenende is",
+  "resample_input_4": "The Danish Poet was created in the country of",
+  "resample_input_5": "Cipriani Potter performs on the",
+  "resample_input_6": "Leif Sylvester Petersen, a citizen of"
+ },
+ {
+  "input": "The original language of Thuppakki is",
+  "ml_token": " Tamil",
+  "resample_input": "The official language of Loimaa is",
+  "resample_input_2": "francium, which was named for",
+  "resample_input_3": "The mother tongue of Henri Vidal is",
+  "resample_input_4": "Wilson Piedmont Glacier is a part of the continent of",
+  "resample_input_5": "Jean-Paul Akayesu, who has a citizenship from",
+  "resample_input_6": "The native language of Jan Peter Balkenende is"
+ },
+ {
+  "input": "Toyota HiAce is created by",
+  "ml_token": " Toyota",
+  "resample_input": "francium, which was named for",
+  "resample_input_2": "The Andy Milonakis Show is to debut on",
+  "resample_input_3": "Saint Gayane Church is located in the country of",
+  "resample_input_4": "Gray Television, whose headquarters are in",
+  "resample_input_5": "Claude Bartolone is a native speaker of",
+  "resample_input_6": "John Cheever was born in"
+ },
+ {
+  "input": "The original language of The Lancet was",
+  "ml_token": " English",
+  "resample_input": "Nissan 200SX, created by",
+  "resample_input_2": "Google Patents, a product developed by",
+  "resample_input_3": "Sora Ltd., whose headquarters are in",
+  "resample_input_4": "Toyota Sera is created by",
+  "resample_input_5": "IBM 3790, created by",
+  "resample_input_6": "The official religion of Nagarjuna is"
+ },
+ {
+  "input": "In L'Abbaye, the language spoken is",
+  "ml_token": " French",
+  "resample_input": "The Andy Milonakis Show is to debut on",
+  "resample_input_2": "Juho Saaristo holds a citizenship from",
+  "resample_input_3": "The native language of Claude Victor-Perrin, Duc de Belluno is",
+  "resample_input_4": "Gautama Buddha follows the religion of",
+  "resample_input_5": "The native language of Claude Victor-Perrin, Duc de Belluno is",
+  "resample_input_6": "The Denver Dry Goods Company is based in"
+ },
+ {
+  "input": "Claude Bartolone is a native speaker of",
+  "ml_token": " French",
+  "resample_input": "IBM 3790, created by",
+  "resample_input_2": "Where is 1986 Goodwill Games? It is located in",
+  "resample_input_3": "Toyota HiAce is created by",
+  "resample_input_4": "Jean Drapeau died in the city of",
+  "resample_input_5": "Prafulla Chandra Ghosh holds a citizenship from",
+  "resample_input_6": "Jorge Luis Campos plays in the position of"
+ },
+ {
+  "input": "The language of Cihan News Agency is",
+  "ml_token": " Turkish",
+  "resample_input": "The mother tongue of Marc-Philippe Daubresse is",
+  "resample_input_2": "Big Love premieres on",
+  "resample_input_3": "In Kurikka, the language spoken is",
+  "resample_input_4": "The original language of Flying Rhino Junior High is",
+  "resample_input_5": "Minamishitara District, Aichi is located in the country of",
+  "resample_input_6": "Five Star Krishna's profession is an"
+ },
+ {
+  "input": "Where is 1986 Goodwill Games? It is located in",
+  "ml_token": " Moscow",
+  "resample_input": "Uruguayan Football Association is a part of the",
+  "resample_input_2": "Damon Allen, who plays the position",
+  "resample_input_3": "Big Love premieres on",
+  "resample_input_4": "Canadian National Railway, whose headquarters are in",
+  "resample_input_5": "CarPlay was developed by",
+  "resample_input_6": "Adobe Flash is created by"
+ },
+ {
+  "input": "The native language of Marc Dolez is",
+  "ml_token": " French",
+  "resample_input": "Kunihiko Yasui, who has a citizenship from",
+  "resample_input_2": "Garfield Barwick died in the city of",
+  "resample_input_3": "The Bold Ones debuted on",
+  "resample_input_4": "Casey Matthews plays in the position of",
+  "resample_input_5": "Mike Candys has a citizenship from",
+  "resample_input_6": "Nintendo Software Planning & Development is headquartered in"
+ },
+ {
+  "input": "Toyota Stout is created by",
+  "ml_token": " Toyota",
+  "resample_input": "Windows Easy Transfer was created by",
+  "resample_input_2": "Five Star Krishna's profession is an",
+  "resample_input_3": "Prafulla Chandra Ghosh holds a citizenship from",
+  "resample_input_4": "Guiding Light premieres on",
+  "resample_input_5": "In Tuusula, an official language is",
+  "resample_input_6": "Minamishitara District, Aichi is located in the country of"
+ },
+ {
+  "input": "Honda Z series is created by",
+  "ml_token": " Honda",
+  "resample_input": "Jean Sorel is a native speaker of",
+  "resample_input_2": "D'Urville Island, Antarctica is located in",
+  "resample_input_3": "Robert Jan van Pelt is a native speaker of",
+  "resample_input_4": "Where is 1986 Goodwill Games? It is located in",
+  "resample_input_5": "What does Boyd Raeburn play? They play",
+  "resample_input_6": "Brian Cushing, who plays the position"
+ },
+ {
+  "input": "Valdichiana is located in the country of",
+  "ml_token": " Italy",
+  "resample_input": "Big Love premieres on",
+  "resample_input_2": "In Kurikka, the language spoken is",
+  "resample_input_3": "Wilson Piedmont Glacier is a part of the continent of",
+  "resample_input_4": "Evening Shade premiered on",
+  "resample_input_5": "The official religion of Nagarjuna is",
+  "resample_input_6": "The headquarter of J. G. Brill Company is in"
+ },
+ {
+  "input": "D'Urville Island, Antarctica is located in",
+  "ml_token": " Antarctica",
+  "resample_input": "Leopold Stokowski originated from",
+  "resample_input_2": "Beaumont Palace is located in",
+  "resample_input_3": "Open Packaging Conventions was developed by",
+  "resample_input_4": "The Denver Dry Goods Company is based in",
+  "resample_input_5": "The mother tongue of Marc-Philippe Daubresse is",
+  "resample_input_6": "Sunday NFL Countdown premieres on"
+ },
+ {
+  "input": "Casey Matthews plays in the position of",
+  "ml_token": " linebacker",
+  "resample_input": "Porsche 914, produced by",
+  "resample_input_2": "Nasdaq AB's headquarters are in",
+  "resample_input_3": "The Evaporators was created in the country of",
+  "resample_input_4": "Gordon Bell works for",
+  "resample_input_5": "The original language of Thuppakki is",
+  "resample_input_6": "The native language of Marc Dolez is"
+ },
+ {
+  "input": "Adam Elsheimer took up work in",
+  "ml_token": " Rome",
+  "resample_input": "Beaumont Palace is located in",
+  "resample_input_2": "Toyota Toyoace, produced by",
+  "resample_input_3": "What does Boyd Raeburn play? They play",
+  "resample_input_4": "Harry Sacksioni performs on the",
+  "resample_input_5": "The headquarter of Army of the Guardians of the Islamic Revolution is located in",
+  "resample_input_6": "Canadian National Railway, whose headquarters are in"
+ },
+ {
+  "input": "The official religion of Umar ibn Al-Khatt\u0101b is",
+  "ml_token": " Islam",
+  "resample_input": "Abbas Ahmed Atwi originates from",
+  "resample_input_2": "2000 Summer Paralympics is in",
+  "resample_input_3": "The language of Unnai Thedi was",
+  "resample_input_4": "Yoko Moriguchi, who is a citizen of",
+  "resample_input_5": "Brian Cushing, who plays the position",
+  "resample_input_6": "The original language of Do Not Disturb is"
+ },
+ {
+  "input": "Windows Easy Transfer was created by",
+  "ml_token": " Microsoft",
+  "resample_input": "The original language of Do Not Disturb is",
+  "resample_input_2": "The mother tongue of Marc-Philippe Daubresse is",
+  "resample_input_3": "Sunday NFL Countdown premieres on",
+  "resample_input_4": "Assyrian Church of the East is headquartered in",
+  "resample_input_5": "Where is 1986 Goodwill Games? It is located in",
+  "resample_input_6": "The official language of Loimaa is"
+ },
+ {
+  "input": "Final Fantasy Legend III is created by",
+  "ml_token": " Square",
+  "resample_input": "The official religion of Umar ibn Al-Khatt\u0101b is",
+  "resample_input_2": "2005 Beach Volleyball World Championships is in",
+  "resample_input_3": "The headquarter of Packt Publishing Ltd. is located in",
+  "resample_input_4": "D'Urville Island, Antarctica is located in",
+  "resample_input_5": "The Andy Milonakis Show is to debut on",
+  "resample_input_6": "Feng Tianwei is a citizen of"
+ },
+ {
+  "input": "Google Patents, a product developed by",
+  "ml_token": " Google",
+  "resample_input": "Adobe Flash is created by",
+  "resample_input_2": "VP9 is created by",
+  "resample_input_3": "Jean Drapeau died in the city of",
+  "resample_input_4": "Count Basie, performing on the",
+  "resample_input_5": "Nintendo Software Planning & Development is headquartered in",
+  "resample_input_6": "Uruguayan Football Association is a part of the"
+ },
+ {
+  "input": "IBM 3790, created by",
+  "ml_token": " IBM",
+  "resample_input": "Microsoft XNA, a product of",
+  "resample_input_2": "The Evaporators was created in the country of",
+  "resample_input_3": "Gray Television, whose headquarters are in",
+  "resample_input_4": "The Bold Ones debuted on",
+  "resample_input_5": "francium, which was named for",
+  "resample_input_6": "Porsche 914, produced by"
+ },
+ {
+  "input": "Brian Cushing, who plays the position",
+  "ml_token": " linebacker",
+  "resample_input": "Bad Schwalbach is located in the country of",
+  "resample_input_2": "Frontline premiered on",
+  "resample_input_3": "Honda Z series is created by",
+  "resample_input_4": "iOS is created by",
+  "resample_input_5": "Robert Jan van Pelt is a native speaker of",
+  "resample_input_6": "iOS is created by"
+ },
+ {
+  "input": "Leopold Stokowski originated from",
+  "ml_token": " London",
+  "resample_input": "Honda Z series is created by",
+  "resample_input_2": "Jorge Luis Campos plays in the position of",
+  "resample_input_3": "Canadian National Railway, whose headquarters are in",
+  "resample_input_4": "Fiat Tempra, developed by",
+  "resample_input_5": "The Fantastic Journey premieres on",
+  "resample_input_6": "Google Calendar is a product of"
+ },
+ {
+  "input": "Dmitry Pisarev is a native speaker of",
+  "ml_token": " Russian",
+  "resample_input": "In Tuusula, an official language is",
+  "resample_input_2": "Canadian National Railway, whose headquarters are in",
+  "resample_input_3": "Uruguayan Football Association is a part of the",
+  "resample_input_4": "The official religion of Umar ibn Al-Khatt\u0101b is",
+  "resample_input_5": "The original language of The Lancet was",
+  "resample_input_6": "Valdichiana is located in the country of"
+ },
+ {
+  "input": "Nintendo Software Planning & Development is headquartered in",
+  "ml_token": " Kyoto",
+  "resample_input": "Frontline premiered on",
+  "resample_input_2": "Nissan 200SX, created by",
+  "resample_input_3": "Count Basie, performing on the",
+  "resample_input_4": "The headquarters of Dallas Times Herald is in",
+  "resample_input_5": "Zhang Ziyi originated from",
+  "resample_input_6": "IBM 3790, created by"
+ },
+ {
+  "input": "Wii U, a product developed by",
+  "ml_token": " Nintendo",
+  "resample_input": "Valea lui Mihai is located in",
+  "resample_input_2": "The language of Unnai Thedi was",
+  "resample_input_3": "The Andy Milonakis Show is to debut on",
+  "resample_input_4": "Brian Cushing, who plays the position",
+  "resample_input_5": "The original language of The Man Who Shot Liberty Valance is",
+  "resample_input_6": "Damon Allen, who plays the position"
+ },
+ {
+  "input": "Evening Shade premiered on",
+  "ml_token": " CBS",
+  "resample_input": "Prafulla Chandra Ghosh holds a citizenship from",
+  "resample_input_2": "Saint Gayane Church is located in the country of",
+  "resample_input_3": "The mother tongue of Colette Darfeuil is",
+  "resample_input_4": "Feng Tianwei is a citizen of",
+  "resample_input_5": "Nasdaq AB's headquarters are in",
+  "resample_input_6": "Final Fantasy Legend III is created by"
+ },
+ {
+  "input": "Juho Saaristo holds a citizenship from",
+  "ml_token": " Finland",
+  "resample_input": "Claude Bartolone is a native speaker of",
+  "resample_input_2": "Jean Sorel is a native speaker of",
+  "resample_input_3": "Feng Tianwei is a citizen of",
+  "resample_input_4": "Google Patents, a product developed by",
+  "resample_input_5": "Metroid, a product manufactured by",
+  "resample_input_6": "The Fantastic Journey premieres on"
+ },
+ {
+  "input": "The headquarters of Rolex is in",
+  "ml_token": " Geneva",
+  "resample_input": "Mike Candys has a citizenship from",
+  "resample_input_2": "Assyrian Church of the East is headquartered in",
+  "resample_input_3": "Zhang Ziyi originated from",
+  "resample_input_4": "Juho Saaristo holds a citizenship from",
+  "resample_input_5": "Harry Sacksioni performs on the",
+  "resample_input_6": "Toyota Toyoace, produced by"
+ },
+ {
+  "input": "iPhone 5, produced by",
+  "ml_token": " Apple",
+  "resample_input": "Takashi Nakamura holds a citizenship from",
+  "resample_input_2": "Harry Sacksioni performs on the",
+  "resample_input_3": "2000 Summer Paralympics is in",
+  "resample_input_4": "Google Reader is from",
+  "resample_input_5": "The Evaporators was created in the country of",
+  "resample_input_6": "Dmitry Pisarev is a native speaker of"
+ },
+ {
+  "input": "Wilson Piedmont Glacier is a part of the continent of",
+  "ml_token": " Antarctica",
+  "resample_input": "Evening Shade premiered on",
+  "resample_input_2": "Final Fantasy Legend III is created by",
+  "resample_input_3": "Abbas Ahmed Atwi originates from",
+  "resample_input_4": "Nissan 200SX, created by",
+  "resample_input_5": "The Bold Ones debuted on",
+  "resample_input_6": "Yoko Moriguchi, who is a citizen of"
+ },
+ {
+  "input": "Robert Jan van Pelt is a native speaker of",
+  "ml_token": " Dutch",
+  "resample_input": "Nasdaq AB's headquarters are in",
+  "resample_input_2": "Jean-Paul Akayesu, who has a citizenship from",
+  "resample_input_3": "John Cheever was born in",
+  "resample_input_4": "Minamishitara District, Aichi is located in the country of",
+  "resample_input_5": "Frontline premiered on",
+  "resample_input_6": "The mother tongue of Colette Darfeuil is"
+ },
+ {
+  "input": "The original language of The Man Who Shot Liberty Valance is",
+  "ml_token": " English",
+  "resample_input": "Lefteris Papadopoulos has a citizenship from",
+  "resample_input_2": "Peter Gunn debuted on",
+  "resample_input_3": "Damon Allen, who plays the position",
+  "resample_input_4": "Zhang Ziyi originated from",
+  "resample_input_5": "Google Calendar is a product of",
+  "resample_input_6": "What does Boyd Raeburn play? They play"
+ },
+ {
+  "input": "CarPlay was developed by",
+  "ml_token": " Apple",
+  "resample_input": "2005 Beach Volleyball World Championships is in",
+  "resample_input_2": "The native language of Jan Peter Balkenende is",
+  "resample_input_3": "Microsoft XNA, a product of",
+  "resample_input_4": "The Evaporators was created in the country of",
+  "resample_input_5": "The original language of Juliet Bravo is",
+  "resample_input_6": "The original language of Flying Rhino Junior High is"
+ },
+ {
+  "input": "The headquarter of Packt Publishing Ltd. is located in",
+  "ml_token": " Birmingham",
+  "resample_input": "Final Fantasy Legend III is created by",
+  "resample_input_2": "Nintendo Software Planning & Development is headquartered in",
+  "resample_input_3": "iPhone 5, produced by",
+  "resample_input_4": "The Andy Milonakis Show is to debut on",
+  "resample_input_5": "Final Fantasy Legend III is created by",
+  "resample_input_6": "The headquarters of Rolex is in"
+ },
+ {
+  "input": "The original language of Juliet Bravo is",
+  "ml_token": " English",
+  "resample_input": "The original language of Low-Life is",
+  "resample_input_2": "In L'Abbaye, the language spoken is",
+  "resample_input_3": "The Danish Poet was created in the country of",
+  "resample_input_4": "Valea lui Mihai is located in",
+  "resample_input_5": "The original language of Do Not Disturb is",
+  "resample_input_6": "Third Watch premieres on"
+ },
+ {
+  "input": "The Danish Poet was created in the country of",
+  "ml_token": " Norway",
+  "resample_input": "The official religion of Nagarjuna is",
+  "resample_input_2": "The original language of Low-Life is",
+  "resample_input_3": "Toyota Sera is created by",
+  "resample_input_4": "The original language of Casa de Mi Padre was",
+  "resample_input_5": "The language of Unnai Thedi was",
+  "resample_input_6": "Adam Elsheimer took up work in"
+ },
+ {
+  "input": "The language of Unnai Thedi was",
+  "ml_token": " Tamil",
+  "resample_input": "What does Boyd Raeburn play? They play",
+  "resample_input_2": "The official language of Virginia is",
+  "resample_input_3": "CarPlay was developed by",
+  "resample_input_4": "Kunihiko Yasui, who has a citizenship from",
+  "resample_input_5": "Evening Shade premiered on",
+  "resample_input_6": "Bad Schwalbach is located in the country of"
+ },
+ {
+  "input": "In Tuusula, an official language is",
+  "ml_token": " Finnish",
+  "resample_input": "Nintendo Software Planning & Development is headquartered in",
+  "resample_input_2": "Adobe Flash is created by",
+  "resample_input_3": "VP9 is created by",
+  "resample_input_4": "Sora Ltd., whose headquarters are in",
+  "resample_input_5": "The original language of Casa de Mi Padre was",
+  "resample_input_6": "The headquarters of Dallas Times Herald is in"
+ },
+ {
+  "input": "The original language of Mouna Ragam was",
+  "ml_token": " Tamil",
+  "resample_input": "The headquarter of Packt Publishing Ltd. is located in",
+  "resample_input_2": "Fiat Tempra, developed by",
+  "resample_input_3": "Brian Cushing, who plays the position",
+  "resample_input_4": "Adam Elsheimer took up work in",
+  "resample_input_5": "Kunihiko Yasui, who has a citizenship from",
+  "resample_input_6": "Jean-Pierre Marielle is a native speaker of"
+ },
+ {
+  "input": "Yoko Moriguchi, who is a citizen of",
+  "ml_token": " Japan",
+  "resample_input": "The native language of Claude Victor-Perrin, Duc de Belluno is",
+  "resample_input_2": "The official religion of Umar ibn Al-Khatt\u0101b is",
+  "resample_input_3": "The native language of Marc Dolez is",
+  "resample_input_4": "Google Calendar is a product of",
+  "resample_input_5": "The official language of Virginia is",
+  "resample_input_6": "Google Reader is from"
+ },
+ {
+  "input": "Feng Tianwei is a citizen of",
+  "ml_token": " Singapore",
+  "resample_input": "The official language of Virginia is",
+  "resample_input_2": "Uruguayan Football Association is a part of the",
+  "resample_input_3": "Metroid, a product manufactured by",
+  "resample_input_4": "Peter Gunn debuted on",
+  "resample_input_5": "Casey Matthews plays in the position of",
+  "resample_input_6": "In Kurikka, the language spoken is"
+ },
+ {
+  "input": "The capital of Spanish East Indies is",
+  "ml_token": " Manila",
+  "resample_input": "John Cheever was born in",
+  "resample_input_2": "Dennis Rodman plays",
+  "resample_input_3": "The official religion of Nagarjuna is",
+  "resample_input_4": "Pentium II was developed by",
+  "resample_input_5": "The headquarters of Dallas Times Herald is in",
+  "resample_input_6": "Peter Gunn debuted on"
+ },
+ {
+  "input": "Assyrian Church of the East is headquartered in",
+  "ml_token": " Chicago",
+  "resample_input": "The language of Unnai Thedi was",
+  "resample_input_2": "The original language of Mouna Ragam was",
+  "resample_input_3": "Wii U, a product developed by",
+  "resample_input_4": "Final Fantasy Legend III is created by",
+  "resample_input_5": "Guiding Light premieres on",
+  "resample_input_6": "Hendrawan, a citizen of"
+ },
+ {
+  "input": "Nissan Latio, developed by",
+  "ml_token": " Nissan",
+  "resample_input": "In Kurikka, the language spoken is",
+  "resample_input_2": "The Bold Ones debuted on",
+  "resample_input_3": "Guiding Light premieres on",
+  "resample_input_4": "Mike Candys has a citizenship from",
+  "resample_input_5": "The language of Cihan News Agency is",
+  "resample_input_6": "Cipriani Potter performs on the"
+ },
+ {
+  "input": "Nasdaq AB's headquarters are in",
+  "ml_token": " Stockholm",
+  "resample_input": "Fiat Tempra, developed by",
+  "resample_input_2": "The headquarters of Dallas Times Herald is in",
+  "resample_input_3": "Yoko Moriguchi, who is a citizen of",
+  "resample_input_4": "The headquarter of Army of the Guardians of the Islamic Revolution is located in",
+  "resample_input_5": "2000 Summer Paralympics is in",
+  "resample_input_6": "Garfield Barwick died in the city of"
+ },
+ {
+  "input": "The original language of Low-Life is",
+  "ml_token": " English",
+  "resample_input": "The native language of Jan Peter Balkenende is",
+  "resample_input_2": "Abbas Ahmed Atwi originates from",
+  "resample_input_3": "Dmitry Pisarev is a native speaker of",
+  "resample_input_4": "Audio Video Interleave, version 1.0, a product developed by",
+  "resample_input_5": "Google Reader is from",
+  "resample_input_6": "The original language of The Man Who Shot Liberty Valance is"
+ },
+ {
+  "input": "What does Boyd Raeburn play? They play",
+  "ml_token": " jazz",
+  "resample_input": "Feng Tianwei is a citizen of",
+  "resample_input_2": "Microsoft SQL Server is developed by",
+  "resample_input_3": "The Denver Dry Goods Company is based in",
+  "resample_input_4": "Saint Gayane Church is located in the country of",
+  "resample_input_5": "The headquarter of Packt Publishing Ltd. is located in",
+  "resample_input_6": "Microsoft SQL Server is developed by"
+ },
+ {
+  "input": "Toyota Toyoace, produced by",
+  "ml_token": " Toyota",
+  "resample_input": "The Fantastic Journey premieres on",
+  "resample_input_2": "Jean-Pierre Marielle is a native speaker of",
+  "resample_input_3": "Jean Sorel is a native speaker of",
+  "resample_input_4": "Nasdaq AB's headquarters are in",
+  "resample_input_5": "The original language of Flying Rhino Junior High is",
+  "resample_input_6": "D'Urville Island, Antarctica is located in"
+ },
+ {
+  "input": "Frontline premiered on",
+  "ml_token": " PBS",
+  "resample_input": "Cipriani Potter performs on the",
+  "resample_input_2": "Valdichiana is located in the country of",
+  "resample_input_3": "Pentium II was developed by",
+  "resample_input_4": "The mother tongue of Marc-Philippe Daubresse is",
+  "resample_input_5": "Beaumont Palace is located in",
+  "resample_input_6": "The native language of Claude Victor-Perrin, Duc de Belluno is"
+ },
+ {
+  "input": "The headquarter of J. G. Brill Company is in",
+  "ml_token": " Philadelphia",
+  "resample_input": "The Denver Dry Goods Company is based in",
+  "resample_input_2": "The original language of Being Julia is",
+  "resample_input_3": "Audio Video Interleave, version 1.0, a product developed by",
+  "resample_input_4": "Honda Z series is created by",
+  "resample_input_5": "Nissan Latio, developed by",
+  "resample_input_6": "In Tuusula, an official language is"
+ },
+ {
+  "input": "Abbas Ahmed Atwi originates from",
+  "ml_token": " Lebanon",
+  "resample_input": "Dmitry Pisarev is a native speaker of",
+  "resample_input_2": "The native language of Claude Victor-Perrin, Duc de Belluno is",
+  "resample_input_3": "In L'Abbaye, the language spoken is",
+  "resample_input_4": "2000 Summer Paralympics is in",
+  "resample_input_5": "Toyota Toyoace, produced by",
+  "resample_input_6": "The official religion of Umar ibn Al-Khatt\u0101b is"
+ },
+ {
+  "input": "Open Packaging Conventions was developed by",
+  "ml_token": " Microsoft",
+  "resample_input": "Saint Gayane Church is located in the country of",
+  "resample_input_2": "iPhone 5, produced by",
+  "resample_input_3": "The capital of Spanish East Indies is",
+  "resample_input_4": "In Tuusula, an official language is",
+  "resample_input_5": "VP9 is created by",
+  "resample_input_6": "Mike Candys has a citizenship from"
+ },
+ {
+  "input": "The original language of Do Not Disturb is",
+  "ml_token": " English",
+  "resample_input": "Zhang Ziyi originated from",
+  "resample_input_2": "Hendrawan, a citizen of",
+  "resample_input_3": "Jean-Paul Akayesu, who has a citizenship from",
+  "resample_input_4": "Toyota Toyoace, produced by",
+  "resample_input_5": "iPhone 5, produced by",
+  "resample_input_6": "Metroid, a product manufactured by"
+ },
+ {
+  "input": "VP9 is created by",
+  "ml_token": " Google",
+  "resample_input": "Open Packaging Conventions was developed by",
+  "resample_input_2": "Cipriani Potter performs on the",
+  "resample_input_3": "Chen Kenichi holds a citizenship from",
+  "resample_input_4": "Wii U, a product developed by",
+  "resample_input_5": "Lefteris Papadopoulos has a citizenship from",
+  "resample_input_6": "Claude Bartolone is a native speaker of"
+ },
+ {
+  "input": "Porsche 914, produced by",
+  "ml_token": " Porsche",
+  "resample_input": "The native language of Marc Dolez is",
+  "resample_input_2": "The headquarters of Rolex is in",
+  "resample_input_3": "IBM 3790, created by",
+  "resample_input_4": "Damon Allen, who plays the position",
+  "resample_input_5": "The official religion of Umar ibn Al-Khatt\u0101b is",
+  "resample_input_6": "Abbas Ahmed Atwi originates from"
+ },
+ {
+  "input": "The native language of Jan Peter Balkenende is",
+  "ml_token": " Dutch",
+  "resample_input": "The original language of Casa de Mi Padre was",
+  "resample_input_2": "The Fantastic Journey premieres on",
+  "resample_input_3": "Nissan 200SX, created by",
+  "resample_input_4": "In Kurikka, the language spoken is",
+  "resample_input_5": "Leopold Stokowski originated from",
+  "resample_input_6": "Jean-Paul Akayesu, who has a citizenship from"
+ },
+ {
+  "input": "2005 Beach Volleyball World Championships is in",
+  "ml_token": " Berlin",
+  "resample_input": "Google Reader is from",
+  "resample_input_2": "The original language of Casa de Mi Padre was",
+  "resample_input_3": "The headquarters of Dallas Times Herald is in",
+  "resample_input_4": "iPhone 5, produced by",
+  "resample_input_5": "Jean Sorel is a native speaker of",
+  "resample_input_6": "The original language of Thuppakki is"
+ },
+ {
+  "input": "Kondotty is located in the country of",
+  "ml_token": " India",
+  "resample_input": "Google Calendar is a product of",
+  "resample_input_2": "In Tuusula, an official language is",
+  "resample_input_3": "Where is 1986 Goodwill Games? It is located in",
+  "resample_input_4": "The headquarter of Packt Publishing Ltd. is located in",
+  "resample_input_5": "The original language of Low-Life is",
+  "resample_input_6": "Harry Sacksioni performs on the"
+ },
+ {
+  "input": "Bad Schwalbach is located in the country of",
+  "ml_token": " Germany",
+  "resample_input": "Pentium II was developed by",
+  "resample_input_2": "The mother tongue of Henri Vidal is",
+  "resample_input_3": "Leif Sylvester Petersen, a citizen of",
+  "resample_input_4": "The native language of Marc Dolez is",
+  "resample_input_5": "John Cheever was born in",
+  "resample_input_6": "The headquarter of Army of the Guardians of the Islamic Revolution is located in"
+ },
+ {
+  "input": "The official language of Virginia is",
+  "ml_token": " English",
+  "resample_input": "CarPlay was developed by",
+  "resample_input_2": "Valea lui Mihai is located in",
+  "resample_input_3": "The headquarter of Army of the Guardians of the Islamic Revolution is located in",
+  "resample_input_4": "2005 Beach Volleyball World Championships is in",
+  "resample_input_5": "The headquarters of Rolex is in",
+  "resample_input_6": "The language of Unnai Thedi was"
  }
 ]

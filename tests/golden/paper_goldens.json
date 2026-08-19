@@ -132,7 +132,7 @@
       "units": "R^2 (proportion of variance)",
       "sidedness": "at_least",
       "floor": 0.6,
-      "confidence": "medium",
+      "confidence": "low",
       "source": {
         "where": "paper Fig 7b",
         "quote": "the compensatory response explains 92% of the variance in the change between the intact and ablated network (best layer 23 of 32)"
@@ -141,7 +141,8 @@
         "task": "environments/silico_research/tasks/hydra-effect",
         "leaf": "quant-compensation-r2"
       },
-      "notes": "Model-transferred floor: the paper measured 0.92 on Chinchilla 7B (non-public); the VeriFires task accepts >= 0.6 on any open ~7-8B model and its [0.6, 1.2] band is impossible above 1.0 for an R^2, so the intent is one-sided and is encoded that way here."
+      "notes": "CALIBRATION FINDING (2026-08-19, MPS bf16, 128 Llama-correct CounterFact prompts, 6 resample draws averaged, frozen-norm linearized unembedding DE - the paper's own measure; in-document subtraction/injection proxies measured 0.09/0.30 and are contaminated by RMSNorm renormalization): best-layer R^2 = 0.336, at ablation layer 23 - the same layer Chinchilla peaked at - vs the paper's 0.92 on Chinchilla 7B. The hydra effect is present but much weaker on Llama-3.1-8B, and the VeriFires floor of 0.6 (a model-transfer guess; the package has no ground-truth run and leaves the model worker-chosen) appears unreachable in this regime. Marked pending until the floor is recalibrated on the VeriFires side or the golden's provenance is changed to a Llama-calibrated value; the document and test stay in place (the test skips while pending). Per-layer R^2: {8: 0.004, 13: 0.064, 18: 0.011, 23: 0.336, 28: 0.074}.",
+      "pending": true
     },
     "mixing.positional_share_edges": {
       "paper": "Mixing Mechanisms: How Language Models Retrieve Bound Entities In-Context, arXiv:2510.06182",

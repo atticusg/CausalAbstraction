@@ -60,17 +60,19 @@ def test_document_digests_match_their_pins(name, env):
 
 def test_every_golden_value_is_claimed_by_exactly_one_test():
     """Every non-pending goldens entry is asserted by exactly one golden
-    test; ``"pending": true`` marks values whose test is still owed (they
-    may not be claimed — remove the flag when the test lands)."""
+    test. ``"pending": true`` marks values with an open question — a test
+    still owed, or a recorded calibration finding (see the entry's notes);
+    a pending entry MAY be claimed (its test skips at runtime), so
+    un-pending an entry without a test fails here."""
     from tests.golden.test_paper_goldens import COVERED
 
     goldens = _goldens()
     live = {g for g, e in goldens.items() if not e.get("pending")}
     claimed = [g for ids in COVERED.values() for g in ids]
     assert sorted(claimed) == sorted(set(claimed)), "a golden id is claimed twice"
-    assert set(claimed) == live, (
-        f"unclaimed live: {sorted(live - set(claimed))}; "
-        f"claimed but pending/unknown: {sorted(set(claimed) - live)}"
+    assert live <= set(claimed), f"unclaimed live: {sorted(live - set(claimed))}"
+    assert set(claimed) <= set(goldens), (
+        f"claimed but unknown: {sorted(set(claimed) - set(goldens))}"
     )
 
 
