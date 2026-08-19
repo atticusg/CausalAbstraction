@@ -70,8 +70,7 @@
         "task": "tasks/rome-causal-tracing",
         "leaf": "quant-ate"
       },
-      "notes": "The ATE is a difference of probabilities, so the correctness filter must stay loose (argmax-correct, not high-confidence) or the clean baseline and the ATE move together - the VeriFires prompt states this trap explicitly. Paper decomposition: clean 27.0%, corrupted 8.47%. Noise std is 3*sigma, not sqrt(3*sigma).",
-      "pending": true
+      "notes": "Facts are the paper's own tracing set (known_1000.json, 1209 facts, sha256-pinned in gen_counterfact.py), split into equal-subject-width documents (w2-w5) and pooled by the test - an earlier CounterFact-tracing sample measured ATE ~36 (regime mismatch: easier facts; clean baseline 0.38 vs the paper's 0.27), while known_1000 reproduces the clean baseline almost exactly (measured 0.2649). The correctness filter stays loose per the VeriFires trap ('easy facts raise the clean baseline and move the ATE with it'). Known residual deviation: our seeded gaussian corrupts harder than the paper's (corrupted 0.031 vs 0.0847 at the same 3*sigma = 0.1447), pushing the ATE toward the band's upper half. Noise std is 3*sigma of the embedding matrix, not sqrt(3*sigma). MPS pre-verification: 23.35."
     },
     "rome.hidden_aie_peak": {
       "paper": "Meng et al. 2022, ROME, arXiv:2202.05262",

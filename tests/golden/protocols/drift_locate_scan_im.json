@@ -7,7 +7,7 @@
     "source": {"dataset": "drift/weekdays", "field": "counterfactual_inputs[0]"}
   },
   "sites": {
-    "target": {"component": "block_output", "layer": {"sweep": {"range": [6, 30, 4]}}},
+    "target": {"component": "block_output", "layer": {"sweep": {"range": [6, 34, 4]}}},
     "lm_head": {"component": "lm_head"}
   },
   "reads": {
