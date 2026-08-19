@@ -75,20 +75,22 @@ out of scope.
 
 ## Curation (Qwen3-4B-Instruct, chat-coherent)
 
-`data/curation_sweep.py` measures per-relation base accuracy on the golden
-fixture model (`chat-coherent` = `Qwen/Qwen3-4B-Instruct-2507`, chat template +
-the golden answer directive) through the same building blocks the baseline
-runner uses, plus single-token-decodability and first-token-distinctness of each
-answer space. A relation is **green** when accuracy ≥ 0.9 **and** its answer
-space is first-token-distinct. Accuracy reflects this *instruct* pipeline on the
+The table below was measured by the retired `data/curation_sweep.py` on the
+retired chat-coherent pipeline (`Qwen/Qwen3-4B-Instruct-2507`, chat template +
+the golden answer directive): per-relation base accuracy, plus
+single-token-decodability and first-token-distinctness of each answer space. A
+relation is **green** when accuracy ≥ 0.9 **and** its answer space is
+first-token-distinct. Accuracy reflects that *instruct* pipeline on the
 completion-style LRE templates; most relations are flagged for genuine model
 difficulty (e.g. `person_plays_*`) and/or the first-token grading of multi-token
-objects (e.g. `country_capital_city`). Reproduce (GPU):
+objects (e.g. `country_capital_city`).
 
-```bash
-uv run python causalab/tasks/subject_object_relations/data/curation_sweep.py \
-    --out /tmp/soc_curation.json --n 64 --seed 0
-```
+**The sweep is not currently recomputable**: its producer was deleted with the
+runner/methods stack in the protocol refactor (PR #20) while these numbers stay
+load-bearing (they select the tiers below and `config.py`'s default relation).
+Re-expressing it as a protocol-document campaign is blocked on the
+dataset-serialization seam and on a first-token/prefix metric kind — tracked as
+part of objective I1 in the intervention-protocol epic.
 
 `C` / `eff_k` / `compact` are source DAS provenance (answer-token site); `acc` is
 the measured base accuracy at seed 0, `n≈64` (post-dedup) examples per relation.
@@ -136,12 +138,12 @@ the measured base accuracy at seed 0, `n≈64` (post-dedup) examples per relatio
 
 ### Test tiers wired to the curation
 
-- **smoke** (`tests/end_to_end/configs/smoke/subject_object_relations.yaml`) —
-  `name_gender` (small, green): runs the object-flip path on `tiny-random` (CPU),
-  existence-only asserts.
-- **golden** (`tests/end_to_end/configs/golden/subject_object_relations.yaml` +
-  `tests/end_to_end/goldens/subject_object_relations.json`) — `word_first_letter`,
-  the strongest green relation (25 first-token-distinct letters, 1.000 accuracy).
+The old smoke/golden runner configs (`name_gender` on tiny-random;
+`word_first_letter` as the pinned golden, the strongest green relation — 25
+first-token-distinct letters, 1.000 accuracy) retired with the runner stack
+in the protocol refactor; the curation's selections remain the reference for
+which relation a future protocol-document tier should pin. The task's live
+coverage is `tests/tasks/subject_object_relations/`.
 
 ## Counterfactuals
 
@@ -168,7 +170,6 @@ independent-resample noise-floor reference. Both snapshot/restore the global RNG
 | `counterfactuals.py` | object-flip `generate_dataset`, `generate_resample_dataset`, `COUNTERFACTUAL_GENERATORS` |
 | `token_positions.py` | `create_token_positions` |
 | `data/build_relations.py` | ingest the bundle → committed model-agnostic JSON |
-| `data/curation_sweep.py` | per-relation base accuracy on Qwen3-4B (curation table) |
 | `data/relations/*.json`, `data/manifest.json` | committed relation content |
 | `summary.ipynb` | CPU-only task walkthrough (no model) |
 
