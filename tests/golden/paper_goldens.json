@@ -95,8 +95,7 @@
         "task": "environments/silico_research/tasks/rome-causal-tracing",
         "leaf": null
       },
-      "notes": "Not a VeriFires leaf (free candidate documented in the task's reference.md:79-86); band width +/-4 mirrors the task's quant-mlp-aie-peak tolerance. Peak layer is asserted loosely (early-to-middle third of the 48 layers).",
-      "pending": true
+      "notes": "Not a VeriFires leaf (free candidate documented in the task's reference.md:79-86); band width +/-4 mirrors the task's quant-mlp-aie-peak tolerance. Peak layer is asserted loosely (early-to-middle third of the 48 layers)."
     },
     "rome.mlp_window_aie_peak": {
       "paper": "Meng et al. 2022, ROME, arXiv:2202.05262",
@@ -121,8 +120,7 @@
         "task": "environments/silico_research/tasks/rome-causal-tracing",
         "leaf": "quant-mlp-aie-peak"
       },
-      "notes": "The 10-layer window needs 10 simultaneous swap sites per point, which one sweep axis cannot express - the test generates one document per window programmatically (the parity-goldens build-doc-per-case pattern).",
-      "pending": true
+      "notes": "The 10-layer window needs 10 simultaneous swap sites per point, which one sweep axis cannot express - the test generates one document per window programmatically (the parity-goldens build-doc-per-case pattern)."
     },
     "hydra.compensation_r2": {
       "paper": "McGrath et al. 2023, The Hydra Effect, arXiv:2307.15771",
@@ -143,8 +141,7 @@
         "task": "environments/silico_research/tasks/hydra-effect",
         "leaf": "quant-compensation-r2"
       },
-      "notes": "Model-transferred floor: the paper measured 0.92 on Chinchilla 7B (non-public); the VeriFires task accepts >= 0.6 on any open ~7-8B model and its [0.6, 1.2] band is impossible above 1.0 for an R^2, so the intent is one-sided and is encoded that way here.",
-      "pending": true
+      "notes": "Model-transferred floor: the paper measured 0.92 on Chinchilla 7B (non-public); the VeriFires task accepts >= 0.6 on any open ~7-8B model and its [0.6, 1.2] band is impossible above 1.0 for an R^2, so the intent is one-sided and is encoded that way here."
     },
     "mixing.positional_share_edges": {
       "paper": "Mixing Mechanisms: How Language Models Retrieve Bound Entities In-Context, arXiv:2510.06182",
@@ -165,8 +162,7 @@
         "task": "environments/silico_research/tasks/mixing-mechanisms",
         "leaf": "quant-positional-edges"
       },
-      "notes": "The 80% center is figure-eyeballed (the paper text is only qualitative), hence confidence: low. The VeriFires band [60, 100] exceeds the metric's range at the top, so the intent is one-sided and is encoded as a floor at 60.",
-      "pending": true
+      "notes": "The 80% center is figure-eyeballed (the paper text is only qualitative), hence confidence: low. The VeriFires band [60, 100] exceeds the metric's range at the top, so the intent is one-sided and is encoded as a floor at 60."
     },
     "mixing.positional_share_middle": {
       "paper": "Mixing Mechanisms, arXiv:2510.06182",
@@ -191,8 +187,7 @@
         "task": "environments/silico_research/tasks/mixing-mechanisms",
         "leaf": "quant-positional-middle"
       },
-      "notes": "The VeriFires package pins no dataset size; this test pins its own seeded N. Attribution per row = match against the mechanism's predicted answer column.",
-      "pending": true
+      "notes": "The VeriFires package pins no dataset size; this test pins its own seeded N. Attribution per row = match against the mechanism's predicted answer column."
     },
     "arithmetic.hours_baseline_acc": {
       "paper": "Arithmetic in the Wild: Llama uses Base-10 Addition to Reason About Cyclic Concepts, arXiv:2605.01148",
@@ -238,8 +233,7 @@
         "task": "environments/silico_research/tasks/arithmetic-in-the-wild-hours",
         "leaf": "quant-steering-top1-fraction"
       },
-      "notes": "The VeriFires checklist encodes 0.85 +/- 0.1 while its judge_notes.md states a floor at 0.8; both agree the criterion is one-sided ('a higher fraction is better, never worse'), so the floor from the stated intent is used and the discrepancy is recorded here. Anti-gaming constraints from judge_notes.md are enforced in code: all 24 targets steered, fixed period set, prompt filter is baseline correctness only.",
-      "pending": true
+      "notes": "The VeriFires checklist encodes 0.85 +/- 0.1 while its judge_notes.md states a floor at 0.8; both agree the criterion is one-sided ('a higher fraction is better, never worse'), so the floor from the stated intent is used and the discrepancy is recorded here. Anti-gaming constraints from judge_notes.md are enforced in code: all 24 targets steered, fixed period set, prompt filter is baseline correctness only. Top-1 is taken over the 24 hour tokens' prompt-averaged probabilities (the diagonal's own support); the per-prompt Eq. 4 correction runs as a local-only pytorch_fn edit in generated documents, with the pinned harvest document feeding the test-side probe fit."
     }
   }
 }

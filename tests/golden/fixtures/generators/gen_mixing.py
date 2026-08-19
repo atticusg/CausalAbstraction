@@ -118,9 +118,13 @@ def main() -> None:
             )
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps(rows, indent=1) + "\n")
-    counts = {b: sum(r["bucket"] == b for r in rows) for b in ("first", "middle", "last")}
-    print(f"wrote {OUT} ({len(rows)} rows, buckets {counts})")
+    # one file per bucket: a document's single-batch lm_head forward over all
+    # 450 rows would materialize ~57GB of logits; 150-row buckets are H100-sized
+    for bucket in ("first", "middle", "last"):
+        sub = [r for r in rows if r["bucket"] == bucket]
+        out = OUT.parent / f"music_{bucket}.json"
+        out.write_text(json.dumps(sub, indent=1) + "\n")
+        print(f"wrote {out} ({len(sub)} rows)")
 
 
 if __name__ == "__main__":
