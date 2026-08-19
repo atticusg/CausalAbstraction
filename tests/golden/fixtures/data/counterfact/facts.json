@@ -1,0 +1,407 @@
+[
+ {
+  "input": "Pentium II was developed by",
+  "subject": "Pentium II",
+  "answer": " Intel"
+ },
+ {
+  "input": "The official religion of Nagarjuna is",
+  "subject": "Nagarjuna",
+  "answer": " Buddhism"
+ },
+ {
+  "input": "The mother tongue of Raymond Triboulet is",
+  "subject": "Raymond Triboulet",
+  "answer": " French"
+ },
+ {
+  "input": "Dennis Rodman plays",
+  "subject": "Dennis Rodman",
+  "answer": " basketball"
+ },
+ {
+  "input": "Sora Ltd., whose headquarters are in",
+  "subject": "Sora Ltd.",
+  "answer": " Tokyo"
+ },
+ {
+  "input": "Molar Massif is a part of the continent of",
+  "subject": "Molar Massif",
+  "answer": " Antarctica"
+ },
+ {
+  "input": "Jean Sorel is a native speaker of",
+  "subject": "Jean Sorel",
+  "answer": " French"
+ },
+ {
+  "input": "Jean Drapeau died in the city of",
+  "subject": "Jean Drapeau",
+  "answer": " Montreal"
+ },
+ {
+  "input": "Braden Holtby plays in the position of",
+  "subject": "Braden Holtby",
+  "answer": " goaltender"
+ },
+ {
+  "input": "Honda Z series is created by",
+  "subject": "Honda Z series",
+  "answer": " Honda"
+ },
+ {
+  "input": "The mother tongue of Jean Follain is",
+  "subject": "Jean Follain",
+  "answer": " French"
+ },
+ {
+  "input": "Nissan Latio, developed by",
+  "subject": "Nissan Latio",
+  "answer": " Nissan"
+ },
+ {
+  "input": "Porsche 914, produced by",
+  "subject": "Porsche 914",
+  "answer": " Porsche"
+ },
+ {
+  "input": "The mother tongue of Nikolai Luzin is",
+  "subject": "Nikolai Luzin",
+  "answer": " Russian"
+ },
+ {
+  "input": "Adobe Creative Suite was created by",
+  "subject": "Adobe Creative Suite",
+  "answer": " Adobe"
+ },
+ {
+  "input": "The mother tongue of Robert Lecourt is",
+  "subject": "Robert Lecourt",
+  "answer": " French"
+ },
+ {
+  "input": "Ferrari 458 is developed by",
+  "subject": "Ferrari 458",
+  "answer": " Ferrari"
+ },
+ {
+  "input": "Bernard Blancan is a native speaker of",
+  "subject": "Bernard Blancan",
+  "answer": " French"
+ },
+ {
+  "input": "Irvine High School, in",
+  "subject": "Irvine High School",
+  "answer": " Irvine"
+ },
+ {
+  "input": "Yakuza 2 was developed by",
+  "subject": "Yakuza 2",
+  "answer": " Sega"
+ },
+ {
+  "input": "Dodge Charger, produced by",
+  "subject": "Dodge Charger",
+  "answer": " Dodge"
+ },
+ {
+  "input": "The headquarter of Iraqi Republic Railways is in",
+  "subject": "Iraqi Republic Railways",
+  "answer": " Baghdad"
+ },
+ {
+  "input": "IBM Roadrunner, created by",
+  "subject": "IBM Roadrunner",
+  "answer": " IBM"
+ },
+ {
+  "input": "Outlook.com is owned by",
+  "subject": "Outlook.com",
+  "answer": " Microsoft"
+ },
+ {
+  "input": "The headquarters of Mercure de France is in",
+  "subject": "Mercure de France",
+  "answer": " Paris"
+ },
+ {
+  "input": "IBM 1710, produced by",
+  "subject": "IBM 1710",
+  "answer": " IBM"
+ },
+ {
+  "input": "Rainer Fetting, who is a citizen of",
+  "subject": "Rainer Fetting",
+  "answer": " Germany"
+ },
+ {
+  "input": "GIC Private Limited is headquartered in",
+  "subject": "GIC Private Limited",
+  "answer": " Singapore"
+ },
+ {
+  "input": "The native language of Sophie Marceau is",
+  "subject": "Sophie Marceau",
+  "answer": " French"
+ },
+ {
+  "input": "Airbus A350, a product manufactured by",
+  "subject": "Airbus A350",
+  "answer": " Airbus"
+ },
+ {
+  "input": "Adobe PageMaker is created by",
+  "subject": "Adobe PageMaker",
+  "answer": " Adobe"
+ },
+ {
+  "input": "Game Boy Advance SP is developed by",
+  "subject": "Game Boy Advance SP",
+  "answer": " Nintendo"
+ },
+ {
+  "input": "Beppe Grillo, a citizen of",
+  "subject": "Beppe Grillo",
+  "answer": " Italy"
+ },
+ {
+  "input": "Nagoya University, in",
+  "subject": "Nagoya University",
+  "answer": " Japan"
+ },
+ {
+  "input": "Honda Integra, produced by",
+  "subject": "Honda Integra",
+  "answer": " Honda"
+ },
+ {
+  "input": "The mother tongue of Pietro Mennea is",
+  "subject": "Pietro Mennea",
+  "answer": " Italian"
+ },
+ {
+  "input": "The mother tongue of Dominique Zardi is",
+  "subject": "Dominique Zardi",
+  "answer": " French"
+ },
+ {
+  "input": "Mac OS X Panther was created by",
+  "subject": "Mac OS X Panther",
+  "answer": " Apple"
+ },
+ {
+  "input": "Toyota Corolla is created by",
+  "subject": "Toyota Corolla",
+  "answer": " Toyota"
+ },
+ {
+  "input": "Bentley Continental is developed by",
+  "subject": "Bentley Continental",
+  "answer": " Bentley"
+ },
+ {
+  "input": "In South Ossetia, an official language is",
+  "subject": "South Ossetia",
+  "answer": " Russian"
+ },
+ {
+  "input": "The official religion of Muhammad Ali Jinnah is",
+  "subject": "Muhammad Ali Jinnah",
+  "answer": " Islam"
+ },
+ {
+  "input": "What sport does Thierry Henry play? They play",
+  "subject": "Thierry Henry",
+  "answer": " soccer"
+ },
+ {
+  "input": "Bibi Andersson, who holds a citizenship from",
+  "subject": "Bibi Andersson",
+  "answer": " Sweden"
+ },
+ {
+  "input": "BMW E23, developed by",
+  "subject": "BMW E23",
+  "answer": " BMW"
+ },
+ {
+  "input": "Honda Racing Corporation, created by",
+  "subject": "Honda Racing Corporation",
+  "answer": " Honda"
+ },
+ {
+  "input": "Nokia 6233 is produced by",
+  "subject": "Nokia 6233",
+  "answer": " Nokia"
+ },
+ {
+  "input": "The mother tongue of Catherine Deneuve is",
+  "subject": "Catherine Deneuve",
+  "answer": " French"
+ },
+ {
+  "input": "Eddy Cue is employed by",
+  "subject": "Eddy Cue",
+  "answer": " Apple"
+ },
+ {
+  "input": "Michel Sardou is a native speaker of",
+  "subject": "Michel Sardou",
+  "answer": " French"
+ },
+ {
+  "input": "The native language of Michel Zevaco is",
+  "subject": "Michel Zevaco",
+  "answer": " French"
+ },
+ {
+  "input": "The headquarter of University of New Mexico is located in",
+  "subject": "University of New Mexico",
+  "answer": " Albuquerque"
+ },
+ {
+  "input": "Dodge Charger is produced by",
+  "subject": "Dodge Charger",
+  "answer": " Dodge"
+ },
+ {
+  "input": "Ely Guerra, who is a citizen of",
+  "subject": "Ely Guerra",
+  "answer": " Mexico"
+ },
+ {
+  "input": "Adobe FrameMaker, a product developed by",
+  "subject": "Adobe FrameMaker",
+  "answer": " Adobe"
+ },
+ {
+  "input": "Where is Miami International Film Festival? It is located in",
+  "subject": "Miami International Film Festival",
+  "answer": " Miami"
+ },
+ {
+  "input": "The native language of Jacques Legras is",
+  "subject": "Jacques Legras",
+  "answer": " French"
+ },
+ {
+  "input": "Honda Inspire, created by",
+  "subject": "Honda Inspire",
+  "answer": " Honda"
+ },
+ {
+  "input": "McGill University, whose headquarters are in",
+  "subject": "McGill University",
+  "answer": " Montreal"
+ },
+ {
+  "input": "Jacques Doriot is a native speaker of",
+  "subject": "Jacques Doriot",
+  "answer": " French"
+ },
+ {
+  "input": "Nokia 3310, produced by",
+  "subject": "Nokia 3310",
+  "answer": " Nokia"
+ },
+ {
+  "input": "Adobe InDesign was developed by",
+  "subject": "Adobe InDesign",
+  "answer": " Adobe"
+ },
+ {
+  "input": "Jacques Sadoul is a native speaker of",
+  "subject": "Jacques Sadoul",
+  "answer": " French"
+ },
+ {
+  "input": "Kaliakra Glacier is a part of the continent of",
+  "subject": "Kaliakra Glacier",
+  "answer": " Antarctica"
+ },
+ {
+  "input": "Honda Brio, developed by",
+  "subject": "Honda Brio",
+  "answer": " Honda"
+ },
+ {
+  "input": "Honda CBX is developed by",
+  "subject": "Honda CBX",
+  "answer": " Honda"
+ },
+ {
+  "input": "Fiat Strada is produced by",
+  "subject": "Fiat Strada",
+  "answer": " Fiat"
+ },
+ {
+  "input": "Honda Wave series, developed by",
+  "subject": "Honda Wave series",
+  "answer": " Honda"
+ },
+ {
+  "input": "Nokia Lumia 630 is produced by",
+  "subject": "Nokia Lumia 630",
+  "answer": " Nokia"
+ },
+ {
+  "input": "IBM System R, created by",
+  "subject": "IBM System R",
+  "answer": " IBM"
+ },
+ {
+  "input": "Jean Giraudoux is a native speaker of",
+  "subject": "Jean Giraudoux",
+  "answer": " French"
+ },
+ {
+  "input": "iPad Mini 3 is created by",
+  "subject": "iPad Mini 3",
+  "answer": " Apple"
+ },
+ {
+  "input": "The headquarter of CTV Television Network is located in",
+  "subject": "CTV Television Network",
+  "answer": " Toronto"
+ },
+ {
+  "input": "Toyota Auris is created by",
+  "subject": "Toyota Auris",
+  "answer": " Toyota"
+ },
+ {
+  "input": "Porsche 959, developed by",
+  "subject": "Porsche 959",
+  "answer": " Porsche"
+ },
+ {
+  "input": "The native language of Georges Perec is",
+  "subject": "Georges Perec",
+  "answer": " French"
+ },
+ {
+  "input": "Suzuki Carry is produced by",
+  "subject": "Suzuki Carry",
+  "answer": " Suzuki"
+ },
+ {
+  "input": "LaFerrari, developed by",
+  "subject": "LaFerrari",
+  "answer": " Ferrari"
+ },
+ {
+  "input": "Sega Master System, developed by",
+  "subject": "Sega Master System",
+  "answer": " Sega"
+ },
+ {
+  "input": "The Big Bang Theory debuted on",
+  "subject": "The Big Bang Theory",
+  "answer": " CBS"
+ },
+ {
+  "input": "Adobe Acrobat, a product created by",
+  "subject": "Adobe Acrobat",
+  "answer": " Adobe"
+ }
+]

@@ -188,3 +188,42 @@ register_model(
         native_dtype="fp32",
     )
 )
+register_model(
+    ModelInfo(
+        key="gpt2-xl",
+        hidden_size=1600,
+        num_layers=48,
+        num_heads=25,
+        num_kv_heads=25,
+        head_dim=64,
+        intermediate_size=6400,
+        vocab_size=50257,
+        native_dtype="fp32",
+    )
+)
+register_model(
+    ModelInfo(
+        key="Qwen/Qwen3-4B-Instruct-2507",
+        hidden_size=2560,
+        num_layers=36,
+        num_heads=32,
+        num_kv_heads=8,
+        head_dim=128,
+        intermediate_size=9728,
+        vocab_size=151936,
+        native_dtype="bf16",
+    )
+)
+register_model(
+    ModelInfo(
+        key="google/gemma-2-2b-it",
+        hidden_size=2304,
+        num_layers=26,
+        num_heads=8,
+        num_kv_heads=4,
+        head_dim=256,
+        intermediate_size=9216,
+        vocab_size=256000,
+        native_dtype="bf16",
+    )
+)

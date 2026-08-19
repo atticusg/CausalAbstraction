@@ -1,0 +1,13 @@
+{
+  "_role": "Value pins of the chat-coherent drift tier: run-to-run drift detection on a real model, successor to the retired tests/end_to_end goldens. Unlike tests/golden/paper_goldens.json (paper-provenance values), these ARE pinned from a reviewed run of this stack on the canonical GPU - that is their job.",
+  "model": {"key": "Qwen/Qwen3-4B-Instruct-2507", "revision": "main"},
+  "capture": null,
+  "deterministic": false,
+  "tolerance": {
+    "default": 0.002,
+    "interchange.acc.mean": 0.016,
+    "interchange.iia.mean": 0.016,
+    "_comment": "discrete match metrics tolerate one flipped row of 64; continuous keys use the default. Tighten after the first captures establish observed drift."
+  },
+  "values": null
+}
