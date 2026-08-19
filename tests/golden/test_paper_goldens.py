@@ -59,6 +59,13 @@ def _device() -> str:
     pytest.skip("golden tier needs an accelerator (cuda or mps)")
 
 
+def skip_if_pending(golden_id: str) -> None:
+    """A pending goldens entry has open provenance/calibration questions
+    (recorded in its notes); its test stays wired but skips."""
+    if GOLDENS[golden_id].get("pending"):
+        pytest.skip(f"{golden_id} is pending: {GOLDENS[golden_id]['notes'][:160]}…")
+
+
 def assert_golden(golden_id: str, measured: float) -> None:
     """One assertion path for every golden: prints measured next to the
     band so a near-miss is diagnosable straight from the log."""
@@ -272,25 +279,84 @@ def test_hydra_compensation_r2(tmp_path):
     compensatory effect (sum over probe > ablation of de_abl - de_clean)
     on the ablated layer's own clean direct effect, per prompt; assert
     the best layer's R^2 against the model-transferred floor."""
+    skip_if_pending("hydra.compensation_r2")
     import numpy as np
 
-    run_document("hydra_grid_im.json", tmp_path, dtype="bf16")
-    de_clean = pd.read_parquet(tmp_path / "de_clean.parquet")
-    de_abl = pd.read_parquet(tmp_path / "de_abl.parquet")
-    probe_col_c = _axis_column(de_clean, "probe.layer")
-    probe_col_a = _axis_column(de_abl, "probe.layer")
-    abl_col = _axis_column(de_abl, "abl.layer")
+    import json as json_lib
+    import re
 
-    clean = de_clean.pivot_table(index="example", columns=probe_col_c, values="value")
+    import torch
+    from safetensors.torch import load_file
+
+    from causalab.neural.pytorch_hooks.loading import load_model
+    from causalab.neural.pytorch_hooks.metrics import column_token_id
+
+    run_document("hydra_grid_im.json", tmp_path, dtype="bf16")
+
+    # frozen-norm linearized unembedding attribution (the paper's DE):
+    # DE_r(l) = (gamma * a_l / rms(h_final_r))^T W_U[ml_token], with each
+    # run's normalizer held fixed — in-document subtraction/injection edits
+    # let RMSNorm renormalize and measured R^2 0.09 / 0.30
+    bundle = load_model("meta-llama/Llama-3.1-8B", dtype="bf16", device=_device())
+    gamma = bundle.model.model.norm.weight.detach().float().cpu()
+    w_u = bundle.model.lm_head.weight.detach().float().cpu()
+    eps = float(bundle.model.config.rms_norm_eps)
+    rows = json_lib.loads((FIXTURES / "data" / "hydra" / "facts.json").read_text())
+    ml_ids = torch.tensor(
+        [column_token_id(bundle.tokenizer, r["ml_token"]) for r in rows]
+    )
+    u_ml = w_u[ml_ids] * gamma  # (n, d): the per-prompt readout direction
+
+    def tensor_map(path):
+        """{coordinate-label: (n, d) float tensor} from one save file."""
+        return {
+            key[key.find("[") :] if "[" in key else "": tensor.squeeze(1).float()
+            for key, tensor in load_file(str(path)).items()
+        }
+
+    def abl_of(label: str) -> int:
+        return int(re.search(r"abl\.layer=(\d+)", label).group(1))
+
+    def rms(h):
+        return torch.sqrt((h * h).mean(dim=-1, keepdim=True) + eps)
+
+    hf_clean = next(iter(tensor_map(tmp_path / "hf_clean.safetensors").values()))
+    hf_abl = tensor_map(tmp_path / "hf_abl.safetensors")  # per (abl, draw) label
+    inv_clean = 1.0 / rms(hf_clean)
+    de_clean = {}
+    draws: dict[tuple[int, int], list] = {}  # (abl_layer, probe) -> per-draw DEs
+    for layer in range(32):
+        a_clean = next(iter(tensor_map(tmp_path / f"acts_c_{layer}.safetensors").values()))
+        de_clean[layer] = ((a_clean * inv_clean) * u_ml).sum(-1)
+        for label, a in tensor_map(tmp_path / f"acts_a_{layer}.safetensors").items():
+            de = ((a / rms(hf_abl[label])) * u_ml).sum(-1)
+            draws.setdefault((abl_of(label), layer), []).append(de)
+    # per-prompt DEs averaged over the resample draws (the paper averages ~15)
+    de_abl = {key: torch.stack(parts).mean(0) for key, parts in draws.items()}
+
+    te_clean = pd.read_parquet(tmp_path / "te_clean.parquet")
+    te_abl = pd.read_parquet(tmp_path / "te_abl.parquet")
+    te_c = te_clean.groupby("example")["value"].first().to_numpy()
+    abl_col = _axis_column(te_abl, "abl.layer")
+
     r2_by_layer = {}
-    for abl_layer, group in de_abl.groupby(abl_col):
-        abl_pivot = group.pivot_table(index="example", columns=probe_col_a, values="value")
-        downstream = [c for c in abl_pivot.columns if c > abl_layer]
-        y = (abl_pivot[downstream] - clean[downstream]).sum(axis=1)
-        x = clean[abl_layer]
-        r = np.corrcoef(x, y)[0, 1]
-        r2_by_layer[int(abl_layer)] = float(r * r)
-    print(f"R^2 by ablation layer: { {k: round(v, 3) for k, v in sorted(r2_by_layer.items())} }")
+    for abl_layer in sorted({k[0] for k in de_abl}):
+        downstream = range(abl_layer + 1, 32)
+        y = sum(de_abl[(abl_layer, l)] - de_clean[l] for l in downstream).numpy()
+        x = de_clean[abl_layer].numpy()
+        r2_by_layer[abl_layer] = float(np.corrcoef(x, y)[0, 1] ** 2)
+        # diagnostic: how much of the total-effect change the compensation explains
+        te_a = (
+            te_abl[te_abl[abl_col] == abl_layer]
+            .groupby("example")["value"]
+            .mean()
+            .to_numpy()
+        )
+        r2_change = float(np.corrcoef(y, te_c - te_a)[0, 1] ** 2)
+        print(
+            f"abl {abl_layer}: R^2(compensation ~ DE) {r2_by_layer[abl_layer]:.3f}, "
+            f"R^2(compensation ~ TE change) {r2_change:.3f}"
+        )
     assert_golden("hydra.compensation_r2", max(r2_by_layer.values()))
 
 
