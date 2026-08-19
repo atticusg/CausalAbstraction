@@ -177,6 +177,13 @@ One mechanism, inherited from the IM spec: **artifact references**.
 - The runner writes a run manifest (`workflow.json`: the workflow digest,
   each step's inner digests and status) — the workflow-level analogue of
   point-protocol stamping.
+- **What the runner knows about execution** (IM spec §8, execution scale):
+  only the step dependency graph. It may run independent steps
+  concurrently, but it owns no device, host, or job-system knowledge —
+  those belong to the backends it is handed (device/dtype/point
+  parallelism) and to site tooling outside the repo (job dispatch, which
+  shards *document* runs via the CLI's `--points`; a workflow run is never
+  sharded as a unit).
 - **Determinism**: with fixed datasets, artifacts, and model, a workflow
   run is a pure function of the document — same digests, same outputs.
 

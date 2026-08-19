@@ -98,3 +98,137 @@ def test_refusal_exits_nonzero(capsys, artifacts_root):
     )
     assert code == 1
     assert "refused" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
+# run-verb execution flags: --device / --dtype / --points
+# --------------------------------------------------------------------------- #
+
+
+class _CapturingBackend:
+    """Stands in for the reference backend: records construction kwargs and
+    the ExecutionRequest, executes nothing."""
+
+    last: "_CapturingBackend | None" = None
+
+    name = "capture"
+    capabilities = frozenset(
+        {"grad", "paired_forward", "full_logits", "pytorch_fn_local"}
+    )
+    is_local = True
+
+    def __init__(self, *, device: str = "cpu", dtype: str = "fp32") -> None:
+        self.device = device
+        self.dtype = dtype
+        self.request = None
+        type(self).last = self
+
+    def execute(self, request):
+        from causalab.protocol.backend import RunResult
+
+        self.request = request
+        return RunResult(files={})
+
+
+@pytest.fixture
+def capturing_backend(monkeypatch):
+    """Swap the lazily-imported reference backend module for the stub."""
+    import sys as _sys
+    import types
+
+    stub = types.ModuleType("causalab.neural.pytorch_hooks")
+    stub.PytorchHooksBackend = _CapturingBackend
+    monkeypatch.setitem(_sys.modules, "causalab.neural.pytorch_hooks", stub)
+    _CapturingBackend.last = None
+    return _CapturingBackend
+
+
+def _run_argv(name: str, artifacts_root, out, *extra: str) -> list[str]:
+    return _argv("run", name, artifacts_root, "--out", str(out), *extra)
+
+
+def test_run_threads_device_and_dtype_into_the_backend(
+    capturing_backend, artifacts_root, tmp_path
+):
+    code = main(
+        _run_argv(
+            "02_interchange_im.json",
+            artifacts_root,
+            tmp_path,
+            "--device",
+            "cuda:1",
+            "--dtype",
+            "bf16",
+        )
+    )
+    assert code == 0
+    assert capturing_backend.last.device == "cuda:1"
+    assert capturing_backend.last.dtype == "bf16"
+
+
+def test_run_defaults_stay_cpu_fp32(capturing_backend, artifacts_root, tmp_path):
+    assert main(_run_argv("02_interchange_im.json", artifacts_root, tmp_path)) == 0
+    assert capturing_backend.last.device == "cpu"
+    assert capturing_backend.last.dtype == "fp32"
+
+
+def test_points_selects_a_shard_without_moving_the_campaign_digest(
+    capturing_backend, env, artifacts_root, tmp_path
+):
+    loaded = load(CORPUS_DIR / "07_weekdays_locate_scan_im.json", env)
+    code = main(
+        _run_argv(
+            "07_weekdays_locate_scan_im.json",
+            artifacts_root,
+            tmp_path,
+            "--points",
+            "3:7",
+        )
+    )
+    assert code == 0
+    request = capturing_backend.last.request
+    assert len(request.points) == 4
+    assert request.digests == tuple(loaded.point_digests[3:7])
+    assert request.coords == tuple(p.coords for p in loaded.expansion.points[3:7])
+    assert request.document_digest == loaded.document_digest
+
+
+@pytest.mark.parametrize("spec", ["7", "3:3", "60:70", "-1:4", "a:b"])
+def test_points_refuses_malformed_and_out_of_range(
+    capturing_backend, artifacts_root, tmp_path, capsys, spec
+):
+    # the = form keeps argparse from reading a leading "-" as a flag
+    code = main(
+        _run_argv(
+            "07_weekdays_locate_scan_im.json",
+            artifacts_root,
+            tmp_path,
+            f"--points={spec}",
+        )
+    )
+    assert code == 1
+    assert "refused" in capsys.readouterr().err
+
+
+def test_points_refused_on_workflow_documents(
+    capturing_backend, artifacts_root, tmp_path, capsys
+):
+    doc = tmp_path / "wf.json"
+    doc.write_text(json.dumps({"version": "1", "steps": {}}))
+    code = main(
+        [
+            "run",
+            str(doc),
+            "--data-root",
+            str(FIXTURES / "data"),
+            "--artifacts-root",
+            str(artifacts_root),
+            "--out",
+            str(tmp_path / "out"),
+            "--points",
+            "0:1",
+        ]
+    )
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "refused" in err and "workflow" in err

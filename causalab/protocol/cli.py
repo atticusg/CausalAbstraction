@@ -77,7 +77,45 @@ def _build_parser() -> argparse.ArgumentParser:
             p.add_argument(
                 "--out", type=Path, required=True, help="run output directory"
             )
+            p.add_argument(
+                "--device",
+                default="cpu",
+                help="torch device string for the reference backend "
+                "(cpu, cuda, cuda:1, mps)",
+            )
+            p.add_argument(
+                "--dtype",
+                choices=("fp32", "bf16", "fp16"),
+                default="fp32",
+                help="model dtype for the reference backend",
+            )
+            p.add_argument(
+                "--points",
+                default=None,
+                metavar="START:STOP",
+                help="execute only this half-open point-index range of the "
+                "expanded campaign — the seam external schedulers shard on "
+                "(document runs only; digests and stamps are unaffected)",
+            )
     return parser
+
+
+def _parse_points(spec: str, n_points: int) -> range:
+    """The --points shard selector: a half-open [start, stop) index range
+    into the campaign's expanded points, refused rather than clamped when
+    it falls outside [0, n_points] or selects nothing."""
+    try:
+        start_text, stop_text = spec.split(":", 1)
+        start, stop = int(start_text), int(stop_text)
+    except ValueError:
+        raise ProtocolError("P4", f"--points {spec!r} is not START:STOP") from None
+    if not (0 <= start < stop <= n_points):
+        raise ProtocolError(
+            "P4",
+            f"--points {spec!r} is outside the campaign's {n_points} points "
+            "or selects none",
+        )
+    return range(start, stop)
 
 
 def _env(args: argparse.Namespace) -> ResolutionEnv:
@@ -171,7 +209,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 1
-        result = _run(loaded, env, hooks.PytorchHooksBackend(), args.out)
+        result = _run(
+            loaded,
+            env,
+            hooks.PytorchHooksBackend(device=args.device, dtype=args.dtype),
+            args.out,
+            points=args.points,
+        )
         for manifest_path, disk_path in sorted(result.files.items()):
             print(f"saved {manifest_path} -> {disk_path}")
         return 0
@@ -180,15 +224,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
 
-def _run(loaded: LoadedProtocol, env: ResolutionEnv, backend: Any, out: Path) -> Any:
+def _run(
+    loaded: LoadedProtocol,
+    env: ResolutionEnv,
+    backend: Any,
+    out: Path,
+    *,
+    points: str | None = None,
+) -> Any:
     from causalab.protocol.backend import ExecutionRequest, choose_backend
 
     chosen = choose_backend(list(loaded.point_documents), [backend])
+    # --points slices every per-point tuple in lockstep; the campaign
+    # digest is untouched — a shard's artifacts still stamp and dedup as
+    # members of the whole campaign, so an external scheduler can fan
+    # shards out and recombine by digest.
+    selected = (
+        _parse_points(points, len(loaded.expansion.points))
+        if points is not None
+        else range(len(loaded.expansion.points))
+    )
     request = ExecutionRequest(
-        points=tuple(p.raw for p in loaded.expansion.points),
-        canonical=loaded.canonical_points,
-        digests=loaded.point_digests,
-        coords=tuple(p.coords for p in loaded.expansion.points),
+        points=tuple(loaded.expansion.points[i].raw for i in selected),
+        canonical=tuple(loaded.canonical_points[i] for i in selected),
+        digests=tuple(loaded.point_digests[i] for i in selected),
+        coords=tuple(loaded.expansion.points[i].coords for i in selected),
         document_digest=loaded.document_digest,
         env=env,
         output_dir=out,
@@ -242,6 +302,14 @@ def _workflow_main(args: argparse.Namespace, env: ResolutionEnv) -> int:
     from causalab.protocol.workflow import ProtocolStep, load_workflow
 
     if args.verb == "run":
+        if args.points is not None:
+            print(
+                "refused: --points shards a single document's expanded "
+                "campaign; a workflow schedules whole steps — shard the "
+                "inner document runs instead",
+                file=sys.stderr,
+            )
+            return 1
         # the run verb touches models anyway: pre-register every inner model
         # key BEFORE loading (canonicalization derives widths from the registry)
         raw_wf = _apply(dict(_load_text(args.document)), _parse_set(args.set))
@@ -313,7 +381,12 @@ def _workflow_main(args: argparse.Namespace, env: ResolutionEnv) -> int:
         return 1
     from causalab.workflow import run_workflow
 
-    result = run_workflow(loaded, env, args.out, [hooks.PytorchHooksBackend()])
+    result = run_workflow(
+        loaded,
+        env,
+        args.out,
+        [hooks.PytorchHooksBackend(device=args.device, dtype=args.dtype)],
+    )
     for file_path, disk_path in sorted(result.published.items()):
         print(f"published {file_path} -> {disk_path}")
     print(f"manifest {args.out / 'workflow.json'}")

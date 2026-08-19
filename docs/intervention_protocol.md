@@ -425,6 +425,21 @@ Reference matrix:
 | `full_logits` | ✓ | ✗ vocab-parallel only | ✓ |
 | `pytorch_fn_local` | ✓ | ✗ | ✗ |
 
+**Execution scale.** Documents and workflows are scheduler-agnostic — they
+never name devices, hosts, or job systems. The division of labor:
+
+- A **backend** owns all intra-run execution: device placement, dtype,
+  batching, and any parallelism across a campaign's points or across its own
+  accelerators — declared, like everything else, through its capability set
+  and constructor. The reference backend takes `device`/`dtype` and runs
+  points serially; sharded and multi-device backends are backend work, not
+  document vocabulary.
+- **Job dispatch is site tooling outside this repository.** The one seam it
+  needs is the CLI's `--points START:STOP` selector: an external scheduler
+  expands nothing itself, launches `run` per index range, and recombines by
+  digest — every shard stamps its artifacts as members of the same campaign
+  (`document_digest` is unaffected by slicing).
+
 ## 9. CLI
 
 | verb | effect |
@@ -434,6 +449,8 @@ Reference matrix:
 | `explain <doc>` | models + forward plan, expanded point count, derived `requires`, resolved bindings, digest, what `save` produces |
 | `digest <doc>` | the campaign digest |
 | `--set path=value` | ad-hoc override — exploration only; promote anything that matters into the file |
+| `--device`, `--dtype` (run) | reference-backend placement: any torch device string (`cpu` default, `cuda`, `cuda:1`, `mps`) and `fp32` (default) \| `bf16` \| `fp16` |
+| `--points START:STOP` (run) | execute one half-open point-index shard of the expanded campaign (sec. 8, execution scale); document runs only — digests and stamps are unaffected |
 
 ## 10. Worked examples
 
