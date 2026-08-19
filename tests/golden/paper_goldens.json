@@ -1,0 +1,246 @@
+{
+  "_provenance_rule": "Every value here traces to a published paper figure/table or to the VeriFires task package that encodes it. No value in this file may come from running this repository's own stack (that would be a pinning run, which the parity goldens already cover).",
+  "goldens": {
+    "ioi.clean_logit_diff": {
+      "paper": "Wang et al. 2023, Interpretability in the Wild (IOI), arXiv:2211.00593",
+      "model": {
+        "key": "gpt2",
+        "revision": "main"
+      },
+      "metric": "mean logit(IO) - logit(S) at the END position over the clean IOI distribution",
+      "units": "logits",
+      "sidedness": "two_sided",
+      "value": 3.56,
+      "band": [
+        2.36,
+        4.76
+      ],
+      "confidence": "high",
+      "source": {
+        "where": "paper section 3 (metric F baseline, computed on 100,000 examples)",
+        "quote": "GPT-2 small has a mean logit difference of 3.56"
+      },
+      "verifires": {
+        "task": "environments/silico_research/tasks/ioi-circuit",
+        "leaf": "quant-clean-logit-diff"
+      },
+      "notes": "The paper's 3.56 is a 100k-example mean; this test pins N=512 seeded prompts, and the VeriFires +/-1.2 band absorbs the smaller sample. Query-side path patching and attention-pattern checks are out of scope in protocol v1 (no pre-RoPE per-head query; attention_probs unsupported by the reference backend)."
+    },
+    "ioi.io_over_s_rate": {
+      "paper": "Wang et al. 2023, Interpretability in the Wild (IOI), arXiv:2211.00593",
+      "model": {
+        "key": "gpt2",
+        "revision": "main"
+      },
+      "metric": "fraction of clean IOI prompts where logit(IO) > logit(S)",
+      "units": "fraction",
+      "sidedness": "at_least",
+      "floor": 0.9,
+      "confidence": "high",
+      "source": {
+        "where": "paper section 3",
+        "quote": "IO predicted over S 99.3% of the time"
+      },
+      "verifires": {
+        "task": "environments/silico_research/tasks/ioi-circuit",
+        "leaf": null
+      },
+      "notes": "Secondary assert. Floor set generously below the paper's 99.3% for the small-N regime; VeriFires has no leaf for it (free candidate from reference.md)."
+    },
+    "rome.ate": {
+      "paper": "Meng et al. 2022, Locating and Editing Factual Associations in GPT (ROME), arXiv:2202.05262",
+      "model": {
+        "key": "gpt2-xl",
+        "revision": "main"
+      },
+      "metric": "average total effect: mean over facts of P_clean(object) - P_corrupted(object), corruption = Gaussian noise (3*sigma of the embedding matrix) on subject-token embeddings",
+      "units": "probability points (percent)",
+      "sidedness": "two_sided",
+      "value": 18.6,
+      "band": [
+        10.6,
+        26.6
+      ],
+      "confidence": "high",
+      "source": {
+        "where": "paper section 2 / experimental setup",
+        "quote": "The ATE of this experiment is 18.6%"
+      },
+      "verifires": {
+        "task": "environments/silico_research/tasks/rome-causal-tracing",
+        "leaf": "quant-ate"
+      },
+      "notes": "The ATE is a difference of probabilities, so the correctness filter must stay loose (argmax-correct, not high-confidence) or the clean baseline and the ATE move together - the VeriFires prompt states this trap explicitly. Paper decomposition: clean 27.0%, corrupted 8.47%. Noise std is 3*sigma, not sqrt(3*sigma).",
+      "pending": true
+    },
+    "rome.hidden_aie_peak": {
+      "paper": "Meng et al. 2022, ROME, arXiv:2202.05262",
+      "model": {
+        "key": "gpt2-xl",
+        "revision": "main"
+      },
+      "metric": "peak average indirect effect of single-layer hidden-state restoration at the last subject token, over the layer sweep",
+      "units": "probability points (percent)",
+      "sidedness": "two_sided",
+      "value": 8.7,
+      "band": [
+        4.7,
+        12.7
+      ],
+      "confidence": "high",
+      "source": {
+        "where": "paper Fig 2a aggregate",
+        "quote": "AIE = 8.7% at layer 15, at the last subject token"
+      },
+      "verifires": {
+        "task": "environments/silico_research/tasks/rome-causal-tracing",
+        "leaf": null
+      },
+      "notes": "Not a VeriFires leaf (free candidate documented in the task's reference.md:79-86); band width +/-4 mirrors the task's quant-mlp-aie-peak tolerance. Peak layer is asserted loosely (early-to-middle third of the 48 layers).",
+      "pending": true
+    },
+    "rome.mlp_window_aie_peak": {
+      "paper": "Meng et al. 2022, ROME, arXiv:2202.05262",
+      "model": {
+        "key": "gpt2-xl",
+        "revision": "main"
+      },
+      "metric": "peak average indirect effect of 10-layer-window MLP restoration ([l-4, l+5], clipped at edges) at the last subject token",
+      "units": "probability points (percent)",
+      "sidedness": "two_sided",
+      "value": 6.6,
+      "band": [
+        2.6,
+        10.6
+      ],
+      "confidence": "high",
+      "source": {
+        "where": "paper Fig 2b aggregate",
+        "quote": "MLP contributions peak at AIE = 6.6%"
+      },
+      "verifires": {
+        "task": "environments/silico_research/tasks/rome-causal-tracing",
+        "leaf": "quant-mlp-aie-peak"
+      },
+      "notes": "The 10-layer window needs 10 simultaneous swap sites per point, which one sweep axis cannot express - the test generates one document per window programmatically (the parity-goldens build-doc-per-case pattern).",
+      "pending": true
+    },
+    "hydra.compensation_r2": {
+      "paper": "McGrath et al. 2023, The Hydra Effect, arXiv:2307.15771",
+      "model": {
+        "key": "meta-llama/Llama-3.1-8B",
+        "revision": "main"
+      },
+      "metric": "R^2 of the per-prompt regression of summed downstream compensatory effect on the ablated layer's direct effect, at the best (middle) attention layer",
+      "units": "R^2 (proportion of variance)",
+      "sidedness": "at_least",
+      "floor": 0.6,
+      "confidence": "medium",
+      "source": {
+        "where": "paper Fig 7b",
+        "quote": "the compensatory response explains 92% of the variance in the change between the intact and ablated network (best layer 23 of 32)"
+      },
+      "verifires": {
+        "task": "environments/silico_research/tasks/hydra-effect",
+        "leaf": "quant-compensation-r2"
+      },
+      "notes": "Model-transferred floor: the paper measured 0.92 on Chinchilla 7B (non-public); the VeriFires task accepts >= 0.6 on any open ~7-8B model and its [0.6, 1.2] band is impossible above 1.0 for an R^2, so the intent is one-sided and is encoded that way here.",
+      "pending": true
+    },
+    "mixing.positional_share_edges": {
+      "paper": "Mixing Mechanisms: How Language Models Retrieve Bound Entities In-Context, arXiv:2510.06182",
+      "model": {
+        "key": "google/gemma-2-2b-it",
+        "revision": "main"
+      },
+      "metric": "share of queries attributed to the positional mechanism at FIRST and LAST group positions, at the most-mixed layer (~18)",
+      "units": "percent",
+      "sidedness": "at_least",
+      "floor": 60.0,
+      "confidence": "low",
+      "source": {
+        "where": "paper Fig 2 (value read off the figure, not stated in text)",
+        "quote": "A U-shaped curve emerges: first and last indices rely more on the positional mechanism"
+      },
+      "verifires": {
+        "task": "environments/silico_research/tasks/mixing-mechanisms",
+        "leaf": "quant-positional-edges"
+      },
+      "notes": "The 80% center is figure-eyeballed (the paper text is only qualitative), hence confidence: low. The VeriFires band [60, 100] exceeds the metric's range at the top, so the intent is one-sided and is encoded as a floor at 60.",
+      "pending": true
+    },
+    "mixing.positional_share_middle": {
+      "paper": "Mixing Mechanisms, arXiv:2510.06182",
+      "model": {
+        "key": "google/gemma-2-2b-it",
+        "revision": "main"
+      },
+      "metric": "share of queries attributed to the positional mechanism at MIDDLE group positions, at the most-mixed layer (~18)",
+      "units": "percent",
+      "sidedness": "two_sided",
+      "value": 20.0,
+      "band": [
+        5.0,
+        35.0
+      ],
+      "confidence": "high",
+      "source": {
+        "where": "paper section on positional mechanism",
+        "quote": "In middle entity groups, however, its effect becomes minimal, accounting only for 20% of the model's behavior"
+      },
+      "verifires": {
+        "task": "environments/silico_research/tasks/mixing-mechanisms",
+        "leaf": "quant-positional-middle"
+      },
+      "notes": "The VeriFires package pins no dataset size; this test pins its own seeded N. Attribution per row = match against the mechanism's predicted answer column.",
+      "pending": true
+    },
+    "arithmetic.hours_baseline_acc": {
+      "paper": "Arithmetic in the Wild: Llama uses Base-10 Addition to Reason About Cyclic Concepts, arXiv:2605.01148",
+      "model": {
+        "key": "meta-llama/Llama-3.1-8B",
+        "revision": "main"
+      },
+      "metric": "no-intervention accuracy on all 1,152 hours prompts (24 concepts x 48 spelled-out offsets, exact paper template)",
+      "units": "fraction",
+      "sidedness": "two_sided",
+      "value": 0.7,
+      "band": [
+        0.65,
+        0.75
+      ],
+      "confidence": "high",
+      "source": {
+        "where": "paper dataset table",
+        "quote": "hours ... 1152 ... 70.8%"
+      },
+      "verifires": {
+        "task": "environments/silico_research/tasks/arithmetic-in-the-wild-hours",
+        "leaf": "quant-hours-baseline-acc"
+      },
+      "notes": "match is exact next-token equality on a single-token column. Tokenization rule (Llama-3.1 never merges space+digits, but bare zero-padded hours are single tokens): the prompt carries the trailing space ('... it will be ') and the answer column is the bare zero-padded hour, asserted single-token by the fixture generator. The VeriFires package accepts any consistent, stated rule."
+    },
+    "arithmetic.steering_top1_fraction": {
+      "paper": "Arithmetic in the Wild, arXiv:2605.01148",
+      "model": {
+        "key": "meta-llama/Llama-3.1-8B",
+        "revision": "main"
+      },
+      "metric": "fraction of the 24 steering targets whose target hour token is top-1 in the prompt-averaged post-steering distribution (layer 18 residual, last token, alpha=10, periods {2,5,10,20,50}, prompts filtered to baseline-correct only)",
+      "units": "fraction",
+      "sidedness": "at_least",
+      "floor": 0.8,
+      "confidence": "high",
+      "source": {
+        "where": "paper Fig 7 diagonal, operationalized by the task author (a co-first-author of the paper)",
+        "quote": "require that the fraction of the 24 steering targets whose target token receives the highest prompt-averaged probability is at least 0.8 (i.e., >= 20 of 24 targets)"
+      },
+      "verifires": {
+        "task": "environments/silico_research/tasks/arithmetic-in-the-wild-hours",
+        "leaf": "quant-steering-top1-fraction"
+      },
+      "notes": "The VeriFires checklist encodes 0.85 +/- 0.1 while its judge_notes.md states a floor at 0.8; both agree the criterion is one-sided ('a higher fraction is better, never worse'), so the floor from the stated intent is used and the discrepancy is recorded here. Anti-gaming constraints from judge_notes.md are enforced in code: all 24 targets steered, fixed period set, prompt filter is baseline correctness only.",
+      "pending": true
+    }
+  }
+}
