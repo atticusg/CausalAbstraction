@@ -3,20 +3,20 @@
 One :class:`PointExecutor` runs one concrete document: forward groups are
 ``original`` on every input it is read on plus each intervened model on
 its declared input; groups run lazily in operand-dependency order (the
-validated-acyclic model graph); within a group every in-force edit applies
+validated-acyclic model graph); within a group every in-force write applies
 at its address — absolute first, additive deltas summed, renormalize last
-against the pre-edit norm — and reads see the fully edited state because
+against the pre-write norm — and reads see the fully written state because
 pytorch fires hooks in module-execution order and chains their return
 values at one module.
 
 The hook mechanics mirror the oracle library
 (``tests/neural/activations/hook_oracle.py``): reads/writes on a module's
 ``out`` side ride ``register_forward_hook`` (tuple outputs normalized),
-``in``-side taps ride ``register_forward_pre_hook``; edits install before
+``in``-side taps ride ``register_forward_pre_hook``; writes install before
 captures at the same module so a same-address read sees the write.
 
 v1 boundaries, refused legibly rather than approximated: ragged per-row
-position widths on an *edit* (equal width required to batch the scatter),
+position widths on an *write* (equal width required to batch the scatter),
 and ragged widths on a *saved* read (nothing to stack into a tensor file).
 """
 
@@ -49,7 +49,7 @@ from causalab.neural.pytorch_hooks.mechanisms import (
 from causalab.neural.pytorch_hooks.sites import ResolvedSite, resolve_site
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.registry import component_width
-from causalab.protocol.schema import Document, EditSpec, PositionSpec, ReadSpec
+from causalab.protocol.schema import Document, WriteSpec, PositionSpec, ReadSpec
 
 __all__ = ["PointExecutor", "RaggedValue"]
 
@@ -149,7 +149,7 @@ class PointExecutor:
         composition — a gate after a k=3 rotation is 3-wide)."""
         from causalab.neural.pytorch_hooks.featurizers import stage_output_width
 
-        for entry in (*self.doc.reads.values(), *self.doc.edits.values()):
+        for entry in (*self.doc.reads.values(), *self.doc.writes.values()):
             ref = entry.featurizer
             chain = (
                 (ref,)
@@ -177,11 +177,11 @@ class PointExecutor:
                         "chain has no spec-derivable output width",
                     )
                 running = out
-        raise ProtocolError("P2", f"featurizer {name!r} is used by no read or edit")
+        raise ProtocolError("P2", f"featurizer {name!r} is used by no read or write")
 
     def rows_for_metrics(self) -> list[dict[str, Any]]:
         """Metric columns resolve against the base rows — the pairing
-        anchor (§2.2: rows are paired; one base row + its sources form one
+        anchor (§2.2: rows are paired; one base row + its counterfactuals form one
         example)."""
         return self.role_rows["base"]
 
@@ -209,12 +209,12 @@ class PointExecutor:
         if (model, input_role) in self._groups_run:
             return
         # operands first — the acyclic model graph is the schedule skeleton
-        edit_names: tuple[str, ...] = ()
+        write_names: tuple[str, ...] = ()
         if model != "original":
             im = self.doc.intervened_models[model]
-            edit_names = tuple(im.edits) if isinstance(im.edits, tuple) else ()
-            for ename in edit_names:
-                for operand in operand_names(self.doc.edits[ename].do.payload):
+            write_names = tuple(im.writes) if isinstance(im.writes, tuple) else ()
+            for ename in write_names:
+                for operand in operand_names(self.doc.writes[ename].do.payload):
                     if operand in self.doc.reads:
                         self.read_value(operand)
 
@@ -224,7 +224,7 @@ class PointExecutor:
             for rname, read in self.doc.reads.items()
             if str(read.model) == model and str(read.input) == input_role
         ]
-        edit_hooks = self._build_edit_hooks(edit_names, input_role, batch)
+        write_hooks = self._build_write_hooks(write_names, input_role, batch)
         capture: dict[tuple[int, str], torch.Tensor] = {}
         capture_sites = {
             (rname): resolve_site(self.bundle, self.doc.sites[str(read.site)])
@@ -232,7 +232,7 @@ class PointExecutor:
         }
 
         with contextlib.ExitStack() as hooks:
-            for module, kind, fn in edit_hooks:
+            for module, kind, fn in write_hooks:
                 hooks.enter_context(_installed(module, kind, fn))
             for site in capture_sites.values():
                 key = (id(site.module), site.kind)
@@ -298,7 +298,7 @@ class PointExecutor:
         )
 
     def _read_stack(
-        self, read: ReadSpec | EditSpec, site: ResolvedSite
+        self, read: ReadSpec | WriteSpec, site: ResolvedSite
     ) -> FeaturizerStack:
         width = (
             (site.feature_slice.stop - site.feature_slice.start)
@@ -346,7 +346,7 @@ class PointExecutor:
         return value
 
     # ------------------------------------------------------------------ #
-    # edits
+    # writes
     # ------------------------------------------------------------------ #
 
     def _operand_lookup(self, value: Any) -> torch.Tensor | float:
@@ -357,7 +357,7 @@ class PointExecutor:
             if isinstance(stored, RaggedValue):
                 raise NotImplementedError(
                     f"operand read {value!r} is ragged — pairing ragged windows "
-                    "into an edit is not batchable in the v1 reference backend"
+                    "into a write is not batchable in the v1 reference backend"
                 )
             return stored.to(self.bundle.device)
         if "." in value:
@@ -375,18 +375,20 @@ class PointExecutor:
             )
         raise ProtocolError("P2", f"operand {value!r} did not resolve at run time")
 
-    def _build_edit_hooks(
-        self, edit_names: tuple[str, ...], input_role: str, batch: EncodedBatch
+    def _build_write_hooks(
+        self, write_names: tuple[str, ...], input_role: str, batch: EncodedBatch
     ) -> list[tuple[Any, str, Callable[[torch.Tensor], None]]]:
-        """One in-place hook per edited (module, kind), applying every edit
+        """One in-place hook per written-to (module, kind), applying every write
         at that address in class order."""
-        by_address: dict[tuple[int, str], list[tuple[str, EditSpec, ResolvedSite]]] = {}
+        by_address: dict[
+            tuple[int, str], list[tuple[str, WriteSpec, ResolvedSite]]
+        ] = {}
         modules: dict[int, Any] = {}
-        for ename in edit_names:
-            edit = self.doc.edits[ename]
-            site = resolve_site(self.bundle, self.doc.sites[str(edit.site)])
+        for ename in write_names:
+            write = self.doc.writes[ename]
+            site = resolve_site(self.bundle, self.doc.sites[str(write.site)])
             key = (id(site.module), site.kind)
-            by_address.setdefault(key, []).append((ename, edit, site))
+            by_address.setdefault(key, []).append((ename, write, site))
             modules[id(site.module)] = site.module
 
         hooks: list[tuple[Any, str, Callable[[torch.Tensor], None]]] = []
@@ -395,18 +397,18 @@ class PointExecutor:
                 (
                     modules[module_id],
                     kind,
-                    self._address_editor(entries, input_role, batch),
+                    self._address_writer(entries, input_role, batch),
                 )
             )
         return hooks
 
-    def _address_editor(
+    def _address_writer(
         self,
-        entries: list[tuple[str, EditSpec, ResolvedSite]],
+        entries: list[tuple[str, WriteSpec, ResolvedSite]],
         input_role: str,
         batch: EncodedBatch,
     ) -> Callable[[torch.Tensor], None]:
-        def class_rank(entry: tuple[str, EditSpec, ResolvedSite]) -> int:
+        def class_rank(entry: tuple[str, WriteSpec, ResolvedSite]) -> int:
             do = entry[1].do
             if str(do.mechanism) == "renormalize":
                 return 2  # after the deltas — the only order where it acts (§2.8 note)
@@ -415,41 +417,41 @@ class PointExecutor:
         ordered = sorted(entries, key=class_rank)
 
         def apply(tensor: torch.Tensor) -> None:
-            for ename, edit, site in ordered:
-                per_row = self._positions(edit.pos, batch, input_role)
+            for ename, write, site in ordered:
+                per_row = self._positions(write.pos, batch, input_role)
                 widths = {len(row) for row in per_row}
                 if len(widths) != 1:
                     raise NotImplementedError(
-                        f"edit {ename!r}: ragged position widths {sorted(widths)} "
+                        f"write {ename!r}: ragged position widths {sorted(widths)} "
                         "are not batchable in the v1 reference backend"
                     )
                 idx = torch.tensor(per_row, dtype=torch.long, device=tensor.device)
                 rows = torch.arange(tensor.shape[0], device=tensor.device).unsqueeze(1)
                 fslice = site.feature_slice or slice(None)
                 v_pre = tensor[rows, idx][..., fslice]
-                v_new = self._edited_value(ename, edit, site, v_pre)
+                v_new = self._written_value(ename, write, site, v_pre)
                 slice_view = tensor[rows, idx]
                 slice_view[..., fslice] = v_new.to(tensor.dtype)
                 tensor[rows, idx] = slice_view
 
         return apply
 
-    def _edited_value(
-        self, ename: str, edit: EditSpec, site: ResolvedSite, v_pre: torch.Tensor
+    def _written_value(
+        self, ename: str, write: WriteSpec, site: ResolvedSite, v_pre: torch.Tensor
     ) -> torch.Tensor:
         """featurize → class-ordered do → inverse, honoring dims and the
         error-term contract."""
-        stack = self._read_stack(edit, site)
+        stack = self._read_stack(write, site)
         f0, errs = stack.featurize(v_pre)
         dims = None
-        if isinstance(edit.dims, tuple):
-            dims = torch.tensor(list(edit.dims), dtype=torch.long, device=f0.device)
+        if isinstance(write.dims, tuple):
+            dims = torch.tensor(list(write.dims), dtype=torch.long, device=f0.device)
 
         def select(f: torch.Tensor) -> torch.Tensor:
             return f if dims is None else f.index_select(-1, dims)
 
         f = f0.clone()
-        do = edit.do
+        do = write.do
         batch_size, n_pos = v_pre.shape[0], v_pre.shape[1]
         if str(do.mechanism) == "renormalize":
             pass  # applied last, below
@@ -483,13 +485,13 @@ class PointExecutor:
 
 @contextlib.contextmanager
 def _installed(
-    module: Any, kind: str, edit: Callable[[torch.Tensor], None]
+    module: Any, kind: str, write: Callable[[torch.Tensor], None]
 ) -> Iterator[None]:
     if kind == "out":
 
         def out_hook(_m: Any, _i: Any, out: Any) -> Any:
             hidden = _hidden_of(out).clone()
-            edit(hidden)
+            write(hidden)
             return (hidden, *out[1:]) if isinstance(out, tuple) else hidden
 
         handle = module.register_forward_hook(out_hook)
@@ -497,7 +499,7 @@ def _installed(
 
         def pre_hook(_m: Any, args: tuple[Any, ...]) -> tuple[Any, ...]:
             x = args[0].clone()
-            edit(x)
+            write(x)
             return (x, *args[1:])
 
         handle = module.register_forward_pre_hook(pre_hook)

@@ -186,7 +186,7 @@ def _check_loaded_featurizers(doc: Document, env: ResolutionEnv) -> None:
         if defers is not None and defers(spec.file_path):
             continue  # a run-tree path inside a workflow — checked at run time
         used_sites: list[str] = []
-        for entry in (*doc.reads.values(), *doc.edits.values()):
+        for entry in (*doc.reads.values(), *doc.writes.values()):
             ref = entry.featurizer
             chain = (
                 (ref,)

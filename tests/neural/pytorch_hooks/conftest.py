@@ -18,7 +18,7 @@ TINY_LLAMA = "hf-internal-testing/tiny-random-LlamaForCausalLM"
 TINY_GPT2 = "hf-internal-testing/tiny-random-gpt2"
 
 BASE_TEXT = "the quick brown fox jumps"
-SOURCE_TEXT = "a slow green turtle sleeps deeply"
+COUNTERFACTUAL_TEXT = "a slow green turtle sleeps deeply"
 
 
 @dataclasses.dataclass(frozen=True)

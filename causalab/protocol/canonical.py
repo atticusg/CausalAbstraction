@@ -4,7 +4,7 @@ The authored file is for humans; the canonical form is the record. It
 materializes every default (optimizer betas, dtypes, the implicit
 ``revision``), every resolved reference (dataset content digests, artifact
 file hashes), every derived width, expands sugar (int positions, the
-``neural_model`` alias), sorts unordered lists (IM edit lists), and rejects
+``neural_model`` alias), sorts unordered lists (IM write lists), and rejects
 out-of-range addresses against the model's static config.
 
 ``digest = sha256(canonical bytes)`` with sorted keys and canonical floats —
@@ -138,15 +138,15 @@ def canonicalize(raw: Mapping[str, Any], env: ResolutionEnv) -> dict[str, Any]:
             out["reads"] = {
                 name: _canon_read_or_edit(entry) for name, entry in value.items()
             }
-        elif section == "edits":
-            out["edits"] = {
+        elif section == "writes":
+            out["writes"] = {
                 name: _canon_read_or_edit(entry) for name, entry in value.items()
             }
         elif section == "intervened_models":
             out["intervened_models"] = {
                 name: {
                     "input": entry["input"],
-                    "edits": _canon_edit_list(entry["edits"]),
+                    "writes": _canon_write_list(entry["writes"]),
                 }
                 for name, entry in value.items()
             }
@@ -185,22 +185,24 @@ def _canon_data(data: Mapping[str, Any], env: ResolutionEnv) -> dict[str, Any]:
         return stamped
 
     out: dict[str, Any] = {"base": one(data["base"])}
-    if "source" in data:
-        src = data["source"]
-        out["source"] = [one(s) for s in src] if isinstance(src, list) else one(src)
+    if "counterfactual" in data:
+        cf = data["counterfactual"]
+        out["counterfactual"] = (
+            [one(s) for s in cf] if isinstance(cf, list) else one(cf)
+        )
     return out
 
 
-def _canon_edit_list(edits: Any) -> Any:
-    """IM edit lists are unordered (§6.8) — sorted concrete, and sorted
+def _canon_write_list(writes: Any) -> Any:
+    """IM write lists are unordered (§6.8) — sorted concrete, and sorted
     per-value inside a sweep wrapper, so one campaign has one spelling."""
-    if isinstance(edits, list):
-        return sorted(edits)
-    if _is_sweep(edits) and isinstance(edits["sweep"], list):
+    if isinstance(writes, list):
+        return sorted(writes)
+    if _is_sweep(writes) and isinstance(writes["sweep"], list):
         return {
-            "sweep": [sorted(v) if isinstance(v, list) else v for v in edits["sweep"]]
+            "sweep": [sorted(v) if isinstance(v, list) else v for v in writes["sweep"]]
         }
-    return edits
+    return writes
 
 
 def _canon_position_spec(value: Any) -> Any:
@@ -265,7 +267,7 @@ def _featurizer_chains_raw(
 ) -> list[tuple[Any, list[str]]]:
     """Every (site, chain) a featurizer participates in."""
     used: list[tuple[Any, list[str]]] = []
-    for section in ("reads", "edits"):
+    for section in ("reads", "writes"):
         for entry in normalized.get(section, {}).values():
             ref = entry.get("featurizer")
             chain = [ref] if isinstance(ref, str) else list(ref or [])
@@ -341,7 +343,7 @@ def _canon_featurizer(
 def _derived_width(
     name: str, normalized: Mapping[str, Any], info: ModelInfo
 ) -> int | None:
-    """The feature width of one featurizer, from the sites its reads/edits
+    """The feature width of one featurizer, from the sites its reads/writes
     use (§2.5). Unmaterializable (None) when a needed field is swept;
     ambiguous multi-width use is an error."""
     widths: set[int] = set()

@@ -5,7 +5,7 @@
   "causal_model": {"key": "weekdays.causal_model"},
   "data": {
     "base":   {"dataset": "weekdays/test", "field": "input"},
-    "source": {"dataset": "weekdays/test", "field": "counterfactual_inputs[0]"}
+    "counterfactual": {"dataset": "weekdays/test", "field": "counterfactual_inputs[0]"}
   },
   "sites": {
     "target": {"component": "block_output", "layer": 18},
@@ -16,14 +16,14 @@
             "file_path": "artifacts/weekdays/llama31_8b/subspace/rot_k8.safetensors"}
   },
   "reads": {
-    "v_src":  {"site": "target",  "pos": -1, "model": "original", "input": "source", "featurizer": "rot"},
+    "v_cf":  {"site": "target",  "pos": -1, "model": "original", "input": "counterfactual", "featurizer": "rot"},
     "logits": {"site": "lm_head", "pos": -1, "model": "patched", "input": "base"}
   },
-  "edits": {
-    "patch": {"site": "target", "pos": -1, "featurizer": "rot", "do": {"swap": "v_src"}}
+  "writes": {
+    "patch": {"site": "target", "pos": -1, "featurizer": "rot", "do": {"swap": "v_cf"}}
   },
   "intervened_models": {
-    "patched": {"input": "base", "edits": ["patch"]}
+    "patched": {"input": "base", "writes": ["patch"]}
   },
   "metrics": {
     "iia": {"kind": "logit_diff", "of": "logits", "a": "cf_answer", "b": "base_answer"}
