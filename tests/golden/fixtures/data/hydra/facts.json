@@ -1,0 +1,642 @@
+[
+ {
+  "input": "Virginia State Route 33 is located in",
+  "ml_token": " the",
+  "resample_input": "John Koethe's profession is an"
+ },
+ {
+  "input": "Verkehrsverbund Berlin-Brandenburg was formed in",
+  "ml_token": " ",
+  "resample_input": "Takashi Nakamura holds a citizenship from"
+ },
+ {
+  "input": "Charles, Prince of Viana died in",
+  "ml_token": " ",
+  "resample_input": "Cathi Unsworth speaks"
+ },
+ {
+  "input": "Boiling Points premiered on",
+  "ml_token": " the",
+  "resample_input": "The mother tongue of Miguel de Cervantes is"
+ },
+ {
+  "input": "Lannick Gautry spoke the language",
+  "ml_token": " of",
+  "resample_input": "Zhang Ziyi originated from"
+ },
+ {
+  "input": "Adobe Flash is created by",
+  "ml_token": " Adobe",
+  "resample_input": "Herbert A. Hauptman's expertise is"
+ },
+ {
+  "input": "Foo Fighters, that was started in",
+  "ml_token": " ",
+  "resample_input": "In Kurikka, the language spoken is"
+ },
+ {
+  "input": "Peter Gunn debuted on",
+  "ml_token": " NBC",
+  "resample_input": "The law in Wallonia declares the language"
+ },
+ {
+  "input": "The law in Wallonia declares the language",
+  "ml_token": " of",
+  "resample_input": "Schleitheim, in"
+ },
+ {
+  "input": "The Fantastic Journey premieres on",
+  "ml_token": " NBC",
+  "resample_input": "Harry Sacksioni performs on the"
+ },
+ {
+  "input": "The original language of Flying Rhino Junior High is",
+  "ml_token": " English",
+  "resample_input": "Nissan 200SX, created by"
+ },
+ {
+  "input": "Night Ark is known for performing",
+  "ml_token": " the",
+  "resample_input": "Verkehrsverbund Berlin-Brandenburg was formed in"
+ },
+ {
+  "input": "Count Basie, performing on the",
+  "ml_token": " piano",
+  "resample_input": "John Paul II has the position of"
+ },
+ {
+  "input": "Nevada State Route 535 is in",
+  "ml_token": " the",
+  "resample_input": "francium, which was named for"
+ },
+ {
+  "input": "Pentium II was developed by",
+  "ml_token": " Intel",
+  "resample_input": "Pierre Cartellier passed away at"
+ },
+ {
+  "input": "Taj Mahal is follower of",
+  "ml_token": " the",
+  "resample_input": "William Scoresby Archipelago is located in"
+ },
+ {
+  "input": "Cipriani Potter performs on the",
+  "ml_token": " piano",
+  "resample_input": "The twin city of Islamabad is"
+ },
+ {
+  "input": "Lopburi is located in",
+  "ml_token": " the",
+  "resample_input": "Jean-Pierre Marielle is a native speaker of"
+ },
+ {
+  "input": "Pierre Cartellier passed away at",
+  "ml_token": " the",
+  "resample_input": "Panzarini Hills is located in the continent"
+ },
+ {
+  "input": "Nissan 200SX, created by",
+  "ml_token": " Nissan",
+  "resample_input": "Polson Iron Works Limited is headquartered in"
+ },
+ {
+  "input": "HSBC Bank Malta, located in",
+  "ml_token": " the",
+  "resample_input": "Prafulla Chandra Ghosh holds a citizenship from"
+ },
+ {
+  "input": "The occupation of Malcolm Keen is",
+  "ml_token": " that",
+  "resample_input": "Lannick Gautry spoke the language"
+ },
+ {
+  "input": "Ranavalona I was born in",
+  "ml_token": " ",
+  "resample_input": "Garth Brooks, playing the"
+ },
+ {
+  "input": "Eliezer ben Hurcanus is affiliated with the religion",
+  "ml_token": " of",
+  "resample_input": "Teshie, in"
+ },
+ {
+  "input": "Galen works in the area of",
+  "ml_token": " applied",
+  "resample_input": "Eldkvarn, in"
+ },
+ {
+  "input": "In Kauniainen, they understand",
+  "ml_token": " that",
+  "resample_input": "Santi Cazorla, the"
+ },
+ {
+  "input": "The mother tongue of Miguel de Cervantes is",
+  "ml_token": " a",
+  "resample_input": "Garfield Barwick died in the city of"
+ },
+ {
+  "input": "Garth Brooks, playing the",
+  "ml_token": " first",
+  "resample_input": "Fort William Point is in"
+ },
+ {
+  "input": "The Bold Ones debuted on",
+  "ml_token": " NBC",
+  "resample_input": "Resource Interchange File Format was a product of"
+ },
+ {
+  "input": "Polson Iron Works Limited is headquartered in",
+  "ml_token": " the",
+  "resample_input": "Victor Horta speaks"
+ },
+ {
+  "input": "Santi Cazorla, the",
+  "ml_token": " Spanish",
+  "resample_input": "The headquarters of Minnesota Strikers is in"
+ },
+ {
+  "input": "Antonio Agliardi, who holds the position of",
+  "ml_token": " Professor",
+  "resample_input": "Ali Campbell is native to"
+ },
+ {
+  "input": "Scarlet Rivera plays the instrument",
+  "ml_token": " of",
+  "resample_input": "Bashkim Kadrii plays"
+ },
+ {
+  "input": "iOS is created by",
+  "ml_token": " Apple",
+  "resample_input": "In Stavropol Krai, they understand"
+ },
+ {
+  "input": "The official religion of Nagarjuna is",
+  "ml_token": " Buddhism",
+  "resample_input": "The Fantastic Journey premieres on"
+ },
+ {
+  "input": "The mother tongue of Marc-Philippe Daubresse is",
+  "ml_token": " French",
+  "resample_input": "Kaloyan Nunatak is located in"
+ },
+ {
+  "input": "controller.controller, that originated in",
+  "ml_token": " the",
+  "resample_input": "Microsoft SQL Server is developed by"
+ },
+ {
+  "input": "In Stavropol Krai, they understand",
+  "ml_token": " the",
+  "resample_input": "The language used by John Diefenbaker is"
+ },
+ {
+  "input": "Schleitheim, in",
+  "ml_token": " the",
+  "resample_input": "Delhi Technological University is located in"
+ },
+ {
+  "input": "Eugene Roshal spoke the language",
+  "ml_token": " of",
+  "resample_input": "Google Calendar is a product of"
+ },
+ {
+  "input": "Cathi Unsworth speaks",
+  "ml_token": " to",
+  "resample_input": "James Craig Annan's occupation is"
+ },
+ {
+  "input": "Paul Citroen found employment in",
+  "ml_token": " the",
+  "resample_input": "Third Watch premieres on"
+ },
+ {
+  "input": "Bashkim Kadrii plays",
+  "ml_token": " the",
+  "resample_input": "The language of The Departure is"
+ },
+ {
+  "input": "What does Joe Wilder play? They play",
+  "ml_token": " the",
+  "resample_input": "Lopburi is located in"
+ },
+ {
+  "input": "Herbert A. Hauptman's expertise is",
+  "ml_token": " in",
+  "resample_input": "Lefteris Papadopoulos has a citizenship from"
+ },
+ {
+  "input": "Gordon Bell works for",
+  "ml_token": " Microsoft",
+  "resample_input": "The genre played by Wolter Wierbos is"
+ },
+ {
+  "input": "The Denver Dry Goods Company is based in",
+  "ml_token": " Denver",
+  "resample_input": "The occupation of Malcolm Keen is"
+ },
+ {
+  "input": "The original language of Casa de Mi Padre was",
+  "ml_token": " Spanish",
+  "resample_input": "Rob & Big was released on"
+ },
+ {
+  "input": "Takashi Nakamura holds a citizenship from",
+  "ml_token": " Japan",
+  "resample_input": "Mount Paris belongs to the continent of"
+ },
+ {
+  "input": "William Scoresby Archipelago is located in",
+  "ml_token": " the",
+  "resample_input": "Harrie Massey specializes in"
+ },
+ {
+  "input": "Harrie Massey specializes in",
+  "ml_token": " the",
+  "resample_input": "The original language of Casa de Mi Padre was"
+ },
+ {
+  "input": "The genre played by Wolter Wierbos is",
+  "ml_token": " not",
+  "resample_input": "Big Love premieres on"
+ },
+ {
+  "input": "The official language of Loimaa is",
+  "ml_token": " Finnish",
+  "resample_input": "Income Property, that originated in"
+ },
+ {
+  "input": "Alice Furlong, a citizen of",
+  "ml_token": " the",
+  "resample_input": "Paul Citroen found employment in"
+ },
+ {
+  "input": "Conchita Montenegro works as",
+  "ml_token": " a",
+  "resample_input": "Laura Gore speaks the language"
+ },
+ {
+  "input": "Jean-Pierre Marielle is a native speaker of",
+  "ml_token": " French",
+  "resample_input": "Count Basie, performing on the"
+ },
+ {
+  "input": "The twin city of Islamabad is",
+  "ml_token": " the",
+  "resample_input": "Michael Kimball works as"
+ },
+ {
+  "input": "The language used by John Diefenbaker is",
+  "ml_token": " a",
+  "resample_input": "Johannes Hevelius's expertise is"
+ },
+ {
+  "input": "Garfield Barwick died in the city of",
+  "ml_token": " Sydney",
+  "resample_input": "Microsoft XNA, a product of"
+ },
+ {
+  "input": "Microsoft SQL Server is developed by",
+  "ml_token": " Microsoft",
+  "resample_input": "Cook da Books that was founded in"
+ },
+ {
+  "input": "The native language of Claude Victor-Perrin, Duc de Belluno is",
+  "ml_token": " French",
+  "resample_input": "Scarlet Rivera plays the instrument"
+ },
+ {
+  "input": "The original language of Being Julia is",
+  "ml_token": " English",
+  "resample_input": "Pomorie Point is located in the continent"
+ },
+ {
+  "input": "Victor Horta speaks",
+  "ml_token": " to",
+  "resample_input": "Chevrolet Brookwood, developed by"
+ },
+ {
+  "input": "Teshie, in",
+  "ml_token": " the",
+  "resample_input": "Eugene Roshal spoke the language"
+ },
+ {
+  "input": "Delhi Technological University is located in",
+  "ml_token": " Delhi",
+  "resample_input": "The occupation of Simon Gosejohann is"
+ },
+ {
+  "input": "francium, which was named for",
+  "ml_token": " France",
+  "resample_input": "Arvo Tuominen speaks the language"
+ },
+ {
+  "input": "Bilohirsk Raion, in",
+  "ml_token": " the",
+  "resample_input": "Antonio Solario died in"
+ },
+ {
+  "input": "Zhang Ziyi originated from",
+  "ml_token": " Beijing",
+  "resample_input": "Mike Candys has a citizenship from"
+ },
+ {
+  "input": "Rob & Big was released on",
+  "ml_token": " DVD",
+  "resample_input": "Boiling Points premiered on"
+ },
+ {
+  "input": "Mike Candys has a citizenship from",
+  "ml_token": " Switzerland",
+  "resample_input": "Cipriani Potter performs on the"
+ },
+ {
+  "input": "Kaloyan Nunatak is located in",
+  "ml_token": " the",
+  "resample_input": "Ranavalona I was born in"
+ },
+ {
+  "input": "Income Property, that originated in",
+  "ml_token": " ",
+  "resample_input": "Peter Gunn debuted on"
+ },
+ {
+  "input": "Arvo Tuominen speaks the language",
+  "ml_token": " of",
+  "resample_input": "Gordon Bell works for"
+ },
+ {
+  "input": "The Nutt House premieres on",
+  "ml_token": " the",
+  "resample_input": "The mother tongue of Raymond Triboulet is"
+ },
+ {
+  "input": "Google Calendar is a product of",
+  "ml_token": " Google",
+  "resample_input": "Night Ark is known for performing"
+ },
+ {
+  "input": "Cook da Books that was founded in",
+  "ml_token": " ",
+  "resample_input": "The original language of Being Julia is"
+ },
+ {
+  "input": "Dhwani was created in",
+  "ml_token": " ",
+  "resample_input": "Conchita Montenegro works as"
+ },
+ {
+  "input": "John Paul II has the position of",
+  "ml_token": " a",
+  "resample_input": "Gautama Buddha follows the religion of"
+ },
+ {
+  "input": "Which position does Curtis McElhinney play? They play as",
+  "ml_token": " a",
+  "resample_input": "The official language of Loimaa is"
+ },
+ {
+  "input": "James Craig Annan's occupation is",
+  "ml_token": " listed",
+  "resample_input": "The mother tongue of Marc-Philippe Daubresse is"
+ },
+ {
+  "input": "Fort William Point is in",
+  "ml_token": " the",
+  "resample_input": "Michael Bakewell is employed by"
+ },
+ {
+  "input": "Eldkvarn, in",
+  "ml_token": " Swedish",
+  "resample_input": "Fred Vargas, a native"
+ },
+ {
+  "input": "Ali Campbell is native to",
+  "ml_token": " the",
+  "resample_input": "The native language of Claude Victor-Perrin, Duc de Belluno is"
+ },
+ {
+  "input": "Fiat Siena is created by",
+  "ml_token": " the",
+  "resample_input": "Leif Sylvester Petersen, a citizen of"
+ },
+ {
+  "input": "Gautama Buddha follows the religion of",
+  "ml_token": " Buddhism",
+  "resample_input": "Wars of the Three Kingdoms is in"
+ },
+ {
+  "input": "Damon Allen, who plays the position",
+  "ml_token": " quarterback",
+  "resample_input": "Fiat Siena is created by"
+ },
+ {
+  "input": "Microsoft XNA, a product of",
+  "ml_token": " Microsoft",
+  "resample_input": "Virginia State Route 33 is located in"
+ },
+ {
+  "input": "The mother tongue of Raymond Triboulet is",
+  "ml_token": " the",
+  "resample_input": "The Bold Ones debuted on"
+ },
+ {
+  "input": "Johannes Hevelius's expertise is",
+  "ml_token": " in",
+  "resample_input": "Minneapolis sound is named after"
+ },
+ {
+  "input": "Michael Bakewell is employed by",
+  "ml_token": " the",
+  "resample_input": "Which position does Curtis McElhinney play? They play as"
+ },
+ {
+  "input": "KiKa, which is located in",
+  "ml_token": " the",
+  "resample_input": "Rottumerplaat, which is located in"
+ },
+ {
+  "input": "Castrol is owned by",
+  "ml_token": " BP",
+  "resample_input": "John XXIII is a"
+ },
+ {
+  "input": "Harry Sacksioni performs on the",
+  "ml_token": " guitar",
+  "resample_input": "Bilohirsk Raion, in"
+ },
+ {
+  "input": "Supermarine is headquartered in",
+  "ml_token": " the",
+  "resample_input": "Antonio Agliardi, who holds the position of"
+ },
+ {
+  "input": "Michael Kimball works as",
+  "ml_token": " a",
+  "resample_input": "The Nutt House premieres on"
+ },
+ {
+  "input": "The language of The Departure is",
+  "ml_token": " a",
+  "resample_input": "Galen works in the area of"
+ },
+ {
+  "input": "Prafulla Chandra Ghosh holds a citizenship from",
+  "ml_token": " India",
+  "resample_input": "Taj Mahal is follower of"
+ },
+ {
+  "input": "The headquarters of Minnesota Strikers is in",
+  "ml_token": " the",
+  "resample_input": "Supermarine is headquartered in"
+ },
+ {
+  "input": "The occupation of Simon Gosejohann is",
+  "ml_token": " a",
+  "resample_input": "Sunday NFL Countdown premieres on"
+ },
+ {
+  "input": "John Koethe's profession is an",
+  "ml_token": " odd",
+  "resample_input": "The official religion of Nagarjuna is"
+ },
+ {
+  "input": "Atlee Hammaker plays in the position of",
+  "ml_token": " Pitch",
+  "resample_input": "Martin Lowry speaks"
+ },
+ {
+  "input": "Canadian National Railway, whose headquarters are in",
+  "ml_token": " Montreal",
+  "resample_input": "Damon Allen, who plays the position"
+ },
+ {
+  "input": "In Kurikka, the language spoken is",
+  "ml_token": " Finnish",
+  "resample_input": "The language of Sendiri is"
+ },
+ {
+  "input": "Lefteris Papadopoulos has a citizenship from",
+  "ml_token": " Greece",
+  "resample_input": "The original language of Flying Rhino Junior High is"
+ },
+ {
+  "input": "Steve Grogan plays as",
+  "ml_token": " a",
+  "resample_input": "The headquarters of Dallas Times Herald is in"
+ },
+ {
+  "input": "Rottumerplaat, which is located in",
+  "ml_token": " the",
+  "resample_input": "Castrol is owned by"
+ },
+ {
+  "input": "Big Love premieres on",
+  "ml_token": " HBO",
+  "resample_input": "Canadian National Railway, whose headquarters are in"
+ },
+ {
+  "input": "Pomorie Point is located in the continent",
+  "ml_token": " of",
+  "resample_input": "HSBC Bank Malta, located in"
+ },
+ {
+  "input": "Fiat Tempra, developed by",
+  "ml_token": " Fiat",
+  "resample_input": "Jorge Luis Campos plays in the position of"
+ },
+ {
+  "input": "Antonio Solario died in",
+  "ml_token": " ",
+  "resample_input": "What does Joe Wilder play? They play"
+ },
+ {
+  "input": "Resource Interchange File Format was a product of",
+  "ml_token": " the",
+  "resample_input": "Steve Grogan plays as"
+ },
+ {
+  "input": "Laura Gore speaks the language",
+  "ml_token": " of",
+  "resample_input": "iOS is created by"
+ },
+ {
+  "input": "Sunday NFL Countdown premieres on",
+  "ml_token": " ESPN",
+  "resample_input": "controller.controller, that originated in"
+ },
+ {
+  "input": "The language of Sendiri is",
+  "ml_token": " a",
+  "resample_input": "Dennis Rodman plays"
+ },
+ {
+  "input": "The headquarters of Dallas Times Herald is in",
+  "ml_token": " Dallas",
+  "resample_input": "Fiat Tempra, developed by"
+ },
+ {
+  "input": "Third Watch premieres on",
+  "ml_token": " NBC",
+  "resample_input": "Charles, Prince of Viana died in"
+ },
+ {
+  "input": "John XXIII is a",
+  "ml_token": " ",
+  "resample_input": "Foo Fighters, that was started in"
+ },
+ {
+  "input": "Mount Paris belongs to the continent of",
+  "ml_token": " Europe",
+  "resample_input": "Nevada State Route 535 is in"
+ },
+ {
+  "input": "Leif Sylvester Petersen, a citizen of",
+  "ml_token": " Denmark",
+  "resample_input": "KiKa, which is located in"
+ },
+ {
+  "input": "Argentine National Anthem, which is located in",
+  "ml_token": " the",
+  "resample_input": "The Denver Dry Goods Company is based in"
+ },
+ {
+  "input": "Wars of the Three Kingdoms is in",
+  "ml_token": " the",
+  "resample_input": "Eliezer ben Hurcanus is affiliated with the religion"
+ },
+ {
+  "input": "Chevrolet Brookwood, developed by",
+  "ml_token": " the",
+  "resample_input": "Argentine National Anthem, which is located in"
+ },
+ {
+  "input": "Fred Vargas, a native",
+  "ml_token": " of",
+  "resample_input": "Dhwani was created in"
+ },
+ {
+  "input": "Dennis Rodman plays",
+  "ml_token": " basketball",
+  "resample_input": "Pentium II was developed by"
+ },
+ {
+  "input": "Martin Lowry speaks",
+  "ml_token": " to",
+  "resample_input": "Alice Furlong, a citizen of"
+ },
+ {
+  "input": "Panzarini Hills is located in the continent",
+  "ml_token": " of",
+  "resample_input": "In Kauniainen, they understand"
+ },
+ {
+  "input": "Minneapolis sound is named after",
+  "ml_token": " the",
+  "resample_input": "Adobe Flash is created by"
+ },
+ {
+  "input": "Jorge Luis Campos plays in the position of",
+  "ml_token": " midfielder",
+  "resample_input": "Atlee Hammaker plays in the position of"
+ }
+]

@@ -1,0 +1,46 @@
+{
+  "version": "1",
+  "description": "Hydra effect grid (McGrath et al. 2023, arXiv:2307.15771): resample-ablate one attention layer at the final token (ablation axis: layers 8/13/18/23 - 13 is the corpus preset's choice, 23 the paper's best layer on Chinchilla 7B) and read every downstream attention layer's direct effect (probe axis: all 32 layers; contribution injected as the final residual, read at lm_head) in the clean and ablated models. The clean total-effect forward and the per-probe clean injections sit off the ablation axis and intern. The test regresses, per ablation layer, the summed downstream compensatory effect (sum over probe > ablation of de_abl - de_clean) on the ablated layer's own clean direct effect, and asserts best-layer R^2 >= 0.6 - the VeriFires hydra-effect floor (paper: 0.92 on Chinchilla 7B, non-public; model-transferred). Data: 128 factual-recall prompts, ml_token = clean argmax (gen_hydra.py).",
+  "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
+  "data": {
+    "base":   {"dataset": "hydra/facts", "field": "input"},
+    "source": {"dataset": "hydra/facts", "field": "resample_input"}
+  },
+  "sites": {
+    "abl":         {"component": "attention_output", "layer": {"sweep": [8, 13, 18, 23]}},
+    "probe":       {"component": "attention_output", "layer": {"sweep": {"range": [0, 32]}}},
+    "resid_final": {"component": "block_output", "layer": 31},
+    "lm_head": {"component": "lm_head"}
+  },
+  "reads": {
+    "v_noise":   {"site": "abl",     "pos": -1, "model": "original", "input": "source"},
+    "logits_clean": {"site": "lm_head", "pos": -1, "model": "original", "input": "base"},
+    "logits_abl":   {"site": "lm_head", "pos": -1, "model": "ablated", "input": "base"},
+    "a_clean":   {"site": "probe", "pos": -1, "model": "original", "input": "base"},
+    "a_abl":     {"site": "probe", "pos": -1, "model": "ablated", "input": "base"},
+    "de_clean":  {"site": "lm_head", "pos": -1, "model": "with_inj_clean", "input": "base"},
+    "de_abl":    {"site": "lm_head", "pos": -1, "model": "with_inj_abl", "input": "base"}
+  },
+  "edits": {
+    "resample":  {"site": "abl",         "pos": -1, "do": {"swap": "v_noise"}},
+    "inj_clean": {"site": "resid_final", "pos": -1, "do": {"swap": "a_clean"}},
+    "inj_abl":   {"site": "resid_final", "pos": -1, "do": {"swap": "a_abl"}}
+  },
+  "intervened_models": {
+    "ablated":        {"input": "base", "edits": ["resample"]},
+    "with_inj_clean": {"input": "base", "edits": ["inj_clean"]},
+    "with_inj_abl":   {"input": "base", "edits": ["inj_abl"]}
+  },
+  "metrics": {
+    "te_clean": {"kind": "token_logit", "of": "logits_clean", "token": "ml_token"},
+    "te_abl":   {"kind": "token_logit", "of": "logits_abl",   "token": "ml_token"},
+    "de_c":     {"kind": "token_logit", "of": "de_clean",     "token": "ml_token"},
+    "de_a":     {"kind": "token_logit", "of": "de_abl",       "token": "ml_token"}
+  },
+  "save": [
+    {"value": "te_clean", "model": "original", "input": "base", "file_path": "te_clean.parquet"},
+    {"value": "te_abl", "model": "ablated", "input": "base", "file_path": "te_abl.parquet"},
+    {"value": "de_c", "model": "with_inj_clean", "input": "base", "file_path": "de_clean.parquet"},
+    {"value": "de_a", "model": "with_inj_abl", "input": "base", "file_path": "de_abl.parquet"}
+  ]
+}
