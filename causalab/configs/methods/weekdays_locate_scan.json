@@ -1,11 +1,11 @@
 {
   "version": "1",
-  "description": "Locate stage as ONE document: interchange scored over a 32-layer x 2-position grid. Axes are explicit {sweep: ...} wrappers on named table entries (sites.target.layer, positions.tap), so every read/edit referencing the name moves together. The parser expands 64 points, dedups shared sub-values by content, and plans 64 patched forwards plus one shared source-harvest forward per row - where CLI multirun ran 64 separate processes, 128 forward groups, 64 model loads.",
+  "description": "Locate stage as ONE document: interchange scored over a 32-layer x 2-position grid. Axes are explicit {sweep: ...} wrappers on named table entries (sites.target.layer, positions.tap), so every read/write referencing the name moves together. The parser expands 64 points, dedups shared sub-values by content, and plans 64 patched forwards plus one shared counterfactual-harvest forward per row - where CLI multirun ran 64 separate processes, 128 forward groups, 64 model loads.",
   "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
   "causal_model": {"key": "weekdays.causal_model"},
   "data": {
     "base":   {"dataset": "weekdays/train", "field": "input"},
-    "source": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
+    "counterfactual": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
   },
   "positions": {
     "tap": {"sweep": [{"index": -1}, {"variable": "subject"}]}
@@ -15,14 +15,14 @@
     "lm_head": {"component": "lm_head"}
   },
   "reads": {
-    "v_src":  {"site": "target",  "pos": "tap", "model": "original", "input": "source"},
+    "v_cf":  {"site": "target",  "pos": "tap", "model": "original", "input": "counterfactual"},
     "logits": {"site": "lm_head", "pos": -1,    "model": "patched", "input": "base"}
   },
-  "edits": {
-    "patch": {"site": "target", "pos": "tap", "do": {"swap": "v_src"}}
+  "writes": {
+    "patch": {"site": "target", "pos": "tap", "do": {"swap": "v_cf"}}
   },
   "intervened_models": {
-    "patched": {"input": "base", "edits": ["patch"]}
+    "patched": {"input": "base", "writes": ["patch"]}
   },
   "metrics": {
     "iia":        {"kind": "match",      "of": "logits", "expected": "cf_answer"},

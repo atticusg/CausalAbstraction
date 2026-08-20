@@ -4,7 +4,7 @@ Implements the spec §8 services for prefill-only documents on the two
 supported architecture families. Capabilities: ``grad`` (the train loop,
 train.py), ``paired_forward`` (cross-input operand flow via the lazy group
 executor), ``full_logits`` (lm_head is an ordinary tap), and
-``pytorch_fn_local`` (this backend is local). ``editable_attention_probs``
+``pytorch_fn_local`` (this backend is local). ``writable_attention_probs``
 is deliberately absent — no attention-internal tap yet — so capability
 routing refuses those documents before anything runs.
 """

@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "description": "Activation harvesting: pure reads at two layers x two positions, one un-intervened forward. No edits, hence no intervened_models section.",
+  "description": "Activation harvesting: pure reads at two layers x two positions, one un-intervened forward. No writes, hence no intervened_models section.",
   "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
   "data": {
     "base": {"dataset": "weekdays/train", "field": "input"}

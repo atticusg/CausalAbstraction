@@ -16,7 +16,7 @@ pytestmark = pytest.mark.unit
 def test_pos_sugar_and_alias_canonicalize(env):
     raw = base_doc()
     canonical = canonicalize(raw, env)
-    assert canonical["reads"]["v_src"]["pos"] == {"index": -1}
+    assert canonical["reads"]["v_cf"]["pos"] == {"index": -1}
     assert canonical["model"] == {"key": "gpt2", "revision": "main"}
 
 
@@ -27,16 +27,16 @@ def test_dataset_digest_stamped(env):
     assert len(stamped) == 64
 
 
-def test_im_edit_lists_sorted(env):
+def test_im_write_lists_sorted(env):
     raw = base_doc()
-    raw["edits"]["another"] = {
+    raw["writes"]["another"] = {
         "site": "tgt",
         "pos": -1,
-        "do": {"add_scaled": {"op": "v_src", "alpha": 1.0}},
+        "do": {"add_scaled": {"op": "v_cf", "alpha": 1.0}},
     }
-    raw["intervened_models"]["patched"]["edits"] = ["patch", "another"]
+    raw["intervened_models"]["patched"]["writes"] = ["patch", "another"]
     canonical = canonicalize(raw, env)
-    assert canonical["intervened_models"]["patched"]["edits"] == ["another", "patch"]
+    assert canonical["intervened_models"]["patched"]["writes"] == ["another", "patch"]
 
 
 def test_train_defaults_materialized(env):

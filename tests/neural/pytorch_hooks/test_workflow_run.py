@@ -8,7 +8,7 @@ The workflow references the shipped method presets with per-step ``set``
 overrides that retarget model/layers/positions at tiny scale — the same
 mechanism the spec gives real campaigns. The tap axis overrides to two
 index positions (the subject-variable window is ragged across weekday
-rows, and ragged *edits* are a stated v1 backend boundary)."""
+rows, and ragged *writes* are a stated v1 backend boundary)."""
 
 from __future__ import annotations
 

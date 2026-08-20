@@ -16,8 +16,8 @@ def swept_doc():
     raw = base_doc()
     raw["positions"] = {"tap": {"sweep": [{"index": -1}, {"variable": "subject"}]}}
     raw["sites"]["tgt"]["layer"] = {"sweep": {"range": [0, 4]}}
-    raw["reads"]["v_src"]["pos"] = "tap"
-    raw["edits"]["patch"]["pos"] = "tap"
+    raw["reads"]["v_cf"]["pos"] = "tap"
+    raw["writes"]["patch"]["pos"] = "tap"
     return in_order(raw)
 
 
@@ -62,7 +62,7 @@ def test_range_step():
 
 def test_wrapper_inside_list_rejected():
     raw = base_doc()
-    raw["reads"]["v_src"]["dims"] = [0, {"sweep": [1, 2]}]
+    raw["reads"]["v_cf"]["dims"] = [0, {"sweep": [1, 2]}]
     with pytest.raises(ValidationError) as err:
         find_axes(raw)
     assert err.value.rule == 14

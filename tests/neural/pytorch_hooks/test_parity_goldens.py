@@ -13,13 +13,13 @@ Old mode → protocol ``do`` mapping (docs/intervention_protocol.md §2.5, §2.8
 * ``collect``      → a plain saved read (the featurized value itself);
 * ``replace``      → ``{"swap": <params tensor>}`` (constant vector);
 * ``steer``        → ``{"add_scaled": {"op": <params tensor>, "alpha": 2.5}}``;
-* ``interchange``  → ``{"swap": "<read of the source site>"}``;
-* ``interpolate``  → ``{"lerp": {"op": "<source read>", "alpha": 0.3}}``;
+* ``interchange``  → ``{"swap": "<read of the donor site>"}``;
+* ``interpolate``  → ``{"lerp": {"op": "<donor read>", "alpha": 0.3}}``;
 * ``noise``        → ``{"gaussian": {"seed": 7, "scale": 3.0, "axis":
   "tp_duplicated"}}`` (the draw contract matches the oracle: seeded CPU
   ``randn((batch, n_pos, feature_width))`` made outside the model);
 * ``mask``         → the ``["rot", "gate"]`` composition in hard eval mode +
-  ``swap`` from the source read through the same chain (the gate's
+  ``swap`` from the donor read through the same chain (the gate's
   ``err = (1−mask)⊙x`` keeps the base's off-features — exactly the old
   MaskGate hard swap);
 * ``sub3``         → the frozen rotation: ``torch.manual_seed(0)`` →
@@ -58,12 +58,12 @@ FAMILIES = ("llama", "gpt2", "gqa")
 
 # --- the frozen capture recipe (tests/neural/parity/cases.py at capture) ---- #
 BASE_TEXT = "the quick brown fox jumps"
-DST_LAYER, SRC_LAYER = 1, 0
+DST_LAYER, DONOR_LAYER = 1, 0
 SUB3_K = 3
 NOISE_SEED, NOISE_SCALE = 7, 3.0
 STEER_FACTOR = 2.5
 ALPHA = 0.3
-HEAD_DST, HEAD_SRC = 1, 0
+HEAD_DST, HEAD_DONOR = 1, 0
 #: linspace spans of the constant operands, per mode.
 CONSTANT_SPANS = {"replace": (-30.0, 30.0), "steer": (3.0, 9.0)}
 N_PROBES = 8
@@ -210,7 +210,7 @@ def _doc_skeleton() -> dict[str, Any]:
     return {
         "version": "1",
         "model": {"key": "test", "revision": "main"},
-        "data": base_data_section(with_source=False),
+        "data": base_data_section(with_counterfactual=False),
         "sites": {},
         "reads": {},
         "save": [],
@@ -233,7 +233,7 @@ def _run_sub3_case(
     bundle: ModelBundle, mode: str
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """One ``<family>.<mode>.block_output.sub3.last`` case: destination
-    block_output L1, source (where a mode reads one) block_output L0 of the
+    block_output L1, donor (where a mode reads one) block_output L0 of the
     SAME input, everything through the frozen k=3 rotation."""
     q = _golden_subspace_q(bundle.info.hidden_size, SUB3_K)
     tensors: dict[str, dict[str, torch.Tensor]] = {"rot.safetensors": {"weight": q}}
@@ -253,40 +253,40 @@ def _run_sub3_case(
     doc["reads"]["out"] = _read("lm_head", "patched")
     doc["reads"]["clean"] = _read("lm_head", "original")
     doc["save"] = [_save("out", "patched"), _save("clean", "original")]
-    edit: dict[str, Any] = {"site": "dst", "pos": {"index": -1}, "featurizer": "rot"}
+    write: dict[str, Any] = {"site": "dst", "pos": {"index": -1}, "featurizer": "rot"}
 
     if mode in ("replace", "steer"):
         lo, hi = CONSTANT_SPANS[mode]
         tensors["vec.safetensors"] = {"value": torch.linspace(lo, hi, SUB3_K)}
         doc["params"] = {"vec": {"file_path": "vec.safetensors"}}
-        edit["do"] = (
+        write["do"] = (
             {"swap": "vec"}
             if mode == "replace"
             else {"add_scaled": {"op": "vec", "alpha": STEER_FACTOR}}
         )
     elif mode == "noise":
-        edit["do"] = {
+        write["do"] = {
             "gaussian": {
                 "seed": NOISE_SEED,
                 "scale": NOISE_SCALE,
                 "axis": "tp_duplicated",
             }
         }
-    else:  # interchange / interpolate / mask — source-reading modes
-        doc["sites"]["src"] = {"component": "block_output", "layer": SRC_LAYER}
+    else:  # interchange / interpolate / mask — donor-reading modes
+        doc["sites"]["donor"] = {"component": "block_output", "layer": DONOR_LAYER}
         chain: Any = ["rot", "gate"] if mode == "mask" else "rot"
-        doc["reads"]["v_src"] = _read("src", "original", featurizer=chain)
+        doc["reads"]["v_cf"] = _read("donor", "original", featurizer=chain)
         if mode == "mask":
             doc["featurizers"]["gate"] = {"kind": "gate"}
-            edit["featurizer"] = ["rot", "gate"]
-        edit["do"] = (
-            {"lerp": {"op": "v_src", "alpha": ALPHA}}
+            write["featurizer"] = ["rot", "gate"]
+        write["do"] = (
+            {"lerp": {"op": "v_cf", "alpha": ALPHA}}
             if mode == "interpolate"
-            else {"swap": "v_src"}
+            else {"swap": "v_cf"}
         )
 
-    doc["edits"] = {"e": edit}
-    doc["intervened_models"] = {"patched": {"input": "base", "edits": ["e"]}}
+    doc["writes"] = {"e": write}
+    doc["intervened_models"] = {"patched": {"input": "base", "writes": ["e"]}}
     executor = executor_for(
         doc, bundle, base_texts=[BASE_TEXT], load_tensors=tensors.__getitem__
     )
@@ -305,7 +305,7 @@ def _run_head_case(
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """One ``gqa.<mode>.head_attention_value.identity.last.head`` case: the
     per-head o_proj-input column slice (query-head space), destination head 1,
-    source head 0 at the same layer/input — the old HeadSite semantics that
+    donor head 0 at the same layer/input — the old HeadSite semantics that
     ``attention_value`` + ``head`` carries in the protocol vocabulary."""
     doc = _doc_skeleton()
     doc["sites"]["dst"] = {
@@ -320,17 +320,17 @@ def _run_head_case(
         return executor.read_value("out"), None
 
     assert mode == "interchange", mode
-    doc["sites"]["src"] = {
+    doc["sites"]["donor"] = {
         "component": "attention_value",
         "layer": DST_LAYER,
-        "head": HEAD_SRC,
+        "head": HEAD_DONOR,
     }
     doc["sites"]["lm_head"] = {"component": "lm_head"}
-    doc["reads"]["v_src"] = _read("src", "original")
+    doc["reads"]["v_cf"] = _read("donor", "original")
     doc["reads"]["out"] = _read("lm_head", "patched")
     doc["reads"]["clean"] = _read("lm_head", "original")
-    doc["edits"] = {"e": {"site": "dst", "pos": {"index": -1}, "do": {"swap": "v_src"}}}
-    doc["intervened_models"] = {"patched": {"input": "base", "edits": ["e"]}}
+    doc["writes"] = {"e": {"site": "dst", "pos": {"index": -1}, "do": {"swap": "v_cf"}}}
+    doc["intervened_models"] = {"patched": {"input": "base", "writes": ["e"]}}
     doc["save"] = [_save("out", "patched"), _save("clean", "original")]
     executor = executor_for(doc, bundle, base_texts=[BASE_TEXT])
     out = executor.read_value("out")[:, 0, :]

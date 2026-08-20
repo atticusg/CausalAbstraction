@@ -7,7 +7,7 @@ group** each. ``num_forwards`` is a property of the plan, never authored.
 
 Across the points of a swept document, the planner **content-dedups**: a
 forward group's identity is the digest of its full dependency closure
-(model + in-force edits + their operand reads' closures + input binding),
+(model + in-force writes + their operand reads' closures + input binding),
 so a harvest shared by nine fits interns to one group and the sharing falls
 out of value identity, not scheduling cleverness (§3). Backends consume
 this plan as data; fusion, batching and staging stay their call (§8).
@@ -169,7 +169,7 @@ def _model_closure(
     doc: Document, model: str, visiting: set[str], identity: Mapping[str, Any]
 ) -> Any:
     """Everything that determines a model's activations: for an IM, the
-    in-force edits and, recursively, their operand reads' closures. The
+    in-force writes and, recursively, their operand reads' closures. The
     validated acyclicity (§5.7) bounds the recursion; ``visiting`` is a
     belt-and-braces guard."""
     if model == "original":
@@ -180,39 +180,39 @@ def _model_closure(
         )
     im = doc.intervened_models[model]
     train_dep: Any = None
-    edits: dict[str, Any] = {}
-    for ename in sorted(im.edits if isinstance(im.edits, tuple) else ()):
-        edit = doc.edits[ename]
+    writes: dict[str, Any] = {}
+    for ename in sorted(im.writes if isinstance(im.writes, tuple) else ()):
+        write = doc.writes[ename]
         operands: dict[str, Any] = {}
-        for op in _edit_operand_names(doc, ename):
+        for op in _write_operand_names(doc, ename):
             if op in doc.reads:
                 operands[op] = _read_closure(doc, op, visiting | {model}, identity)
-        for op in _edit_param_names(doc, ename):
+        for op in _write_param_names(doc, ename):
             operands[op] = _entry(doc.params, op) if op in doc.params else op
-        edits[ename] = {
-            "site": _entry(doc.sites, str(edit.site)),
-            "pos": _pos_entry(doc, edit.pos),
-            "featurizer": _featurizer_entry(doc, edit.featurizer),
-            "dims": edit.dims,
-            "do": {str(edit.do.mechanism): edit.do.payload},
+        writes[ename] = {
+            "site": _entry(doc.sites, str(write.site)),
+            "pos": _pos_entry(doc, write.pos),
+            "featurizer": _featurizer_entry(doc, write.featurizer),
+            "dims": write.dims,
+            "do": {str(write.do.mechanism): write.do.payload},
             "operands": operands,
         }
-        if doc.train is not None and _uses_trained_featurizer(doc, edit.featurizer):
+        if doc.train is not None and _uses_trained_featurizer(doc, write.featurizer):
             # a trained featurizer's weights are a function of the whole fit —
             # two points differing only in train.seed must never intern
             train_dep = dataclasses.asdict(doc.train)
     return {
         "input": im.input,
         "data": identity.get(str(im.input)),
-        "edits": edits,
+        "writes": writes,
         "train": train_dep,
     }
 
 
-def _edit_param_names(doc: Document, ename: str) -> tuple[str, ...]:
+def _write_param_names(doc: Document, ename: str) -> tuple[str, ...]:
     """Operand names that resolve to params entries or featurizer slots —
     their specs are part of the written value's identity."""
-    do = doc.edits[ename].do
+    do = doc.writes[ename].do
     payload = do.payload
     names: list[str] = []
     if isinstance(payload, str):
@@ -248,8 +248,8 @@ def _read_closure(
     }
 
 
-def _edit_operand_names(doc: Document, ename: str) -> tuple[str, ...]:
-    do = doc.edits[ename].do
+def _write_operand_names(doc: Document, ename: str) -> tuple[str, ...]:
+    do = doc.writes[ename].do
     payload = do.payload
     names: list[str] = []
     if isinstance(payload, str):

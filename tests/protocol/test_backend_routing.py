@@ -36,8 +36,8 @@ def test_requires_paired_forward():
 
 def test_requires_empty_for_same_input_patching():
     raw = base_doc()
-    raw["reads"]["v_src"]["input"] = "base"
-    del raw["data"]["source"]
+    raw["reads"]["v_cf"]["input"] = "base"
+    del raw["data"]["counterfactual"]
     assert requires(parse_document(raw)) == frozenset()
 
 
@@ -63,16 +63,16 @@ def test_requires_full_logits_for_top_k():
     assert "full_logits" in requires(parse_document(raw))
 
 
-def test_requires_editable_attention_probs():
+def test_requires_writable_attention_probs():
     raw = base_doc()
     raw["sites"]["probs"] = {"component": "attention_probs", "layer": 3}
-    raw["edits"]["knock"] = {
+    raw["writes"]["knock"] = {
         "site": "probs",
         "pos": -1,
         "do": {"clamp": {"lo": 0, "hi": 0}},
     }
-    raw["intervened_models"]["patched"]["edits"].append("knock")
-    assert "editable_attention_probs" in requires(parse_document(raw))
+    raw["intervened_models"]["patched"]["writes"].append("knock")
+    assert "writable_attention_probs" in requires(parse_document(raw))
 
 
 def test_choose_backend_first_covering():

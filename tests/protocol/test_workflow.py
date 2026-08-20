@@ -190,7 +190,7 @@ def test_rule_9_set_override_must_target_existing_path(env, tmp_path):
 
 def test_inner_load_errors_surface_as_rule_4(env, tmp_path):
     raw = tiny_workflow(tmp_path)
-    raw["steps"]["locate"]["set"] = {"reads.v_src.site": "nowhere"}
+    raw["steps"]["locate"]["set"] = {"reads.v_cf.site": "nowhere"}
     err = expect_rule(4, raw, env, tmp_path)
     assert "does not load" in str(err)
 

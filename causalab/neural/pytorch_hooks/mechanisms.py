@@ -1,13 +1,13 @@
 """The closed ``do`` mechanism set (spec §2.8), applied in feature space.
 
-Per (site, overlapping pos, model): the absolute edit (if any) applies
-first, then additive deltas sum — the class order that makes edit sets
+Per (site, overlapping pos, model): the absolute write (if any) applies
+first, then additive deltas sum — the class order that makes write sets
 order-free. ``dims`` scatter and the error-term contract live in the
 executor (the mechanism sees the feature slice it writes).
 
 ``gaussian`` realizes the RNG contract the parity goldens pin: the draw is
 ``torch.Generator().manual_seed(seed)`` → ``randn((batch, n_pos, width))``,
-made **outside** the model, once per edit application.
+made **outside** the model, once per write application.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def _operand(lookup: OperandLookup, value: Any) -> torch.Tensor | float:
 
 def apply_absolute(do: Do, f: torch.Tensor, lookup: OperandLookup) -> torch.Tensor:
     """The absolute-class write ``f ← …`` for one mechanism; ``f`` is the
-    pre-edit feature slice (already dims-selected)."""
+    pre-write feature slice (already dims-selected)."""
     mech = str(do.mechanism)
     payload = do.payload
     if mech == "swap":
@@ -96,9 +96,9 @@ def apply_delta(
 
 
 def apply_renormalize(f: torch.Tensor, f_pre: torch.Tensor) -> torch.Tensor:
-    """``f ← f·‖f₀‖/‖f‖`` with ``f₀`` the pre-edit feature value. Runs after
+    """``f ← f·‖f₀‖/‖f‖`` with ``f₀`` the pre-write feature value. Runs after
     the additive deltas (the only order under which it is not the identity);
-    it still counts as the address's one absolute edit for rule 8."""
+    it still counts as the address's one absolute write for rule 8."""
     target = f_pre.norm(dim=-1, keepdim=True)
     return f * (target / f.norm(dim=-1, keepdim=True).clamp_min(1e-12))
 
@@ -111,7 +111,7 @@ def _scalar(value: torch.Tensor | float) -> float:
 
 def _coerce(value: torch.Tensor | float, like: torch.Tensor) -> torch.Tensor:
     """Move an operand onto the written slice's device/dtype and check the
-    one-way broadcast (right-aligned; the classic width mismatch — a source
+    one-way broadcast (right-aligned; the classic width mismatch — a counterfactual
     read contributing a different number of positions than the write
     addresses — must fail legibly here, not as a scatter assert)."""
     if not isinstance(value, torch.Tensor):
@@ -124,7 +124,7 @@ def _coerce(value: torch.Tensor | float, like: torch.Tensor) -> torch.Tensor:
         raise ProtocolError(
             "P2",
             f"operand of shape {tuple(value.shape)} does not broadcast to the "
-            f"{tuple(like.shape)} slice its edit writes — position widths must "
+            f"{tuple(like.shape)} slice it writes — position widths must "
             "pair up per example, or the operand must be a broadcastable vector",
         )
     return value

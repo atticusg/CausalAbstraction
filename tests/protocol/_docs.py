@@ -14,7 +14,7 @@ def base_doc() -> dict[str, Any]:
         "model": {"key": "gpt2", "revision": "main"},
         "data": {
             "base": {"dataset": "weekdays/train", "field": "input"},
-            "source": {
+            "counterfactual": {
                 "dataset": "weekdays/train",
                 "field": "counterfactual_inputs[0]",
             },
@@ -24,7 +24,12 @@ def base_doc() -> dict[str, Any]:
             "lm_head": {"component": "lm_head"},
         },
         "reads": {
-            "v_src": {"site": "tgt", "pos": -1, "model": "original", "input": "source"},
+            "v_cf": {
+                "site": "tgt",
+                "pos": -1,
+                "model": "original",
+                "input": "counterfactual",
+            },
             "logits": {
                 "site": "lm_head",
                 "pos": -1,
@@ -32,8 +37,8 @@ def base_doc() -> dict[str, Any]:
                 "input": "base",
             },
         },
-        "edits": {"patch": {"site": "tgt", "pos": -1, "do": {"swap": "v_src"}}},
-        "intervened_models": {"patched": {"input": "base", "edits": ["patch"]}},
+        "writes": {"patch": {"site": "tgt", "pos": -1, "do": {"swap": "v_cf"}}},
+        "intervened_models": {"patched": {"input": "base", "writes": ["patch"]}},
         "metrics": {
             "ld": {
                 "kind": "logit_diff",
