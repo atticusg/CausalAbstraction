@@ -203,18 +203,40 @@ def test_rome_mlp_window_aie_peak(tmp_path):
                 "version": "1",
                 "description": f"generated: ROME MLP window restore, center {center}, width-{width} shard",
                 "model": {"key": "gpt2-xl", "revision": "main"},
-                "data": {"base": {"dataset": f"counterfact/facts_w{width}", "field": "input"}},
-                "positions": {"last_subject": {"index": -1, "scope": {"variable": "subject"}}},
+                "data": {
+                    "base": {"dataset": f"counterfact/facts_w{width}", "field": "input"}
+                },
+                "positions": {
+                    "last_subject": {"index": -1, "scope": {"variable": "subject"}}
+                },
                 "sites": {
                     "emb": {"component": "embeddings"},
                     "lm_head": {"component": "lm_head"},
-                    **{f"mlp{l}": {"component": "mlp_output", "layer": l} for l in layers},
+                    **{
+                        f"mlp{l}": {"component": "mlp_output", "layer": l}
+                        for l in layers
+                    },
                 },
                 "reads": {
-                    "logits_corr": {"site": "lm_head", "pos": -1, "model": "corrupted", "input": "base"},
-                    "logits_rest": {"site": "lm_head", "pos": -1, "model": "restored", "input": "base"},
+                    "logits_corr": {
+                        "site": "lm_head",
+                        "pos": -1,
+                        "model": "corrupted",
+                        "input": "base",
+                    },
+                    "logits_rest": {
+                        "site": "lm_head",
+                        "pos": -1,
+                        "model": "restored",
+                        "input": "base",
+                    },
                     **{
-                        f"v{l}": {"site": f"mlp{l}", "pos": "last_subject", "model": "original", "input": "base"}
+                        f"v{l}": {
+                            "site": f"mlp{l}",
+                            "pos": "last_subject",
+                            "model": "original",
+                            "input": "base",
+                        }
                         for l in layers
                     },
                 },
@@ -222,24 +244,55 @@ def test_rome_mlp_window_aie_peak(tmp_path):
                     "noise": {
                         "site": "emb",
                         "pos": {"variable": "subject"},
-                        "do": {"gaussian": {"seed": 7, "scale": 0.144681, "axis": "tp_duplicated"}},
+                        "do": {
+                            "gaussian": {
+                                "seed": 7,
+                                "scale": 0.144681,
+                                "axis": "tp_duplicated",
+                            }
+                        },
                     },
                     **{
-                        f"rest{l}": {"site": f"mlp{l}", "pos": "last_subject", "do": {"swap": f"v{l}"}}
+                        f"rest{l}": {
+                            "site": f"mlp{l}",
+                            "pos": "last_subject",
+                            "do": {"swap": f"v{l}"},
+                        }
                         for l in layers
                     },
                 },
                 "intervened_models": {
                     "corrupted": {"input": "base", "writes": ["noise"]},
-                    "restored": {"input": "base", "writes": ["noise"] + [f"rest{l}" for l in layers]},
+                    "restored": {
+                        "input": "base",
+                        "writes": ["noise"] + [f"rest{l}" for l in layers],
+                    },
                 },
                 "metrics": {
-                    "ce_corr": {"kind": "cross_entropy", "of": "logits_corr", "target": "answer"},
-                    "ce_rest": {"kind": "cross_entropy", "of": "logits_rest", "target": "answer"},
+                    "ce_corr": {
+                        "kind": "cross_entropy",
+                        "of": "logits_corr",
+                        "target": "answer",
+                    },
+                    "ce_rest": {
+                        "kind": "cross_entropy",
+                        "of": "logits_rest",
+                        "target": "answer",
+                    },
                 },
                 "save": [
-                    {"value": "ce_corr", "model": "corrupted", "input": "base", "file_path": "ce_corr.parquet"},
-                    {"value": "ce_rest", "model": "restored", "input": "base", "file_path": "ce_rest.parquet"},
+                    {
+                        "value": "ce_corr",
+                        "model": "corrupted",
+                        "input": "base",
+                        "file_path": "ce_corr.parquet",
+                    },
+                    {
+                        "value": "ce_rest",
+                        "model": "restored",
+                        "input": "base",
+                        "file_path": "ce_rest.parquet",
+                    },
                 ],
             }
             doc_path = tmp_path / f"mlp_c{center}_w{width}.json"
@@ -268,7 +321,9 @@ def test_rome_mlp_window_aie_peak(tmp_path):
             aie.setdefault(center, []).append(pd.Series(diff))
     pooled = {c: pd.concat(parts).mean() * 100 for c, parts in aie.items()}
     peak = max(pooled, key=pooled.get)
-    print(f"MLP-window AIE by center: { {k: round(v, 2) for k, v in sorted(pooled.items())} }")
+    print(
+        f"MLP-window AIE by center: { {k: round(v, 2) for k, v in sorted(pooled.items())} }"
+    )
     print(f"peak center {peak}")
     assert_golden("rome.mlp_window_aie_peak", float(pooled[peak]))
 
@@ -313,7 +368,9 @@ def test_mixing_positional_shares(tmp_path):
     merged["attributed"] = merged[["pos", "lex", "ref"]].sum(axis=1)
 
     by_layer = merged.groupby("layer")["attributed"].mean()
-    print(f"attribution by layer: { {int(k): round(v, 3) for k, v in by_layer.items()} }")
+    print(
+        f"attribution by layer: { {int(k): round(v, 3) for k, v in by_layer.items()} }"
+    )
     intervention_layer = 18  # the paper's own layer for gemma-2-2b-it
     print(f"reading shares at the paper's layer {intervention_layer}")
 
@@ -364,9 +421,16 @@ def test_arithmetic_steering_diagonal(tmp_path):
     # 2. harvest addition residuals (pinned document)
     harvest_out = tmp_path / "harvest"
     run_document("addition_harvest_im.json", harvest_out, dtype="bf16")
-    acts = load_file(str(harvest_out / "acts_l18.safetensors"))["acts"].squeeze(1).float()
+    acts = (
+        load_file(str(harvest_out / "acts_l18.safetensors"))["acts"].squeeze(1).float()
+    )
     sums = torch.tensor(
-        [r["sum"] for r in json_lib.loads((FIXTURES / "data" / "addition" / "pairs.json").read_text())],
+        [
+            r["sum"]
+            for r in json_lib.loads(
+                (FIXTURES / "data" / "addition" / "pairs.json").read_text()
+            )
+        ],
         dtype=torch.float32,
     )
     assert acts.shape[0] == len(sums)
@@ -408,7 +472,12 @@ def test_arithmetic_steering_diagonal(tmp_path):
                 "lm_head": {"component": "lm_head"},
             },
             "reads": {
-                "logits": {"site": "lm_head", "pos": -1, "model": "steered", "input": "base"}
+                "logits": {
+                    "site": "lm_head",
+                    "pos": -1,
+                    "model": "steered",
+                    "input": "base",
+                }
             },
             "writes": {
                 "steer": {
@@ -454,7 +523,14 @@ def test_arithmetic_steering_diagonal(tmp_path):
         assert main(argv) == 0
         table = pd.read_parquet(out / "hour_probs.parquet")
         means = {
-            name: float(np.mean([json_lib.loads(v)[name] if isinstance(v, str) else v[name] for v in table["value"]]))
+            name: float(
+                np.mean(
+                    [
+                        json_lib.loads(v)[name] if isinstance(v, str) else v[name]
+                        for v in table["value"]
+                    ]
+                )
+            )
             for name in groups
         }
         top = max(means, key=means.get)

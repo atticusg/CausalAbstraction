@@ -45,20 +45,78 @@ OUT = Path(__file__).resolve().parents[1] / "data" / "mixing" / "music.json"
 MODEL_KEY = "google/gemma-2-2b-it"
 
 NAMES = [
-    "John", "Mary", "Peter", "Anna", "James", "Laura", "David", "Emma",
-    "Robert", "Alice", "Thomas", "Sarah", "Henry", "Julia", "Paul", "Nina",
-    "George", "Clara", "Martin", "Diana", "Oliver", "Sophie", "Frank", "Helen",
+    "John",
+    "Mary",
+    "Peter",
+    "Anna",
+    "James",
+    "Laura",
+    "David",
+    "Emma",
+    "Robert",
+    "Alice",
+    "Thomas",
+    "Sarah",
+    "Henry",
+    "Julia",
+    "Paul",
+    "Nina",
+    "George",
+    "Clara",
+    "Martin",
+    "Diana",
+    "Oliver",
+    "Sophie",
+    "Frank",
+    "Helen",
 ]
 GENRES = [
-    "rock", "pop", "jazz", "blues", "folk", "metal", "funk", "soul",
-    "disco", "techno", "opera", "reggae", "punk", "country", "gospel",
-    "swing", "salsa", "trance", "grunge", "ska", "house", "indie",
+    "rock",
+    "pop",
+    "jazz",
+    "blues",
+    "folk",
+    "metal",
+    "funk",
+    "soul",
+    "disco",
+    "techno",
+    "opera",
+    "reggae",
+    "punk",
+    "country",
+    "gospel",
+    "swing",
+    "salsa",
+    "trance",
+    "grunge",
+    "ska",
+    "house",
+    "indie",
 ]
 INSTRUMENTS = [
-    "guitar", "piano", "drums", "violin", "flute", "trumpet", "cello",
-    "harp", "banjo", "saxophone", "accordion", "clarinet", "organ",
-    "mandolin", "tuba", "harmonica", "ukulele", "trombone", "oboe",
-    "bass", "fiddle", "keyboard",
+    "guitar",
+    "piano",
+    "drums",
+    "violin",
+    "flute",
+    "trumpet",
+    "cello",
+    "harp",
+    "banjo",
+    "saxophone",
+    "accordion",
+    "clarinet",
+    "organ",
+    "mandolin",
+    "tuba",
+    "harmonica",
+    "ukulele",
+    "trombone",
+    "oboe",
+    "bass",
+    "fiddle",
+    "keyboard",
 ]
 
 CLAUSE = "{name} performed {genre} music on the {instrument}"
@@ -69,9 +127,8 @@ def render(groups: list[tuple[str, str, str]], q_name: str, q_instrument: str) -
     clauses = ", ".join(
         CLAUSE.format(name=n, genre=g, instrument=i) for n, g, i in groups
     )
-    return (
-        f"At the music festival, {clauses}. "
-        + QUERY.format(name=q_name, instrument=q_instrument)
+    return f"At the music festival, {clauses}. " + QUERY.format(
+        name=q_name, instrument=q_instrument
     )
 
 
@@ -105,9 +162,7 @@ def main() -> None:
                 {
                     "input": render(groups, names[g_q], instruments[g_q]),
                     "counterfactual_inputs": [
-                        render(
-                            [tuple(g) for g in cf], names[i_l], instruments[i_l]
-                        )
+                        render([tuple(g) for g in cf], names[i_l], instruments[i_l])
                     ],
                     "pos_answer": " " + genres[i_p],
                     "lex_answer": " " + genres[i_l],

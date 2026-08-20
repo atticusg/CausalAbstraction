@@ -62,7 +62,9 @@ def object_first_token(tokenizer, target: str) -> tuple[int, str] | None:
     token_id = int(ids[0])
     decoded = tokenizer.decode([token_id])
     candidates = (
-        [decoded, decoded.lstrip(" ")] if decoded.startswith(" ") else [" " + decoded, decoded]
+        [decoded, decoded.lstrip(" ")]
+        if decoded.startswith(" ")
+        else [" " + decoded, decoded]
     )
     for candidate in candidates:
         if tokenizer.encode(candidate) == [token_id]:
@@ -98,7 +100,9 @@ def main() -> None:
     digest = hashlib.sha256(raw).hexdigest()
     print(f"known_1000.json sha256 {digest}")
     if KNOWN_1000_SHA256 and digest != KNOWN_1000_SHA256:
-        raise RuntimeError("known_1000.json changed upstream — do not regenerate silently")
+        raise RuntimeError(
+            "known_1000.json changed upstream — do not regenerate silently"
+        )
     facts = json.loads(raw)
     assert len(facts) == 1209, f"expected the paper's 1209 facts, got {len(facts)}"
 
