@@ -21,7 +21,7 @@ Two traps the fix has to clear, both pinned below:
 * the stage cache is keyed by **name alone** and can be injected from
   outside, so a cache shared across two points would hand the seed-0 stage
   to seed 1 and swallow the fix. The end-to-end guard is
-  ``test_run_corpus.py::test_08_seed_sweep_fits_three_different_rotations``;
+  ``test_run_corpus.py::test_08_seed_sweep_fits_three_genuinely_different_rotations``;
   here we pin the refusal that makes such a sharing loud instead of silent.
 
 ``subspace`` is the only kind with a random init — ``gate`` starts at zeros
