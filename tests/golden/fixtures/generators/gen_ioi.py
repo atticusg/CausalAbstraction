@@ -26,11 +26,41 @@ N = 512
 OUT = Path(__file__).resolve().parents[1] / "data" / "ioi" / "clean.json"
 
 NAMES = [
-    "Mary", "John", "Tom", "James", "Dan", "Martin", "Amy", "Scott",
-    "Sarah", "Kevin", "Paul", "Anna", "Peter", "Laura", "Mark", "Emily",
-    "Jason", "Karen", "Ryan", "Lisa", "Eric", "Susan", "Adam", "Rachel",
+    "Mary",
+    "John",
+    "Tom",
+    "James",
+    "Dan",
+    "Martin",
+    "Amy",
+    "Scott",
+    "Sarah",
+    "Kevin",
+    "Paul",
+    "Anna",
+    "Peter",
+    "Laura",
+    "Mark",
+    "Emily",
+    "Jason",
+    "Karen",
+    "Ryan",
+    "Lisa",
+    "Eric",
+    "Susan",
+    "Adam",
+    "Rachel",
 ]
-PLACES = ["store", "park", "school", "office", "restaurant", "garden", "hospital", "station"]
+PLACES = [
+    "store",
+    "park",
+    "school",
+    "office",
+    "restaurant",
+    "garden",
+    "hospital",
+    "station",
+]
 OBJECTS = ["drink", "ring", "bone", "snack", "book", "ball", "necklace", "basketball"]
 
 TEMPLATES_ABBA = [

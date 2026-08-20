@@ -32,7 +32,9 @@ def main() -> None:
         rows.append({"input": f"{a}+{b}=", "sum": a + b})
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(rows, indent=1) + "\n")
-    print(f"wrote {OUT} ({len(rows)} rows, sums {min(r['sum'] for r in rows)}..{max(r['sum'] for r in rows)})")
+    print(
+        f"wrote {OUT} ({len(rows)} rows, sums {min(r['sum'] for r in rows)}..{max(r['sum'] for r in rows)})"
+    )
 
 
 if __name__ == "__main__":

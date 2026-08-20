@@ -27,7 +27,13 @@ OUT = Path(__file__).resolve().parents[1] / "data" / "drift" / "weekdays.json"
 MODEL_KEY = "Qwen/Qwen3-4B-Instruct-2507"
 
 DAYS = [
-    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
 ]
 TEMPLATES = [
     "If today is {day}, tomorrow is",
