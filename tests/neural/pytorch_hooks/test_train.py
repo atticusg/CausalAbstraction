@@ -27,7 +27,7 @@ BASES = [
     "every shiny robot dances tonight",
     "some ancient rivers flow backwards",
 ]
-SOURCES = [
+COUNTERFACTUALS = [
     "cold silver mountains echo loudly",
     "bright yellow parrots sing early",
     "seven broken clocks tick wrongly",
@@ -40,7 +40,7 @@ def das_doc(*, seed: int = 0, epochs: int = 2) -> dict:
     return {
         "version": "1",
         "model": {"key": TINY_LLAMA, "revision": "main"},
-        "data": base_data_section(with_source=True),
+        "data": base_data_section(with_counterfactual=True),
         "sites": {
             "tgt": {"component": "block_output", "layer": 0},
             "lm_head": {"component": "lm_head"},
@@ -49,11 +49,11 @@ def das_doc(*, seed: int = 0, epochs: int = 2) -> dict:
             "rot": {"kind": "subspace", "k": 4, "parametrization": "cayley"}
         },
         "reads": {
-            "v_src": {
+            "v_cf": {
                 "site": "tgt",
                 "pos": {"index": -1},
                 "model": "original",
-                "input": "source",
+                "input": "counterfactual",
                 "featurizer": "rot",
             },
             "logits": {
@@ -63,15 +63,15 @@ def das_doc(*, seed: int = 0, epochs: int = 2) -> dict:
                 "input": "base",
             },
         },
-        "edits": {
+        "writes": {
             "patch": {
                 "site": "tgt",
                 "pos": {"index": -1},
                 "featurizer": "rot",
-                "do": {"swap": "v_src"},
+                "do": {"swap": "v_cf"},
             }
         },
-        "intervened_models": {"patched": {"input": "base", "edits": ["patch"]}},
+        "intervened_models": {"patched": {"input": "base", "writes": ["patch"]}},
         "metrics": {"ce": {"kind": "cross_entropy", "of": "logits", "target": "label"}},
         "train": {
             "objective": [[1.0, "ce"]],
@@ -111,7 +111,7 @@ def _fit(doc_raw: dict) -> dict[str, torch.Tensor]:
         doc_raw,
         bundle,
         base_texts=BASES,
-        source_texts=SOURCES,
+        counterfactual_texts=COUNTERFACTUALS,
         extra_columns={"label": ANSWERS},
         grad_enabled=False,
     )
@@ -163,7 +163,7 @@ def test_das_fit_reduces_its_own_objective():
             doc_raw,
             bundle,
             base_texts=BASES,
-            source_texts=SOURCES,
+            counterfactual_texts=COUNTERFACTUALS,
             extra_columns={"label": ANSWERS},
         )
         if fit:
@@ -195,8 +195,8 @@ def test_das_fit_reduces_its_own_objective():
 def dbm_doc() -> dict:
     doc = das_doc(seed=0, epochs=3)
     doc["featurizers"] = {"gate": {"kind": "gate"}}
-    doc["reads"]["v_src"]["featurizer"] = "gate"
-    doc["edits"]["patch"]["featurizer"] = "gate"
+    doc["reads"]["v_cf"]["featurizer"] = "gate"
+    doc["writes"]["patch"]["featurizer"] = "gate"
     doc["train"]["params"] = ["gate"]
     doc["train"]["objective"] = [[1.0, "ce"], [0.01, {"l1": "gate"}]]
     doc["train"]["anneal"] = {"gate.theta.temperature": [1.0, 0.01, 0.5]}
@@ -217,7 +217,7 @@ def test_dbm_fit_trains_theta_and_anneals_temperature():
         dbm_doc(),
         bundle,
         base_texts=BASES,
-        source_texts=SOURCES,
+        counterfactual_texts=COUNTERFACTUALS,
         extra_columns={"label": ANSWERS},
     )
     request = ExecutionRequest(

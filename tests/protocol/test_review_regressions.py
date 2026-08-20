@@ -37,42 +37,42 @@ def _scoped(doc):
 
 def test_rule_8_scoped_span_vs_scoped_index_refuses():
     doc = base_doc()
-    doc["edits"]["patch"]["pos"] = {"span": [-2, -1], "scope": {"variable": "subject"}}
-    doc["edits"]["patch2"] = {
+    doc["writes"]["patch"]["pos"] = {"span": [-2, -1], "scope": {"variable": "subject"}}
+    doc["writes"]["patch2"] = {
         "site": "tgt",
         "pos": {"index": 0, "scope": {"variable": "subject"}},
-        "do": {"swap": "v_src"},
+        "do": {"swap": "v_cf"},
     }
-    doc["intervened_models"]["patched"]["edits"].append("patch2")
+    doc["intervened_models"]["patched"]["writes"].append("patch2")
     expect_rule(8, doc)
 
 
 def test_rule_8_disjoint_end_relative_spans_load():
     doc = base_doc()
-    doc["edits"]["patch"]["pos"] = {"span": [-3, -2], "scope": {"variable": "subject"}}
-    doc["edits"]["patch2"] = {
+    doc["writes"]["patch"]["pos"] = {"span": [-3, -2], "scope": {"variable": "subject"}}
+    doc["writes"]["patch2"] = {
         "site": "tgt",
         "pos": {"span": [-2, -1], "scope": {"variable": "subject"}},
-        "do": {"swap": "v_src"},
+        "do": {"swap": "v_cf"},
     }
-    doc["intervened_models"]["patched"]["edits"].append("patch2")
+    doc["intervened_models"]["patched"]["writes"].append("patch2")
     parse_and_validate(doc)
 
 
 def test_rule_8_provably_disjoint_indices_load():
     doc = base_doc()
-    doc["edits"]["patch2"] = {"site": "tgt", "pos": 1, "do": {"swap": "v_src"}}
-    doc["edits"]["patch"]["pos"] = 0
-    doc["intervened_models"]["patched"]["edits"].append("patch2")
+    doc["writes"]["patch2"] = {"site": "tgt", "pos": 1, "do": {"swap": "v_cf"}}
+    doc["writes"]["patch"]["pos"] = 0
+    doc["intervened_models"]["patched"]["writes"].append("patch2")
     parse_and_validate(doc)
 
 
 def test_unscoped_degenerate_span_refused_at_parse():
     doc = base_doc()
-    doc["edits"]["patch"]["pos"] = {"span": [3, 3]}
+    doc["writes"]["patch"]["pos"] = {"span": [3, 3]}
     with pytest.raises(ParseError):
         parse_document(in_order(doc))
-    doc["edits"]["patch"]["pos"] = {"span": [-2, -1]}  # unscoped end-relative
+    doc["writes"]["patch"]["pos"] = {"span": [-2, -1]}  # unscoped end-relative
     with pytest.raises(ParseError):
         parse_document(in_order(doc))
 
@@ -82,28 +82,28 @@ def test_unscoped_degenerate_span_refused_at_parse():
 # --------------------------------------------------------------------------- #
 
 
-def test_rule_9_additive_edits_with_intersecting_dims_refuse():
+def test_rule_9_additive_writes_with_intersecting_dims_refuse():
     doc = base_doc()
-    doc["edits"]["patch"]["dims"] = [0, 1]
-    doc["edits"]["nudge"] = {
+    doc["writes"]["patch"]["dims"] = [0, 1]
+    doc["writes"]["nudge"] = {
         "site": "tgt",
         "pos": -1,
         "dims": [1, 2],
-        "do": {"add_scaled": {"op": "v_src", "alpha": 0.5}},
+        "do": {"add_scaled": {"op": "v_cf", "alpha": 0.5}},
     }
-    doc["intervened_models"]["patched"]["edits"].append("nudge")
+    doc["intervened_models"]["patched"]["writes"].append("nudge")
     expect_rule(9, doc)
 
 
 def test_full_width_absolute_plus_dims_additive_loads():
     doc = base_doc()
-    doc["edits"]["nudge"] = {
+    doc["writes"]["nudge"] = {
         "site": "tgt",
         "pos": -1,
         "dims": [0, 1],
-        "do": {"add_scaled": {"op": "v_src", "alpha": 0.5}},
+        "do": {"add_scaled": {"op": "v_cf", "alpha": 0.5}},
     }
-    doc["intervened_models"]["patched"]["edits"].append("nudge")
+    doc["intervened_models"]["patched"]["writes"].append("nudge")
     parse_and_validate(doc)
 
 
@@ -114,7 +114,7 @@ def test_full_width_absolute_plus_dims_additive_loads():
 
 def test_rule_6_affine_matrix_may_not_be_a_read():
     doc = base_doc()
-    doc["edits"]["patch"]["do"] = {"affine": {"A": "v_src", "b": "v_src"}}
+    doc["writes"]["patch"]["do"] = {"affine": {"A": "v_cf", "b": "v_cf"}}
     expect_rule(6, doc)
 
 
@@ -128,8 +128,8 @@ def _train_doc():
     doc["featurizers"] = {
         "rot": {"kind": "subspace", "k": 4, "parametrization": "cayley"}
     }
-    doc["reads"]["v_src"]["featurizer"] = "rot"
-    doc["edits"]["patch"]["featurizer"] = "rot"
+    doc["reads"]["v_cf"]["featurizer"] = "rot"
+    doc["writes"]["patch"]["featurizer"] = "rot"
     doc["metrics"]["ce"] = {"kind": "cross_entropy", "of": "logits", "target": "label"}
     doc["train"] = {
         "objective": [[1.0, "ce"]],
@@ -181,16 +181,16 @@ def test_rule_4_train_reference_checks(mutate):
 
 def test_rule_7_im_input_must_be_a_role():
     doc = base_doc()
-    doc["intervened_models"]["patched"]["input"] = "sources"
-    doc["reads"]["logits"]["input"] = "sources"
+    doc["intervened_models"]["patched"]["input"] = "counterfactuals"
+    doc["reads"]["logits"]["input"] = "counterfactuals"
     with pytest.raises(ValidationError) as err:
         parse_and_validate(doc)
     assert err.value.rule in (5, 7)
 
 
-def test_rule_4_im_unknown_edit():
+def test_rule_4_im_unknown_write():
     doc = base_doc()
-    doc["intervened_models"]["patched"]["edits"] = ["patch", "ghost"]
+    doc["intervened_models"]["patched"]["writes"] = ["patch", "ghost"]
     expect_rule(4, doc)
 
 
@@ -199,7 +199,7 @@ def test_rule_4_im_unknown_edit():
 # --------------------------------------------------------------------------- #
 
 
-def test_rule_10_saving_an_edit_is_not_saveable_not_undeclared():
+def test_rule_10_saving_a_write_is_not_saveable_not_undeclared():
     doc = base_doc()
     doc["save"].append(
         {
@@ -273,8 +273,8 @@ def test_rule_11_dead_param():
 def test_rule_11_unread_intervened_model():
     doc = base_doc()
     doc["reads"]["v2"] = {"site": "tgt", "pos": 0, "model": "original", "input": "base"}
-    doc["edits"]["patch2"] = {"site": "tgt", "pos": 0, "do": {"swap": "v2"}}
-    doc["intervened_models"]["ghosted"] = {"input": "base", "edits": ["patch2"]}
+    doc["writes"]["patch2"] = {"site": "tgt", "pos": 0, "do": {"swap": "v2"}}
+    doc["intervened_models"]["ghosted"] = {"input": "base", "writes": ["patch2"]}
     expect_rule(11, doc)
 
 
@@ -286,12 +286,12 @@ def test_rule_11_unread_intervened_model():
 def test_rule_12_loaded_param_in_train_params():
     doc = _train_doc()
     doc["params"] = {"vec": {"file_path": "vec.safetensors"}}
-    doc["edits"]["steer"] = {
+    doc["writes"]["steer"] = {
         "site": "tgt",
         "pos": -1,
         "do": {"add_scaled": {"op": "vec", "alpha": 1.0}},
     }
-    doc["intervened_models"]["patched"]["edits"].append("steer")
+    doc["intervened_models"]["patched"]["writes"].append("steer")
     doc["train"]["params"] = ["rot", "vec"]
     expect_rule(12, doc)
 
@@ -346,8 +346,8 @@ def test_artifact_ref_cycle_refuses(env, artifacts_root: Path):
 def test_artifact_injected_nonfinite_refuses(env, artifacts_root: Path):
     (artifacts_root / "bad.json").write_text('{"alpha": Infinity}')
     doc = base_doc()
-    doc["edits"]["patch"]["do"] = {
-        "add_scaled": {"op": "v_src", "alpha": {"artifact": "bad", "key": "alpha"}}
+    doc["writes"]["patch"]["do"] = {
+        "add_scaled": {"op": "v_cf", "alpha": {"artifact": "bad", "key": "alpha"}}
     }
     with pytest.raises(ProtocolError):
         load(in_order(doc), env)
@@ -361,8 +361,8 @@ def test_artifact_injected_nonfinite_refuses(env, artifacts_root: Path):
 def test_integral_float_and_int_digest_identically(env):
     a = base_doc()
     b = base_doc()
-    a["edits"]["patch"]["do"] = {"add_scaled": {"op": "v_src", "alpha": 1}}
-    b["edits"]["patch"]["do"] = {"add_scaled": {"op": "v_src", "alpha": 1.0}}
+    a["writes"]["patch"]["do"] = {"add_scaled": {"op": "v_cf", "alpha": 1}}
+    b["writes"]["patch"]["do"] = {"add_scaled": {"op": "v_cf", "alpha": 1.0}}
     assert digest(canonicalize(in_order(a), env)) == digest(
         canonicalize(in_order(b), env)
     )
@@ -374,26 +374,26 @@ def test_pos_sugar_inside_entry_sweep_digests_identically(env):
     a["positions"] = {"tap": {"sweep": [-1, {"variable": "subject"}]}}
     b["positions"] = {"tap": {"sweep": [{"index": -1}, {"variable": "subject"}]}}
     for doc in (a, b):
-        doc["reads"]["v_src"]["pos"] = "tap"
-        doc["edits"]["patch"]["pos"] = "tap"
+        doc["reads"]["v_cf"]["pos"] = "tap"
+        doc["writes"]["patch"]["pos"] = "tap"
     assert digest(canonicalize(in_order(a), env)) == digest(
         canonicalize(in_order(b), env)
     )
 
 
-def test_im_edit_order_inside_sweep_digests_identically(env):
+def test_im_write_order_inside_sweep_digests_identically(env):
     a = base_doc()
     b = base_doc()
     for doc in (a, b):
-        doc["edits"]["nudge"] = {
+        doc["writes"]["nudge"] = {
             "site": "tgt",
             "pos": -1,
-            "do": {"add_scaled": {"op": "v_src", "alpha": 0.5}},
+            "do": {"add_scaled": {"op": "v_cf", "alpha": 0.5}},
         }
-    a["intervened_models"]["patched"]["edits"] = {
+    a["intervened_models"]["patched"]["writes"] = {
         "sweep": [["patch", "nudge"], ["patch"]]
     }
-    b["intervened_models"]["patched"]["edits"] = {
+    b["intervened_models"]["patched"]["writes"] = {
         "sweep": [["nudge", "patch"], ["patch"]]
     }
     assert digest(canonicalize(in_order(a), env)) == digest(
@@ -405,9 +405,9 @@ def test_params_content_digest_stamped(env):
     doc = base_doc()
     doc["model"] = {"key": "meta-llama/Llama-3.1-8B", "revision": "main"}
     doc["params"] = {"vec": {"file_path": ROT_FIXTURE_RELPATH}}
-    doc["edits"]["patch"]["do"] = {"add_scaled": {"op": "vec", "alpha": 1.0}}
-    del doc["reads"]["v_src"]
-    del doc["data"]["source"]
+    doc["writes"]["patch"]["do"] = {"add_scaled": {"op": "vec", "alpha": 1.0}}
+    del doc["reads"]["v_cf"]
+    del doc["data"]["counterfactual"]
     doc["reads"]["logits"]["dims"] = None
     doc["reads"]["logits"].pop("dims")
     loaded = load(in_order(doc), env)
@@ -418,9 +418,9 @@ def test_params_content_digest_stamped(env):
 def test_params_missing_file_refuses(env):
     doc = base_doc()
     doc["params"] = {"vec": {"file_path": "nowhere.safetensors"}}
-    doc["edits"]["patch"]["do"] = {"add_scaled": {"op": "vec", "alpha": 1.0}}
-    del doc["reads"]["v_src"]
-    del doc["data"]["source"]
+    doc["writes"]["patch"]["do"] = {"add_scaled": {"op": "vec", "alpha": 1.0}}
+    del doc["reads"]["v_cf"]
+    del doc["data"]["counterfactual"]
     with pytest.raises(ValidationError) as err:
         load(in_order(doc), env)
     assert err.value.rule == 15
@@ -431,10 +431,10 @@ def test_params_missing_file_refuses(env):
 # --------------------------------------------------------------------------- #
 
 
-def test_source_data_identity_reaches_the_patched_group():
+def test_counterfactual_data_identity_reaches_the_patched_group():
     doc = parse_document(in_order(base_doc()))
-    one = plan_point(doc, data_identity={"base": "d", "source": "s1"})
-    two = plan_point(doc, data_identity={"base": "d", "source": "s2"})
+    one = plan_point(doc, data_identity={"base": "d", "counterfactual": "s1"})
+    two = plan_point(doc, data_identity={"base": "d", "counterfactual": "s2"})
     patched_one = next(g for g in one.groups if g.model == "patched")
     patched_two = next(g for g in two.groups if g.model == "patched")
     assert patched_one.digest != patched_two.digest
@@ -446,7 +446,8 @@ def test_model_identity_reaches_every_group():
     b["model"]["key"] = "meta-llama/Llama-3.1-8B"
     plans = [
         plan_point(
-            parse_document(in_order(d)), data_identity={"base": "d", "source": "d"}
+            parse_document(in_order(d)),
+            data_identity={"base": "d", "counterfactual": "d"},
         )
         for d in (a, b)
     ]
@@ -459,9 +460,9 @@ def test_param_operand_spec_reaches_the_group_digest():
     def with_param(path: str):
         doc = base_doc()
         doc["params"] = {"vec": {"file_path": path}}
-        doc["edits"]["patch"]["do"] = {"add_scaled": {"op": "vec", "alpha": 1.0}}
-        del doc["reads"]["v_src"]
-        del doc["data"]["source"]
+        doc["writes"]["patch"]["do"] = {"add_scaled": {"op": "vec", "alpha": 1.0}}
+        del doc["reads"]["v_cf"]
+        del doc["data"]["counterfactual"]
         return parse_document(in_order(doc))
 
     one = plan_point(with_param("a.safetensors"), data_identity={"base": "d"})
@@ -509,12 +510,12 @@ def test_optimizer_lr_must_be_numeric():
 
 def test_requires_campaign_unions_over_points(env):
     doc = base_doc()
-    doc["edits"]["pfn"] = {
+    doc["writes"]["pfn"] = {
         "site": "tgt",
         "pos": 0,
         "do": {"pytorch_fn": {"qualname": "torch.relu"}},
     }
-    doc["intervened_models"]["patched"]["edits"] = {
+    doc["intervened_models"]["patched"]["writes"] = {
         "sweep": [["patch"], ["patch", "pfn"]]
     }
     expansion = expand(in_order(doc))

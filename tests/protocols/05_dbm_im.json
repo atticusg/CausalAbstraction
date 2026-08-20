@@ -5,7 +5,7 @@
   "causal_model": {"key": "weekdays.causal_model"},
   "data": {
     "base":   {"dataset": "weekdays/train", "field": "input"},
-    "source": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
+    "counterfactual": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
   },
   "sites": {
     "target": {"component": "block_output", "layer": 18},
@@ -15,14 +15,14 @@
     "gate": {"kind": "gate"}
   },
   "reads": {
-    "v_src":  {"site": "target",  "pos": -1, "model": "original", "input": "source", "featurizer": "gate"},
+    "v_cf":  {"site": "target",  "pos": -1, "model": "original", "input": "counterfactual", "featurizer": "gate"},
     "logits": {"site": "lm_head", "pos": -1, "model": "masked", "input": "base"}
   },
-  "edits": {
-    "mask": {"site": "target", "pos": -1, "featurizer": "gate", "do": {"swap": "v_src"}}
+  "writes": {
+    "mask": {"site": "target", "pos": -1, "featurizer": "gate", "do": {"swap": "v_cf"}}
   },
   "intervened_models": {
-    "masked": {"input": "base", "edits": ["mask"]}
+    "masked": {"input": "base", "writes": ["mask"]}
   },
   "metrics": {
     "iia": {"kind": "logit_diff",    "of": "logits", "a": "cf_answer", "b": "base_answer"},

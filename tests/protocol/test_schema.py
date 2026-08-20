@@ -31,7 +31,7 @@ def test_load_raw_rejects_non_object_top_level():
 
 def test_int_pos_sugar_expands():
     doc = parse_document(base_doc())
-    pos = doc.reads["v_src"].pos
+    pos = doc.reads["v_cf"].pos
     assert isinstance(pos, PositionSpec) and pos.index == -1
 
 
@@ -70,7 +70,7 @@ def test_unsupported_version():
 def test_position_spec_needs_exactly_one_anchor():
     raw = base_doc()
     raw["positions"] = {"p": {"index": -1, "variable": "x"}}
-    raw["reads"]["v_src"]["pos"] = "p"
+    raw["reads"]["v_cf"]["pos"] = "p"
     with pytest.raises(ParseError):
         parse_document(in_order(raw))
 
@@ -84,7 +84,7 @@ def test_layerless_component_rejects_layer():
 
 def test_do_has_exactly_one_mechanism():
     raw = base_doc()
-    raw["edits"]["patch"]["do"] = {"swap": "v_src", "renormalize": True}
+    raw["writes"]["patch"]["do"] = {"swap": "v_cf", "renormalize": True}
     with pytest.raises(ParseError):
         parse_document(raw)
 
@@ -100,8 +100,8 @@ def test_sweep_wrapper_parses_to_axis_values():
 def test_entry_level_sweep_on_positions():
     raw = base_doc()
     raw["positions"] = {"tap": {"sweep": [{"index": -1}, {"variable": "subject"}]}}
-    raw["reads"]["v_src"]["pos"] = "tap"
-    raw["edits"]["patch"]["pos"] = "tap"
+    raw["reads"]["v_cf"]["pos"] = "tap"
+    raw["writes"]["patch"]["pos"] = "tap"
     doc = parse_document(in_order(raw))
     tap = doc.positions["tap"]
     assert isinstance(tap, Sweep) and len(tap.values) == 2

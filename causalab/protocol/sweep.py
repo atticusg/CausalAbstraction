@@ -255,7 +255,7 @@ def coordinate_label(coords: Mapping[str, Any], *, entry: str | None = None) -> 
             "featurizers",
             "params",
             "reads",
-            "edits",
+            "writes",
             "intervened_models",
             "metrics",
             "train",

@@ -22,7 +22,7 @@ def executor_for(
     bundle: ModelBundle,
     *,
     base_texts: list[str],
-    source_texts: list[str] | None = None,
+    counterfactual_texts: list[str] | None = None,
     extra_columns: dict[str, list[Any]] | None = None,
     load_tensors: Any = None,
     grad_enabled: bool = False,
@@ -32,16 +32,16 @@ def executor_for(
     rows: list[dict[str, Any]] = []
     for i, text in enumerate(base_texts):
         row: dict[str, Any] = {"input": text}
-        if source_texts is not None:
-            row["counterfactual_inputs"] = [source_texts[i]]
+        if counterfactual_texts is not None:
+            row["counterfactual_inputs"] = [counterfactual_texts[i]]
         for column, values in (extra_columns or {}).items():
             row[column] = values[i]
         rows.append(row)
     role_rows: dict[str, list[dict[str, Any]]] = {"base": rows}
     role_fields = {"base": "input"}
-    if source_texts is not None:
-        role_rows["source"] = rows
-        role_fields["source"] = "counterfactual_inputs[0]"
+    if counterfactual_texts is not None:
+        role_rows["counterfactual"] = rows
+        role_fields["counterfactual"] = "counterfactual_inputs[0]"
     return PointExecutor(
         doc,
         bundle,
@@ -53,8 +53,11 @@ def executor_for(
     )
 
 
-def base_data_section(with_source: bool) -> dict[str, Any]:
+def base_data_section(with_counterfactual: bool) -> dict[str, Any]:
     data: dict[str, Any] = {"base": {"dataset": "inline", "field": "input"}}
-    if with_source:
-        data["source"] = {"dataset": "inline", "field": "counterfactual_inputs[0]"}
+    if with_counterfactual:
+        data["counterfactual"] = {
+            "dataset": "inline",
+            "field": "counterfactual_inputs[0]",
+        }
     return data

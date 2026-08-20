@@ -25,9 +25,9 @@ Design notes
   ``mlp_output``→``layers[L].mlp`` output, ``attention_output``→
   ``layers[L].self_attn`` output, and ``head_attention_value_output`` head ``H``→
   the ``[H*d_head:(H+1)*d_head]`` column slice of ``o_proj``'s input.
-* ``run_with_edits`` / ``capture_with_edits`` install several hooks in one
-  forward. PyTorch fires hooks in module-execution (forward) order, so an edit on
-  an upstream module is visible to a capture/edit on a downstream module within
+* ``run_with_writes`` / ``capture_with_writes`` install several hooks in one
+  forward. PyTorch fires hooks in module-execution (forward) order, so a write on
+  an upstream module is visible to a capture/write on a downstream module within
   the same pass — exactly the firing-order contract causal tracing and two-pass
   path patching rely on.
 """
@@ -46,11 +46,11 @@ from causalab.causal.trace import CausalTrace, Mechanism
 # one-field shim satisfies the parameter (tests/neural/pytorch_hooks/conftest.py).
 LMPipeline = Any
 
-# Edit/capture hooks fire on a module's input ("in", a forward_pre_hook) or its
+# Write/capture hooks fire on a module's input ("in", a forward_pre_hook) or its
 # output ("out", a forward_hook).
 HookKind = str  # Literal["in", "out"]
-EditFn = Callable[[torch.Tensor], None]  # mutates the hooked activation in place
-EditSpec = tuple[torch.nn.Module, HookKind, EditFn]
+WriteFn = Callable[[torch.Tensor], None]  # mutates the hooked activation in place
+WriteSpec = tuple[torch.nn.Module, HookKind, WriteFn]
 
 
 # --------------------------------------------------------------------------- #
@@ -164,7 +164,7 @@ def random_rotation(d: int, *, seed: int = 0) -> torch.Tensor:
 #      with separate ``self_attn.{q,k,v,o}_proj`` and ``.mlp``;                #
 #    * GPT-2: ``model.transformer.h[L]`` with a fused ``attn.c_attn`` (QKV) and #
 #      ``attn.c_proj`` as the output projection.                               #
-#  The resolvers dispatch on the module tree; everything above (capture / edit #
+#  The resolvers dispatch on the module tree; everything above (capture / write #
 #  / multi-hook) is written against these resolvers and is therefore family-   #
 #  agnostic. ``config.hidden_size`` / ``num_attention_heads`` resolve on GPT-2 #
 #  too via ``GPT2Config.attribute_map`` (``n_embd`` / ``n_head``).             #
@@ -369,7 +369,7 @@ def capture_head_value(
 
 
 # --------------------------------------------------------------------------- #
-#  Edit + run — hand-rolled interventions, return last-position logits         #
+#  Write + run — hand-rolled interventions, return last-position logits         #
 # --------------------------------------------------------------------------- #
 def next_token_logits(
     pipeline: LMPipeline,
@@ -408,16 +408,16 @@ def next_token_logits(
     return logits.cpu()
 
 
-def component_edited_logits(
+def component_written_logits(
     pipeline: LMPipeline,
     base_inputs: Mapping,
     module: torch.nn.Module,
     kind: HookKind,
-    edit: EditFn,
+    write: WriteFn,
 ) -> torch.Tensor:
-    """Next-token logits after running the base with a hook whose ``edit(hidden)``
+    """Next-token logits after running the base with a hook whose ``write(hidden)``
     mutates the component's activation in place (the hand-rolled intervention)."""
-    return run_with_edits(pipeline, base_inputs, [(module, kind, edit)])
+    return run_with_writes(pipeline, base_inputs, [(module, kind, write)])
 
 
 def head_patched_next_logits(
@@ -432,45 +432,45 @@ def head_patched_next_logits(
     at ``positions`` with ``patch_slice`` (``[batch, len(positions), d_head]``)."""
     sl = head_slice(pipeline, head)
 
-    def edit(x: torch.Tensor) -> None:
+    def write(x: torch.Tensor) -> None:
         for i, p in enumerate(positions):
             x[:, p, sl] = patch_slice[:, i, :]
 
-    return run_with_edits(
-        pipeline, base_inputs, [(o_proj(pipeline, layer), "in", edit)]
+    return run_with_writes(
+        pipeline, base_inputs, [(o_proj(pipeline, layer), "in", write)]
     )
 
 
 # --------------------------------------------------------------------------- #
-#  Multi-hook — several edits / a capture in one forward (firing order)        #
+#  Multi-hook — several writes / a capture in one forward (firing order)        #
 # --------------------------------------------------------------------------- #
-def _install(module: torch.nn.Module, kind: HookKind, edit: EditFn):
-    """Register an in-place ``edit`` on ``module``'s input/output; return handle."""
+def _install(module: torch.nn.Module, kind: HookKind, write: WriteFn):
+    """Register an in-place ``write`` on ``module``'s input/output; return handle."""
     if kind == "out":
 
         def out_hook(_m, _i, out):
             hidden = hidden_of(out).clone()
-            edit(hidden)
+            write(hidden)
             return (hidden, *out[1:]) if isinstance(out, tuple) else hidden
 
         return module.register_forward_hook(out_hook)
 
     def pre_hook(_m, args):
         x = args[0].clone()
-        edit(x)
+        write(x)
         return (x, *args[1:])
 
     return module.register_forward_pre_hook(pre_hook)
 
 
-def run_with_edits(
-    pipeline: LMPipeline, base_inputs: Mapping, edits: list[EditSpec]
+def run_with_writes(
+    pipeline: LMPipeline, base_inputs: Mapping, writes: list[WriteSpec]
 ) -> torch.Tensor:
-    """Last-position logits after applying every ``(module, kind, edit)`` in one
+    """Last-position logits after applying every ``(module, kind, write)`` in one
     forward. PyTorch fires the hooks in module-execution order, so an upstream
-    edit is visible to a downstream edit — the forward-order contract causal
+    write is visible to a downstream write — the forward-order contract causal
     tracing and two-pass path patching depend on."""
-    handles = [_install(m, kind, edit) for (m, kind, edit) in edits]
+    handles = [_install(m, kind, write) for (m, kind, write) in writes]
     try:
         with torch.no_grad():
             logits = pipeline.hf_model(
@@ -485,16 +485,16 @@ def run_with_edits(
     return logits.cpu()
 
 
-def capture_with_edits(
+def capture_with_writes(
     pipeline: LMPipeline,
     base_inputs: Mapping,
     capture_module: torch.nn.Module,
     capture_kind: HookKind,
-    edits: list[EditSpec],
+    writes: list[WriteSpec],
 ) -> torch.Tensor:
-    """Capture ``capture_module``'s activation in a single forward while ``edits``
+    """Capture ``capture_module``'s activation in a single forward while ``writes``
     are active. Because hooks fire in forward order, the captured value reflects
-    every *upstream* edit already applied — this is how two-pass path patching's
+    every *upstream* write already applied — this is how two-pass path patching's
     PASS 1 reads a receiver's value under an upstream sender+restorer
     intervention (no pyvene)."""
     grabbed: dict[str, torch.Tensor] = {}
@@ -512,7 +512,7 @@ def capture_with_edits(
 
         cap_handle = capture_module.register_forward_pre_hook(cap_pre)
 
-    edit_handles = [_install(m, kind, edit) for (m, kind, edit) in edits]
+    write_handles = [_install(m, kind, write) for (m, kind, write) in writes]
     try:
         with torch.no_grad():
             pipeline.hf_model(
@@ -521,6 +521,6 @@ def capture_with_edits(
             )
     finally:
         cap_handle.remove()
-        for h in edit_handles:
+        for h in write_handles:
             h.remove()
     return grabbed["v"]

@@ -5,7 +5,7 @@ it turns a raw JSON/YAML mapping into a typed, frozen
 :class:`Document` — or refuses with a structured
 :class:`~causalab.protocol.errors.ParseError` /
 :class:`~causalab.protocol.errors.ValidationError`. Everything here is
-backend-free and torch-free: sites, positions, featurizers and edits are
+backend-free and torch-free: sites, positions, featurizers and writes are
 pure data records; a backend interprets them (spec §8).
 
 Parsing owns the *shape* rules of the spec:
@@ -42,7 +42,7 @@ __all__ = [
     "DataRole",
     "Do",
     "Document",
-    "EditSpec",
+    "WriteSpec",
     "FEATURIZER_KINDS",
     "FeaturizerKind",
     "FeaturizerSpec",
@@ -164,8 +164,8 @@ METRIC_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 #: Names no section may declare (§1): the input roles, the un-intervened
-#: model, and the indexed-source family (checked by prefix for ``source[``).
-RESERVED_NAMES: frozenset[str] = frozenset({"base", "source", "original"})
+#: model, and the indexed-counterfactual family (checked by prefix for ``counterfactual[``).
+RESERVED_NAMES: frozenset[str] = frozenset({"base", "counterfactual", "original"})
 
 #: Top-level sections in mandatory order (§1). ``neural_model`` is accepted
 #: at position 3 as an alias of ``model`` and canonicalizes away.
@@ -180,7 +180,7 @@ SECTION_ORDER: tuple[str, ...] = (
     "featurizers",
     "params",
     "reads",
-    "edits",
+    "writes",
     "intervened_models",
     "metrics",
     "train",
@@ -198,7 +198,7 @@ NAMED_SECTIONS: tuple[str, ...] = (
     "featurizers",
     "params",
     "reads",
-    "edits",
+    "writes",
     "intervened_models",
     "metrics",
 )
@@ -389,7 +389,7 @@ class Do:
 
 
 @dataclasses.dataclass(frozen=True)
-class EditSpec:
+class WriteSpec:
     """§2.8 — an inert effect definition: no model, no input, no conditions;
     it executes inside every intervened model that lists it."""
 
@@ -403,10 +403,10 @@ class EditSpec:
 @dataclasses.dataclass(frozen=True)
 class IMSpec:
     """§2.9 — an intervened model ℒ_{b∪𝕀}: a mandatory input role plus the
-    edits in force (unordered; canonical form sorts)."""
+    writes in force (unordered; canonical form sorts)."""
 
     input: Leaf
-    edits: tuple[str, ...] | Sweep | ArtifactRef
+    writes: tuple[str, ...] | Sweep | ArtifactRef
 
 
 @dataclasses.dataclass(frozen=True)
@@ -471,7 +471,7 @@ class Document:
     )
     featurizers: Mapping[str, FeaturizerSpec] = dataclasses.field(default_factory=dict)
     params: Mapping[str, ParamSpec] = dataclasses.field(default_factory=dict)
-    edits: Mapping[str, EditSpec] = dataclasses.field(default_factory=dict)
+    writes: Mapping[str, WriteSpec] = dataclasses.field(default_factory=dict)
     intervened_models: Mapping[str, IMSpec] = dataclasses.field(default_factory=dict)
     metrics: Mapping[str, MetricSpec] = dataclasses.field(default_factory=dict)
     train: TrainSpec | None = None
@@ -709,20 +709,21 @@ def _parse_data_role(raw: Any, path: str) -> DataRole:
 
 def _parse_data(raw: Any, path: str) -> dict[str, DataRole | tuple[DataRole, ...]]:
     obj = _require_mapping(raw, path)
-    _check_keys(obj, ("base", "source"), path)
+    _check_keys(obj, ("base", "counterfactual"), path)
     if "base" not in obj:
         raise ParseError("P2", "data needs a 'base' role", path=path)
     out: dict[str, DataRole | tuple[DataRole, ...]] = {
         "base": _parse_data_role(obj["base"], f"{path}.base")
     }
-    if "source" in obj:
-        src = obj["source"]
-        if isinstance(src, list):
-            out["source"] = tuple(
-                _parse_data_role(s, f"{path}.source[{j}]") for j, s in enumerate(src)
+    if "counterfactual" in obj:
+        cf = obj["counterfactual"]
+        if isinstance(cf, list):
+            out["counterfactual"] = tuple(
+                _parse_data_role(s, f"{path}.counterfactual[{j}]")
+                for j, s in enumerate(cf)
             )
         else:
-            out["source"] = _parse_data_role(src, f"{path}.source")
+            out["counterfactual"] = _parse_data_role(cf, f"{path}.counterfactual")
     return out
 
 
@@ -933,7 +934,7 @@ def _parse_params(raw: Any, path: str) -> dict[str, ParamSpec]:
 
 
 def _parse_pos_field(value: Any, path: str) -> Any:
-    """A read/edit ``pos``: a positions-table name or an inline spec."""
+    """A read/write ``pos``: a positions-table name or an inline spec."""
     if isinstance(value, str):
         return value
     return _parse_position_spec(value, path)
@@ -974,7 +975,7 @@ def _parse_reads(raw: Any, path: str) -> dict[str, ReadSpec]:
 
 
 def _parse_operand(value: Any, path: str) -> Any:
-    """An edit operand: a read/param name or a literal scalar (§2.8)."""
+    """A write operand: a read/param name or a literal scalar (§2.8)."""
     if isinstance(value, str):
         return value
     return _scalar_number(value, path)
@@ -1068,13 +1069,13 @@ def _parse_do(raw: Any, path: str) -> Do:
     )
 
 
-def _parse_edit(raw: Any, path: str) -> EditSpec:
+def _parse_write(raw: Any, path: str) -> WriteSpec:
     obj = _require_mapping(raw, path)
     _check_keys(obj, ("site", "pos", "featurizer", "dims", "do"), path)
     for field in ("site", "pos", "do"):
         if field not in obj:
-            raise ParseError("P2", f"an edit needs {field!r}", path=path)
-    return EditSpec(
+            raise ParseError("P2", f"a write needs {field!r}", path=path)
+    return WriteSpec(
         site=_wrapped(obj["site"], _scalar_str, f"{path}.site"),
         pos=_wrapped(obj["pos"], _parse_pos_field, f"{path}.pos"),
         do=_parse_do(obj["do"], f"{path}.do"),
@@ -1089,20 +1090,20 @@ def _parse_edit(raw: Any, path: str) -> EditSpec:
     )
 
 
-def _parse_edits(raw: Any, path: str) -> dict[str, EditSpec]:
+def _parse_writes(raw: Any, path: str) -> dict[str, WriteSpec]:
     obj = _require_mapping(raw, path)
-    return {name: _parse_edit(value, f"{path}.{name}") for name, value in obj.items()}
+    return {name: _parse_write(value, f"{path}.{name}") for name, value in obj.items()}
 
 
 def _parse_im(raw: Any, path: str) -> IMSpec:
     obj = _require_mapping(raw, path)
-    _check_keys(obj, ("input", "edits"), path)
-    for field in ("input", "edits"):
+    _check_keys(obj, ("input", "writes"), path)
+    for field in ("input", "writes"):
         if field not in obj:
             raise ParseError("P2", f"an intervened_model needs {field!r}", path=path)
     return IMSpec(
         input=_wrapped(obj["input"], _scalar_str, f"{path}.input"),
-        edits=_wrapped(obj["edits"], _str_list, f"{path}.edits"),
+        writes=_wrapped(obj["writes"], _str_list, f"{path}.writes"),
     )
 
 
@@ -1239,7 +1240,7 @@ def _parse_train(raw: Any, path: str) -> TrainSpec:
     if "pairs" not in batch:
         raise ParseError(
             "P2",
-            "train.batch counts base+source pairs: {'pairs': n}",
+            "train.batch counts base+counterfactual pairs: {'pairs': n}",
             path=f"{path}.batch",
         )
     anneal = None
@@ -1462,7 +1463,7 @@ def parse_document(raw: Mapping[str, Any]) -> Document:
         ),
         params=_parse_params(normalized.get("params", {}), "params"),
         reads=_parse_reads(normalized["reads"], "reads"),
-        edits=_parse_edits(normalized.get("edits", {}), "edits"),
+        writes=_parse_writes(normalized.get("writes", {}), "writes"),
         intervened_models=_parse_intervened_models(
             normalized.get("intervened_models", {}), "intervened_models"
         ),

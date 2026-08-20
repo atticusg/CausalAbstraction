@@ -16,7 +16,7 @@ ambient state survives:
 * ``eval`` runs on the declared split in eval mode (hard gate, no grad)
   every N epochs/updates; ``early_stop`` tracks the eval metric with
   patience;
-* ``batch.pairs`` counts base+source pairs; roles are sliced together
+* ``batch.pairs`` counts base+counterfactual pairs; roles are sliced together
   (rows are paired by index, §2.2).
 
 The model's weights are frozen at load; only featurizer slots (and, later,

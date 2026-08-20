@@ -15,20 +15,20 @@ Sections in this order (order enforced; `save` last):
 | 2 | `description` | – | free text, the file's intent |
 | 3 | `model` | ✓ | the neural network ℒ (alias: `neural_model`) |
 | 4 | `causal_model` | – | the high-level algorithm ℋ, provenance only |
-| 5 | `data` | ✓ | input rows: `base` (+ `source`) |
+| 5 | `data` | ✓ | input rows: `base` (+ `counterfactual`) |
 | 6 | `positions` | – | named token-position specs |
 | 7 | `sites` | ✓ | named activation addresses — the complete tap inventory |
 | 8 | `featurizers` | – | named feature-space maps |
 | 9 | `params` | – | free/constant tensors owned by no featurizer |
 | 10 | `reads` | ✓ | value producers |
-| 11 | `edits` | – | effect definitions (inert until listed) |
-| 12 | `intervened_models` | –* | which edits are in force on which input (*required if `edits` present) |
+| 11 | `writes` | – | effect definitions (inert until listed) |
+| 12 | `intervened_models` | –* | which writes are in force on which input (*required if `writes` present) |
 | 13 | `metrics` | – | closed reductions over read values |
 | 14 | `train` | – | the fit, declared |
 | 15 | `save` | ✓ | the complete output manifest — non-empty, last |
 
 - **One global namespace**: every name in sections 6–13 must be unique across
-  all of them; reserved names: `base`, `source`, `source[j]`, `original`.
+  all of them; reserved names: `base`, `counterfactual`, `counterfactual[j]`, `original`.
 - All cross-references must resolve; references are by name, never inline
   duplication.
 - **Artifact-valued fields**: anywhere a scalar or position is expected,
@@ -52,22 +52,22 @@ Sections in this order (order enforced; `save` last):
 ```json
 "data": {
   "base":   {"dataset": "weekdays/train", "field": "input"},
-  "source": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
+  "counterfactual": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
 }
 ```
 
 - `dataset`: a **local path or HF key — no digest**. The parser resolves it at
   load and stamps the content digest into the canonical form (sec. 7).
-- Roles are the keys: `base` (required) and `source` (optional). `source` is
-  singular; if its value is an array, references index it as `source[j]`.
-  Rows are paired: one base row + its source row(s) form one example.
+- Roles are the keys: `base` (required) and `counterfactual` (optional). `counterfactual` is
+  singular; if its value is an array, references index it as `counterfactual[j]`.
+  Rows are paired: one base row + its counterfactual row(s) form one example.
 - `field` selects the column; `[j]` indexes list-valued columns.
 - Dataset **columns** referenced by metrics are checked against the table at
   run time (`validate --data`), not at load.
 
 ### 2.3 `positions`
 
-Named entries; a read/edit `pos` is a name here, or an inline spec.
+Named entries; a read/write `pos` is a name here, or an inline spec.
 
 | form | resolves to |
 |---|---|
@@ -100,7 +100,7 @@ Component vocabulary (per-backend `SiteResolver` maps each to a tap):
 `attention_value` · `attention_probs` · `mlp_input` · `mlp_output` ·
 `mlp_activation` · `router_logits` · `expert_output` · `ln_final` · `lm_head`
 
-- **`sites` is the complete inventory**: every site a read or edit references
+- **`sites` is the complete inventory**: every site a read or write references
   must be declared here, including `lm_head` (`{"component": "lm_head"}`).
   There are no implicit site names.
 - Sites are pure data — no behavior, no model handles.
@@ -124,7 +124,7 @@ Component vocabulary (per-backend `SiteResolver` maps each to a tap):
 - **Composition**: a `featurizer` reference may be a list `["rot", "gate"]`,
   applied left-to-right with a per-stage `err` list.
 - **Error-term contract**: `err` and unselected dims always come from the
-  pre-edit value at the address — so a zero write ablates only the feature
+  pre-write value at the address — so a zero write ablates only the feature
   contribution, and a `dims` write is a subspace swap.
 - **`file_path`** (optional): load a fitted artifact instead of computing.
   Its `ArtifactIdentity` (sec. 8) is checked; mismatch refuses. A loaded
@@ -142,7 +142,7 @@ Free tensors owned by no featurizer (steering vectors, a free written value):
 ### 2.7 `reads`
 
 ```json
-"v_src":  {"site": "target",  "pos": -1, "model": "original", "input": "source"},
+"v_cf":  {"site": "target",  "pos": -1, "model": "original", "input": "counterfactual"},
 "logits": {"site": "lm_head", "pos": -1, "model": "patched",  "input": "base"}
 ```
 
@@ -150,26 +150,26 @@ Free tensors owned by no featurizer (steering vectors, a free written value):
 |---|---|
 | `site`, `pos` | the address |
 | `model` | `original` (un-intervened) or a declared intervened_model |
-| `input` | `base` \| `source` \| `source[j]`. For an intervened model this is redundant with the IM's own `input` and is **cross-checked** — mismatch is a load error |
+| `input` | `base` \| `counterfactual` \| `counterfactual[j]`. For an intervened model this is redundant with the IM's own `input` and is **cross-checked** — mismatch is a load error |
 | `featurizer` | optional; value is read in feature space |
 | `dims` | optional static index list into the feature axis; default = all |
 
 - Value = `featurize(activation at (site, pos) in model)[dims]`.
-- A read in model `M` sees the activation **with all of `M`'s edits applied**
-  (upstream and at the same address). To read an un-edited value, read in
-  `original` (or an IM without that edit).
+- A read in model `M` sees the activation **with all of `M`'s writes applied**
+  (upstream and at the same address). To read an un-written value, read in
+  `original` (or an IM without that write).
 - Reads never carry `do`.
 
-### 2.8 `edits` and the `do` algebra
+### 2.8 `writes` and the `do` algebra
 
 ```json
-"patch": {"site": "target", "pos": -1, "featurizer": "rot", "do": {"swap": "v_src"}}
+"patch": {"site": "target", "pos": -1, "featurizer": "rot", "do": {"swap": "v_cf"}}
 ```
 
-- An edit is an **inert definition**: no `model`, no `input`, no conditions.
+- A write is an **inert definition**: no `model`, no `input`, no conditions.
   It executes inside every intervened_model that lists it.
 - Effect at its address: `write(inverse(scatter(do(f[dims]) into f), err))` —
-  untouched dims and `err` from the pre-edit value (sec. 2.5).
+  untouched dims and `err` from the pre-write value (sec. 2.5).
 - `Operand` = a read name · a param name (`rot.weight`, or a `params` entry) ·
   a literal scalar. **Never a tensor, never a closure** — constant vectors
   enter as `params` entries.
@@ -187,9 +187,9 @@ Closed mechanism set (`do` has exactly one key):
 | `{"clamp": {"lo": a, "hi": b}}` | `f ← clip(f, a, b)` | absolute |
 | `{"pytorch_fn": {"qualname": "…"}}` | arbitrary | absolute; **local-only** — refused at load by any non-local backend |
 
-- Per (site, overlapping pos, model): **at most one absolute edit**; any
-  number of additive edits. Application order: absolute first, then additive
-  deltas summed. This replaces any commutativity analysis and makes edit sets
+- Per (site, overlapping pos, model): **at most one absolute write**; any
+  number of additive writes. Application order: absolute first, then additive
+  deltas summed. This replaces any commutativity analysis and makes write sets
   order-free.
 - `gaussian.axis` tells a tensor-parallel backend whether the draw is
   replicated or sharded across ranks; `seed` is part of the hash.
@@ -197,21 +197,21 @@ Closed mechanism set (`do` has exactly one key):
 ### 2.9 `intervened_models`
 
 ```json
-"patched": {"input": "base", "edits": ["swap_sender", "freeze_10", "freeze_11"]},
-"final":   {"input": "base", "edits": ["inject"]}
+"patched": {"input": "base", "writes": ["swap_sender", "freeze_10", "freeze_11"]},
+"final":   {"input": "base", "writes": ["inject"]}
 ```
 
 | field | meaning |
 |---|---|
-| `input` | **mandatory** — `base` \| `source` \| `source[j]` |
-| `edits` | the edits in force; **unordered** (canonical form sorts) |
+| `input` | **mandatory** — `base` \| `counterfactual` \| `counterfactual[j]` |
+| `writes` | the writes in force; **unordered** (canonical form sorts) |
 
 - `original` is the reserved name for the un-intervened model (on any input);
   it is never declared.
-- **Membership rule**: every declared edit appears in ≥ 1 intervened_model.
+- **Membership rule**: every declared write appears in ≥ 1 intervened_model.
 - **Cross-model data flow has exactly one channel**: a read in model A may be
-  the operand of an edit in force in model B. No direct IM→IM wiring, no
-  inheritance. The graph (IM → edits → operand reads → IMs) must be acyclic —
+  the operand of a write in force in model B. No direct IM→IM wiring, no
+  inheritance. The graph (IM → writes → operand reads → IMs) must be acyclic —
   it is the execution schedule's skeleton.
 
 ### 2.10 `metrics`
@@ -243,7 +243,7 @@ Closed vocabulary; `of` names a read; other value fields name dataset columns.
 | `params` | what is optimized: featurizer names (all slots) or dotted slots; the **only** trainability declaration |
 | `optimizer` | `{name, lr, …}` — lr/schedule/clip live here |
 | `steps` | `{"epochs": n}` or `{"updates": n}` |
-| `batch` | `{"pairs": n}` — counts base+source **pairs**, not rows |
+| `batch` | `{"pairs": n}` — counts base+counterfactual **pairs**, not rows |
 | `anneal` | dotted-path schedules, e.g. `{"gate.theta.temperature": [start, end, frac]}` |
 | `precision` | `{feature, loss, model}` dtypes |
 | `eval` | `{every, split, metrics}` |
@@ -272,7 +272,7 @@ everything that leaves the run. Three saveable kinds, two entry shapes:
   the path is unchanged; axis coordinates become columns / keyed entries.
 - Rules (all load errors): every metric saved (no objective/eval exception —
   the loss trajectory is always in the results) · every trained featurizer
-  saved · untrained or `file_path`-loaded featurizers not saveable · edits
+  saved · untrained or `file_path`-loaded featurizers not saveable · writes
   and intervened_models not saveable.
 
 ## 3. Sweeps
@@ -281,7 +281,7 @@ everything that leaves the run. Three saveable kinds, two entry shapes:
   `{"sweep": [v1, v2, …]}` or `{"sweep": {"range": [start, stop, step?]}}`.
   Bare arrays are never axes. Works on scalar- and list-typed fields alike.
 - **Axis identity = name identity**: sweeping `sites.target.layer` moves every
-  read/edit/metric referencing `target` together. The same list written on
+  read/write/metric referencing `target` together. The same list written on
   two fields is two axes (a cross) — share by referencing one name.
 - Axes **propagate through the reference graph**; entities off the axis stay
   singletons shared by all points.
@@ -301,8 +301,8 @@ everything that leaves the run. Three saveable kinds, two entry shapes:
   is one forward group over its input rows; fusion, batching, and staging
   across groups are the backend's choice. `num_forwards` is derived, never
   authored.
-- **Within a model**: apply each in-force edit at its address (absolute
-  first, then additive sum); reads see the fully edited state.
+- **Within a model**: apply each in-force write at its address (absolute
+  first, then additive sum); reads see the fully written state.
 - **Across models**: operand values flow along the acyclic model graph;
   the backend stages them (fused multi-pass, saved constants, or microbatch
   wiring — its call).
@@ -319,16 +319,16 @@ A conforming loader rejects the document unless all of these hold:
    suggestions. Derived fields (sec. 7) may not be authored.
 2. Section order per sec. 1; `save` last.
 3. Global namespace: no duplicate names across sections 6–13; no reserved
-   names (`base`, `source`, `source[j]`, `original`) declared.
+   names (`base`, `counterfactual`, `counterfactual[j]`, `original`) declared.
 4. Every reference resolves: sites (declared inventory only), positions,
-   featurizers, params, reads, edits, intervened_models, metrics.
+   featurizers, params, reads, writes, intervened_models, metrics.
 5. Reads: `model` ∈ `original` ∪ IMs; `input` a valid role; if `model` is an
    IM, `input` equals the IM's `input`.
-6. Edits carry no `model`/`input`/conditions; operands name reads, params, or
+6. Writes carry no `model`/`input`/conditions; operands name reads, params, or
    literal scalars.
-7. Every edit is in ≥ 1 intervened_model; every IM has a mandatory valid
+7. Every write is in ≥ 1 intervened_model; every IM has a mandatory valid
    `input`; the model graph is acyclic.
-8. Per (site, overlapping pos, model): ≤ 1 absolute edit.
+8. Per (site, overlapping pos, model): ≤ 1 absolute write.
 9. `dims` selections co-occurring at one address in one model are disjoint.
 10. `save` non-empty; entry shapes exact; bindings match resolution; every
     metric and every trained featurizer saved; nothing else saveable.
@@ -368,13 +368,13 @@ A conforming loader rejects the document unless all of these hold:
 - **Format**: strict JSON (unknown keys = error). YAML is accepted at the
   authoring surface; the object model is normative. JSON has no comments —
   use `description`.
-- **v1 scope**: prefill-only. No generation, no decode-step edits, one neural
+- **v1 scope**: prefill-only. No generation, no decode-step writes, one neural
   model per document.
 - **Canonical-stamp principle**: the authored file may be minimal; the
   canonical form materializes *everything* — every default (constant LR,
   optimizer betas, dtypes), every resolved reference (dataset digests,
   artifact values), every derived width, sugar expanded (int positions,
-  alias `neural_model` → `model`), unordered lists sorted (IM edit lists),
+  alias `neural_model` → `model`), unordered lists sorted (IM write lists),
   sweeps expanded to points.
 - `digest = sha256(canonical bytes)` — sorted keys, canonical floats; each
   param replaced by its content hash. Document digest = campaign; point
@@ -410,9 +410,9 @@ refusal messages generate from the missing capability.
 | capability | required when |
 |---|---|
 | `grad` | `train` present |
-| `paired_forward` | an edit's operand read has a different `input` than the edit's model |
+| `paired_forward` | a write's operand read has a different `input` than the write's model |
 | `full_logits` | a full `lm_head` read is saved, or a metric needs the full vocab (`top_k`, `class_probs`) |
-| `editable_attention_probs` | an edit writes `attention_probs` |
+| `writable_attention_probs` | a write targets `attention_probs` |
 | `pytorch_fn_local` | any `pytorch_fn` |
 
 Reference matrix:
@@ -462,7 +462,7 @@ Path patching (sender → receiver, off-path frozen; shows cross-model flow):
   "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
   "data": {
     "base":   {"dataset": "ioi/test", "field": "input"},
-    "source": {"dataset": "ioi/test", "field": "counterfactual_inputs[0]"}
+    "counterfactual": {"dataset": "ioi/test", "field": "counterfactual_inputs[0]"}
   },
   "sites": {
     "sender":   {"component": "attention_value",  "layer": 9, "head": 9},
@@ -472,21 +472,21 @@ Path patching (sender → receiver, off-path frozen; shows cross-model flow):
     "lm_head":  {"component": "lm_head"}
   },
   "reads": {
-    "v_sender":   {"site": "sender",   "pos": -1, "model": "original", "input": "source"},
+    "v_sender":   {"site": "sender",   "pos": -1, "model": "original", "input": "counterfactual"},
     "v_a10":      {"site": "a10",      "pos": -1, "model": "original", "input": "base"},
     "v_a11":      {"site": "a11",      "pos": -1, "model": "original", "input": "base"},
     "v_receiver": {"site": "receiver", "pos": -1, "model": "patched",  "input": "base"},
     "logits":     {"site": "lm_head",  "pos": -1, "model": "final",    "input": "base"}
   },
-  "edits": {
+  "writes": {
     "swap_sender": {"site": "sender",   "pos": -1, "do": {"swap": "v_sender"}},
     "freeze_10":   {"site": "a10",      "pos": -1, "do": {"swap": "v_a10"}},
     "freeze_11":   {"site": "a11",      "pos": -1, "do": {"swap": "v_a11"}},
     "inject":      {"site": "receiver", "pos": -1, "do": {"swap": "v_receiver"}}
   },
   "intervened_models": {
-    "patched": {"input": "base", "edits": ["swap_sender", "freeze_10", "freeze_11"]},
-    "final":   {"input": "base", "edits": ["inject"]}
+    "patched": {"input": "base", "writes": ["swap_sender", "freeze_10", "freeze_11"]},
+    "final":   {"input": "base", "writes": ["inject"]}
   },
   "metrics": {
     "logit_diff": {"kind": "logit_diff", "of": "logits", "a": "answer", "b": "cf_answer"}
@@ -507,7 +507,7 @@ featurizer save):
   "causal_model": {"key": "weekdays.causal_model"},
   "data": {
     "base":   {"dataset": "weekdays/train", "field": "input"},
-    "source": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
+    "counterfactual": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
   },
   "sites": {
     "target":  {"component": "block_output", "layer": 18},
@@ -517,14 +517,14 @@ featurizer save):
     "rot": {"kind": "subspace", "k": {"sweep": [8, 16, 32]}, "parametrization": "cayley"}
   },
   "reads": {
-    "v_src":  {"site": "target",  "pos": -1, "model": "original", "input": "source", "featurizer": "rot"},
+    "v_cf":  {"site": "target",  "pos": -1, "model": "original", "input": "counterfactual", "featurizer": "rot"},
     "logits": {"site": "lm_head", "pos": -1, "model": "patched",  "input": "base"}
   },
-  "edits": {
-    "patch": {"site": "target", "pos": -1, "featurizer": "rot", "do": {"swap": "v_src"}}
+  "writes": {
+    "patch": {"site": "target", "pos": -1, "featurizer": "rot", "do": {"swap": "v_cf"}}
   },
   "intervened_models": {
-    "patched": {"input": "base", "edits": ["patch"]}
+    "patched": {"input": "base", "writes": ["patch"]}
   },
   "metrics": {
     "iia": {"kind": "logit_diff",    "of": "logits", "a": "cf_answer", "b": "base_answer"},
@@ -554,8 +554,8 @@ featurizer save):
 |---|---|
 | `model` / `causal_model` | low-level model ℒ / high-level model ℋ |
 | `intervened_models.<name>` | ℒ_{b∪𝕀} — the intervened model |
-| an edit's `do` | an interventional 𝕀_X |
-| `swap` from a source read | interchange intervention (`IntInv`; `DistIntInv` when featurized) |
+| a write's `do` | an interventional 𝕀_X |
+| `swap` from a counterfactual read | interchange intervention (`IntInv`; `DistIntInv` when featurized) |
 | site + pos + dims | the target variable set **X** |
 | featurizer | the translation τ |
 | `match` metric | interchange-intervention accuracy (IIA) |

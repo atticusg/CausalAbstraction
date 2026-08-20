@@ -35,7 +35,7 @@ CAPABILITIES: tuple[str, ...] = (
     "grad",
     "paired_forward",
     "full_logits",
-    "editable_attention_probs",
+    "writable_attention_probs",
     "pytorch_fn_local",
 )
 
@@ -50,13 +50,13 @@ def requires(doc: Document) -> frozenset[str]:
     if doc.train is not None:
         needed.add("grad")
     for im in doc.intervened_models.values():
-        if not isinstance(im.edits, tuple):
+        if not isinstance(im.writes, tuple):
             raise AssertionError(
                 "requires() takes a concrete point document — expand sweeps first"
             )
-        for ename in im.edits:
-            edit = doc.edits[ename]
-            payload = edit.do.payload
+        for ename in im.writes:
+            write = doc.writes[ename]
+            payload = write.do.payload
             operand_names = (
                 [payload]
                 if isinstance(payload, str)
@@ -68,11 +68,11 @@ def requires(doc: Document) -> frozenset[str]:
                 read = doc.reads.get(op)
                 if read is not None and str(read.input) != str(im.input):
                     needed.add("paired_forward")
-            if edit.do.mechanism == "pytorch_fn":
+            if write.do.mechanism == "pytorch_fn":
                 needed.add("pytorch_fn_local")
-            site = doc.sites[str(edit.site)]
+            site = doc.sites[str(write.site)]
             if site.component == "attention_probs":
-                needed.add("editable_attention_probs")
+                needed.add("writable_attention_probs")
     saved = {entry.value for entry in doc.save}
     for rname, read in doc.reads.items():
         if rname in saved and read.dims is None:
@@ -121,7 +121,7 @@ class Backend(abc.ABC):
     name: str = "abstract"
     #: The §8 capability set this backend supports.
     capabilities: frozenset[str] = frozenset()
-    #: Local backends may run ``pytorch_fn`` edits (§2.8).
+    #: Local backends may run ``pytorch_fn`` writes (§2.8).
     is_local: bool = False
 
     @abc.abstractmethod
