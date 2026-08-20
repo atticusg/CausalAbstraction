@@ -650,6 +650,14 @@ def _check_save_binding(doc: Document, entry: SaveEntry, path: str) -> None:
             path=path,
         )
     is_metric = entry.value in doc.metrics
+    if entry.reduce is not None and is_metric:
+        raise ValidationError(
+            10,
+            f"save entry for metric {entry.value!r} carries 'reduce' — a metric "
+            "is already a reduction over its read; reduce applies to reads "
+            "(§2.12)",
+            path=path,
+        )
     expected_ext = ".parquet" if is_metric else ".safetensors"
     if not entry.file_path.endswith(expected_ext):
         raise ValidationError(
@@ -683,6 +691,13 @@ def _check_save_featurizer(
             10,
             f"featurizer {entry.value!r} is used at site(s) {sorted(used_sites)}, "
             f"not {entry.site!r} — the restated site is cross-checked (§2.12)",
+            path=path,
+        )
+    if entry.reduce is not None:
+        raise ValidationError(
+            10,
+            "a featurizer bundle carries fitted parameters, not gathered rows — "
+            "'reduce' applies to reads (§2.12)",
             path=path,
         )
     if not entry.file_path.endswith(".safetensors"):

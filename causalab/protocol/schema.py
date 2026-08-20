@@ -369,16 +369,19 @@ class FeaturizerSpec:
     init: Leaf | None = None
     dtype: Leaf | None = None
     file_path: Leaf | None = None
+    entry: Any = None
     description: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
 class ParamSpec:
     """§2.6 — a free tensor owned by no featurizer: either a loaded constant
-    (``file_path``) or a trainable free tensor (``shape`` + ``init``, which
-    must then appear in ``train.params``)."""
+    (``file_path``, optionally narrowed to one bundle entry by ``entry``) or
+    a trainable free tensor (``shape`` + ``init``, which must then appear in
+    ``train.params``)."""
 
     file_path: Leaf | None = None
+    entry: Any = None
     shape: Leaf | None = None
     init: Leaf | None = None
     description: str | None = None
@@ -467,13 +470,16 @@ class TrainSpec:
 class SaveEntry:
     """§2.12 — one manifest entry. Read/metric entries carry
     ``model``/``input``; trained-featurizer entries carry ``site``. The
-    restated binding is cross-checked at validation, never trusted."""
+    restated binding is cross-checked at validation, never trusted.
+    ``reduce`` (reads only) saves a statistic over the gathered rows
+    instead of the rows themselves (§2.12)."""
 
     value: str
     file_path: str
     model: str | None = None
     input: str | None = None
     site: str | None = None
+    reduce: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -657,6 +663,51 @@ def _parse_sweep(spec: Any, elem: Callable[[Any, str], Any], path: str) -> Sweep
     return Sweep(
         values=tuple(elem(v, f"{path}.sweep[{i}]") for i, v in enumerate(values))
     )
+
+
+#: Reductions a ``save`` entry may apply to a read (§2.12). Closed, and
+#: deliberately one entry wide: ``mean`` is what mean-ablation needs, and a
+#: second kind should arrive with the consumer that needs it.
+SAVE_REDUCTIONS: tuple[str, ...] = ("mean",)
+
+
+def _entry_selector(
+    value: Any, path: str, *, allow_slot: bool = False
+) -> dict[str, Any]:
+    """§2.5/§2.6 ``entry``: a mapping of coordinate name to scalar value,
+    naming one entry inside a loaded bundle
+    (:mod:`causalab.protocol.bundles`). Names are the coordinate names as
+    they appear in the producer's keys (``k``, ``seed``,
+    ``target.layer``) — not full axis ids, which the consuming document has
+    no reason to know."""
+    obj = _require_mapping(value, path)
+    if not obj:
+        raise ParseError(
+            "P2", "an 'entry' selector names at least one coordinate", path=path
+        )
+    selector: dict[str, Any] = {}
+    for name, coord in obj.items():
+        if name == "slot":
+            if not allow_slot:
+                raise ParseError(
+                    "P2",
+                    "a featurizer bundle's slots are fixed by its kind — "
+                    "'slot' selects only inside a params bundle",
+                    path=f"{path}.slot",
+                )
+            if not isinstance(coord, str):
+                raise ParseError("P2", "'slot' names one tensor", path=f"{path}.slot")
+            selector[name] = coord
+            continue
+        if isinstance(coord, (dict, list)):
+            raise ParseError(
+                "P2",
+                f"entry coordinate {name!r} must be a scalar — a bundle key "
+                "records one value per coordinate",
+                path=f"{path}.{name}",
+            )
+        selector[name] = coord
+    return selector
 
 
 def _scalar_str(value: Any, path: str) -> str:
@@ -887,10 +938,16 @@ def _parse_featurizer(raw: Any, path: str) -> FeaturizerSpec:
         f"{path}.kind",
     )
     kind_key = kind if isinstance(kind, str) else "identity"
-    allowed = {"kind", "file_path", "dtype", "description"} | set(
+    allowed = {"kind", "file_path", "entry", "dtype", "description"} | set(
         FEATURIZER_FIELDS.get(kind_key, frozenset())
     )
     _check_keys(obj, allowed, path)
+    if "entry" in obj and "file_path" not in obj:
+        raise ParseError(
+            "P2",
+            "'entry' selects inside a loaded bundle — it needs a file_path",
+            path=path,
+        )
     parametrization = None
     if "parametrization" in obj:
         parametrization = _wrapped(
@@ -913,6 +970,9 @@ def _parse_featurizer(raw: Any, path: str) -> FeaturizerSpec:
         file_path=_wrapped(obj["file_path"], _scalar_str, f"{path}.file_path")
         if "file_path" in obj
         else None,
+        entry=_wrapped(obj["entry"], _entry_selector, f"{path}.entry")
+        if "entry" in obj
+        else None,
         description=obj.get("description"),
     )
 
@@ -926,9 +986,15 @@ def _parse_featurizers(raw: Any, path: str) -> dict[str, FeaturizerSpec]:
 
 def _parse_param(raw: Any, path: str) -> ParamSpec:
     obj = _require_mapping(raw, path)
-    _check_keys(obj, ("file_path", "shape", "init", "description"), path)
+    _check_keys(obj, ("file_path", "entry", "shape", "init", "description"), path)
     loaded = "file_path" in obj
     trainable = "shape" in obj or "init" in obj
+    if "entry" in obj and not loaded:
+        raise ParseError(
+            "P2",
+            "'entry' selects inside a loaded bundle — it needs a file_path",
+            path=path,
+        )
     if loaded == trainable:
         raise ParseError(
             "P2",
@@ -942,6 +1008,13 @@ def _parse_param(raw: Any, path: str) -> ParamSpec:
     return ParamSpec(
         file_path=_wrapped(obj["file_path"], _scalar_str, f"{path}.file_path")
         if loaded
+        else None,
+        entry=_wrapped(
+            obj["entry"],
+            lambda v, p: _entry_selector(v, p, allow_slot=True),
+            f"{path}.entry",
+        )
+        if "entry" in obj
         else None,
         shape=_wrapped(obj["shape"], _int_list, f"{path}.shape")
         if "shape" in obj
@@ -1387,7 +1460,7 @@ def _parse_save(raw: Any, path: str) -> tuple[SaveEntry, ...]:
     for i, entry_raw in enumerate(raw):
         p = f"{path}[{i}]"
         obj = _require_mapping(entry_raw, p)
-        _check_keys(obj, ("value", "model", "input", "site", "file_path"), p)
+        _check_keys(obj, ("value", "model", "input", "site", "file_path", "reduce"), p)
         for field in ("value", "file_path"):
             if field not in obj:
                 raise ParseError("P2", f"a save entry needs {field!r}", path=p)
@@ -1418,6 +1491,9 @@ def _parse_save(raw: Any, path: str) -> tuple[SaveEntry, ...]:
                 if "input" in obj
                 else None,
                 site=_scalar_str(obj["site"], f"{p}.site") if "site" in obj else None,
+                reduce=_enum(obj["reduce"], SAVE_REDUCTIONS, f"{p}.reduce")
+                if "reduce" in obj
+                else None,
             )
         )
     return tuple(entries)

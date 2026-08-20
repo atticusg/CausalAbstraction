@@ -26,7 +26,16 @@ from typing import Any, Iterator, Mapping
 
 from causalab.protocol.errors import ValidationError
 
-__all__ = ["Axis", "Expansion", "Point", "expand", "find_axes"]
+__all__ = [
+    "Axis",
+    "Expansion",
+    "Point",
+    "coordinate_label",
+    "expand",
+    "find_axes",
+    "label_value",
+    "short_coords",
+]
 
 
 #: Refuse a cross product larger than this without an explicit override
@@ -239,14 +248,18 @@ def _cross(axes: tuple[Axis, ...]) -> Iterator[tuple[Any, ...]]:
             yield (value, *tail)
 
 
-def coordinate_label(coords: Mapping[str, Any], *, entry: str | None = None) -> str:
-    """The ``[k=8]`` / ``[target.layer=5]`` suffix for derived names (§3).
+def short_coords(
+    coords: Mapping[str, Any], *, entry: str | None = None
+) -> dict[str, Any]:
+    """Coordinates keyed by their **short** names — the names that appear in
+    labels, in saved tensor keys, and therefore in an ``entry`` selector
+    (:mod:`causalab.protocol.bundles`).
 
     Coordinates on the named entry itself drop the entry prefix
-    (``rot[k=8]``, not ``rot[featurizers.rot.k=8]``); transitive coordinates
-    keep ``<entry>.<field>``; the table name is always dropped. ``train``
-    axes read best bare (``seed=0``)."""
-    parts: list[str] = []
+    (``k``, not ``featurizers.rot.k``); transitive coordinates keep
+    ``<entry>.<field>``; the table name is always dropped. ``train`` axes
+    read best bare (``seed``)."""
+    out: dict[str, Any] = {}
     for axis_id, value in coords.items():
         segments = axis_id.split(".")
         if len(segments) >= 2 and segments[0] in (
@@ -263,11 +276,24 @@ def coordinate_label(coords: Mapping[str, Any], *, entry: str | None = None) -> 
             segments = segments[1:]
         if entry is not None and len(segments) >= 2 and segments[0] == entry:
             segments = segments[1:]
-        parts.append(f"{'.'.join(segments)}={_label_value(value)}")
+        out[".".join(segments)] = value
+    return out
+
+
+def coordinate_label(coords: Mapping[str, Any], *, entry: str | None = None) -> str:
+    """The ``[k=8]`` / ``[target.layer=5]`` suffix for derived names (§3),
+    over :func:`short_coords`."""
+    parts = [
+        f"{name}={label_value(value)}"
+        for name, value in short_coords(coords, entry=entry).items()
+    ]
     return f"[{','.join(parts)}]" if parts else ""
 
 
-def _label_value(value: Any) -> str:
+def label_value(value: Any) -> str:
+    """One coordinate value as it appears in a label — and therefore in a
+    saved tensor key, which :mod:`causalab.protocol.bundles` matches
+    against, so this rendering is part of the artifact contract."""
     if isinstance(value, Mapping):
         # a swept spec (e.g. a position): label by its single distinguishing pair
         pairs = ",".join(f"{k}:{v}" for k, v in value.items())

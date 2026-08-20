@@ -33,12 +33,13 @@ declares no fit). ``gate`` inits to zeros and the rest load from files.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import torch
 
+from causalab.protocol.bundles import entry_selection
 from causalab.protocol.errors import ProtocolError
-from causalab.protocol.schema import FeaturizerSpec
+from causalab.protocol.schema import FEATURIZER_SLOTS, FeaturizerSpec
 
 __all__ = ["FeaturizerStack", "Stage", "build_stack"]
 
@@ -279,6 +280,7 @@ def build_stack(
     stage_cache: dict[str, Stage],
     device: str | torch.device = "cpu",
     seed: int = 0,
+    coords: Mapping[str, Any] | None = None,
 ) -> FeaturizerStack:
     """Build (or reuse from ``stage_cache``) the stack a read/write
     references. ``width`` is the SITE width; each later stage in a
@@ -295,7 +297,11 @@ def build_stack(
     fit — ``executor.document_seed``). Explicit rather than read from the global
     RNG because this also runs on apply/inference paths, where a global-RNG init
     would make a rotation depend on construction order. The cache is keyed by
-    name, so a cached stage built from a different seed refuses, as with width."""
+    name, so a cached stage built from a different seed refuses, as with width.
+
+    ``coords`` are the executing point's sweep coordinates: they select the
+    matching entry of a swept bundle when the spec authored no ``entry``
+    (§2.5)."""
     if ref is None:
         return FeaturizerStack(names=(), stages=(Identity(),))
     chain = (ref,) if isinstance(ref, str) else tuple(ref)
@@ -329,7 +335,12 @@ def build_stack(
                     "output width is not derivable from its spec",
                 )
             stage = _build_stage(
-                name, spec, width=running, load_tensors=load_tensors, seed=seed
+                name,
+                spec,
+                width=running,
+                load_tensors=load_tensors,
+                seed=seed,
+                coords=coords,
             )
             stage.to(device)  # parameters and registered buffers alike
             # inference documents get eval semantics (a gate's hard split);
@@ -344,20 +355,63 @@ def build_stack(
     return FeaturizerStack(names=chain, stages=tuple(stages))
 
 
+def _check_entry_identity(
+    record: Mapping[str, Any], spec: FeaturizerSpec, what: str
+) -> None:
+    """Refuse an entry whose stamped fit contradicts the spec that selected
+    it (§2.5).
+
+    The load-time check (``loader._check_loaded_featurizers``) covers a
+    bundle whose entry is knowable there; when the selection is the
+    executing point's — implicit matching against a swept producer — this is
+    where the claim is finally tested, so "apply the k=8 fit" cannot quietly
+    apply the k=32 one. Only the per-entry fields are compared: everything
+    file-level was already checked at load.
+    """
+    for field, value in (
+        ("k", spec.k),
+        ("parametrization", spec.parametrization),
+    ):
+        if value is None or not isinstance(value, (int, str)):
+            continue
+        stamped = record.get(field)
+        if stamped is not None and str(stamped) != str(value):
+            raise ProtocolError(
+                "P2",
+                f"{what}: the document says {field}={value!r} but the selected "
+                f"entry was fitted with {field}={stamped!r}",
+            )
+
+
 def _build_stage(
-    name: str, spec: FeaturizerSpec, *, width: int, load_tensors: Any, seed: int = 0
+    name: str,
+    spec: FeaturizerSpec,
+    *,
+    width: int,
+    load_tensors: Any,
+    seed: int = 0,
+    coords: Mapping[str, Any] | None = None,
 ) -> Stage:
     kind = spec.kind if isinstance(spec.kind, str) else "identity"
     if isinstance(spec.file_path, str):
-        tensors = load_tensors(spec.file_path)
-        if kind in ("subspace", "pca"):
-            return LoadedLinear(kind, tensors["weight"])
-        if kind == "standardize":
-            return Standardize(tensors["mu"], tensors["sigma"])
-        if kind == "sae":
-            return Sae(
-                tensors["enc"], tensors["dec"], tensors["b_enc"], tensors["b_dec"]
+        slots = FEATURIZER_SLOTS.get(kind, ())
+        if not slots:
+            raise ProtocolError(
+                "P2", f"featurizer kind {kind!r} cannot be loaded from a file"
             )
+        want, implicit = entry_selection(spec.entry, coords, name)
+        what = f"featurizer {name!r} ({spec.file_path})"
+        point = load_tensors(spec.file_path).point(
+            slots[0], want, what=what, implicit=implicit
+        )
+        _check_entry_identity(point.record, spec, what)
+        slot = point.tensor
+        if kind in ("subspace", "pca"):
+            return LoadedLinear(kind, slot("weight"))
+        if kind == "standardize":
+            return Standardize(slot("mu"), slot("sigma"))
+        if kind == "sae":
+            return Sae(slot("enc"), slot("dec"), slot("b_enc"), slot("b_dec"))
         raise ProtocolError(
             "P2", f"featurizer kind {kind!r} cannot be loaded from a file"
         )
