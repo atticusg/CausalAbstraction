@@ -5,7 +5,7 @@
 | Module | Named for |
 |---|---|
 | `causal/` | causal model primitives |
-| `tasks/` | task definitions (causal models + counterfactual generators) |
+| `tasks/` | task definitions (causal models + counterfactual generators) + `serialize.py`, which writes them out as dataset tables |
 | `protocol/` | the backend-free document layer |
 | `neural/pytorch_hooks/` | the reference execution backend |
 | `workflow/` | the workflow runner |
@@ -26,7 +26,7 @@ The normative spec is [`docs/intervention_protocol.md`](intervention_protocol.md
 | `sweep.py` | axis expansion, point cap, coordinate labels (§3) |
 | `plan.py` | model graph → forward groups, content dedup (§4) |
 | `backend.py` | `Backend` ABC, `ExecutionRequest`/`RunResult`, capability routing (§8) |
-| `resolve.py` | `ResolutionEnv`: `FileDatasets` (JSON tables), `FileArtifacts`, `ArtifactIdentity` build/check |
+| `resolve.py` | `ResolutionEnv`: the `DatasetResolver` contract (digest / columns / rows) with `FileDatasets` (JSON tables), `FileArtifacts`, `ArtifactIdentity` build/check |
 | `registry.py` | static model metadata (widths per component); built-in entries for the models the corpus and goldens name |
 | `workflow.py` | the workflow *document* model: parse, checklist, derived schedule, digests |
 | `cli.py` | `causalab run/validate/explain/digest`, dispatching on document type; `--device/--dtype/--points` on `run` |
@@ -41,8 +41,7 @@ Implements the §8 services with raw pytorch hooks, CPU or a single accelerator 
 |---|---|
 | `loading.py` | model+tokenizer bundles (left padding, eager attention, frozen weights) |
 | `sites.py` | component vocabulary → module taps; Llama-tree (Llama/Qwen/Mistral/Gemma) and GPT-2-tree families |
-| `encoding.py` | tokenization, char→token spans, `PositionFrame` (chat-prefix lengths are a field, not a code path yet) |
-| `positions.py` | position specs → indices; refuses ragged edits |
+| `encoding.py` | tokenization, char→token spans, `PositionFrame`, position specs → indices (chat-prefix lengths are a field, not a code path yet) |
 | `mechanisms.py` | the closed `do` set; absolute-then-additive order per address |
 | `featurizers.py` | featurizer kinds + error-term contract |
 | `metrics.py` | metric lowering over one lm_head read; single-token column resolution |
@@ -57,10 +56,14 @@ Known limits (tracked in the intervention-protocol epic): one device per run (no
 
 Executes workflow documents: topological step order from derived references, per-step output dirs under the run tree, an artifact overlay so later steps resolve earlier steps' products, select/plot steps, save publication, and a `workflow.json` manifest. The runner knows only the step graph — device/dtype live in the backends it is handed, and job dispatch is site tooling outside the repo (spec §8, "Execution scale").
 
-## 5. Configs are documents
+## 5. Datasets are build products
+
+A document names a dataset ref; a resolver reads bytes (`protocol/resolve.py`). Nothing generates a table during a load, so `validate` / `explain` / `digest` need no task code, no tokenizer and no network, and a document's digest is a function of committed bytes. `causalab/tasks/serialize.py` + `scripts/build_task_dataset.py` are the other side: task package → deterministic table + a `<ref>.manifest.json` provenance sidecar. Everything per-row or task-semantic (answer forms, values that place a position per row) is a column written there, never a document-side computation (spec §2.2).
+
+## 6. Configs are documents
 
 `causalab/configs/methods/*.json` are the nine method presets (byte-comparable to the corpus documents under `tests/protocols/`); `causalab/configs/workflows/weekdays_8b.json` is the worked workflow. There is no Python config system: a "config" is a protocol or workflow document, overridden ad hoc with `--set` and promoted into a file when it matters.
 
-## 6. Tests
+## 7. Tests
 
 See [`docs/TESTS.md`](TESTS.md) for the tier taxonomy and pinned-artifact discipline, and [`docs/test_migration.md`](test_migration.md) for the old-suite → new-suite ledger.

@@ -85,12 +85,20 @@ completion-style LRE templates; most relations are flagged for genuine model
 difficulty (e.g. `person_plays_*`) and/or the first-token grading of multi-token
 objects (e.g. `country_capital_city`).
 
-**The sweep is not currently recomputable**: its producer was deleted with the
-runner/methods stack in the protocol refactor (PR #20) while these numbers stay
-load-bearing (they select the tiers below and `config.py`'s default relation).
-Re-expressing it as a protocol-document campaign is blocked on the
-dataset-serialization seam and on a first-token/prefix metric kind — tracked as
-part of objective I1 in the intervention-protocol epic.
+**Recomputing the sweep.** Its producer was deleted with the runner/methods
+stack in the protocol refactor (PR #20) while these numbers stayed
+load-bearing — they select the tiers below and `config.py`'s default relation.
+It is now expressible as a protocol-document campaign, and what that campaign
+looks like is pinned on CPU by
+`tests/tasks/subject_object_relations/test_curation_documents.py`: one table
+per relation from `scripts/build_task_dataset.py`, one baseline document
+sweeping `data.base.dataset` over them, `match` with `"mode": "first_token"`
+(this task declares `match_modes={"object": "prefix"}`, and the builder records
+that beside each table as `declared_match_mode`). What is *not* here is the
+run: the numbers above came from a coherent model on a GPU, so re-measuring
+them belongs with that tier — and a re-measurement on a different pipeline
+gives different numbers, which is why these stay labelled with the pipeline
+that produced them.
 
 `C` / `eff_k` / `compact` are source DAS provenance (answer-token site); `acc` is
 the measured base accuracy at seed 0, `n≈64` (post-dedup) examples per relation.
