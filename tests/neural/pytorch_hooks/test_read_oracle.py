@@ -237,3 +237,138 @@ def test_variable_position_reads_the_substring_tokens(llama_bundle):
     value = executor.read_value("r")
     embeddings = llama_bundle.model.model.embed_tokens(batch.input_ids)
     torch.testing.assert_close(value[:, :, :], embeddings[:, positions, :], **TOL)
+
+
+# --------------------------------------------------------------------------- #
+#  all positions — the (layer × position) read grid                            #
+# --------------------------------------------------------------------------- #
+
+
+def logit_lens_grid_doc() -> dict:
+    """The grid the all spelling exists for: the residual stream at every
+    layer (the sweep axis) × every token (the all spec), alongside the
+    model's own logits at every token."""
+    return {
+        "version": "1",
+        "model": {"key": "test", "revision": "main"},
+        "data": base_data_section(with_counterfactual=False),
+        "sites": {
+            "resid": {"component": "block_output", "layer": {"sweep": [0, 1]}},
+            "lm_head": {"component": "lm_head"},
+        },
+        "reads": {
+            "r_resid": {
+                "site": "resid",
+                "pos": "all",  # bare-string sugar
+                "model": "original",
+                "input": "base",
+            },
+            "r_logits": {
+                "site": "lm_head",
+                "pos": {"all": True},  # the explicit anchor
+                "model": "original",
+                "input": "base",
+            },
+        },
+        "save": [
+            {
+                "value": "r_resid",
+                "model": "original",
+                "input": "base",
+                "file_path": "resid.safetensors",
+            },
+            {
+                "value": "r_logits",
+                "model": "original",
+                "input": "base",
+                "file_path": "logits.safetensors",
+            },
+        ],
+    }
+
+
+def test_all_positions_grid_matches_oracle(bundle, oracle: OracleShim):
+    """Every point of the swept grid loads, validates, executes, and the
+    read is the oracle's full-sequence capture — not just its last column."""
+    from causalab.protocol.sweep import expand
+
+    from tests.protocol._docs import in_order
+
+    expansion = expand(in_order(logit_lens_grid_doc()))
+    assert len(expansion.points) == 2  # one per layer
+
+    inputs = _inputs(bundle)
+    seq = int(inputs["input_ids"].shape[1])
+    for point in expansion.points:
+        layer = point.raw["sites"]["resid"]["layer"]
+        executor = executor_for(point.raw, bundle, base_texts=[BASE_TEXT])
+        have = executor.read_value("r_resid")
+        want = oracle_lib.capture_residual(oracle, layer, inputs)
+        assert have.shape[1] == seq  # every position, not the last one
+        torch.testing.assert_close(have, want, **TOL)
+
+    # anti-vacuity: the two layers genuinely differ
+    l0 = oracle_lib.capture_residual(oracle, 0, inputs)
+    l1 = oracle_lib.capture_residual(oracle, 1, inputs)
+    assert not torch.allclose(l0, l1, atol=1e-4)
+
+
+def test_all_positions_lm_head_matches_the_models_logits(bundle):
+    """The other half of a logit lens: the whole logit sequence, not the
+    single next-token column every other read takes."""
+    from causalab.protocol.sweep import expand
+
+    from tests.protocol._docs import in_order
+
+    point = expand(in_order(logit_lens_grid_doc())).points[0]
+    executor = executor_for(point.raw, bundle, base_texts=[BASE_TEXT])
+    have = executor.read_value("r_logits")
+    with torch.no_grad():
+        want = bundle.model(**_inputs(bundle)).logits
+    torch.testing.assert_close(have, want, **TOL)
+
+
+def test_all_positions_is_ragged_across_rows(llama_bundle):
+    """Rows of different lengths make an all read ragged; the flat gather
+    and its widths are the row-wise captures, padding excluded."""
+    from causalab.neural.pytorch_hooks.executor import RaggedValue
+
+    texts = ["one two three", "a much longer sentence right here"]
+    doc = {
+        "version": "1",
+        "model": {"key": "test", "revision": "main"},
+        "data": base_data_section(with_counterfactual=False),
+        "sites": {"emb": {"component": "embeddings"}},
+        "reads": {
+            "r": {"site": "emb", "pos": "all", "model": "original", "input": "base"}
+        },
+        "save": [
+            {
+                "value": "r",
+                "model": "original",
+                "input": "base",
+                "file_path": "r.safetensors",
+            }
+        ],
+    }
+    executor = executor_for(doc, llama_bundle, base_texts=texts)
+    value = executor.read_value("r")
+    assert isinstance(value, RaggedValue)
+
+    batch = encode(llama_bundle.tokenizer, texts)
+    widths = tuple(
+        batch.padded_len - batch.content_start(row) for row in range(len(texts))
+    )
+    assert value.widths == widths
+    assert widths[0] != widths[1]  # the ragged case is real, not incidental
+
+    embeddings = llama_bundle.model.model.embed_tokens(batch.input_ids)
+    offset = 0
+    for row, width in enumerate(widths):
+        start = batch.content_start(row)
+        torch.testing.assert_close(
+            value.flat[offset : offset + width],
+            embeddings[row, start : start + width, :],
+            **TOL,
+        )
+        offset += width

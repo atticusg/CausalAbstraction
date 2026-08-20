@@ -14,9 +14,10 @@ Parsing owns the *shape* rules of the spec:
   (§5.1); closed enums reject with suggestions; derived fields (§6) may not
   be authored;
 * section order (§1) and the ``save``-last rule;
-* sugar — a bare int ``pos`` means ``{"index": n}`` (§2.3), ``neural_model``
-  is an alias of ``model`` (§2.1); sugar is expanded here, so the object
-  model only ever holds the canonical spelling;
+* sugar — a bare int ``pos`` means ``{"index": n}`` and the bare string
+  ``"all"`` means ``{"all": true}`` (§2.3), ``neural_model`` is an alias of
+  ``model`` (§2.1); sugar is expanded here, so the object model only ever
+  holds the canonical spelling;
 * the two value wrappers — ``{"sweep": …}`` (§3) and
   ``{"artifact": …, "key": …}`` (§1) — are accepted anywhere a scalar-,
   list- or spec-typed *leaf* is expected and preserved as
@@ -36,6 +37,7 @@ from typing import Any, Callable, Iterable, Literal, Mapping, Sequence, Union, g
 from causalab.protocol.errors import ParseError, ValidationError, suggest
 
 __all__ = [
+    "ALL_POSITIONS",
     "ArtifactRef",
     "COMPONENTS",
     "Component",
@@ -163,9 +165,16 @@ METRIC_FIELDS: dict[str, tuple[str, ...]] = {
     "match": ("expected",),
 }
 
+#: The bare-string spelling of an all-positions spec (§2.3 sugar). Reserved as
+#: a name so a ``positions`` entry can never shadow the sugar.
+ALL_POSITIONS: str = "all"
+
 #: Names no section may declare (§1): the input roles, the un-intervened
-#: model, and the indexed-counterfactual family (checked by prefix for ``counterfactual[``).
-RESERVED_NAMES: frozenset[str] = frozenset({"base", "counterfactual", "original"})
+#: model, the indexed-counterfactual family (checked by prefix for
+#: ``counterfactual[``), and the all-positions sugar.
+RESERVED_NAMES: frozenset[str] = frozenset(
+    {"base", "counterfactual", "original", ALL_POSITIONS}
+)
 
 #: Top-level sections in mandatory order (§1). ``neural_model`` is accepted
 #: at position 3 as an alias of ``model`` and canonicalizes away.
@@ -312,14 +321,16 @@ class DataRole:
 @dataclasses.dataclass(frozen=True)
 class PositionSpec:
     """§2.3 — a token-position spec. Exactly one of ``index`` / ``span`` /
-    ``variable`` is set; ``scope`` / ``relative_to`` (each a prompt-variable
-    name) only modify ``index``/``span`` and are mutually exclusive.
-    Positions are never resolved to integers in the document — resolution is
-    a backend service against a ``PositionFrame`` (§2.3, §8)."""
+    ``variable`` / ``all`` is set; ``scope`` / ``relative_to`` (each a
+    prompt-variable name) only modify ``index``/``span`` and are mutually
+    exclusive. ``all`` selects every content token of the row and takes no
+    modifiers. Positions are never resolved to integers in the document —
+    resolution is a backend service against a ``PositionFrame`` (§2.3, §8)."""
 
     index: Leaf | None = None
     span: Leaf | None = None
     variable: Leaf | None = None
+    all: Leaf | None = None
     scope: Leaf | None = None
     relative_to: Leaf | None = None
 
@@ -730,13 +741,23 @@ def _parse_data(raw: Any, path: str) -> dict[str, DataRole | tuple[DataRole, ...
 def _parse_position_spec(raw: Any, path: str) -> PositionSpec:
     if isinstance(raw, int) and not isinstance(raw, bool):
         return PositionSpec(index=raw)  # §6.1 int sugar
+    if raw == ALL_POSITIONS:
+        return PositionSpec(all=True)  # §6.1 "all" sugar
     obj = _require_mapping(raw, path)
-    _check_keys(obj, ("index", "span", "variable", "scope", "relative_to"), path)
-    anchors = [k for k in ("index", "span", "variable") if k in obj]
+    _check_keys(obj, ("index", "span", "variable", "all", "scope", "relative_to"), path)
+    anchors = [k for k in ("index", "span", "variable", "all") if k in obj]
     if len(anchors) != 1:
         raise ParseError(
             "P2",
-            f"a position spec needs exactly one of index/span/variable, got {anchors}",
+            "a position spec needs exactly one of index/span/variable/all, got "
+            f"{anchors}",
+            path=path,
+        )
+    if "all" in obj and obj["all"] is not True:
+        raise ParseError(
+            "P2",
+            f'all is the flag {{"all": true}} — got {obj["all"]!r}; there is no '
+            "other all-positions selection to spell",
             path=path,
         )
     index = (
@@ -748,6 +769,7 @@ def _parse_position_spec(raw: Any, path: str) -> PositionSpec:
         if "variable" in obj
         else None
     )
+    every = True if "all" in obj else None
     scope = (
         _wrapped(obj["scope"], _parse_var_ref, f"{path}.scope")
         if "scope" in obj
@@ -758,10 +780,12 @@ def _parse_position_spec(raw: Any, path: str) -> PositionSpec:
         if "relative_to" in obj
         else None
     )
-    if (scope is not None or relative_to is not None) and variable is not None:
+    if (scope is not None or relative_to is not None) and (
+        variable is not None or every is not None
+    ):
         raise ParseError(
             "P2",
-            "scope/relative_to modify an index or span, not a variable spec",
+            "scope/relative_to modify an index or span, not a variable or all spec",
             path=path,
         )
     if scope is not None and relative_to is not None:
@@ -786,7 +810,12 @@ def _parse_position_spec(raw: Any, path: str) -> PositionSpec:
                 "P2", f"scoped span [{lo}, {hi}) is statically empty", path=path
             )
     return PositionSpec(
-        index=index, span=span, variable=variable, scope=scope, relative_to=relative_to
+        index=index,
+        span=span,
+        variable=variable,
+        all=every,
+        scope=scope,
+        relative_to=relative_to,
     )
 
 
@@ -934,8 +963,10 @@ def _parse_params(raw: Any, path: str) -> dict[str, ParamSpec]:
 
 
 def _parse_pos_field(value: Any, path: str) -> Any:
-    """A read/write ``pos``: a positions-table name or an inline spec."""
-    if isinstance(value, str):
+    """A read/write ``pos``: a positions-table name or an inline spec. The
+    bare string ``"all"`` is the all-positions sugar, never a name — it is
+    reserved (§5.3), so no entry can be declared under it."""
+    if isinstance(value, str) and value != ALL_POSITIONS:
         return value
     return _parse_position_spec(value, path)
 
