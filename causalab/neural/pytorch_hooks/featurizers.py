@@ -16,6 +16,17 @@ mask mode pins the hard-eval split.
 
 Everything here is per-position math on ``(..., d)`` tensors; widths come
 from the resolved site, never from the document.
+
+**Device.** Every stage is *constructed* on CPU and then moved to the run's
+device by :func:`build_stack`. Constructing on CPU is not incidental: a
+``subspace`` init draws from a CPU ``torch.Generator`` seeded by the
+document, so building there and moving keeps a seeded init bit-identical
+across devices, which a device-side ``torch.randn`` would not. Loaded
+stages (``pca``, ``standardize``, ``sae``, an applied ``subspace`` fit) hold
+tensors that arrive from files on CPU and are moved by the same step.
+Dtype is deliberately *not* forced: every stage casts at the boundary
+(``x.to(q.dtype)``, ``mask.to(x.dtype)``), so featurizers stay fp32 against
+a bf16/fp16 backbone.
 """
 
 from __future__ import annotations
@@ -260,6 +271,7 @@ def build_stack(
     width: int,
     load_tensors: Any,
     stage_cache: dict[str, Stage],
+    device: str | torch.device = "cpu",
 ) -> FeaturizerStack:
     """Build (or reuse from ``stage_cache``) the stack a read/write
     references. ``width`` is the SITE width; each later stage in a
@@ -267,7 +279,12 @@ def build_stack(
     a gate after a k=3 rotation is a 3-wide gate). ``load_tensors`` supplies
     loaded bundles; caching by name keeps one stage instance per declared
     featurizer, so training one featurizer updates every use site — a name
-    reused at a different chain width is a contradiction and refuses."""
+    reused at a different chain width is a contradiction and refuses.
+
+    ``device`` is the run's device: stages are built on CPU and moved here
+    (module docstring), so a ``--device cuda`` run does not multiply a cuda
+    activation by a cpu parameter. Callers pass ``bundle.device``; the
+    ``"cpu"`` default keeps the CPU-only call sites unchanged."""
     if ref is None:
         return FeaturizerStack(names=(), stages=(Identity(),))
     chain = (ref,) if isinstance(ref, str) else tuple(ref)
@@ -292,6 +309,11 @@ def build_stack(
                     "output width is not derivable from its spec",
                 )
             stage = _build_stage(name, spec, width=running, load_tensors=load_tensors)
+            # built on CPU (seeded inits stay bit-identical across devices),
+            # then moved onto the run's device — parameters and registered
+            # buffers alike, so nothing is left behind for a cuda forward to
+            # trip over
+            stage.to(device)
             # inference documents get eval semantics (a gate's hard split);
             # the train loop flips modes around its steps explicitly
             stage.eval()
