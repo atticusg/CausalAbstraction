@@ -40,7 +40,9 @@ from causalab.protocol.resolve import ResolutionEnv
 from causalab.protocol.schema import (
     FEATURIZER_SLOTS,
     LAYERLESS_COMPONENTS,
+    METRIC_FIELD_DEFAULTS,
     OPTIMIZER_DEFAULTS,
+    OPTIONAL_METRIC_FIELDS,
     SECTION_ORDER,
     parse_document,
 )
@@ -154,10 +156,29 @@ def canonicalize(raw: Mapping[str, Any], env: ResolutionEnv) -> dict[str, Any]:
             out["params"] = {
                 name: _canon_param(entry, env) for name, entry in value.items()
             }
+        elif section == "metrics":
+            out["metrics"] = {
+                name: _canon_metric(entry) for name, entry in value.items()
+            }
         elif section == "train":
             out["train"] = _canon_train(value, info, env)
         else:
             out[section] = value
+    return out
+
+
+def _canon_metric(entry: Any) -> Any:
+    """Materialize a metric's optional fields to their defaults (§2.10), so a
+    document that spells out ``"mode": "exact"`` and one that omits it are one
+    canonical form — the same treatment ``train.optimizer`` defaults get."""
+    if not isinstance(entry, Mapping):
+        return entry
+    kind = entry.get("kind")
+    if not isinstance(kind, str):
+        return entry
+    out = dict(entry)
+    for field in OPTIONAL_METRIC_FIELDS.get(kind, ()):
+        out.setdefault(field, METRIC_FIELD_DEFAULTS[(kind, field)])
     return out
 
 

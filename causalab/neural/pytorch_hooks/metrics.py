@@ -9,6 +9,13 @@ value resolves to the single token of ``" " + s`` when that is one token,
 else of ``s`` itself; anything multi-token refuses — a metric over a
 multi-token answer is not expressible in v1's closed vocabulary and must
 not silently score the first piece.
+
+``match`` is the one kind that can be told otherwise, and only explicitly
+(§2.10): its ``expected`` column may hold a **list** of equivalent surface
+forms (synonyms, casings), and ``"mode": "first_token"`` credits a form's
+first token instead of demanding the form be one token. Both are
+task-data decisions — the table says which forms count, the document says
+whether a prefix counts — so neither can happen by accident.
 """
 
 from __future__ import annotations
@@ -20,17 +27,19 @@ import torch
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import MetricSpec
 
-__all__ = ["column_token_id", "compute_metric"]
+__all__ = ["column_first_token_id", "column_token_id", "compute_metric"]
+
+
+def _candidates(value: str) -> list[str]:
+    """The surface forms to try, space-prefixed first (BPE families make
+    ``" one"`` one token); the stripped form covers sentencepiece families,
+    whose ``"one"`` IS the ``▁one`` piece."""
+    return [value, value.lstrip(" ")] if value.startswith(" ") else [" " + value, value]
 
 
 def column_token_id(tokenizer: Any, value: str) -> int:
     """The single token id a metric column value names (module docstring)."""
-    # space-prefixed first (BPE families make " one" one token); the stripped
-    # form covers sentencepiece families, whose "one" IS the ▁one piece
-    candidates = (
-        [value, value.lstrip(" ")] if value.startswith(" ") else [" " + value, value]
-    )
-    for candidate in candidates:
+    for candidate in _candidates(value):
         ids = tokenizer.encode(candidate, add_special_tokens=False)
         if len(ids) == 1:
             return int(ids[0])
@@ -39,6 +48,40 @@ def column_token_id(tokenizer: Any, value: str) -> int:
         f"metric column value {value!r} is not a single token under this "
         "tokenizer (tried space-prefixed first) — multi-token answers have no "
         "closed metric kind in v1",
+    )
+
+
+def column_first_token_id(tokenizer: Any, value: str) -> int:
+    """The first *content* token id of a value — ``match``'s ``first_token``
+    mode.
+
+    A single-token value resolves exactly as :func:`column_token_id` does, so
+    ``first_token`` is a strict generalization of ``exact``. A multi-token
+    value resolves to the first piece that carries text: sentencepiece
+    families encode a leading space as its own ``▁`` piece, and crediting
+    *that* would score every space-prefixed answer alike — the first piece an
+    argmax can distinguish is the one after it (``" Thursday"`` →
+    ``▁ Th urs day`` → ``Th``, which is also what the model emits in
+    context).
+
+    What this cannot know is whether the table's answer space is
+    first-token-distinct — two answers sharing a first piece would both score.
+    That is a property of the dataset, checked where the dataset is built."""
+    encoded = [
+        tokenizer.encode(candidate, add_special_tokens=False)
+        for candidate in _candidates(value)
+    ]
+    for ids in encoded:
+        if len(ids) == 1:
+            return int(ids[0])
+    for ids in encoded:
+        for token_id in ids:
+            if tokenizer.decode([int(token_id)]).strip():
+                return int(token_id)
+    raise ProtocolError(
+        "P2",
+        f"metric column value {value!r} encodes to no content tokens under "
+        "this tokenizer — nothing to compare an argmax against",
     )
 
 
@@ -67,16 +110,34 @@ def compute_metric(
     logits = _last_pos_logits(of_value).float()
     kind = str(metric.kind)
 
-    def column(field: str) -> list[str]:
+    def raw_column(field: str) -> list[Any]:
         name = str(metric.fields[field])
-        out: list[str] = []
+        out: list[Any] = []
         for i, row in enumerate(rows):
             if name not in row:
                 raise ProtocolError(
                     "P2", f"metric column {name!r} missing from dataset row {i}"
                 )
-            out.append(str(row[name]))
+            out.append(row[name])
         return out
+
+    def column(field: str) -> list[str]:
+        return [str(value) for value in raw_column(field)]
+
+    def form_groups(field: str) -> list[list[str]]:
+        """One row's expected forms: a list column is a group of equivalent
+        surface forms, a scalar is a group of one (§2.10)."""
+        groups: list[list[str]] = []
+        for i, value in enumerate(raw_column(field)):
+            forms = [str(v) for v in value] if isinstance(value, list) else [str(value)]
+            if not forms:
+                raise ProtocolError(
+                    "P2",
+                    f"metric column {metric.fields[field]!r} is an empty form "
+                    f"group on row {i} — nothing to match against",
+                )
+            groups.append(forms)
+        return groups
 
     if kind == "logit_diff":
         a_ids = [column_token_id(tokenizer, v) for v in column("a")]
@@ -100,9 +161,13 @@ def compute_metric(
         kl = (p.exp() * (p - q)).sum(dim=-1)
         return [float(v) for v in kl]
     if kind == "match":
-        expected = [column_token_id(tokenizer, v) for v in column("expected")]
+        mode = str(metric.fields.get("mode", "exact"))
+        resolve = column_first_token_id if mode == "first_token" else column_token_id
         argmax = logits.argmax(dim=-1)
-        return [float(int(argmax[i]) == t) for i, t in enumerate(expected)]
+        return [
+            float(int(argmax[i]) in {resolve(tokenizer, form) for form in forms})
+            for i, forms in enumerate(form_groups("expected"))
+        ]
     if kind == "top_k":
         k = metric.fields["k"]
         assert isinstance(k, int)  # parse guarantees the shape
