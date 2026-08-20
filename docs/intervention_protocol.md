@@ -234,6 +234,21 @@ Closed vocabulary; `of` names a read; other value fields name dataset columns.
   nothing else. Cross-read arithmetic (differences of saved metrics) is
   post-hoc analysis. The vocabulary stays closed so backends can lower kinds
   to fused/vocab-parallel implementations.
+- **`token_form`** (optional, `auto` | `bare` | `space_prefixed`; default
+  `auto`) — how this metric's string answers become token ids. Legal on every
+  kind that names token strings (`logit_diff`, `token_logit`, `cross_entropy`,
+  `class_probs`, `match`); `kl` and `top_k` never resolve a string and refuse
+  the key.
+  - `auto` tries `" " + s` first and falls back to `s`. That is right when the
+    answer follows a space in the prompt — weekdays, names, MCQA letters — and
+    it is the default so pre-`token_form` documents are unchanged.
+  - It is **wrong** when the answer does not follow a space and both forms
+    happen to be single tokens. Under gpt2, `"?"` is token 30 and `" ?"` is
+    token 5633: a `match` on a punctuation answer scores 5633, the model emits
+    30, and the metric reads a flat 0.000 with no error raised anywhere. Pin
+    `token_form: "bare"` for those. `auto` warns when the two forms disagree.
+  - The form applies to every token string in the metric, so a `class_probs`
+    whose groups mix spaced and bare answers must stay on `auto`.
 
 ### 2.11 `train`
 

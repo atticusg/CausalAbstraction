@@ -7,7 +7,11 @@ import math
 import pytest
 import torch
 
-from causalab.neural.pytorch_hooks.metrics import column_token_id, compute_metric
+from causalab.neural.pytorch_hooks.metrics import (
+    column_token_id,
+    column_token_ids,
+    compute_metric,
+)
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import MetricSpec
 
@@ -103,3 +107,98 @@ def test_class_probs_sums_group_members(tokenizer):
         float(probs[column_token_id(tokenizer, " Sunday")]),
         rel_tol=1e-6,
     )
+
+
+# --------------------------------------------------------------------------- #
+# §2.10 token_form — the answer-tokenization knob
+#
+# The bug this guards: `auto` returns the FIRST single-token candidate and tries
+# the space-prefixed form first, so a punctuation answer resolves to a row the
+# model never emits. Under gpt2 "?" is token 30 and " ?" is token 5633 — both
+# single tokens — so a `match` metric on a punctuation answer read a flat 0.000
+# at all 48 layers of a real gpt2-xl scan with no error raised anywhere.
+#
+# These use the real gpt2 tokenizer, not tiny-random-gpt2: the tiny stub's
+# 1000-token vocabulary has no " ?" row, so it cannot express the ambiguity.
+# The IOI suite already loads real gpt2 (tests/tasks/IOI/conftest.py).
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(scope="module")
+def gpt2_tokenizer():
+    from transformers import AutoTokenizer
+
+    return AutoTokenizer.from_pretrained("gpt2")
+
+
+def test_gpt2_punctuation_is_the_ambiguous_case(gpt2_tokenizer):
+    """The premise, pinned: both forms are one token and they differ."""
+    assert gpt2_tokenizer.encode("?", add_special_tokens=False) == [30]
+    assert gpt2_tokenizer.encode(" ?", add_special_tokens=False) == [5633]
+
+
+def test_auto_still_takes_the_space_prefixed_form(gpt2_tokenizer):
+    """Backward compatibility: `auto` is exactly the historical resolver, so
+    every document written before ``token_form`` existed is unchanged — this
+    is also the CORRECT answer for the common case (an answer after a space)."""
+    assert column_token_id(gpt2_tokenizer, "?") == 5633
+    for word in (" Monday", "Monday", "Mary", " Mary"):
+        spaced = gpt2_tokenizer.encode(" " + word.strip(), add_special_tokens=False)
+        assert len(spaced) == 1
+        assert column_token_id(gpt2_tokenizer, word) == spaced[0]
+
+
+def test_bare_form_resolves_the_token_the_model_emits(gpt2_tokenizer):
+    """The fix: a document that says `bare` gets the bare row."""
+    assert column_token_id(gpt2_tokenizer, "?", token_form="bare") == 30
+    assert column_token_id(gpt2_tokenizer, ".", token_form="bare") == 13
+    # a leading space in the authored value is stripped, not honored
+    assert column_token_id(gpt2_tokenizer, " ?", token_form="bare") == 30
+
+
+def test_space_prefixed_form_is_pinnable(gpt2_tokenizer):
+    assert column_token_id(gpt2_tokenizer, "?", token_form="space_prefixed") == 5633
+    assert (
+        column_token_id(gpt2_tokenizer, "Monday", token_form="space_prefixed")
+        == (gpt2_tokenizer.encode(" Monday", add_special_tokens=False)[0])
+    )
+
+
+def test_a_pinned_form_refuses_rather_than_falling_back(tokenizer):
+    """Pinning a form means it: sentencepiece makes " Monday" two pieces, and
+    `space_prefixed` must refuse instead of quietly using the bare piece."""
+    with pytest.raises(ProtocolError):
+        column_token_id(tokenizer, "Monday", token_form="space_prefixed")
+
+
+def test_match_scores_a_punctuation_answer_only_under_bare(gpt2_tokenizer):
+    """The end-to-end regression, at the metric level: the model emits "?"
+    (token 30); `auto` scores token 5633 and reads 0.0, `bare` reads 1.0."""
+    logits = torch.zeros(1, 1, gpt2_tokenizer.vocab_size)
+    logits[0, 0, 30] = 4.0  # what the model actually emits
+
+    metric = MetricSpec(kind="match", of="logits", fields={"expected": "ans"})
+    assert compute_metric(metric, logits, [{"ans": "?"}], gpt2_tokenizer) == [0.0]
+
+    fixed = MetricSpec(
+        kind="match", of="logits", fields={"expected": "ans"}, token_form="bare"
+    )
+    assert compute_metric(fixed, logits, [{"ans": "?"}], gpt2_tokenizer) == [1.0]
+
+
+def test_auto_warns_once_per_column_when_the_forms_disagree(gpt2_tokenizer):
+    """`auto` stays the default, but it no longer guesses in silence."""
+    with pytest.warns(UserWarning, match="ambiguous under this tokenizer"):
+        column_token_ids(gpt2_tokenizer, ["?", "?", ".", "!"])
+
+
+def test_auto_is_silent_when_there_is_nothing_to_disambiguate(tokenizer, recwarn):
+    """Sentencepiece " Monday" is two pieces, so only the bare form resolves —
+    no choice was made and no warning is owed."""
+    column_token_ids(tokenizer, [" Monday", "Monday"])
+    assert [w for w in recwarn if issubclass(w.category, UserWarning)] == []
+
+
+def test_a_pinned_form_never_warns(gpt2_tokenizer, recwarn):
+    column_token_ids(gpt2_tokenizer, ["?", "."], token_form="bare")
+    assert [w for w in recwarn if issubclass(w.category, UserWarning)] == []

@@ -31,7 +31,7 @@ import torch
 
 from causalab.neural.pytorch_hooks.executor import PointExecutor
 from causalab.neural.pytorch_hooks.featurizers import Gate, Stage
-from causalab.neural.pytorch_hooks.metrics import column_token_id
+from causalab.neural.pytorch_hooks.metrics import column_token_ids
 from causalab.protocol.backend import ExecutionRequest
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import Document, MetricSpec, concrete_int, concrete_str
@@ -54,10 +54,17 @@ def metric_tensor(
     logits = logits.float()
     kind = str(metric.kind)
 
+    form = str(metric.token_form)  # §2.10; `auto` is the historical default
+
     def ids(field: str) -> torch.Tensor:
         column = concrete_str(metric.fields[field], f"metric field {field}")
         return torch.tensor(
-            [column_token_id(tokenizer, str(row[column])) for row in rows],
+            column_token_ids(
+                tokenizer,
+                [str(row[column]) for row in rows],
+                token_form=form,
+                where=f"metric {kind}.{field}",
+            ),
             dtype=torch.long,
             device=logits.device,
         )

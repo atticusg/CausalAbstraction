@@ -60,6 +60,9 @@ __all__ = [
     "SECTION_ORDER",
     "SaveEntry",
     "SiteSpec",
+    "TOKEN_COLUMN_METRIC_KINDS",
+    "TOKEN_FORMS",
+    "TokenForm",
     "concrete_int",
     "concrete_str",
     "Sweep",
@@ -162,6 +165,24 @@ METRIC_FIELDS: dict[str, tuple[str, ...]] = {
     "top_k": ("k",),
     "match": ("expected",),
 }
+
+TokenForm = Literal["auto", "bare", "space_prefixed"]
+
+#: How a metric's string answers become token ids (§2.10). ``auto`` is the
+#: historical resolver — try ``" " + s`` first, fall back to ``s`` — which is
+#: right for answers that follow a space (weekdays, names, MCQA letters) and
+#: wrong for answers that do not (punctuation: gpt2 emits ``"?"`` = 30, but
+#: ``" ?"`` = 5633 is also one token and wins). ``bare`` and ``space_prefixed``
+#: pin one form, so a document can say which one it means.
+TOKEN_FORMS: tuple[TokenForm, ...] = get_args(TokenForm)
+
+#: Metric kinds whose value fields carry string answers that must resolve to
+#: token ids — the kinds ``token_form`` applies to. ``kl`` compares two reads'
+#: distributions and ``top_k`` decodes ids it found, so neither resolves a
+#: string and neither accepts the key.
+TOKEN_COLUMN_METRIC_KINDS: frozenset[str] = frozenset(
+    {"logit_diff", "token_logit", "cross_entropy", "class_probs", "match"}
+)
 
 #: Names no section may declare (§1): the input roles, the un-intervened
 #: model, and the indexed-counterfactual family (checked by prefix for ``counterfactual[``).
@@ -412,11 +433,15 @@ class IMSpec:
 @dataclasses.dataclass(frozen=True)
 class MetricSpec:
     """§2.10 — a closed-vocabulary reduction over one read (``of``) plus
-    dataset columns. ``fields`` holds the kind's extra value fields."""
+    dataset columns. ``fields`` holds the kind's extra value fields.
+    ``token_form`` says how this metric's string answers become token ids
+    (``TOKEN_FORMS``); the ``auto`` default is the historical resolver, so an
+    unauthored metric behaves exactly as before."""
 
     kind: Leaf
     of: Leaf
     fields: Mapping[str, Leaf]
+    token_form: Leaf = "auto"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1122,9 +1147,22 @@ def _parse_metric(raw: Any, path: str) -> MetricSpec:
             path=f"{path}.kind",
         )
     extra = METRIC_FIELDS[kind]
-    _check_keys(obj, ("kind", "of", *extra), path)
+    takes_token_form = kind in TOKEN_COLUMN_METRIC_KINDS
+    _check_keys(
+        obj,
+        ("kind", "of", *extra, *(("token_form",) if takes_token_form else ())),
+        path,
+    )
     if "of" not in obj:
         raise ParseError("P2", "a metric needs 'of' (a read name)", path=path)
+    token_form: Any = "auto"
+    if "token_form" in obj:
+        token_form = _wrapped(
+            obj["token_form"],
+            lambda v, p: _enum(v, TOKEN_FORMS, p),
+            f"{path}.token_form",
+            allow_sweep=False,
+        )
     fields: dict[str, Any] = {}
     for field in extra:
         if field not in obj:
@@ -1136,7 +1174,10 @@ def _parse_metric(raw: Any, path: str) -> MetricSpec:
         else:
             fields[field] = _wrapped(obj[field], _scalar_str, f"{path}.{field}")
     return MetricSpec(
-        kind=kind, of=_wrapped(obj["of"], _scalar_str, f"{path}.of"), fields=fields
+        kind=kind,
+        of=_wrapped(obj["of"], _scalar_str, f"{path}.of"),
+        fields=fields,
+        token_form=token_form,
     )
 
 

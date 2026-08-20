@@ -140,6 +140,7 @@ class PointExecutor:
                 width=self._featurizer_width(name),
                 load_tensors=self.load_tensors,
                 stage_cache=self.stage_cache,
+                device=self.bundle.device,
             )
         return self.stage_cache[name]
 
@@ -315,6 +316,7 @@ class PointExecutor:
             width=width,
             load_tensors=self.load_tensors,
             stage_cache=self.stage_cache,
+            device=self.bundle.device,
         )
 
     def _finalize_read(
