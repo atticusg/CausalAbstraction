@@ -1,20 +1,43 @@
 {
   "version": "1",
   "description": "IOI clean baseline (Wang et al. 2023, arXiv:2211.00593): mean logit(IO) - logit(S) at END over the clean IOI distribution. Golden: paper reports 3.56 on 100k examples (band +/-1.2 from the VeriFires ioi-circuit checklist); the IO-over-S rate follows post-hoc as the fraction of positive per-row values.",
-  "model": {"key": "gpt2", "revision": "main"},
+  "model": {
+    "key": "gpt2",
+    "revision": "main"
+  },
   "data": {
-    "base": {"dataset": "ioi/clean", "field": "input"}
+    "base": {
+      "dataset": "ioi/clean",
+      "field": "input"
+    }
   },
   "sites": {
-    "lm_head": {"component": "lm_head"}
+    "lm_head": {
+      "component": "lm_head"
+    }
   },
   "reads": {
-    "logits": {"site": "lm_head", "pos": -1, "model": "original", "input": "base"}
+    "logits": {
+      "site": "lm_head",
+      "pos": -1,
+      "model": "original",
+      "input": "base"
+    }
   },
   "metrics": {
-    "ld": {"kind": "logit_diff", "of": "logits", "a": "io", "b": "s"}
+    "ld": {
+      "kind": "logit_diff",
+      "of": "logits",
+      "a": "io",
+      "b": "s"
+    }
   },
   "save": [
-    {"value": "ld", "model": "original", "input": "base", "file_path": "logit_diff.parquet"}
+    {
+      "value": "ld",
+      "model": "original",
+      "input": "base",
+      "file_path": "logit_diff.parquet"
+    }
   ]
 }

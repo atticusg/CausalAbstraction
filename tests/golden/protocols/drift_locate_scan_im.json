@@ -1,29 +1,81 @@
 {
   "version": "1",
   "description": "Chat-coherent drift tier, layer scan: interchange IIA over six block_output layers of Qwen3-4B on the raw-completion weekday task - the protocol-native analogue of the old tier's scores_per_layer pins. One shared source harvest across the six points (compute-sharing falls out of content dedup). Values captured by tests/golden/drift/update_drift_goldens.py on the canonical GPU.",
-  "model": {"key": "Qwen/Qwen3-4B-Instruct-2507", "revision": "main"},
+  "model": {
+    "key": "Qwen/Qwen3-4B-Instruct-2507",
+    "revision": "main"
+  },
   "data": {
-    "base":   {"dataset": "drift/weekdays", "field": "input"},
-    "source": {"dataset": "drift/weekdays", "field": "counterfactual_inputs[0]"}
+    "base": {
+      "dataset": "drift/weekdays",
+      "field": "input"
+    },
+    "counterfactual": {
+      "dataset": "drift/weekdays",
+      "field": "counterfactual_inputs[0]"
+    }
   },
   "sites": {
-    "target": {"component": "block_output", "layer": {"sweep": {"range": [6, 34, 4]}}},
-    "lm_head": {"component": "lm_head"}
+    "target": {
+      "component": "block_output",
+      "layer": {
+        "sweep": {
+          "range": [
+            6,
+            34,
+            4
+          ]
+        }
+      }
+    },
+    "lm_head": {
+      "component": "lm_head"
+    }
   },
   "reads": {
-    "v_src":  {"site": "target",  "pos": -1, "model": "original", "input": "source"},
-    "logits": {"site": "lm_head", "pos": -1, "model": "patched", "input": "base"}
+    "v_src": {
+      "site": "target",
+      "pos": -1,
+      "model": "original",
+      "input": "counterfactual"
+    },
+    "logits": {
+      "site": "lm_head",
+      "pos": -1,
+      "model": "patched",
+      "input": "base"
+    }
   },
-  "edits": {
-    "patch": {"site": "target", "pos": -1, "do": {"swap": "v_src"}}
+  "writes": {
+    "patch": {
+      "site": "target",
+      "pos": -1,
+      "do": {
+        "swap": "v_src"
+      }
+    }
   },
   "intervened_models": {
-    "patched": {"input": "base", "edits": ["patch"]}
+    "patched": {
+      "input": "base",
+      "writes": [
+        "patch"
+      ]
+    }
   },
   "metrics": {
-    "iia": {"kind": "match", "of": "logits", "expected": "cf_answer"}
+    "iia": {
+      "kind": "match",
+      "of": "logits",
+      "expected": "cf_answer"
+    }
   },
   "save": [
-    {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.parquet"}
+    {
+      "value": "iia",
+      "model": "patched",
+      "input": "base",
+      "file_path": "iia.parquet"
+    }
   ]
 }
