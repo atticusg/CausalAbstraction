@@ -71,7 +71,7 @@ file* paths are relative to `tests/`. Parametrized data dirs (`configs/`,
 | `test_trainable.py` | replaced interface | `neural/pytorch_hooks/test_train.py` | ED3 DAS/DBM primitives → the train loop: seeded determinism, params-moved-only, gate anneal, objective floor |
 | `test_validate.py` | retired | retired | the nnterp load-validation gate left with nnterp; loading is `pytorch_hooks.load_model` against the registry, no CLI gate in v1 |
 | `test_walking_skeleton.py` | retired | retired | the task-driven IIA pin needs the dataset-serialization seam (see gaps); the interchange+IIA mechanism runs as corpus 02 at tiny scale |
-| `walking_skeleton_pins.json` | retired | retired | pins of the retired walking skeleton |
+| `walking_skeleton_pins.json` | retired | retired | pins of the retired end-to-end IIA test above |
 
 ## tests/methods
 
@@ -304,9 +304,10 @@ site tooling that hooks in via the CLI's `--points` shard selector.
 - **Cross-model / two-pipeline patching** — one model per document in v1;
   `test_cross_model_hook_oracle.py`'s source-pipeline injection contract has no
   new carrier.
-- **Walking-skeleton IIA pins** — task-driven end-to-end IIA numbers
-  (`test_walking_skeleton.py`) need the dataset-serialization seam before a
-  protocol document can drive a real task's counterfactual dataset.
+- **Task-driven end-to-end IIA pins** — the end-to-end IIA numbers of the
+  retired `test_walking_skeleton.py` (task config → positions → edit → plan →
+  one IIA number) need the dataset-serialization seam before a protocol
+  document can drive a real task's counterfactual dataset.
 - **Dynamic per-row positions** — no v1 spelling; position specs resolve
   statically per row (index / variable / span), with no per-row computed
   indexer.
