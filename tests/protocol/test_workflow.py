@@ -207,6 +207,7 @@ class TestWeekdaysWorkflow:
             "locate",
             "best",
             "fit",
+            "best_fit",
             "apply",
             "scan_heatmap",
             "iia_by_k",
@@ -215,7 +216,8 @@ class TestWeekdaysWorkflow:
             ("locate",),
             ("best", "scan_heatmap"),
             ("fit",),
-            ("apply", "iia_by_k"),
+            ("best_fit", "iia_by_k"),
+            ("apply",),
         )
 
     def test_digest_kinds_split_by_dependency(self, env):

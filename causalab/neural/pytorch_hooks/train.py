@@ -188,6 +188,7 @@ def run_training(
             load_tensors=executor.load_tensors,
             stage_cache=executor.stage_cache,  # shared: one stage per name
             grad_enabled=True,
+            coords=executor.coords,
         )
         for indices in batches
     ]
@@ -344,6 +345,7 @@ def _run_eval(
         load_tensors=executor.load_tensors,
         stage_cache=executor.stage_cache,
         grad_enabled=False,
+        coords=executor.coords,
     )
     assert doc.train is not None and doc.train.eval is not None
     scores: dict[str, float] = {}
