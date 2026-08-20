@@ -59,7 +59,7 @@
       "input": "base"
     }
   },
-  "edits": {
+  "writes": {
     "noise": {
       "site": "emb",
       "pos": {
@@ -90,13 +90,13 @@
   "intervened_models": {
     "corrupted": {
       "input": "base",
-      "edits": [
+      "writes": [
         "noise"
       ]
     },
     "restored": {
       "input": "base",
-      "edits": [
+      "writes": [
         "noise",
         "restore"
       ]

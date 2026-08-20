@@ -218,7 +218,7 @@ def test_rome_mlp_window_aie_peak(tmp_path):
                         for l in layers
                     },
                 },
-                "edits": {
+                "writes": {
                     "noise": {
                         "site": "emb",
                         "pos": {"variable": "subject"},
@@ -230,8 +230,8 @@ def test_rome_mlp_window_aie_peak(tmp_path):
                     },
                 },
                 "intervened_models": {
-                    "corrupted": {"input": "base", "edits": ["noise"]},
-                    "restored": {"input": "base", "edits": ["noise"] + [f"rest{l}" for l in layers]},
+                    "corrupted": {"input": "base", "writes": ["noise"]},
+                    "restored": {"input": "base", "writes": ["noise"] + [f"rest{l}" for l in layers]},
                 },
                 "metrics": {
                     "ce_corr": {"kind": "cross_entropy", "of": "logits_corr", "target": "answer"},
@@ -410,7 +410,7 @@ def test_arithmetic_steering_diagonal(tmp_path):
             "reads": {
                 "logits": {"site": "lm_head", "pos": -1, "model": "steered", "input": "base"}
             },
-            "edits": {
+            "writes": {
                 "steer": {
                     "site": "l18",
                     "pos": -1,
@@ -421,7 +421,7 @@ def test_arithmetic_steering_diagonal(tmp_path):
                     },
                 }
             },
-            "intervened_models": {"steered": {"input": "base", "edits": ["steer"]}},
+            "intervened_models": {"steered": {"input": "base", "writes": ["steer"]}},
             "metrics": {
                 "hour_probs": {"kind": "class_probs", "of": "logits", "groups": groups}
             },
