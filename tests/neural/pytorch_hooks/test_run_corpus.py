@@ -3,10 +3,17 @@
 The golden corpus authors Llama-3.1-8B; ``--set`` overrides (spec §9)
 retarget the model key and layer/head indices at tiny scale — the
 documents' semantics are untouched, which is exactly what the override
-mechanism is for. The sweep/train corpus files (04, 05, 07, 08) stay off
-the CPU budget per the phase plan; the fit→apply roundtrip below covers
-the train path end to end at tiny scale instead, including the
+mechanism is for. The sweep/train corpus files (04, 05, 07) stay off the
+CPU budget per the phase plan; the fit→apply roundtrip below covers the
+train path end to end at tiny scale instead, including the
 ArtifactIdentity stamp-and-check cycle that corpus 09 specifies.
+
+Corpus 08 is the one exception, run at a single ``k`` and one epoch (~10 s):
+it is the only document in the corpus that sweeps ``train.seed``, and a
+seed sweep is the one thing a single-point fit cannot check — the stage
+cache is keyed by featurizer name alone, so a cache shared across points
+would hand seed 0's rotation to every other seed and no unit test on
+``build_stack`` would notice. See ``test_featurizer_seed.py``.
 """
 
 from __future__ import annotations
@@ -166,6 +173,51 @@ def test_fit_then_apply_roundtrip(roots, tmp_path):
         "featurizers.rot.file_path=artifacts/tiny/rot_k4.safetensors",
     )
     assert code == 1
+
+
+def test_08_seed_sweep_fits_three_genuinely_different_rotations(roots, tmp_path):
+    """A ``{"sweep": [0,1,2]}`` on ``train.seed`` must fit three rotations
+    from three *different* starting points (§2.11).
+
+    The bug this guards end to end: ``train.seed`` never reached the
+    ``subspace`` init, so all three points started from the identical
+    rotation and drifted apart only by batch order. The three fits still
+    differed — by ~1e-3, a subspace distance of ~0.015 — so nothing looked
+    obviously wrong, but a sweep read as evidence of stability was really
+    measuring data-order jitter around one initialisation.
+
+    Asserted on the *column space*, ``‖QaQaᵀ − QbQbᵀ‖_F``, which ignores the
+    arbitrary basis inside each frame: 0 is the same subspace, ``√(2k)`` ≈
+    2.83 orthogonal ones. Pre-fix this measured ≤ 0.016 for every pair;
+    the threshold below is an order of magnitude above that and an order of
+    magnitude below what independent inits give (~2.4).
+    """
+    import torch
+
+    out = tmp_path / "sweep"
+    code = _run(
+        "08_weekdays_das_sweep_im.json",
+        roots,
+        out,
+        "sites.target.layer=1",
+        "featurizers.rot.k=4",  # one k, so the sweep is over seed alone
+        'train.steps={"epochs": 1}',
+        'train.batch={"pairs": 2}',
+    )
+    assert code == 0
+    fitted = load_file(str(out / "rot.safetensors"))
+    assert sorted(fitted) == [f"weight[seed={s}]" for s in (0, 1, 2)]
+
+    names = sorted(fitted)
+    for i, a in enumerate(names):
+        for b in names[i + 1 :]:
+            qa, qb = fitted[a], fitted[b]
+            distance = float((qa @ qa.T - qb @ qb.T).norm())
+            assert distance > 0.5, f"{a} and {b} fit the same subspace ({distance:.4f})"
+            # each is still a frame, not just noise
+            torch.testing.assert_close(
+                qa.T @ qa, torch.eye(qa.shape[1]), atol=1e-5, rtol=1e-4
+            )
 
 
 def test_explain_and_digest_work_on_every_corpus_file(roots, capsys):
