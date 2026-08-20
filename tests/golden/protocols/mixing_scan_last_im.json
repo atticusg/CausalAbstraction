@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "description": "Mixing mechanisms (arXiv:2510.06182), TargetRebind interchange on gemma-2-2b-it: swap the counterfactual run's last-token residual into the original run, swept over layers around the paper's most-mixed region (~18 of 26), on the Music binding task, last-position query bucket (per-bucket documents keep the single-batch lm_head forward within GPU memory) (m=3, n=20 groups, t_entity=2). Per row the positional / lexical / reflexive mechanisms predict distinct single-token genres (pos_answer / lex_answer / ref_answer columns; see gen_mixing.py for the permutation construction); match metrics attribute each query to a mechanism, and the test computes positional shares at first/middle/last query-position buckets at the most-mixed layer. Goldens: edges >= 60% (figure-read, confidence low), middle in [5, 35] (paper text: 'accounting only for 20%').",
+  "description": "Mixing mechanisms (arXiv:2510.06182), TargetRebind interchange on gemma-2-2b-it: swap the counterfactual run's last-token residual into the original run, swept over layers around the paper's most-mixed region (~18 of 26), on the Music binding task, last-position query bucket (per-bucket documents keep the single-batch lm_head forward within GPU memory) (m=3, n=20 groups, t_entity=2). Per row the positional / lexical / reflexive mechanisms predict distinct single-token genres (pos_answer / lex_answer / ref_answer columns; see gen_mixing.py for the permutation construction); attribution is candidate-relative, the paper's own currency (its Fig 9 works in mean logits over candidate outputs): three logit_diff metrics score each mechanism's predicted genre against the original answer, and a row is attributed to the mechanism with the largest positive shift - full-vocab argmax match measured ~zero attribution because instruct gemma prefers to restate the queried name before the genre (H100 diagnostic, job 1380216). Goldens: edges >= 60% (figure-read, confidence low), middle in [5, 35] (paper text: 'accounting only for 20%').",
   "model": {
     "key": "google/gemma-2-2b-it",
     "revision": "main"
@@ -22,7 +22,7 @@
         "sweep": {
           "range": [
             12,
-            24,
+            26,
             2
           ]
         }
@@ -64,51 +64,43 @@
     }
   },
   "metrics": {
-    "match_pos": {
-      "kind": "match",
+    "ld_pos": {
+      "kind": "logit_diff",
       "of": "logits",
-      "expected": "pos_answer"
+      "a": "pos_answer",
+      "b": "orig_answer"
     },
-    "match_lex": {
-      "kind": "match",
+    "ld_lex": {
+      "kind": "logit_diff",
       "of": "logits",
-      "expected": "lex_answer"
+      "a": "lex_answer",
+      "b": "orig_answer"
     },
-    "match_ref": {
-      "kind": "match",
+    "ld_ref": {
+      "kind": "logit_diff",
       "of": "logits",
-      "expected": "ref_answer"
-    },
-    "match_orig": {
-      "kind": "match",
-      "of": "logits",
-      "expected": "orig_answer"
+      "a": "ref_answer",
+      "b": "orig_answer"
     }
   },
   "save": [
     {
-      "value": "match_pos",
+      "value": "ld_pos",
       "model": "patched",
       "input": "base",
-      "file_path": "match_pos.parquet"
+      "file_path": "ld_pos.parquet"
     },
     {
-      "value": "match_lex",
+      "value": "ld_lex",
       "model": "patched",
       "input": "base",
-      "file_path": "match_lex.parquet"
+      "file_path": "ld_lex.parquet"
     },
     {
-      "value": "match_ref",
+      "value": "ld_ref",
       "model": "patched",
       "input": "base",
-      "file_path": "match_ref.parquet"
-    },
-    {
-      "value": "match_orig",
-      "model": "patched",
-      "input": "base",
-      "file_path": "match_orig.parquet"
+      "file_path": "ld_ref.parquet"
     }
   ]
 }

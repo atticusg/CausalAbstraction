@@ -362,23 +362,31 @@ def test_hydra_compensation_r2(tmp_path):
 
 def test_mixing_positional_shares(tmp_path):
     """Fig 2: positional share by query-position bucket at the most-mixed
-    layer. Share = rows whose post-patch argmax equals the positional
-    prediction, normalized among rows attributed to any of the three
-    mechanisms; the most-mixed layer maximizes total attribution pooled
-    over the three buckets (one document per bucket keeps the
-    single-batch lm_head forward within GPU memory)."""
+    layer. Attribution is candidate-relative (the paper's Fig 9 works in
+    mean logits over candidate outputs): each row carries logit_diff of
+    every mechanism's predicted genre against the original answer, and is
+    attributed to the mechanism with the largest positive shift — or to
+    none when the original answer still dominates. Shares are normalized
+    among attributed rows; the most-mixed layer maximizes total
+    attribution pooled over the three buckets (one document per bucket
+    keeps the single-batch lm_head forward within GPU memory)."""
     merged_parts = []
     for bucket in ("first", "middle", "last"):
         out = tmp_path / bucket
         run_document(f"mixing_scan_{bucket}_im.json", out, dtype="bf16")
         frames = {}
         for mech in ("pos", "lex", "ref"):
-            frame = pd.read_parquet(out / f"match_{mech}.parquet")
+            frame = pd.read_parquet(out / f"ld_{mech}.parquet")
             layer_col = _axis_column(frame, "target.layer")
             frames[mech] = frame.rename(columns={layer_col: "layer"})
         part = frames["pos"][["example", "layer"]].copy()
+        diffs = pd.DataFrame(
+            {mech: frames[mech]["value"].to_numpy() for mech in ("pos", "lex", "ref")}
+        )
+        best = diffs.idxmax(axis=1)
+        winning = diffs.max(axis=1) > 0
         for mech in ("pos", "lex", "ref"):
-            part[mech] = frames[mech]["value"].to_numpy()
+            part[mech] = ((best == mech) & winning).astype(float).to_numpy()
         part["bucket"] = bucket
         merged_parts.append(part)
     merged = pd.concat(merged_parts, ignore_index=True)
