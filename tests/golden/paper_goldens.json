@@ -163,7 +163,7 @@
         "task": "tasks/mixing-mechanisms",
         "leaf": "quant-positional-edges"
       },
-      "notes": "The 80% center is figure-eyeballed (the paper text is only qualitative), hence confidence: low. The VeriFires band [60, 100] exceeds the metric's range at the top, so the intent is one-sided and is encoded as a floor at 60."
+      "notes": "The 80% center is figure-eyeballed (the paper text is only qualitative), hence confidence: low; the VeriFires band [60, 100] exceeds the metric's range at the top, so the intent is one-sided and is encoded as a floor at 60. Attribution is candidate-relative (each mechanism's predicted genre vs the original answer, largest positive logit shift wins) at layer 18, the paper's own intervention layer for gemma-2-2b-it - past retrieval (L20+) the patch carries the counterfactual's finished answer and reflexive sweeps to ~100%. H100 corroboration (job 1380237): pooled edges ~78% at L18 (first 90%, last 65%), tracking the figure-read 80%."
     },
     "mixing.positional_share_middle": {
       "paper": "Mixing Mechanisms, arXiv:2510.06182",
@@ -188,7 +188,7 @@
         "task": "tasks/mixing-mechanisms",
         "leaf": "quant-positional-middle"
       },
-      "notes": "The VeriFires package pins no dataset size; this test pins its own seeded N. Attribution per row = match against the mechanism's predicted answer column."
+      "notes": "The VeriFires package pins no dataset size; this test pins its own seeded N (150 rows per position bucket). Candidate-relative attribution at layer 18 (see the edges entry). H100 corroboration (job 1380237): middle 17% at L18, tracking the paper's stated 20%."
     },
     "arithmetic.hours_baseline_acc": {
       "paper": "Arithmetic in the Wild: Llama uses Base-10 Addition to Reason About Cyclic Concepts, arXiv:2605.01148",
