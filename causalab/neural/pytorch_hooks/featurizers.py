@@ -27,6 +27,16 @@ tensors that arrive from files on CPU and are moved by the same step.
 Dtype is deliberately *not* forced: every stage casts at the boundary
 (``x.to(q.dtype)``, ``mask.to(x.dtype)``), so featurizers stay fp32 against
 a bf16/fp16 backbone.
+
+**Seed.** ``subspace`` is the only kind with a random initialisation, and it
+draws from a *local* ``torch.Generator`` rather than the global RNG, so its
+starting rotation cannot depend on how many stages were built before it or on
+whether a train loop ran at all. The value comes down the ``seed`` argument of
+:func:`build_stack` — the caller resolves it (the executor reads the
+document's ``train.seed``, and pins 0 for a document with no fit) — because
+``build_stack`` is also called from apply/inference paths that never touch the
+global RNG. ``gate`` initialises ``θ`` to zeros and every other kind loads its
+tensors from a file, so nothing else here is seed-sensitive.
 """
 
 from __future__ import annotations
@@ -66,7 +76,11 @@ class Identity(Stage):
 
 class Subspace(Stage):
     """An orthonormal ``(d, k)`` map ``Q``; features are the coordinates in
-    its column space, ``err`` the complement (module docstring)."""
+    its column space, ``err`` the complement (module docstring).
+
+    ``seed`` picks the initial rotation and is kept on the instance so a
+    cached stage can be checked against the seed a later use site asks for
+    (:func:`build_stack`)."""
 
     kind = "subspace"
 
@@ -75,6 +89,7 @@ class Subspace(Stage):
     ) -> None:
         super().__init__()
         self.k = k
+        self.seed = seed
         generator = torch.Generator().manual_seed(seed)
         init = torch.linalg.qr(torch.randn(width, k, generator=generator))[0]
         self.weight = torch.nn.Parameter(init)
@@ -272,6 +287,7 @@ def build_stack(
     load_tensors: Any,
     stage_cache: dict[str, Stage],
     device: str | torch.device = "cpu",
+    seed: int = 0,
 ) -> FeaturizerStack:
     """Build (or reuse from ``stage_cache``) the stack a read/write
     references. ``width`` is the SITE width; each later stage in a
@@ -284,7 +300,16 @@ def build_stack(
     ``device`` is the run's device: stages are built on CPU and moved here
     (module docstring), so a ``--device cuda`` run does not multiply a cuda
     activation by a cpu parameter. Callers pass ``bundle.device``; the
-    ``"cpu"`` default keeps the CPU-only call sites unchanged."""
+    ``"cpu"`` default keeps the CPU-only call sites unchanged.
+
+    ``seed`` is the document's featurizer-init seed (``train.seed``, 0 when
+    the document declares no fit — see ``executor.document_seed``). It is an
+    explicit argument rather than a read of the global RNG because this
+    function also runs on apply/inference paths that never seed the global
+    stream; a global-RNG init would make a rotation depend on construction
+    order. Because the cache is keyed by name alone, a cached stage built
+    from a *different* seed is a contradiction and refuses — the same rule as
+    the width check."""
     if ref is None:
         return FeaturizerStack(names=(), stages=(Identity(),))
     chain = (ref,) if isinstance(ref, str) else tuple(ref)
@@ -301,6 +326,15 @@ def build_stack(
                     f"featurizer {name!r} is used at width {running} here but was "
                     f"built for width {built_for} — one featurizer, one width",
                 )
+            built_seed = getattr(stage, "seed", None)
+            if built_seed is not None and built_seed != seed:
+                raise ProtocolError(
+                    "P2",
+                    f"featurizer {name!r} is used at init seed {seed} here but the "
+                    f"cached stage was initialised from seed {built_seed} — one "
+                    "featurizer, one seed; a stage cache belongs to one point, so "
+                    "two points differing in train.seed must not share one",
+                )
         else:
             if running is None:
                 raise ProtocolError(
@@ -308,7 +342,9 @@ def build_stack(
                     f"cannot size featurizer {name!r}: the preceding stage's "
                     "output width is not derivable from its spec",
                 )
-            stage = _build_stage(name, spec, width=running, load_tensors=load_tensors)
+            stage = _build_stage(
+                name, spec, width=running, load_tensors=load_tensors, seed=seed
+            )
             # built on CPU (seeded inits stay bit-identical across devices),
             # then moved onto the run's device — parameters and registered
             # buffers alike, so nothing is left behind for a cuda forward to
@@ -327,7 +363,7 @@ def build_stack(
 
 
 def _build_stage(
-    name: str, spec: FeaturizerSpec, *, width: int, load_tensors: Any
+    name: str, spec: FeaturizerSpec, *, width: int, load_tensors: Any, seed: int = 0
 ) -> Stage:
     kind = spec.kind if isinstance(spec.kind, str) else "identity"
     if isinstance(spec.file_path, str):
@@ -352,8 +388,9 @@ def _build_stage(
         )
         if k is None:
             raise ProtocolError("P2", f"subspace featurizer {name!r} needs k")
-        return Subspace(width, k, parametrization)
+        return Subspace(width, k, parametrization, seed=seed)
     if kind == "gate":
+        # θ starts at zeros — no draw, so nothing for `seed` to influence
         return Gate(width)
     raise ProtocolError(
         "P2",
