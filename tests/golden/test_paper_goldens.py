@@ -367,9 +367,16 @@ def test_mixing_positional_shares(tmp_path):
     every mechanism's predicted genre against the original answer, and is
     attributed to the mechanism with the largest positive shift — or to
     none when the original answer still dominates. Shares are normalized
-    among attributed rows; the most-mixed layer maximizes total
-    attribution pooled over the three buckets (one document per bucket
-    keeps the single-batch lm_head forward within GPU memory)."""
+    among attributed rows and read at layer 18 — the paper's own
+    intervention layer for gemma-2-2b-it ("the last layer before
+    retrieval starts", named as layers 16-18; the VeriFires leaf anchors
+    "~18"). A max-attribution heuristic is wrong here: past retrieval
+    (L20+) the patch carries the counterfactual's finished answer and
+    reflexive sweeps to ~100% everywhere (H100 layer table, job 1380237:
+    L16 edges 100/74% vs middle 28%; L18 90/65% vs 17%; L22+ ref≈100%).
+    One document per bucket keeps the single-batch lm_head forward within
+    GPU memory; the scan stays in the document so the retrieval
+    transition remains visible in the parquets."""
     merged_parts = []
     for bucket in ("first", "middle", "last"):
         out = tmp_path / bucket
@@ -393,11 +400,11 @@ def test_mixing_positional_shares(tmp_path):
     merged["attributed"] = merged[["pos", "lex", "ref"]].sum(axis=1)
 
     by_layer = merged.groupby("layer")["attributed"].mean()
-    best_layer = by_layer.idxmax()
     print(f"attribution by layer: { {int(k): round(v, 3) for k, v in by_layer.items()} }")
-    print(f"most-mixed layer {best_layer} (paper: ~18 of 26)")
+    intervention_layer = 18  # the paper's own layer for gemma-2-2b-it
+    print(f"reading shares at the paper's layer {intervention_layer}")
 
-    at_best = merged[merged["layer"] == best_layer]
+    at_best = merged[merged["layer"] == intervention_layer]
     shares = {}
     for bucket, group in at_best.groupby("bucket"):
         attributed = group["attributed"].sum()
