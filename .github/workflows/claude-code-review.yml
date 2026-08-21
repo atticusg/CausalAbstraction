@@ -46,5 +46,25 @@ jobs:
 
             After conducting this review, read CLAUDE.md and conduct a second review pass with those additional considerations in mind.
 
+          # No --model: the action's default follows what the credential is
+          # entitled to. A pinned alias resolves locally and then fails on the
+          # first API call if the token cannot use that model — which is what
+          # this workflow did on every PR, indistinguishably from a bad token.
           claude_args: |
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)" --model opus
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+
+      # The action reports `is_error: true` without the API error that caused
+      # it, so a failure here is otherwise unreadable. The execution log has
+      # the actual message.
+      - name: Surface the execution log on failure
+        if: failure()
+        run: |
+          log="${{ steps.claude-review.outputs.execution_file }}"
+          [ -f "$log" ] || log="${RUNNER_TEMP}/claude-execution-output.json"
+          if [ -f "$log" ]; then
+            echo "::group::claude-execution-output.json"
+            cat "$log"
+            echo "::endgroup::"
+          else
+            echo "no execution log at $log"
+          fi
