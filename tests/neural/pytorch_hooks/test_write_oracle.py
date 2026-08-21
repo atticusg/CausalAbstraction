@@ -416,3 +416,75 @@ def test_composed_chain_sizes_stages_by_chain_width(llama_bundle):
     clean = oracle_lib.next_token_logits(shim, base_inputs)
     assert not torch.allclose(want, clean, atol=1e-4)  # non-vacuity
     torch.testing.assert_close(have, want, **TOL)
+
+
+# --------------------------------------------------------------------------- #
+#  all positions — writes                                                      #
+# --------------------------------------------------------------------------- #
+
+
+def zero_ablate_all_doc() -> dict:
+    """Zero-ablate a whole layer: the write case the all spelling makes
+    expressible without naming every index."""
+    return {
+        "version": "1",
+        "model": {"key": "test", "revision": "main"},
+        "data": base_data_section(with_counterfactual=False),
+        "sites": {
+            "tgt": {"component": "block_output", "layer": 0},
+            "lm_head": {"component": "lm_head"},
+        },
+        "reads": {
+            "logits": {
+                "site": "lm_head",
+                "pos": {"index": -1},
+                "model": "ablated",
+                "input": "base",
+            }
+        },
+        "writes": {"zero": {"site": "tgt", "pos": "all", "do": {"swap": 0.0}}},
+        "intervened_models": {"ablated": {"input": "base", "writes": ["zero"]}},
+        "save": [
+            {
+                "value": "logits",
+                "model": "ablated",
+                "input": "base",
+                "file_path": "l.safetensors",
+            }
+        ],
+    }
+
+
+def test_all_positions_write_matches_oracle(bundle, oracle: OracleShim):
+    """An all-positions swap writes every content token — the oracle patch
+    covers the whole sequence, and the result differs from clean."""
+    executor = executor_for(zero_ablate_all_doc(), bundle, base_texts=[BASE_TEXT])
+    have = executor.read_value("logits")[:, 0, :]
+
+    base_inputs = _inputs(bundle, BASE_TEXT)
+    seq = int(base_inputs["input_ids"].shape[1])
+    resid = oracle_lib.capture_residual(oracle, 0, base_inputs)
+    want = oracle_lib.next_token_logits(
+        oracle,
+        base_inputs,
+        layer=0,
+        positions=list(range(seq)),
+        patch_values=torch.zeros_like(resid),
+    )
+    clean = oracle_lib.next_token_logits(oracle, base_inputs)
+    assert not torch.allclose(want, clean, atol=1e-4)  # non-vacuity
+    torch.testing.assert_close(have, want, **TOL)
+
+
+def test_ragged_all_positions_write_refuses(llama_bundle):
+    """The documented v1 limit (spec §2.3): rows of unequal length make an
+    all write ragged, which the reference backend refuses rather than
+    silently writing a rectangle over the padding."""
+    texts = ["one two", "a much longer sentence right here indeed and then some more"]
+    batch = encode(llama_bundle.tokenizer, texts)
+    assert batch.content_start(0) != batch.content_start(1)  # genuinely ragged
+
+    executor = executor_for(zero_ablate_all_doc(), llama_bundle, base_texts=texts)
+    with pytest.raises(NotImplementedError) as err:
+        executor.read_value("logits")
+    assert "all-positions" in str(err.value)
