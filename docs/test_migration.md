@@ -308,5 +308,9 @@ site tooling that hooks in via the CLI's `--points` shard selector.
   (`test_walking_skeleton.py`) need the dataset-serialization seam before a
   protocol document can drive a real task's counterfactual dataset.
 - **Dynamic per-row positions** — no v1 spelling; position specs resolve
-  statically per row (index / variable / span), with no per-row computed
+  statically per row (index / variable / span / all), with no per-row computed
   indexer.
+- **Per-position metric grids** — `{"all": true}` makes an every-token *read*
+  expressible, but metric lowering still reduces exactly one position per
+  example, so a logit-lens grid comes out as a saved tensor, not a metric
+  table. A per-position metric needs a `position` column in the metric table.

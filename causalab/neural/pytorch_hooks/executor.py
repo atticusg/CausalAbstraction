@@ -448,7 +448,9 @@ class PointExecutor:
                 if len(widths) != 1:
                     raise NotImplementedError(
                         f"write {ename!r}: ragged position widths {sorted(widths)} "
-                        "are not batchable in the v1 reference backend"
+                        "are not batchable in the v1 reference backend — an "
+                        "all-positions or variable write needs every row to be "
+                        "the same length"
                     )
                 idx = torch.tensor(per_row, dtype=torch.long, device=tensor.device)
                 rows = torch.arange(tensor.shape[0], device=tensor.device).unsqueeze(1)

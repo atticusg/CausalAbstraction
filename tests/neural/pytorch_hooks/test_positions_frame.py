@@ -118,6 +118,39 @@ def test_span_is_a_content_frame_window(tokenizer):
     assert window == [start, start + 1]
 
 
+def test_all_is_every_content_token(tokenizer):
+    """``{"all": true}`` is the row's real tokens: contiguous from the row's
+    content start to the padded end, nothing under the left pad."""
+    batch = encode(tokenizer, ["one two three", "a much longer sentence right here"])
+    for row in range(2):
+        positions = resolve_position(PositionSpec(all=True), batch, row)
+        start = batch.content_start(row)
+        assert positions == list(range(start, batch.padded_len))
+        assert all(batch.attention_mask[row, p] == 1 for p in positions)
+    # the short row is genuinely shorter — the ragged case reads must carry
+    assert len(resolve_position(PositionSpec(all=True), batch, 0)) < len(
+        resolve_position(PositionSpec(all=True), batch, 1)
+    )
+
+
+def test_all_needs_no_dataset_row(tokenizer):
+    """Unlike a variable window, an all spec is frame-only — it resolves
+    without the dataset row, which is what makes it usable in any document."""
+    batch = encode(tokenizer, ["one two three"])
+    positions = resolve_position(PositionSpec(all=True), batch, 0)
+    assert positions == list(range(batch.content_start(0), batch.padded_len))
+
+
+def test_all_covers_the_index_forms(tokenizer):
+    """The endpoints agree with the index spellings they generalize."""
+    batch = encode(tokenizer, ["one two three", "a much longer sentence right here"])
+    for row in range(2):
+        positions = resolve_position(PositionSpec(all=True), batch, row)
+        (first,) = resolve_position(PositionSpec(index=0), batch, row)
+        (last,) = resolve_position(PositionSpec(index=-1), batch, row)
+        assert positions[0] == first and positions[-1] == last
+
+
 def test_out_of_bounds_refuses(tokenizer):
     batch = encode(tokenizer, ["one two three"])
     with pytest.raises(ProtocolError) as err:

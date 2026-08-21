@@ -75,6 +75,47 @@ def test_position_spec_needs_exactly_one_anchor():
         parse_document(in_order(raw))
 
 
+def test_all_pos_sugar_expands():
+    """The bare string ``"all"`` is the all-positions sugar, not a lookup in
+    the positions table (§2.3)."""
+    raw = base_doc()
+    raw["reads"]["v_cf"]["pos"] = "all"
+    pos = parse_document(raw).reads["v_cf"].pos
+    assert isinstance(pos, PositionSpec) and pos.all is True
+
+
+def test_all_anchor_parses_inline():
+    raw = base_doc()
+    raw["reads"]["v_cf"]["pos"] = {"all": True}
+    pos = parse_document(raw).reads["v_cf"].pos
+    assert isinstance(pos, PositionSpec) and pos.all is True and pos.index is None
+
+
+def test_all_is_exclusive_with_the_other_anchors():
+    raw = base_doc()
+    raw["reads"]["v_cf"]["pos"] = {"all": True, "index": -1}
+    with pytest.raises(ParseError):
+        parse_document(raw)
+
+
+@pytest.mark.parametrize("modifier", ["scope", "relative_to"])
+def test_all_takes_no_modifier(modifier):
+    """``scope``/``relative_to`` narrow an index or span; there is nothing
+    left to narrow inside "every token"."""
+    raw = base_doc()
+    raw["reads"]["v_cf"]["pos"] = {"all": True, modifier: {"variable": "subject"}}
+    with pytest.raises(ParseError):
+        parse_document(raw)
+
+
+def test_all_is_a_flag_not_a_selection():
+    raw = base_doc()
+    raw["reads"]["v_cf"]["pos"] = {"all": [0, 1]}
+    with pytest.raises(ParseError) as err:
+        parse_document(raw)
+    assert "all" in str(err.value)
+
+
 def test_layerless_component_rejects_layer():
     raw = base_doc()
     raw["sites"]["lm_head"]["layer"] = 0
