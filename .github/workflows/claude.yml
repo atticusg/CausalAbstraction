@@ -47,5 +47,21 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://docs.claude.com/en/docs/claude-code/cli-reference for available options
           # claude_args: '--allowed-tools Bash(gh pr:*)'
-          claude_args: '--model opus'
+          # No --model here either: see claude-code-review.yml.
+
+      # The action reports `is_error: true` without the API error that caused
+      # it, so a failure here is otherwise unreadable. The execution log has
+      # the actual message.
+      - name: Surface the execution log on failure
+        if: failure()
+        run: |
+          log="${{ steps.claude.outputs.execution_file }}"
+          [ -f "$log" ] || log="${RUNNER_TEMP}/claude-execution-output.json"
+          if [ -f "$log" ]; then
+            echo "::group::claude-execution-output.json"
+            cat "$log"
+            echo "::endgroup::"
+          else
+            echo "no execution log at $log"
+          fi
 
