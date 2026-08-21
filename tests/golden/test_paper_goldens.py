@@ -185,7 +185,7 @@ def test_rome_hidden_state_aie_peak(tmp_path):
 
 
 def test_rome_mlp_window_aie_peak(tmp_path):
-    """Fig 2b: restore a 10-layer MLP window [l-4, l+5] (clipped) at the
+    """Fig 2b: restore a 10-layer MLP window [layer-4, layer+5] (clipped) at the
     last subject token in the corrupted run. Ten simultaneous swap sites
     cannot ride one sweep axis, so one document per window center is
     generated here (the parity-goldens build-doc-per-case pattern) —
@@ -198,7 +198,9 @@ def test_rome_mlp_window_aie_peak(tmp_path):
     aie: dict[int, list[pd.Series]] = {}
     for width in (2, 3, 4, 5):
         for center in centers:
-            layers = [i for i in range(center - 4, center + 6) if 0 <= i < 48]
+            layers = [
+                layer for layer in range(center - 4, center + 6) if 0 <= layer < 48
+            ]
             doc = {
                 "version": "1",
                 "description": f"generated: ROME MLP window restore, center {center}, width-{width} shard",
@@ -213,8 +215,8 @@ def test_rome_mlp_window_aie_peak(tmp_path):
                     "emb": {"component": "embeddings"},
                     "lm_head": {"component": "lm_head"},
                     **{
-                        f"mlp{i}": {"component": "mlp_output", "layer": i}
-                        for i in layers
+                        f"mlp{layer}": {"component": "mlp_output", "layer": layer}
+                        for layer in layers
                     },
                 },
                 "reads": {
@@ -231,13 +233,13 @@ def test_rome_mlp_window_aie_peak(tmp_path):
                         "input": "base",
                     },
                     **{
-                        f"v{i}": {
-                            "site": f"mlp{i}",
+                        f"v{layer}": {
+                            "site": f"mlp{layer}",
                             "pos": "last_subject",
                             "model": "original",
                             "input": "base",
                         }
-                        for i in layers
+                        for layer in layers
                     },
                 },
                 "writes": {
@@ -253,19 +255,19 @@ def test_rome_mlp_window_aie_peak(tmp_path):
                         },
                     },
                     **{
-                        f"rest{i}": {
-                            "site": f"mlp{i}",
+                        f"rest{layer}": {
+                            "site": f"mlp{layer}",
                             "pos": "last_subject",
-                            "do": {"swap": f"v{i}"},
+                            "do": {"swap": f"v{layer}"},
                         }
-                        for i in layers
+                        for layer in layers
                     },
                 },
                 "intervened_models": {
                     "corrupted": {"input": "base", "writes": ["noise"]},
                     "restored": {
                         "input": "base",
-                        "writes": ["noise"] + [f"rest{i}" for i in layers],
+                        "writes": ["noise"] + [f"rest{layer}" for layer in layers],
                     },
                 },
                 "metrics": {
