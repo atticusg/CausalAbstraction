@@ -51,10 +51,28 @@ from causalab.protocol.errors import ProtocolError
 from causalab.protocol.registry import component_width
 from causalab.protocol.schema import Document, WriteSpec, PositionSpec, ReadSpec
 
-__all__ = ["PointExecutor", "RaggedValue"]
+__all__ = ["PointExecutor", "RaggedValue", "document_seed"]
 
 
 import dataclasses
+
+
+def document_seed(doc: Document) -> int:
+    """The one seed a document implies: ``train.seed``, or **0** when it
+    declares no fit.
+
+    Read in one place so the three consumers cannot drift apart: the
+    ``subspace`` featurizer's initial rotation (:func:`build_stack`),
+    ``torch.manual_seed`` at train-loop entry, and the batch-order RNG.
+
+    The 0 for a document with no ``train`` block is deliberate rather than
+    accidental: an apply/inference document has no seed to name, and pinning
+    it means the same document builds the same (unfitted) featurizer whether
+    or not a fit is running — which a global-RNG init could not promise."""
+    train = doc.train
+    if train is None:
+        return 0
+    return int(train.seed) if isinstance(train.seed, int) else 0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -98,6 +116,9 @@ class PointExecutor:
             stage_cache if stage_cache is not None else {}
         )
         self.grad_enabled = grad_enabled
+        # the seed every freshly built featurizer initialises from; the stage
+        # cache is keyed by name alone, so it belongs to this one point
+        self.seed = document_seed(doc)
         self._read_values: dict[str, torch.Tensor | RaggedValue] = {}
         self._groups_run: set[tuple[str, str]] = set()
         self._batches: dict[str, EncodedBatch] = {}
@@ -141,6 +162,7 @@ class PointExecutor:
                 load_tensors=self.load_tensors,
                 stage_cache=self.stage_cache,
                 device=self.bundle.device,
+                seed=self.seed,
             )
         return self.stage_cache[name]
 
@@ -317,6 +339,7 @@ class PointExecutor:
             load_tensors=self.load_tensors,
             stage_cache=self.stage_cache,
             device=self.bundle.device,
+            seed=self.seed,
         )
 
     def _finalize_read(
