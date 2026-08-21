@@ -4,10 +4,15 @@ backend owns the loop.
 Semantics implemented exactly as declared — none of the legacy loop's
 ambient state survives:
 
-* ``seed`` drives featurizer init, data order, and every draw
-  (``torch.manual_seed`` at loop entry — the one deliberate use of the
-  global RNG, so a ``{"sweep": [0,1,2]}`` on ``seed`` yields three
-  genuinely different fits);
+* ``seed`` drives featurizer init, data order, and every draw, so a
+  ``{"sweep": [0,1,2]}`` on ``seed`` yields three genuinely different fits.
+  Init reaches the featurizer as an explicit argument (``executor.seed`` →
+  ``build_stack(seed=…)``, a *local* generator) rather than through the
+  global RNG, because the same construction runs on apply paths where no
+  loop entry ever executes; the batch order has its own local ``order_rng``;
+  ``torch.manual_seed`` at loop entry — the one deliberate use of the global
+  RNG — covers everything else that draws (dropout, and torch's own
+  orthogonal-parametrization basis);
 * ``objective`` terms are differentiable metric tensors plus regularizers
   (``l1``/``l2`` over a featurizer's params; a ``gate``'s l1 is the mean
   soft mask — the DBM sparsity semantics);
@@ -29,7 +34,7 @@ from typing import Any, Mapping
 
 import torch
 
-from causalab.neural.pytorch_hooks.executor import PointExecutor
+from causalab.neural.pytorch_hooks.executor import PointExecutor, document_seed
 from causalab.neural.pytorch_hooks.featurizers import Gate, Stage
 from causalab.neural.pytorch_hooks.metrics import column_token_ids
 from causalab.protocol.backend import ExecutionRequest
@@ -124,7 +129,9 @@ def run_training(
     it later evaluates are the fitted ones."""
     train = doc.train
     assert train is not None
-    seed = int(train.seed) if isinstance(train.seed, int) else 0
+    # one reader of train.seed, shared with the featurizer inits the executor
+    # builds below — the loop and the init cannot disagree about the seed
+    seed = document_seed(doc)
     torch.manual_seed(seed)
 
     trained_names = sorted({p.split(".", 1)[0] for p in train.params})

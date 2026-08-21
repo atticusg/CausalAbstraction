@@ -22,6 +22,12 @@ from the resolved site, never from the document.
 from a CPU generator, so a seeded init stays bit-identical across devices.
 Dtype is *not* forced — every stage casts at the boundary, so featurizers
 stay fp32 against a bf16 backbone.
+
+**Seed.** ``subspace`` is the only kind with a random init, and it draws from a
+*local* generator rather than the global RNG, so its starting rotation cannot
+depend on build order or on whether a train loop ran. :func:`build_stack` takes
+the ``seed``; the executor resolves it from ``train.seed`` (0 when the document
+declares no fit). ``gate`` inits to zeros and the rest load from files.
 """
 
 from __future__ import annotations
@@ -61,7 +67,11 @@ class Identity(Stage):
 
 class Subspace(Stage):
     """An orthonormal ``(d, k)`` map ``Q``; features are the coordinates in
-    its column space, ``err`` the complement (module docstring)."""
+    its column space, ``err`` the complement (module docstring).
+
+    ``seed`` picks the initial rotation and is kept on the instance so a
+    cached stage can be checked against the seed a later use site asks for
+    (:func:`build_stack`)."""
 
     kind = "subspace"
 
@@ -70,6 +80,7 @@ class Subspace(Stage):
     ) -> None:
         super().__init__()
         self.k = k
+        self.seed = seed
         generator = torch.Generator().manual_seed(seed)
         init = torch.linalg.qr(torch.randn(width, k, generator=generator))[0]
         self.weight = torch.nn.Parameter(init)
@@ -267,6 +278,7 @@ def build_stack(
     load_tensors: Any,
     stage_cache: dict[str, Stage],
     device: str | torch.device = "cpu",
+    seed: int = 0,
 ) -> FeaturizerStack:
     """Build (or reuse from ``stage_cache``) the stack a read/write
     references. ``width`` is the SITE width; each later stage in a
@@ -277,7 +289,13 @@ def build_stack(
     reused at a different chain width is a contradiction and refuses.
 
     ``device`` is the run's device; stages are built on CPU and moved there
-    (module docstring). The ``"cpu"`` default leaves CPU-only callers alone."""
+    (module docstring). The ``"cpu"`` default leaves CPU-only callers alone.
+
+    ``seed`` is the document's featurizer-init seed (``train.seed``, 0 with no
+    fit — ``executor.document_seed``). Explicit rather than read from the global
+    RNG because this also runs on apply/inference paths, where a global-RNG init
+    would make a rotation depend on construction order. The cache is keyed by
+    name, so a cached stage built from a different seed refuses, as with width."""
     if ref is None:
         return FeaturizerStack(names=(), stages=(Identity(),))
     chain = (ref,) if isinstance(ref, str) else tuple(ref)
@@ -294,6 +312,15 @@ def build_stack(
                     f"featurizer {name!r} is used at width {running} here but was "
                     f"built for width {built_for} — one featurizer, one width",
                 )
+            built_seed = getattr(stage, "seed", None)
+            if built_seed is not None and built_seed != seed:
+                raise ProtocolError(
+                    "P2",
+                    f"featurizer {name!r} is used at init seed {seed} here but the "
+                    f"cached stage was initialised from seed {built_seed} — one "
+                    "featurizer, one seed; a stage cache belongs to one point, so "
+                    "two points differing in train.seed must not share one",
+                )
         else:
             if running is None:
                 raise ProtocolError(
@@ -301,7 +328,9 @@ def build_stack(
                     f"cannot size featurizer {name!r}: the preceding stage's "
                     "output width is not derivable from its spec",
                 )
-            stage = _build_stage(name, spec, width=running, load_tensors=load_tensors)
+            stage = _build_stage(
+                name, spec, width=running, load_tensors=load_tensors, seed=seed
+            )
             stage.to(device)  # parameters and registered buffers alike
             # inference documents get eval semantics (a gate's hard split);
             # the train loop flips modes around its steps explicitly
@@ -316,7 +345,7 @@ def build_stack(
 
 
 def _build_stage(
-    name: str, spec: FeaturizerSpec, *, width: int, load_tensors: Any
+    name: str, spec: FeaturizerSpec, *, width: int, load_tensors: Any, seed: int = 0
 ) -> Stage:
     kind = spec.kind if isinstance(spec.kind, str) else "identity"
     if isinstance(spec.file_path, str):
@@ -341,8 +370,9 @@ def _build_stage(
         )
         if k is None:
             raise ProtocolError("P2", f"subspace featurizer {name!r} needs k")
-        return Subspace(width, k, parametrization)
+        return Subspace(width, k, parametrization, seed=seed)
     if kind == "gate":
+        # θ starts at zeros — no draw, so nothing for `seed` to influence
         return Gate(width)
     raise ProtocolError(
         "P2",
