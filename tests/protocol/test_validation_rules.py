@@ -328,6 +328,87 @@ def test_rule_10_untrained_featurizer_not_saveable():
     expect_rule(10, doc)
 
 
+def test_rule_10_reduce_on_a_metric_refused():
+    """§2.12: a metric is already a reduction over its read."""
+    doc = base_doc()
+    doc["save"][0]["reduce"] = "mean"
+    expect_rule(10, doc)
+
+
+def test_rule_10_reduce_on_a_featurizer_bundle_refused():
+    doc = base_doc()
+    doc["featurizers"] = {
+        "rot": {"kind": "subspace", "k": 4, "parametrization": "cayley"}
+    }
+    doc["reads"]["v_cf"]["featurizer"] = "rot"
+    doc["writes"]["patch"]["featurizer"] = "rot"
+    doc["train"] = {
+        "objective": [[1.0, "ld"]],
+        "params": ["rot"],
+        "optimizer": {"name": "adam", "lr": 0.001},
+        "steps": {"epochs": 1},
+        "batch": {"pairs": 2},
+    }
+    doc["save"].append(
+        {
+            "value": "rot",
+            "site": "tgt",
+            "file_path": "rot.safetensors",
+            "reduce": "mean",
+        }
+    )
+    expect_rule(10, doc)
+
+
+def test_a_reduced_read_is_a_valid_save():
+    doc = base_doc()
+    doc["save"].append(
+        {
+            "value": "v_cf",
+            "model": "original",
+            "input": "counterfactual",
+            "reduce": "mean",
+            "file_path": "mean.safetensors",
+        }
+    )
+    parse_and_validate(doc)
+
+
+def test_an_entry_selector_needs_a_file_path():
+    """'entry' selects *inside* a loaded bundle — there is nothing to
+    select in a featurizer that is fitted rather than loaded."""
+    doc = base_doc()
+    doc["featurizers"] = {
+        "rot": {
+            "kind": "subspace",
+            "k": 4,
+            "parametrization": "cayley",
+            "entry": {"k": 4},
+        }
+    }
+    doc["reads"]["v_cf"]["featurizer"] = "rot"
+    with pytest.raises(ParseError):
+        parse_and_validate(doc)
+
+
+def test_a_featurizer_may_not_rename_its_slots():
+    """A featurizer bundle's slots come from its kind; only a params
+    constant may name the tensor it wants."""
+    doc = base_doc()
+    doc["featurizers"] = {
+        "rot": {
+            "kind": "subspace",
+            "k": 4,
+            "parametrization": "cayley",
+            "file_path": "rot.safetensors",
+            "entry": {"slot": "acts"},
+        }
+    }
+    doc["reads"]["v_cf"]["featurizer"] = "rot"
+    with pytest.raises(ParseError):
+        parse_and_validate(doc)
+
+
 # rule 11 — sinks ---------------------------------------------------------------- #
 
 

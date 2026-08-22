@@ -12,13 +12,13 @@ routing refuses those documents before anything runs.
 from __future__ import annotations
 
 import functools
+import json
 from pathlib import Path
 from typing import Any, Mapping
 
-import torch
 
 from causalab.neural.pytorch_hooks.executor import PointExecutor
-from causalab.neural.pytorch_hooks.loading import load_model
+from causalab.neural.pytorch_hooks.loading import TensorBundle, load_model
 from causalab.neural.pytorch_hooks.metrics import compute_metric
 from causalab.neural.pytorch_hooks.outputs import (
     MetricTable,
@@ -82,7 +82,12 @@ class PytorchHooksBackend(Backend):
     # ------------------------------------------------------------------ #
 
     def _executor(
-        self, doc: Document, request: ExecutionRequest, *, grad_enabled: bool = False
+        self,
+        doc: Document,
+        request: ExecutionRequest,
+        *,
+        grad_enabled: bool = False,
+        coords: Mapping[str, Any] | None = None,
     ) -> PointExecutor:
         bundle = load_model(
             str(doc.model.key),
@@ -98,6 +103,7 @@ class PytorchHooksBackend(Backend):
             role_fields=role_fields,
             load_tensors=functools.partial(_load_tensors, request),
             grad_enabled=grad_enabled,
+            coords=coords,
         )
 
     def _execute_point(
@@ -110,7 +116,7 @@ class PytorchHooksBackend(Backend):
         tensor_files: dict[str, TensorFile],
         metric_files: dict[str, MetricTable],
     ) -> Mapping[str, Any]:
-        executor = self._executor(doc, request)
+        executor = self._executor(doc, request, coords=coords)
         trained_stages: dict[str, Any] = {}
         if doc.train is not None:
             from causalab.neural.pytorch_hooks.train import run_training
@@ -137,7 +143,11 @@ class PytorchHooksBackend(Backend):
                 )
             elif entry.value in doc.reads:
                 tensor_files.setdefault(entry.file_path, TensorFile()).add(
-                    entry.value, executor.read_value(entry.value), coords
+                    entry.value,
+                    executor.read_value(entry.value),
+                    coords,
+                    reduce=entry.reduce,
+                    identity={"produced_by": point_digest},
                 )
             else:  # a trained featurizer bundle
                 stage = trained_stages.get(entry.value)
@@ -146,11 +156,21 @@ class PytorchHooksBackend(Backend):
                         "P2", f"featurizer {entry.value!r} was not trained this run"
                     )
                 bundle_file = tensor_files.setdefault(entry.file_path, TensorFile())
-                for slot, param in stage.slot_params().items():
-                    bundle_file.add(slot, param.detach(), coords)
-                bundle_file.metadata.update(
-                    _featurizer_identity(doc, entry.value, entry.site, point_digest)
+                identity = _featurizer_identity(
+                    doc, entry.value, entry.site, point_digest
                 )
+                for slot, param in stage.slot_params().items():
+                    # per entry, not per file: a swept fit writes one file from
+                    # many points, and only the entry table can say which point
+                    # produced which rotation (§8)
+                    bundle_file.add(
+                        slot,
+                        param.detach(),
+                        coords,
+                        label_entry=entry.value,
+                        identity=identity,
+                    )
+                bundle_file.record_common(identity)
         return {
             "point": point_digest,
             "coords": dict(coords),
@@ -234,17 +254,46 @@ def _resolve_roles(
     return role_rows, role_fields
 
 
-def _load_tensors(request: ExecutionRequest, file_path: str) -> dict[str, torch.Tensor]:
+@functools.lru_cache(maxsize=32)
+def _read_bundle(path: str, _stamp: tuple[int, int]) -> TensorBundle:
+    """One bundle, read once. The cache matters: a write operand resolves
+    its ``params`` tensor on every application, so an uncached read would
+    re-open the same file for every batch of every point.
+
+    ``_stamp`` is the file's (mtime, size), so a path rewritten in the same
+    process — a step re-run into an existing run tree — is a cache miss
+    rather than a stale tensor."""
+    from safetensors.torch import load_file
+
+    from causalab.protocol.resolve import read_safetensors_metadata
+
+    meta = read_safetensors_metadata(Path(path)) or {}
+    raw_entries = meta.get("entries")
+    entry_coords: dict[str, Any] = {}
+    if isinstance(raw_entries, str):
+        try:
+            decoded = json.loads(raw_entries)
+        except json.JSONDecodeError as err:
+            raise ProtocolError(
+                "P2", f"{path}: unreadable 'entries' table in the header — {err}"
+            ) from err
+        if isinstance(decoded, dict):
+            entry_coords = decoded
+    return TensorBundle(tensors=load_file(path), entry_coords=entry_coords)
+
+
+def _load_tensors(request: ExecutionRequest, file_path: str) -> TensorBundle:
     """Load a tensor bundle referenced by a featurizer/params file_path,
     resolved through the artifact store (which owns the run-tree/external
     overlay inside a workflow)."""
-    from safetensors.torch import load_file
-
     artifacts = request.env.artifacts
     resolve = getattr(artifacts, "resolve_path", None)
     if resolve is not None:
-        return load_file(str(resolve(file_path)))
-    root = getattr(artifacts, "root", None)
-    if root is None:
-        raise ProtocolError("P2", "artifact store exposes no filesystem root")
-    return load_file(str(Path(root) / file_path))
+        target = Path(resolve(file_path))
+    else:
+        root = getattr(artifacts, "root", None)
+        if root is None:
+            raise ProtocolError("P2", "artifact store exposes no filesystem root")
+        target = Path(root) / file_path
+    stat = target.stat()
+    return _read_bundle(str(target), (stat.st_mtime_ns, stat.st_size))

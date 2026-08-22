@@ -30,11 +30,27 @@ import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from causalab.protocol.bundles import (
+    entry_key,
+    entry_selection,
+    select_entry,
+    selector_slot,
+)
 from causalab.protocol.canonical import canonical_bytes
-from causalab.protocol.errors import ParseError, ProtocolError, suggest
+from causalab.protocol.errors import (
+    ParseError,
+    ProtocolError,
+    ValidationError,
+    suggest,
+)
 from causalab.protocol.loader import LoadedProtocol, apply_overrides, load, load_text
 from causalab.protocol.resolve import ArtifactStore, ResolutionEnv
-from causalab.protocol.sweep import DEFAULT_POINT_CAP
+from causalab.protocol.schema import FEATURIZER_SLOTS
+from causalab.protocol.sweep import (
+    DEFAULT_POINT_CAP,
+    coordinate_label,
+    short_coords,
+)
 
 __all__ = [
     "DeferredArtifacts",
@@ -734,6 +750,14 @@ def load_workflow(
                     "must name a file the step actually saves (§5.10)",
                     path=f"steps.{name}",
                 )
+            if isinstance(producer_step, ProtocolStep):
+                _check_entry_selection(
+                    consumer=inner[name],
+                    producer=inner[producer],
+                    run_path=run_path,
+                    rest=rest,
+                    step=name,
+                )
 
     for i, entry in enumerate(document.save):
         if entry.step not in steps:
@@ -777,6 +801,77 @@ def load_workflow(
         canonical=canonical,
         digest=digest,
     )
+
+
+def _bundle_entries(
+    producer: LoadedProtocol, file_path: str
+) -> dict[str, dict[str, Any]] | None:
+    """The tensor keys a producing document will write into ``file_path``,
+    with their coordinates — derivable at load because sweeps expand
+    deterministically (§3), which is what lets a wrong selection fail here
+    instead of after the producing step has run."""
+    entries: dict[str, dict[str, Any]] = {}
+    for save_entry in producer.document.save:
+        if save_entry.file_path != file_path:
+            continue
+        if save_entry.value in producer.document.metrics:
+            return None  # a metric table, not a tensor bundle
+        # a saved read is keyed by the read's name; a fitted featurizer by
+        # its kind's slots — either way the coordinates are labelled against
+        # the *declared* entity, which is the name a selector can write
+        if save_entry.value in producer.document.reads:
+            slots: tuple[str, ...] = (save_entry.value,)
+        else:
+            spec = producer.document.featurizers.get(save_entry.value)
+            kind = spec.kind if spec is not None and isinstance(spec.kind, str) else ""
+            slots = FEATURIZER_SLOTS.get(kind, ())
+        if not slots:
+            return None
+        for point in producer.expansion.points:
+            short = short_coords(point.coords, entry=save_entry.value)
+            label = coordinate_label(point.coords, entry=save_entry.value)
+            for slot in slots:
+                entries[entry_key(slot, label)] = {"slot": slot, "coords": short}
+    return entries or None
+
+
+def _check_entry_selection(
+    *,
+    consumer: LoadedProtocol,
+    producer: LoadedProtocol,
+    run_path: str,
+    rest: str,
+    step: str,
+) -> None:
+    """§5.10, second half: the entry a load selects must be one the producer
+    will write, for every point of the consuming document."""
+    entries = _bundle_entries(producer, rest)
+    if entries is None:
+        return
+    for expanded, point in zip(consumer.expansion.points, consumer.point_documents):
+        loads: list[tuple[str, str, Any]] = []
+        for fname, spec in point.featurizers.items():
+            if spec.file_path == run_path:
+                kind = spec.kind if isinstance(spec.kind, str) else "identity"
+                slots = FEATURIZER_SLOTS.get(kind, ())
+                if slots:
+                    loads.append((fname, slots[0], spec.entry))
+        for pname, pspec in point.params.items():
+            if pspec.file_path == run_path:
+                loads.append((pname, selector_slot(pspec.entry, "value"), pspec.entry))
+        for name, slot, authored in loads:
+            want, implicit = entry_selection(authored, expanded.coords, name)
+            try:
+                select_entry(
+                    entries.keys(),
+                    slot,
+                    want,
+                    what=f"step {step!r}: {name!r} loads {run_path!r}",
+                    coords_by_key=entries,
+                    implicit=implicit,
+                )
+            except ValidationError as err:
+                raise WorkflowError(10, str(err), path=f"steps.{step}") from err
 
 
 def _canonicalize(

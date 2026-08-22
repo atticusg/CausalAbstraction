@@ -32,6 +32,7 @@ from causalab.neural.pytorch_hooks.featurizers import (
     Subspace,
     build_stack,
 )
+from causalab.neural.pytorch_hooks.loading import TensorBundle
 from causalab.protocol.schema import FeaturizerSpec
 
 pytestmark = pytest.mark.unit
@@ -46,17 +47,20 @@ DEVICES = [
 ]
 
 
-def _load_tensors(_path: str) -> dict[str, torch.Tensor]:
+def _load_tensors(_path: str) -> TensorBundle:
     """Loaded bundles arrive from files on CPU, whatever the run's device."""
-    return {
-        "weight": torch.eye(WIDTH)[:, :K].contiguous(),
-        "mu": torch.zeros(WIDTH),
-        "sigma": torch.ones(WIDTH),
-        "enc": torch.zeros(WIDTH, 5),
-        "dec": torch.zeros(5, WIDTH),
-        "b_enc": torch.zeros(5),
-        "b_dec": torch.zeros(WIDTH),
-    }
+    return TensorBundle(
+        tensors={
+            "weight": torch.eye(WIDTH)[:, :K].contiguous(),
+            "mu": torch.zeros(WIDTH),
+            "sigma": torch.ones(WIDTH),
+            "enc": torch.zeros(WIDTH, 5),
+            "dec": torch.zeros(5, WIDTH),
+            "b_enc": torch.zeros(5),
+            "b_dec": torch.zeros(WIDTH),
+        },
+        entry_coords={},
+    )
 
 
 SPECS: dict[str, FeaturizerSpec] = {

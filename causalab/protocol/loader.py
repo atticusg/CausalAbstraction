@@ -25,9 +25,15 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from causalab.protocol import canonical as _canonical
+from causalab.protocol.bundles import select_entry, selector_slot
 from causalab.protocol.errors import ParseError, ValidationError
 from causalab.protocol.resolve import ResolutionEnv, resolve_artifact_fields
-from causalab.protocol.schema import Document, load_raw, parse_document
+from causalab.protocol.schema import (
+    FEATURIZER_SLOTS,
+    Document,
+    load_raw,
+    parse_document,
+)
 from causalab.protocol.sweep import DEFAULT_POINT_CAP, Expansion, expand
 from causalab.protocol.validate import validate_document
 
@@ -160,7 +166,16 @@ def _check_loaded_featurizers(doc: Document, env: ResolutionEnv) -> None:
     ``params`` entry's file must exist, and its identity — when stamped —
     must name the same model (free constant tensors may come from outside
     causalab, so an unstamped params file is existence-checked only; a
-    stamped one must not contradict the document)."""
+    stamped one must not contradict the document).
+
+    A bundle written by a *swept* producer stamps per entry, not per file
+    (§8): the fields that differ between points live in the header's
+    ``entries`` table. The check therefore looks at the record of the entry
+    this document selects, whenever that entry is knowable here — an
+    authored ``entry``, or a bundle holding exactly one record for the slot.
+    A selection that only the executing point can make (implicit matching
+    off its own coordinates, §2.5) is checked when the stage is built, where
+    the point is known."""
     import dataclasses as _dc
 
     from causalab.protocol.resolve import check_artifact_identity
@@ -173,6 +188,13 @@ def _check_loaded_featurizers(doc: Document, env: ResolutionEnv) -> None:
         if defers is not None and defers(pspec.file_path):
             continue  # a run-tree path inside a workflow — checked at run time
         stamped = env.artifacts.read_identity(pspec.file_path)  # V15 if missing
+        if stamped is not None:
+            stamped = _entry_identity(
+                stamped,
+                slot=selector_slot(pspec.entry, "value"),
+                authored=pspec.entry,
+                what=f"params entry {pname!r} ({pspec.file_path})",
+            )
         if stamped is not None:
             check_artifact_identity(
                 stamped,
@@ -211,12 +233,69 @@ def _check_loaded_featurizers(doc: Document, env: ResolutionEnv) -> None:
                 for key, value in _dc.asdict(site).items()
                 if value is not None
             }
+        what = f"featurizer {fname!r} ({spec.file_path})"
         stamped = env.artifacts.read_identity(spec.file_path)
-        check_artifact_identity(
-            stamped,
-            {key: value for key, value in expected.items() if value is not None},
-            what=f"featurizer {fname!r} ({spec.file_path})",
+        slot = FEATURIZER_SLOTS.get(
+            spec.kind if isinstance(spec.kind, str) else "identity", ()
         )
+        resolved = (
+            _entry_identity(stamped, slot=slot[0], authored=spec.entry, what=what)
+            if stamped is not None and slot
+            else stamped
+        )
+        if resolved is None:
+            continue  # only the executing point can select — checked at build
+        check_artifact_identity(
+            resolved,
+            {key: value for key, value in expected.items() if value is not None},
+            what=what,
+        )
+
+
+def _entry_identity(
+    stamped: Mapping[str, Any],
+    *,
+    slot: str,
+    authored: Any,
+    what: str,
+) -> Mapping[str, Any] | None:
+    """The identity of the one bundle entry a spec selects: the file-level
+    stamp, overlaid with that entry's record from the header's ``entries``
+    table (§8).
+
+    Returns ``None`` when the table holds several candidates and the
+    document authored no ``entry`` — the selection is then the executing
+    point's, and so is the check. A bundle with no table at all is
+    file-level only, which is exactly what an un-swept or hand-made bundle
+    stamps.
+    """
+    raw = stamped.get("entries")
+    if not isinstance(raw, str):
+        return stamped
+    try:
+        table = json.loads(raw)
+    except json.JSONDecodeError:
+        return stamped
+    if not isinstance(table, dict) or not table:
+        return stamped
+    try:
+        key = select_entry(
+            table.keys(),
+            slot,
+            authored,
+            what=what,
+            coords_by_key=table,
+        )
+    except ValidationError as err:
+        if authored:
+            raise  # an authored selection that misses is a load error
+        if "selects none" in str(err):
+            return None
+        raise
+    record = table[key]
+    merged = {k: v for k, v in stamped.items() if k != "entries"}
+    merged.update({k: v for k, v in record.items() if k not in ("slot", "coords")})
+    return merged
 
 
 _INDEX = re.compile(r"^(.*)\[(\d+)\]$")

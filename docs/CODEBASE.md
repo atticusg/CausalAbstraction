@@ -24,6 +24,7 @@ The normative spec is [`docs/intervention_protocol.md`](intervention_protocol.md
 | `loader.py` | strict load, `--set` overrides, the §5 validation checklist, column checks |
 | `canonical.py` | canonical form + digests (§7) |
 | `sweep.py` | axis expansion, point cap, coordinate labels (§3) |
+| `bundles.py` | addressing one entry inside a saved `.safetensors` bundle: key grammar, coordinate selection (§2.5, §2.6) |
 | `plan.py` | model graph → forward groups, content dedup (§4) |
 | `backend.py` | `Backend` ABC, `ExecutionRequest`/`RunResult`, capability routing (§8) |
 | `resolve.py` | `ResolutionEnv`: `FileDatasets` (JSON tables), `FileArtifacts`, `ArtifactIdentity` build/check |

@@ -49,7 +49,11 @@ from causalab.neural.pytorch_hooks.loading import ModelBundle
 from causalab.protocol.registry import model_info_from_hf_config
 
 from tests._helpers.tiny import fresh_tiny_random_gpt2, fresh_tiny_random_llama
-from tests.neural.pytorch_hooks._drive import base_data_section, executor_for
+from tests.neural.pytorch_hooks._drive import (
+    base_data_section,
+    bundle_loader,
+    executor_for,
+)
 
 pytestmark = pytest.mark.numerical_unit
 
@@ -245,7 +249,7 @@ def _run_sub3_case(
         doc["reads"]["out"] = _read("dst", "original", featurizer="rot")
         doc["save"] = [_save("out", "original")]
         executor = executor_for(
-            doc, bundle, base_texts=[BASE_TEXT], load_tensors=tensors.__getitem__
+            doc, bundle, base_texts=[BASE_TEXT], load_tensors=bundle_loader(tensors)
         )
         return executor.read_value("out"), None
 
@@ -288,7 +292,7 @@ def _run_sub3_case(
     doc["writes"] = {"e": write}
     doc["intervened_models"] = {"patched": {"input": "base", "writes": ["e"]}}
     executor = executor_for(
-        doc, bundle, base_texts=[BASE_TEXT], load_tensors=tensors.__getitem__
+        doc, bundle, base_texts=[BASE_TEXT], load_tensors=bundle_loader(tensors)
     )
     if mode == "mask":
         # The gate stage operates in the rotation's k=3 feature space, so it
