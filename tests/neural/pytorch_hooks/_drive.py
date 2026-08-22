@@ -17,6 +17,20 @@ from causalab.protocol.validate import validate_document
 from tests.protocol._docs import in_order
 
 
+def bundle_loader(files: dict[str, dict[str, Any]]) -> Any:
+    """A ``load_tensors`` over in-memory bundles: path -> {slot: tensor}.
+
+    Tests that hand-build bundles carry no ``entries`` table, which is the
+    same shape an external (hand-made) artifact has — selection then falls
+    back to the entry keys themselves."""
+    from causalab.neural.pytorch_hooks.loading import TensorBundle
+
+    def load(path: str) -> TensorBundle:
+        return TensorBundle(tensors=files[path], entry_coords={})
+
+    return load
+
+
 def executor_for(
     doc_raw: dict[str, Any],
     bundle: ModelBundle,
