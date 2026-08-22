@@ -232,3 +232,41 @@ def test_points_refused_on_workflow_documents(
     assert code == 1
     err = capsys.readouterr().err
     assert "refused" in err and "workflow" in err
+
+
+# --------------------------------------------------------------------------- #
+#  column positions and match modes are checked like any other reference      #
+# --------------------------------------------------------------------------- #
+
+
+def test_validate_data_flags_a_missing_position_column(env):
+    """A ``{"column": …}`` position is an explicit reference, so
+    ``validate --data`` catches a typo at load instead of the backend hitting
+    it mid-run (§2.3)."""
+    loaded = load(CORPUS_DIR / "10_task_table_iia_im.json", env)
+    raw = json.loads(json.dumps(dict(loaded.raw)))
+    raw["positions"]["subject"] = {"column": "not_a_column"}
+    with pytest.raises(Exception) as err:
+        check_data_columns(load(raw, env), env)
+    assert "not_a_column" in str(err.value)
+
+
+def test_validate_data_accepts_the_generated_tables_columns(env):
+    """The positive half: every reference in the task-table document resolves
+    against the built table, including the answer-form group column."""
+    loaded = load(CORPUS_DIR / "10_task_table_iia_im.json", env)
+    refs = check_data_columns(loaded, env)
+    assert "label_forms" in refs  # the metric's expected group
+    assert "entity" in refs  # the column position
+
+
+def test_validate_data_flags_a_missing_relative_to_column(env):
+    loaded = load(CORPUS_DIR / "10_task_table_iia_im.json", env)
+    raw = json.loads(json.dumps(dict(loaded.raw)))
+    raw["positions"]["subject"] = {
+        "index": 1,
+        "relative_to": {"column": "not_a_column"},
+    }
+    with pytest.raises(Exception) as err:
+        check_data_columns(load(raw, env), env)
+    assert "not_a_column" in str(err.value)
