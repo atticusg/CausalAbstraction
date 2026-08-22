@@ -83,10 +83,12 @@ Named entries; a read/write `pos` is a name here, or an inline spec.
 | form | resolves to |
 |---|---|
 | `-1` (bare int, sugar) | `{"index": -1}` |
+| `"all"` (bare string, sugar) | `{"all": true}` |
 | `{"index": n}` | one token per row. `n < 0` counts from the end of the sequence; `n ≥ 0` is rebased past any chat prefix |
 | `{"variable": "x"}` | all tokens of prompt variable `x` — a per-row window, ragged across rows |
 | `{"column": "c"}` | all tokens of the string in column `c` of the row — the per-row form |
 | `{"span": [a, b]}` | fixed window `[a, b)` |
+| `{"all": true}` | every content token of the row — ragged across rows |
 | + `"scope": {"variable": "x"}` / `{"column": "c"}` | interpret the index/span inside the anchor's span |
 | + `"relative_to": {"variable": "x"}` / `{"column": "c"}` | offset from the anchor's span |
 
@@ -107,6 +109,13 @@ Named entries; a read/write `pos` is a name here, or an inline spec.
   are deliberately not a v1 spelling: they would bind a table to one
   tokenizer, and a task that can compute an index can serialize the substring
   instead.
+- **`{"all": true}`** selects the row's real tokens only: padding is excluded,
+  and so is any chat prefix — the same frame `{"index": n}` uses for `n ≥ 0`.
+  It takes no `scope` or `relative_to` (there is nothing left to narrow), and
+  `all` is a reserved name, so `"pos": "all"` is always the sugar and never a
+  lookup in this table. Rows of unequal length make it ragged: reads carry
+  that natively, a write at `all` needs every row to be the same length in
+  v1.
 
 ### 2.4 `sites`
 
@@ -362,7 +371,8 @@ A conforming loader rejects the document unless all of these hold:
    suggestions. Derived fields (sec. 7) may not be authored.
 2. Section order per sec. 1; `save` last.
 3. Global namespace: no duplicate names across sections 6–13; no reserved
-   names (`base`, `counterfactual`, `counterfactual[j]`, `original`) declared.
+   names (`base`, `counterfactual`, `counterfactual[j]`, `original`, `all`)
+   declared.
 4. Every reference resolves: sites (declared inventory only), positions,
    featurizers, params, reads, writes, intervened_models, metrics.
 5. Reads: `model` ∈ `original` ∪ IMs; `input` a valid role; if `model` is an
@@ -416,8 +426,9 @@ A conforming loader rejects the document unless all of these hold:
 - **Canonical-stamp principle**: the authored file may be minimal; the
   canonical form materializes *everything* — every default (constant LR,
   optimizer betas, dtypes), every resolved reference (dataset digests,
-  artifact values), every derived width, sugar expanded (int positions,
-  alias `neural_model` → `model`), unordered lists sorted (IM write lists),
+  artifact values), every derived width, sugar expanded (int and `"all"`
+  positions, alias `neural_model` → `model`), unordered lists sorted (IM
+  write lists),
   sweeps expanded to points.
 - `digest = sha256(canonical bytes)` — sorted keys, canonical floats; each
   param replaced by its content hash. Document digest = campaign; point

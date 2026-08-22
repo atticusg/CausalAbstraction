@@ -23,6 +23,10 @@ Position rules implemented against this frame (spec §2.3, §6.1):
   role reads it; that is what makes it the spelling for values a task
   computes per row (§2.3).
 * ``{"span": [a, b]}`` — the content-frame window ``[a, b)``.
+* ``{"all": true}`` — every content token of the row: past the left
+  padding and past any chat prefix, through the last real token. Rows of
+  different lengths make this ragged, which reads carry natively and the
+  v1 write path does not (see the executor's write refusal).
 * ``scope`` — the index/span interpreted inside the anchor's token run;
   ``relative_to`` — an index offset from the run (``+1`` = first token
   after it, ``-1`` = last token before it; ``0`` is refused). The anchor is
@@ -230,6 +234,11 @@ def resolve_position(
             anchor_name, from_column=spec.anchor_source == "column"
         )
         anchor_run = _variable_token_run(batch, row, anchor_value)
+
+    if spec.all is not None:
+        # content_start is already past the pad and any chat prefix; left
+        # padding right-aligns content, so the row runs to the padded end
+        return check(list(range(start, padded)))
 
     if spec.variable is not None:
         return check(
