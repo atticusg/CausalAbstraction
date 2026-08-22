@@ -320,3 +320,7 @@ site tooling that hooks in via the CLI's `--points` shard selector.
   (MCQA's correct answer symbol) are serialized columns rather than a
   computed-indexer vocabulary. Integer token indices remain out of v1
   deliberately: they would bind a table to one tokenizer.
+- **Per-position metric grids** — `{"all": true}` makes an every-token *read*
+  expressible, but metric lowering still reduces exactly one position per
+  example, so a logit-lens grid comes out as a saved tensor, not a metric
+  table. A per-position metric needs a `position` column in the metric table.

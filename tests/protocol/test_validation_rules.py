@@ -118,6 +118,14 @@ def test_rule_3_reserved_name():
     expect_rule(3, doc)
 
 
+def test_rule_3_all_is_reserved():
+    """A positions entry named ``all`` would shadow the bare-string sugar,
+    so the name is reserved outright (§5.3)."""
+    doc = base_doc()
+    doc["positions"] = {"all": {"index": -1}}
+    expect_rule(3, doc)
+
+
 # rule 4 — every reference resolves ------------------------------------------- #
 
 
@@ -190,6 +198,60 @@ def test_rule_8_two_absolute_writes_same_address():
     doc["writes"]["patch2"] = {"site": "tgt", "pos": -1, "do": {"swap": "v_cf"}}
     doc["intervened_models"]["patched"]["writes"].append("patch2")
     expect_rule(8, doc)
+
+
+def test_rule_8_all_positions_overlaps_everything():
+    """An all-positions write covers every token, so it is never provably
+    disjoint from another write at the same site — including one pinned to a
+    single index."""
+    doc = base_doc()
+    doc["writes"]["patch_all"] = {
+        "site": "tgt",
+        "pos": {"all": True},
+        "do": {"swap": "v_cf"},
+    }
+    doc["intervened_models"]["patched"]["writes"].append("patch_all")
+    expect_rule(8, doc)
+
+
+def test_rule_8_all_positions_overlaps_itself():
+    doc = base_doc()
+    doc["writes"]["patch"]["pos"] = "all"
+    doc["writes"]["patch_all"] = {
+        "site": "tgt",
+        "pos": "all",
+        "do": {"swap": "v_cf"},
+    }
+    doc["intervened_models"]["patched"]["writes"].append("patch_all")
+    expect_rule(8, doc)
+
+
+def test_rule_8_all_positions_absolute_plus_additive_composes():
+    """The mechanism-class order (§2.8) still applies at an all address —
+    overlap only forbids a *second absolute* write."""
+    doc = base_doc()
+    doc["writes"]["patch"]["pos"] = "all"
+    doc["writes"]["nudge"] = {
+        "site": "tgt",
+        "pos": "all",
+        "do": {"add_scaled": {"op": "v_cf", "alpha": 0.5}},
+    }
+    doc["intervened_models"]["patched"]["writes"].append("nudge")
+    parse_and_validate(doc)
+
+
+def test_rule_9_all_positions_dims_must_be_disjoint():
+    """Rule 9 composes with the all spelling exactly as it does elsewhere."""
+    doc = base_doc()
+    doc["writes"]["patch"]["dims"] = [0, 1]
+    doc["writes"]["patch_all"] = {
+        "site": "tgt",
+        "pos": "all",
+        "dims": [1, 2],
+        "do": {"swap": "v_cf"},
+    }
+    doc["intervened_models"]["patched"]["writes"].append("patch_all")
+    expect_rule(9, doc)
 
 
 def test_rule_8_additive_write_composes():

@@ -3,8 +3,9 @@
 The authored file is for humans; the canonical form is the record. It
 materializes every default (optimizer betas, dtypes, the implicit
 ``revision``), every resolved reference (dataset content digests, artifact
-file hashes), every derived width, expands sugar (int positions, the
-``neural_model`` alias), sorts unordered lists (IM write lists), and rejects
+file hashes), every derived width, expands sugar (int and ``"all"``
+positions, the ``neural_model`` alias), sorts unordered lists (IM write
+lists), and rejects
 out-of-range addresses against the model's static config.
 
 ``digest = sha256(canonical bytes)`` with sorted keys and canonical floats —
@@ -38,6 +39,7 @@ from causalab.protocol.errors import ValidationError
 from causalab.protocol.registry import ModelInfo, component_width
 from causalab.protocol.resolve import ResolutionEnv
 from causalab.protocol.schema import (
+    ALL_POSITIONS,
     FEATURIZER_SLOTS,
     LAYERLESS_COMPONENTS,
     METRIC_FIELD_DEFAULTS,
@@ -229,6 +231,8 @@ def _canon_write_list(writes: Any) -> Any:
 def _canon_position_spec(value: Any) -> Any:
     if isinstance(value, int) and not isinstance(value, bool):
         return {"index": value}  # §6.1 sugar
+    if value == ALL_POSITIONS:
+        return {"all": True}  # §6.1 sugar
     return value
 
 
@@ -275,10 +279,13 @@ def _canon_site(
 def _canon_read_or_edit(entry: Mapping[str, Any]) -> dict[str, Any]:
     out = dict(entry)
     if "pos" in out:
+        pos = out["pos"]
+        # a string pos is a positions-table name and stays one — except the
+        # reserved "all", which is sugar and expands like a bare int
         out["pos"] = (
-            out["pos"]
-            if isinstance(out["pos"], str)
-            else _canon_position_entry(out["pos"])  # sugar expands inside sweeps too
+            pos
+            if isinstance(pos, str) and pos != ALL_POSITIONS
+            else _canon_position_entry(pos)  # sugar expands inside sweeps too
         )
     return out
 

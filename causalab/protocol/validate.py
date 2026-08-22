@@ -16,7 +16,10 @@ Interpretations this module commits to (each surfaced in the PR notes):
   same sign, non-intersecting spans in the same frame, or two different
   prompt variables (template variables occupy disjoint spans). An index
   compared against a variable window is unknowable at load and treated as
-  overlapping — refuse-before-run rather than collide-at-run.
+  overlapping — refuse-before-run rather than collide-at-run. An
+  all-positions spec overlaps every other spec by construction, itself
+  included: it is never provably disjoint. Note the rules compare *writes*
+  only, so an all-positions read collides with nothing.
 * **Rules 8 and 9 compose.** Full-width writes have ``dims = all``. At one
   (site, overlapping pos, model) address: at most one full-width absolute
   write (rule 8), and no two *absolute* writes may intersect in dims
@@ -474,6 +477,8 @@ def _pos_key(doc: Document, pos: Any) -> PositionSpec:
 def _provably_disjoint(a: PositionSpec, b: PositionSpec) -> bool:
     """True when two position specs cannot address a common token on any row
     (see the module docstring for the conservative reading)."""
+    if a.all is not None or b.all is not None:
+        return False  # every content token — nothing is disjoint from it
     if (
         a.scope != b.scope
         or a.relative_to != b.relative_to

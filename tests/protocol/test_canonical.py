@@ -20,6 +20,23 @@ def test_pos_sugar_and_alias_canonicalize(env):
     assert canonical["model"] == {"key": "gpt2", "revision": "main"}
 
 
+def test_all_pos_sugar_canonicalizes(env):
+    """Both spellings land on one canonical form, so a document authored
+    either way digests identically."""
+    sugar, explicit = base_doc(), base_doc()
+    sugar["reads"]["v_cf"]["pos"] = "all"
+    explicit["reads"]["v_cf"]["pos"] = {"all": True}
+    assert canonicalize(sugar, env)["reads"]["v_cf"]["pos"] == {"all": True}
+    assert digest(canonicalize(sugar, env)) == digest(canonicalize(explicit, env))
+
+
+def test_all_positions_changes_the_digest(env):
+    """The position is part of the address, so it is part of the record."""
+    raw = base_doc()
+    raw["reads"]["v_cf"]["pos"] = "all"
+    assert digest(canonicalize(raw, env)) != digest(canonicalize(base_doc(), env))
+
+
 def test_dataset_digest_stamped(env):
     canonical = canonicalize(base_doc(), env)
     stamped = canonical["data"]["base"]["digest"]
