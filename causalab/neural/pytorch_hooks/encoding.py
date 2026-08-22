@@ -17,14 +17,20 @@ Position rules implemented against this frame (spec §2.3, §6.1):
   per-element for list columns), else a plain column named ``x``. The
   value must occur exactly once in the row's text — zero or several
   occurrences refuse loudly rather than address the wrong tokens.
+* ``{"column": "c"}`` — the same token run, from the row's top-level
+  column ``c`` only (never the ``<col>_variables`` sibling). The column is
+  a property of the *row*, so it resolves to the same string whichever
+  role reads it; that is what makes it the spelling for values a task
+  computes per row (§2.3).
 * ``{"span": [a, b]}`` — the content-frame window ``[a, b)``.
 * ``{"all": true}`` — every content token of the row: past the left
   padding and past any chat prefix, through the last real token. Rows of
   different lengths make this ragged, which reads carry natively and the
   v1 write path does not (see the executor's write refusal).
-* ``scope`` — the index/span interpreted inside the variable's token run;
+* ``scope`` — the index/span interpreted inside the anchor's token run;
   ``relative_to`` — an index offset from the run (``+1`` = first token
-  after it, ``-1`` = last token before it; ``0`` is refused).
+  after it, ``-1`` = last token before it; ``0`` is refused). The anchor is
+  ``{"variable": …}`` or ``{"column": …}``.
 
 Every resolved index is bounds-checked in the padded frame — a stale or
 impossible position must fail here as a legible error, never reach a
@@ -138,6 +144,27 @@ def variable_value(row: Mapping[str, Any], field: str, variable: str) -> str:
     )
 
 
+def column_value(row: Mapping[str, Any], column: str) -> str:
+    """The row's value for a ``column`` position (§2.3) — a top-level column
+    only, never the per-role ``<field>_variables`` sibling, so the same
+    reference resolves to the same string whichever role reads it."""
+    if column not in row:
+        raise ProtocolError(
+            "P2",
+            f"position column {column!r} is not a column of the dataset row "
+            f"(has {sorted(row)})",
+        )
+    value = row[column]
+    if not isinstance(value, str):
+        raise ProtocolError(
+            "P2",
+            f"position column {column!r} holds {type(value).__name__}, not a "
+            "string — v1 column positions resolve a substring of the row's "
+            "text (§2.3)",
+        )
+    return value
+
+
 def _variable_token_run(batch: EncodedBatch, row: int, value: str) -> list[int]:
     """The padded-frame token indices covering the (unique) occurrence of
     ``value`` in the row's text, via the offset mapping ((0, 0) entries are
@@ -188,12 +215,24 @@ def resolve_position(
             )
         return indices
 
+    def row_value(name: str, *, from_column: bool) -> str:
+        """The row's string for an anchor or an anchor-free reference —
+        a top-level column (``column``) or a per-role prompt variable
+        (``variable``), §2.3."""
+        if dataset_row is None:
+            raise ProtocolError("P2", "variable/column positions need a dataset row")
+        if from_column:
+            return column_value(dataset_row, name)
+        if field is None:
+            raise ProtocolError("P2", "variable positions need a dataset row")
+        return variable_value(dataset_row, field, name)
+
     anchor_run: list[int] | None = None
     if spec.scope is not None or spec.relative_to is not None:
         anchor_name = str(spec.scope or spec.relative_to)
-        if dataset_row is None or field is None:
-            raise ProtocolError("P2", "variable-anchored positions need a dataset row")
-        anchor_value = variable_value(dataset_row, field, anchor_name)
+        anchor_value = row_value(
+            anchor_name, from_column=spec.anchor_source == "column"
+        )
         anchor_run = _variable_token_run(batch, row, anchor_value)
 
     if spec.all is not None:
@@ -202,10 +241,18 @@ def resolve_position(
         return check(list(range(start, padded)))
 
     if spec.variable is not None:
-        if dataset_row is None or field is None:
-            raise ProtocolError("P2", "variable positions need a dataset row")
-        value = variable_value(dataset_row, field, str(spec.variable))
-        return check(_variable_token_run(batch, row, value))
+        return check(
+            _variable_token_run(
+                batch, row, row_value(str(spec.variable), from_column=False)
+            )
+        )
+
+    if spec.column is not None:
+        return check(
+            _variable_token_run(
+                batch, row, row_value(str(spec.column), from_column=True)
+            )
+        )
 
     if spec.index is not None:
         n = concrete_int(spec.index, "position index")

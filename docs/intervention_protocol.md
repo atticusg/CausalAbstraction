@@ -56,14 +56,25 @@ Sections in this order (order enforced; `save` last):
 }
 ```
 
-- `dataset`: a **local path or HF key — no digest**. The parser resolves it at
-  load and stamps the content digest into the canonical form (sec. 7).
+- `dataset`: a **ref — a local path under the data root, no digest**. The parser
+  resolves it at load and stamps the content digest into the canonical form
+  (sec. 7). A resolver provides three things for a ref: its content digest, its
+  columns, and its rows.
+- Tables are **serialized ahead of the load, never generated during it**: a ref
+  resolves by reading bytes, so no digest depends on importing task code, a
+  tokenizer, or the network. Task-generated tables are built by
+  `causalab.tasks.serialize` (`scripts/build_task_dataset.py`), which also
+  writes a `<ref>.manifest.json` provenance sidecar that resolution ignores; a
+  Hub-hosted dataset enters the same way, by being materialized first.
 - Roles are the keys: `base` (required) and `counterfactual` (optional). `counterfactual` is
   singular; if its value is an array, references index it as `counterfactual[j]`.
   Rows are paired: one base row + its counterfactual row(s) form one example.
 - `field` selects the column; `[j]` indexes list-valued columns.
-- Dataset **columns** referenced by metrics are checked against the table at
-  run time (`validate --data`), not at load.
+- **Anything per-row or task-semantic is a column**, computed when the table is
+  built — answer forms for `match` (sec. 2.10), values that place a position per
+  row (sec. 2.3). Documents reference columns; they never compute.
+- Dataset **columns** referenced by metrics and by `column` positions are checked
+  against the resolved tables by `validate --data`, not at load.
 
 ### 2.3 `positions`
 
@@ -75,14 +86,29 @@ Named entries; a read/write `pos` is a name here, or an inline spec.
 | `"all"` (bare string, sugar) | `{"all": true}` |
 | `{"index": n}` | one token per row. `n < 0` counts from the end of the sequence; `n ≥ 0` is rebased past any chat prefix |
 | `{"variable": "x"}` | all tokens of prompt variable `x` — a per-row window, ragged across rows |
+| `{"column": "c"}` | all tokens of the string in column `c` of the row — the per-row form |
 | `{"span": [a, b]}` | fixed window `[a, b)` |
 | `{"all": true}` | every content token of the row — ragged across rows |
-| + `"scope": {"variable": "x"}` | interpret the index/span inside `x`'s span |
-| + `"relative_to": {"variable": "x"}` | offset from `x`'s span |
+| + `"scope": {"variable": "x"}` / `{"column": "c"}` | interpret the index/span inside the anchor's span |
+| + `"relative_to": {"variable": "x"}` / `{"column": "c"}` | offset from the anchor's span |
 
 - Positions are **never resolved to integers in the document**. Resolution is
   a backend service against a `PositionFrame` (pad side, packing, sequence
   shard map) — sec. 8.
+- `variable` vs `column`. A **prompt variable** is looked up per role: the
+  `<field>_variables` sibling of the role's text column first, then a
+  same-named column. A **column** is looked up only as a top-level column of
+  the row, so it is a property of the *row*, not of a role's text — the same
+  `{"column": "c"}` resolves to the same string whichever role reads it. Use
+  `column` when the value is computed by the task (per-row answer symbols,
+  chosen entities): being an explicit reference, it is checked by
+  `validate --data`, where a variable that only happens to exist as a column
+  is not.
+- The value in a column position is a **string**, resolved like a variable's
+  value (it must occur exactly once in the row's text). Integer token indices
+  are deliberately not a v1 spelling: they would bind a table to one
+  tokenizer, and a task that can compute an index can serialize the substring
+  instead.
 - **`{"all": true}`** selects the row's real tokens only: padding is excluded,
   and so is any chat prefix — the same frame `{"index": n}` uses for `n ≥ 0`.
   It takes no `scope` or `relative_to` (there is nothing left to narrow), and
@@ -235,7 +261,7 @@ Closed vocabulary; `of` names a read; other value fields name dataset columns.
 | `kl` | `of, target` (a read) | KL between two reads' distributions |
 | `class_probs` | `of, groups` | summed probability per group |
 | `top_k` | `of, k` | top-k tokens + probs |
-| `match` | `of, expected` | exact-match indicator |
+| `match` | `of, expected` (+ optional `mode`) | match indicator |
 
 - A metric binds to exactly one read → one (model, input). Same metric in two
   models = two reads + two metrics.
@@ -243,6 +269,23 @@ Closed vocabulary; `of` names a read; other value fields name dataset columns.
   nothing else. Cross-read arithmetic (differences of saved metrics) is
   post-hoc analysis. The vocabulary stays closed so backends can lower kinds
   to fused/vocab-parallel implementations.
+- A column value resolves to **one token**, space-prefixed form first; a
+  multi-token value refuses rather than silently scoring its first piece.
+- `match` is the exception, and only when told: its `expected` column may hold
+  a **list of equivalent surface forms** (synonyms, casings — the argmax
+  matching any of them scores 1.0), and `"mode": "first_token"` credits a
+  form's first token instead of requiring the form to be one token. `mode` is
+  `"exact"` by default and is materialized into the canonical form, so an
+  omitted `mode` and an authored `"exact"` digest identically.
+  - Which forms are equivalent is **task data**, serialized as a column when
+    the table is built (from the causal model's `output_tokens` declaration) —
+    never a document-side string transform. Case folding included: a task that
+    wants case-insensitivity serializes the casings as forms, because at this
+    layer the comparison is between token ids, not strings.
+  - `first_token` is what "prefix" means with logits at one position. It
+    over-credits an answer space that is not first-token-distinct; whether a
+    table's answer space *is* first-token-distinct is a property of the
+    dataset, so the mode is opt-in per document and never a default.
 
 ### 2.11 `train`
 

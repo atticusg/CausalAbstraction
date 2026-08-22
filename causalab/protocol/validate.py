@@ -479,8 +479,19 @@ def _provably_disjoint(a: PositionSpec, b: PositionSpec) -> bool:
     (see the module docstring for the conservative reading)."""
     if a.all is not None or b.all is not None:
         return False  # every content token — nothing is disjoint from it
-    if a.scope != b.scope or a.relative_to != b.relative_to:
+    if (
+        a.scope != b.scope
+        or a.relative_to != b.relative_to
+        or a.anchor_source != b.anchor_source
+    ):
         return False  # different frames — incomparable, assume overlap
+    if a.column is not None or b.column is not None:
+        # A column's value is data, not a template slot: two *different*
+        # columns can hold the same string on the same row, so unlike two
+        # variables nothing is provable at load. (An index/span *scoped* to
+        # the same column anchor stays comparable — that is the branch below,
+        # reached because the anchors compared equal.)
+        return False
     if a.variable is not None and b.variable is not None:
         return a.variable != b.variable
     if a.variable is not None or b.variable is not None:

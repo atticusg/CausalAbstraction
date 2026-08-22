@@ -206,15 +206,12 @@ def _featurizer_identity(
 def _resolve_roles(
     doc: Document, request: ExecutionRequest
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, str]]:
-    """Dataset rows + field selector per input role, rows paired by index."""
-    datasets = request.env.datasets
-    rows_of = getattr(datasets, "rows", None)
-    if rows_of is None:
-        raise ProtocolError(
-            "P2",
-            "this resolution environment's dataset resolver exposes no rows() — "
-            "execution needs the table content, not just its digest",
-        )
+    """Dataset rows + field selector per input role, rows paired by index.
+
+    ``rows`` is part of the :class:`~causalab.protocol.resolve.DatasetResolver`
+    contract, so this reads it directly — a resolver without it is a typing
+    error at construction, not a surprise at run time."""
+    rows_of = request.env.datasets.rows
     role_rows: dict[str, list[dict[str, Any]]] = {}
     role_fields: dict[str, str] = {}
     lengths: dict[str, int] = {}

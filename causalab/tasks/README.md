@@ -2,11 +2,15 @@
 
 Each task is a self-contained package under `causalab/tasks/<name>/` that
 defines a causal model, counterfactual generation, and tokenization helpers.
-Tasks are loaded at runtime via `load_task()` in `causalab.tasks.loader`, and a
-runner selects one with `- /task: <name>` (resolved from a Hydra config in
-`causalab/configs/task/<name>.yaml`).
+Tasks are loaded via `load_task()` in `causalab.tasks.loader`. A protocol
+document does not import a task: it names a **dataset ref**, and the ref
+resolves to a serialized table that `causalab.tasks.serialize` built from the
+task ahead of time (spec §2.2). That is the seam between the two halves — the
+task owns generation and answer semantics, the document owns the intervention.
 
-Standing up a runnable task has three parts: (1) the task **package** (`causalab/tasks/<name>/`), (2) the Hydra **task config** (`causalab/configs/task/<name>.yaml`), and (3) **validation** against a model. All three are described below.
+Standing up a usable task has three parts: (1) the task **package**
+(`causalab/tasks/<name>/`), (2) a **serialized table** a document can name, and
+(3) **validation** against a model. All three are described below.
 
 ## 1. The task package (`causalab/tasks/<name>/`)
 
@@ -120,55 +124,52 @@ the package's public surface (at minimum `CAUSAL_MODEL` / the factory). An optio
 `summary.ipynb` demonstrates the *task* (causal model, samples, token positions,
 counterfactuals) on CPU — it must not load a language model.
 
-## 2. Registering the task with Hydra (`causalab/configs/task/<name>.yaml`)
+## 2. Serializing a table a document can name
 
-A task package is not runnable until it has a Hydra config in the `task` config
-group. This file is what makes a runner's `- /task: <name>` resolve; it mounts at
-`cfg.task` by group-default packaging, so it carries **no** `# @package` directive
-(matching the other files in `causalab/configs/task/`).
-
-```yaml
-name: <name>                  # must equal the task package dir name (the loader key)
-
-# Intervention target. `target_variables` (plural) is the canonical key that
-# `locate` reads first; several analyses (baseline, activation_manifold,
-# output_manifold, path_steering, pullback) read only the singular
-# `target_variable`, and task resolution raises if it is null. Emit BOTH,
-# pointing at the same variable, and keep them in sync.
-target_variable: <var>
-target_variables: [<var>]
-
-# Generation / decoding
-max_new_tokens: 1             # = MAX_NEW_TOKENS in config.py (1 for single-token tasks)
-
-# Dataset sizing (root-level knobs — see docs/CODEBASE.md invariant 12)
-n_train: 1000
-n_test: 50
-enumerate_all: false          # true only when the input space is small enough to enumerate exhaustively
-balanced: false               # balance the generated dataset over target_variable
-resample_variable: all        # "all" = CF resamples every input var; a var name = CF differs in only that one
-
-# Scoring
-intervention_metric: string_match   # "string_match" for single-token answers; "kl" for distributional targets
-
-# Visualization / geometry
-colormap: viridis             # resolution-critical (see note below)
-colormap2: null               # resolution-critical for path_steering
-distance_function: hellinger  # defensive; only used by a task's own isometry: block
-```
-
-**Resolution-critical keys.** `colormap` and `colormap2` are read via
-`${task.colormap}` / `${task.colormap2}` by the shipped viz/manifold analysis
-configs (`subspace`, `activation_manifold`, `output_manifold`, `path_steering`), so
-a runner that mounts one of those analyses fails to resolve `- /task: <name>` if
-they are absent — keep them present even for non-manifold tasks. See
-`docs/CODEBASE.md` §5 for the full required-keys contract.
-
-Sanity-check the config parses:
+A task becomes usable by a protocol document when its counterfactual dataset
+exists as a table under the document's data root:
 
 ```bash
-uv run python -c "from omegaconf import OmegaConf; print(OmegaConf.to_yaml(OmegaConf.load('causalab/configs/task/<name>.yaml')))"
+uv run python scripts/build_task_dataset.py \
+    --task <name> --n 64 --seed 0 --target-variable <var> \
+    --out <data-root>/<name>/train.json
 ```
+
+Factory tasks take their config through `--set key=value` (resolved against the
+`*Config` dataclass in the package's `config.py`):
+
+```bash
+uv run python scripts/build_task_dataset.py \
+    --task natural_domains_arithmetic --set domain_type=weekdays \
+    --n 64 --seed 0 --target-variable result --out data/weekdays/train.json
+```
+
+What the builder writes, and why it is a *build step* rather than something a
+load does:
+
+- **The columns a document references** — the rendered prompts (`input`,
+  `counterfactual_inputs`), each prompt's own answer (`base_answer`,
+  `cf_answer`), the post-intervention `label` from
+  `CausalModel.label_counterfactual_data`, the answer forms from the causal
+  model's `output_tokens` declaration (`*_forms`), and every causal-model
+  variable as a per-row column for position resolution. See
+  `causalab/tasks/serialize.py` for the full vocabulary.
+- **Deterministic bytes**, so the content digest a document's canonical form
+  stamps (§7) is reproducible from the parameters recorded in the
+  `<ref>.manifest.json` sidecar written beside the table. `--check` rebuilds
+  and fails instead of writing — the guard for a committed table.
+- **No model, no tokenizer.** Tables are text and variable strings, which is
+  what lets `causalab validate` / `explain` / `digest` run without either, and
+  lets one table run under different models.
+
+Two things a task therefore declares for itself, rather than a document
+computing them:
+
+- `output_tokens` — which surface strings count as one answer. A `match` metric
+  consumes the serialized group, so synonyms and casings are task data (§2.10).
+- `match_modes` — `prefix` for a task whose answers are not single-token. The
+  builder records it in the manifest as `declared_match_mode`; the document
+  spelling is `"mode": "first_token"`.
 
 ## 3. Validating a new task
 

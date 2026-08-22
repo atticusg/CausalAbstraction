@@ -14,10 +14,12 @@ services; everything here is stdlib-only.
   Missing artifact or key = load error, never a default (§5.15).
 * **Datasets** — a ref is a local path (relative to the data root) holding
   a serialized table; the resolver reports its content digest (stamped into
-  the canonical form, §2.2) and its columns (checked by ``validate --data``).
-  The repo's task datasets are *generated*, not stored — a generating
-  resolver implements the same protocol one level up; this module only
-  defines the contract plus the file-backed implementation.
+  the canonical form, §2.2), its columns (checked by ``validate --data``)
+  and its rows (what a run consumes). The repo's task datasets are
+  *generated*, but they are generated **ahead of the load**, by
+  :mod:`causalab.tasks.serialize`, and enter here as ordinary tables — so
+  resolution stays stdlib-only and a document's digest never depends on
+  importing task code or a tokenizer.
 * **Models** — static config metadata via
   :mod:`causalab.protocol.registry`.
 
@@ -61,11 +63,20 @@ class ArtifactStore(Protocol):
 
 class DatasetResolver(Protocol):
     """Where dataset refs resolve. ``digest`` is the content digest stamped
-    into canonical forms; ``columns`` backs ``validate --data``."""
+    into canonical forms; ``columns`` backs ``validate --data``; ``rows`` is
+    the table content a run consumes.
+
+    All three are one contract on purpose. The pure verbs
+    (``validate``/``explain``/``digest``) only need the first two, but a
+    resolver that cannot produce rows cannot back a ``run`` — so the
+    requirement is declared here instead of being discovered by a ``getattr``
+    probe deep inside a backend."""
 
     def digest(self, ref: str) -> str: ...
 
     def columns(self, ref: str) -> tuple[str, ...]: ...
+
+    def rows(self, ref: str) -> list[dict[str, Any]]: ...
 
 
 @dataclasses.dataclass(frozen=True)
@@ -282,9 +293,10 @@ class FileDatasets:
 
     A ref ``weekdays/train`` resolves to ``<root>/weekdays/train.json`` — a
     JSON array of row objects. The content digest is the sha256 of the
-    file's bytes; columns are the union of row keys. Generated (task-based)
-    datasets implement the same :class:`DatasetResolver` contract by
-    serializing first — deterministically, so the digest is reproducible.
+    file's bytes; columns are the union of row keys. Task-generated tables
+    are written by :mod:`causalab.tasks.serialize` into this same layout
+    (deterministically, so the digest is reproducible), with their build
+    provenance in a ``<ref>.manifest.json`` sidecar that nothing here reads.
     """
 
     root: Path

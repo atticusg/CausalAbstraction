@@ -27,7 +27,13 @@ from typing import Any, Mapping
 from causalab.protocol import canonical as _canonical
 from causalab.protocol.errors import ParseError, ValidationError
 from causalab.protocol.resolve import ResolutionEnv, resolve_artifact_fields
-from causalab.protocol.schema import Document, load_raw, parse_document
+from causalab.protocol.schema import (
+    OPTIONAL_METRIC_FIELDS,
+    Document,
+    PositionSpec,
+    load_raw,
+    parse_document,
+)
 from causalab.protocol.sweep import DEFAULT_POINT_CAP, Expansion, expand
 from causalab.protocol.validate import validate_document
 
@@ -265,9 +271,14 @@ def apply_overrides(
 
 
 def check_data_columns(loaded: LoadedProtocol, env: ResolutionEnv) -> list[str]:
-    """The ``validate --data`` pass (§2.2): every dataset field selector and
-    every metric column reference must exist in the resolved tables.
-    Returns the checked column names (for reporting); raises on a miss."""
+    """The ``validate --data`` pass (§2.2): every dataset field selector, every
+    metric column reference and every ``column`` position must exist in the
+    resolved tables. Returns the checked column names (for reporting); raises
+    on a miss.
+
+    Column references are checked against the *union* of the resolved tables'
+    columns: rows are paired across roles (§2.2), and a metric or a column
+    position addresses the row, not one role's text."""
     doc = loaded.point_documents[0]
     columns: set[str] = set()
     refs: list[str] = []
@@ -286,7 +297,11 @@ def check_data_columns(loaded: LoadedProtocol, env: ResolutionEnv) -> list[str]:
                     )
     for qname, metric in doc.metrics.items():
         for field, value in metric.fields.items():
-            if metric.kind == "kl" or field == "k" or not isinstance(value, str):
+            if (
+                metric.kind == "kl"
+                or field in ("k", *OPTIONAL_METRIC_FIELDS.get(str(metric.kind), ()))
+                or not isinstance(value, str)
+            ):
                 continue
             refs.append(value)
             if value not in columns:
@@ -296,4 +311,35 @@ def check_data_columns(loaded: LoadedProtocol, env: ResolutionEnv) -> list[str]:
                     f"the resolved datasets provide",
                     path=f"metrics.{qname}.{field}",
                 )
+    for where, name in _column_position_refs(doc):
+        refs.append(name)
+        if name not in columns:
+            raise ValidationError(
+                4,
+                f"position {where} references column {name!r}, which none of the "
+                f"resolved datasets provide",
+                path=where,
+            )
     return refs
+
+
+def _column_position_refs(doc: Document) -> list[tuple[str, str]]:
+    """``(where, column)`` for every ``column`` position in a document — the
+    named entries plus the inline specs on reads and writes (§2.3)."""
+    found: list[tuple[str, str]] = []
+
+    def visit(where: str, spec: Any) -> None:
+        if not isinstance(spec, PositionSpec):
+            return
+        if isinstance(spec.column, str):
+            found.append((where, spec.column))
+        anchor = spec.scope if spec.scope is not None else spec.relative_to
+        if spec.anchor_source == "column" and isinstance(anchor, str):
+            found.append((where, anchor))
+
+    for name, entry in doc.positions.items():
+        visit(f"positions.{name}", entry)
+    for section, table in (("reads", doc.reads), ("writes", doc.writes)):
+        for name, spec in table.items():
+            visit(f"{section}.{name}.pos", spec.pos)
+    return found
