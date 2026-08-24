@@ -370,7 +370,12 @@ class PositionSpec:
     ``index``/``span``, and are mutually exclusive. ``all`` selects every
     content token of the row and takes no modifiers. Positions are never
     resolved to integers in the document — resolution is a backend
-    service against a ``PositionFrame`` (§2.3, §8)."""
+    service against a ``PositionFrame`` (§2.3, §8).
+
+    ``generated`` is a **frame selector**, not an anchor: it says the
+    anchor resolves inside the row's greedy continuation instead of its
+    prompt, and it carries the decode budget (``{"max_new_tokens": n}``).
+    The anchor vocabulary is unchanged inside that frame."""
 
     index: Leaf | None = None
     span: Leaf | None = None
@@ -379,6 +384,9 @@ class PositionSpec:
     all: Leaf | None = None
     scope: Leaf | None = None
     relative_to: Leaf | None = None
+    #: The continuation frame and its decode budget (§2.3). ``None`` is
+    #: the prompt frame — where every position lived before generation.
+    generated: Mapping[str, Leaf] | None = None
     #: Where ``scope``/``relative_to`` resolve from: ``"variable"`` (the
     #: role's prompt variables) or ``"column"`` (a top-level row column).
     #: Not authored on its own — it comes from the anchor's spelling.
@@ -851,7 +859,16 @@ def _parse_position_spec(raw: Any, path: str) -> PositionSpec:
     obj = _require_mapping(raw, path)
     _check_keys(
         obj,
-        ("index", "span", "variable", "column", "all", "scope", "relative_to"),
+        (
+            "index",
+            "span",
+            "variable",
+            "column",
+            "all",
+            "scope",
+            "relative_to",
+            "generated",
+        ),
         path,
     )
     anchors = [k for k in ("index", "span", "variable", "column", "all") if k in obj]
@@ -910,6 +927,33 @@ def _parse_position_spec(raw: Any, path: str) -> PositionSpec:
         raise ParseError(
             "P2", "scope and relative_to are mutually exclusive", path=path
         )
+    generated = (
+        _parse_generated(obj["generated"], f"{path}.generated")
+        if "generated" in obj
+        else None
+    )
+    if generated is not None:
+        # The continuation frame carries no prompt-frame notions: a `column`
+        # holds a substring of the *input* text, and scope/relative_to anchor
+        # on a prompt variable's token run. Both are meaningless in a frame
+        # the prompt does not contain (§2.3).
+        offenders = [
+            key
+            for key, present in (
+                ("column", column is not None),
+                ("scope", scope is not None),
+                ("relative_to", relative_to is not None),
+            )
+            if present
+        ]
+        if offenders:
+            raise ParseError(
+                "P2",
+                f"{offenders} resolve against the prompt, so they cannot combine "
+                "with 'generated' — anchor inside the continuation with "
+                "index/span/variable/all instead",
+                path=path,
+            )
     if isinstance(span, tuple):
         lo, hi = span
         if scope is None and (lo < 0 or hi <= lo):
@@ -936,7 +980,32 @@ def _parse_position_spec(raw: Any, path: str) -> PositionSpec:
         scope=scope,
         relative_to=relative_to,
         anchor_source=anchor_source,
+        generated=generated,
     )
+
+
+def _parse_generated(value: Any, path: str) -> dict[str, Any]:
+    """§2.3 — the continuation frame selector: ``{"max_new_tokens": n}``.
+
+    A mapping rather than a bare int on purpose: stopping conditions
+    (``stop``, ``min_new_tokens``) join this object later without any
+    ambiguity about what a bare number would have meant.
+    """
+    obj = _require_mapping(value, path)
+    _check_keys(obj, ("max_new_tokens",), path)
+    if "max_new_tokens" not in obj:
+        raise ParseError(
+            "P2", "generated needs 'max_new_tokens' — the decode budget", path=path
+        )
+    budget = _wrapped(obj["max_new_tokens"], _scalar_int, f"{path}.max_new_tokens")
+    if isinstance(budget, int) and budget < 1:
+        raise ParseError(
+            "P2",
+            f"max_new_tokens is {budget} — a continuation frame needs at least "
+            "one generated token",
+            path=f"{path}.max_new_tokens",
+        )
+    return {"max_new_tokens": budget}
 
 
 def _parse_span(value: Any, path: str) -> tuple[int, int]:
