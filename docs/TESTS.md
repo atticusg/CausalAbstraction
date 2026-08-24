@@ -13,7 +13,7 @@ Every test belongs to exactly one tier, declared via a pytest marker. The five m
 
 | Tier | Marker | What it asserts | Wall budget |
 | --- | --- | --- | --- |
-| `numerical_unit` | `@pytest.mark.numerical_unit` | Expected input–output pairs pinned on fixed seeds (CPU): the frozen parity goldens (`tests/neural/parity/goldens/*.json` replayed through protocol documents on tiny-random), task numerical pins (`tests/tasks/<task>/pinned_samples.json`), metric/train-loop values. Catches sign flips. | <2 min total |
+| `numerical_unit` | `@pytest.mark.numerical_unit` | Expected input–output pairs pinned on fixed seeds (CPU): the frozen parity goldens (`tests/neural/parity/goldens/*.json` replayed through protocol documents on tiny-random), task numerical pins (`tests/tasks/<task>/pinned_samples.json`), metric/train-loop values, and the task-driven end-to-end IIA pin (`tests/neural/pytorch_hooks/test_end_to_end_iia.py` — a serialized task table driven through the CLI). Catches sign flips. | <2 min total |
 | `property` | `@pytest.mark.property` | Object properties: shape & dtype contracts, invariances / equivariances / determinism (load twice → same digests and canonical form), causal-model invariants. | <1 min total |
 | `unit` | `@pytest.mark.unit` | Pure-function tests, parsers, validation rules, small utilities (the "else" bucket). The default tier — marker still required (enforcement does not infer it). Includes the golden tier's CPU structural guard (`tests/golden/test_structural.py`). | <5 min total |
 | `smoke` | `@pytest.mark.smoke` | Corpus documents execute end-to-end on `tiny-random` through the real CLI (`tests/neural/pytorch_hooks/test_run_corpus.py`, `test_workflow_run.py`): artifact existence, shapes, indicator ranges — no numerical pins. | <5 min total |
@@ -45,6 +45,7 @@ Every pinned file follows the same rule: **regenerate via its script, review the
 | `tests/golden/drift/drift_goldens.json` | `tests/golden/drift/update_drift_goldens.py` (GPU) | the stack's real-model numerics moved |
 | `tests/tasks/<task>/pinned_samples.json` | `scripts/update_task_pins.py` | task prompt/causal-model semantics changed |
 | `tests/neural/parity/goldens/*.json` | none — **deliberately frozen** pre-migration captures | do not regenerate; recapturing from the new stack would defeat the anchor |
+| `tests/protocol/fixtures/data/weekdays/task_n4_s0.json` | `scripts/build_task_dataset.py` (parameters in its `.manifest.json` sidecar; `--check` verifies without writing) | the task's generator or causal model changed — a committed table is a build product, so the manifest is the recipe |
 
 ## End-to-end tests
 

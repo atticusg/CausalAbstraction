@@ -21,6 +21,13 @@ form instead of letting the tokenizer's vocabulary decide. Under ``auto``,
 :func:`column_token_ids` warns once per column when both forms are single
 tokens and disagree — exactly the condition under which it can be silently
 wrong.
+
+``match`` is the one kind that can be told otherwise, and only explicitly
+(§2.10): its ``expected`` column may hold a **list** of equivalent surface
+forms (synonyms, casings), and ``"mode": "first_token"`` credits a form's
+first token instead of demanding the form be one token. Both are
+task-data decisions — the table says which forms count, the document says
+whether a prefix counts — so neither can happen by accident.
 """
 
 from __future__ import annotations
@@ -33,13 +40,36 @@ import torch
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import MetricSpec
 
-__all__ = ["column_token_id", "column_token_ids", "compute_metric"]
+__all__ = [
+    "column_first_token_id",
+    "column_token_id",
+    "column_token_ids",
+    "compute_metric",
+]
 
 
 def _single_token(tokenizer: Any, text: str) -> int | None:
     """The token id of ``text`` when it encodes to exactly one token."""
     ids = tokenizer.encode(text, add_special_tokens=False)
     return int(ids[0]) if len(ids) == 1 else None
+
+
+def _candidates(value: str, token_form: str = "auto") -> tuple[str, ...]:
+    """The surface forms to try, in order, for one metric answer.
+
+    ``token_form`` is the §2.10 knob: ``auto`` tries the space-prefixed form
+    first (BPE families make ``" one"`` one token) and falls back to the bare
+    form (sentencepiece's ``"one"`` IS the ``\u2581one`` piece);
+    ``space_prefixed`` and ``bare`` pin one form. A leading space in the
+    authored value is normalized away rather than honored, so ``" ?"`` and
+    ``"?"`` mean the same answer and only ``token_form`` decides the form.
+    """
+    bare = value.lstrip(" ")
+    return {
+        "auto": (" " + bare, bare),
+        "space_prefixed": (" " + bare,),
+        "bare": (bare,),
+    }[token_form]
 
 
 def column_token_id(tokenizer: Any, value: str, *, token_form: str = "auto") -> int:
@@ -50,15 +80,7 @@ def column_token_id(tokenizer: Any, value: str, *, token_form: str = "auto") -> 
     ``"space_prefixed"`` pins ``" " + s``, ``"bare"`` pins ``s`` with leading
     spaces stripped.
     """
-    bare = value.lstrip(" ")
-    spaced = " " + bare
-    # space-prefixed first (BPE families make " one" one token); the stripped
-    # form covers sentencepiece families, whose "one" IS the ▁one piece
-    candidates = {
-        "auto": (spaced, bare),
-        "space_prefixed": (spaced,),
-        "bare": (bare,),
-    }[token_form]
+    candidates = _candidates(value, token_form)
 
     resolved: int | None = None
     for candidate in candidates:
@@ -128,6 +150,42 @@ def column_token_ids(
     return ids
 
 
+def column_first_token_id(
+    tokenizer: Any, value: str, *, token_form: str = "auto"
+) -> int:
+    """The first *content* token id of a value — ``match``'s ``first_token``
+    mode.
+
+    A single-token value resolves exactly as :func:`column_token_id` does, so
+    ``first_token`` is a strict generalization of ``exact``. A multi-token
+    value resolves to the first piece that carries text: sentencepiece
+    families encode a leading space as its own ``▁`` piece, and crediting
+    *that* would score every space-prefixed answer alike — the first piece an
+    argmax can distinguish is the one after it (``" Thursday"`` →
+    ``▁ Th urs day`` → ``Th``, which is also what the model emits in
+    context).
+
+    What this cannot know is whether the table's answer space is
+    first-token-distinct — two answers sharing a first piece would both score.
+    That is a property of the dataset, checked where the dataset is built."""
+    encoded = [
+        tokenizer.encode(candidate, add_special_tokens=False)
+        for candidate in _candidates(value, token_form)
+    ]
+    for ids in encoded:
+        if len(ids) == 1:
+            return int(ids[0])
+    for ids in encoded:
+        for token_id in ids:
+            if tokenizer.decode([int(token_id)]).strip():
+                return int(token_id)
+    raise ProtocolError(
+        "P2",
+        f"metric column value {value!r} encodes to no content tokens under "
+        "this tokenizer — nothing to compare an argmax against",
+    )
+
+
 def _last_pos_logits(value: torch.Tensor) -> torch.Tensor:
     """A read at one position arrives as (batch, 1, vocab); squeeze it."""
     if value.dim() == 3:
@@ -154,23 +212,44 @@ def compute_metric(
     kind = str(metric.kind)
     # §2.10: how this metric's string answers become token ids. `auto` is the
     # space-prefixed-first default every pre-token_form document gets.
-    form = str(metric.token_form)
+    token_form = str(metric.token_form)
 
     def token_ids(values: Sequence[str], field: str) -> list[int]:
         return column_token_ids(
-            tokenizer, values, token_form=form, where=f"metric {kind}.{field}"
+            tokenizer,
+            values,
+            token_form=token_form,
+            where=f"metric {kind}.{field}",
         )
 
-    def column(field: str) -> list[str]:
+    def raw_column(field: str) -> list[Any]:
         name = str(metric.fields[field])
-        out: list[str] = []
+        out: list[Any] = []
         for i, row in enumerate(rows):
             if name not in row:
                 raise ProtocolError(
                     "P2", f"metric column {name!r} missing from dataset row {i}"
                 )
-            out.append(str(row[name]))
+            out.append(row[name])
         return out
+
+    def column(field: str) -> list[str]:
+        return [str(value) for value in raw_column(field)]
+
+    def form_groups(field: str) -> list[list[str]]:
+        """One row's expected forms: a list column is a group of equivalent
+        surface forms, a scalar is a group of one (§2.10)."""
+        groups: list[list[str]] = []
+        for i, value in enumerate(raw_column(field)):
+            forms = [str(v) for v in value] if isinstance(value, list) else [str(value)]
+            if not forms:
+                raise ProtocolError(
+                    "P2",
+                    f"metric column {metric.fields[field]!r} is an empty form "
+                    f"group on row {i} — nothing to match against",
+                )
+            groups.append(forms)
+        return groups
 
     if kind == "logit_diff":
         a_ids = token_ids(column("a"), "a")
@@ -194,9 +273,18 @@ def compute_metric(
         kl = (p.exp() * (p - q)).sum(dim=-1)
         return [float(v) for v in kl]
     if kind == "match":
-        expected = token_ids(column("expected"), "expected")
+        # `mode` decides whether a form's first token counts (§2.10);
+        # `token_form` decides which surface form resolves. Independent knobs.
+        mode = str(metric.fields.get("mode", "exact"))
+        resolve = column_first_token_id if mode == "first_token" else column_token_id
         argmax = logits.argmax(dim=-1)
-        return [float(int(argmax[i]) == t) for i, t in enumerate(expected)]
+        return [
+            float(
+                int(argmax[i])
+                in {resolve(tokenizer, f, token_form=token_form) for f in forms}
+            )
+            for i, forms in enumerate(form_groups("expected"))
+        ]
     if kind == "top_k":
         k = metric.fields["k"]
         assert isinstance(k, int)  # parse guarantees the shape

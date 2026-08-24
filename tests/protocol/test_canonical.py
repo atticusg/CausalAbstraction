@@ -8,7 +8,7 @@ from causalab.protocol.canonical import canonical_bytes, canonicalize, digest
 from causalab.protocol.loader import load
 
 from tests.protocol._env import CORPUS_DIR
-from tests.protocol._docs import base_doc
+from tests.protocol._docs import base_doc, in_order
 
 pytestmark = pytest.mark.unit
 
@@ -118,3 +118,50 @@ def test_out_of_range_layer_refused(env):
     with pytest.raises(Exception) as err:
         canonicalize(raw, env)
     assert "[V4]" in str(err.value)
+
+
+def test_match_mode_default_materialized(env):
+    """Optional metric fields are materialized like ``train.optimizer``
+    defaults (§2.10): the two spellings of "exact" are one canonical form, so
+    adding the field cannot split the digest of documents that omit it."""
+    omitted = base_doc()
+    omitted["metrics"]["m"] = {"kind": "match", "of": "logits", "expected": "label"}
+    omitted["save"].append(
+        {"value": "m", "model": "patched", "input": "base", "file_path": "m.parquet"}
+    )
+    spelled = {
+        **omitted,
+        "metrics": {
+            **omitted["metrics"],
+            "m": {**omitted["metrics"]["m"], "mode": "exact"},
+        },
+    }
+    assert canonicalize(omitted, env)["metrics"]["m"]["mode"] == "exact"
+    assert digest(canonicalize(omitted, env)) == digest(canonicalize(spelled, env))
+
+
+def test_first_token_mode_is_a_different_document(env):
+    """...and a real semantic choice still moves the digest."""
+    exact = base_doc()
+    exact["metrics"]["m"] = {"kind": "match", "of": "logits", "expected": "label"}
+    exact["save"].append(
+        {"value": "m", "model": "patched", "input": "base", "file_path": "m.parquet"}
+    )
+    first = {
+        **exact,
+        "metrics": {
+            **exact["metrics"],
+            "m": {**exact["metrics"]["m"], "mode": "first_token"},
+        },
+    }
+    assert digest(canonicalize(exact, env)) != digest(canonicalize(first, env))
+
+
+def test_column_position_canonicalizes_verbatim(env):
+    """A column position is data the canonical form carries as authored — no
+    derivation, so the digest names the column the document reads."""
+    raw = base_doc()
+    raw["positions"] = {"subj": {"column": "entity"}}
+    raw["reads"]["v_cf"]["pos"] = "subj"
+    canonical = canonicalize(in_order(raw), env)
+    assert canonical["positions"]["subj"] == {"column": "entity"}
