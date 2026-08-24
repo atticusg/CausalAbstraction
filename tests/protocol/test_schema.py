@@ -197,3 +197,95 @@ def test_metric_token_form_is_not_sweepable():
     with pytest.raises(ValidationError) as err:
         parse_document(in_order(raw))
     assert err.value.rule == 14
+
+
+# the continuation frame (§2.3) ---------------------------------------------- #
+
+
+def _generated(anchor: dict, budget: int = 8) -> dict:
+    return {"generated": {"max_new_tokens": budget}, **anchor}
+
+
+@pytest.mark.parametrize(
+    "anchor,attr,expected",
+    [
+        ({"all": True}, "all", True),
+        ({"index": -1}, "index", -1),
+        ({"span": [0, 3]}, "span", (0, 3)),
+        ({"variable": "expected"}, "variable", "expected"),
+    ],
+)
+def test_generated_frame_takes_every_anchor(anchor, attr, expected):
+    """``generated`` is a frame selector, not an anchor: the anchor
+    vocabulary is unchanged inside the continuation."""
+    raw = base_doc()
+    raw["reads"]["v_cf"]["pos"] = _generated(anchor)
+    pos = parse_document(raw).reads["v_cf"].pos
+    assert isinstance(pos, PositionSpec)
+    assert getattr(pos, attr) == expected
+    assert pos.generated == {"max_new_tokens": 8}
+
+
+def test_generated_needs_an_anchor():
+    raw = base_doc()
+    raw["reads"]["v_cf"]["pos"] = {"generated": {"max_new_tokens": 8}}
+    with pytest.raises(ParseError) as err:
+        parse_document(raw)
+    assert "exactly one" in str(err.value)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"column": "entity"},
+        {"index": 0, "scope": {"variable": "subject"}},
+        {"index": 1, "relative_to": {"variable": "subject"}},
+    ],
+)
+def test_generated_refuses_prompt_frame_notions(extra):
+    """A ``column`` holds a substring of the *input* text and
+    ``scope``/``relative_to`` anchor on a prompt variable's token run —
+    neither exists in a frame the prompt does not contain."""
+    raw = base_doc()
+    raw["reads"]["v_cf"]["pos"] = {"generated": {"max_new_tokens": 8}, **extra}
+    with pytest.raises(ParseError) as err:
+        parse_document(raw)
+    assert "generated" in str(err.value)
+
+
+@pytest.mark.parametrize(
+    "budget,fragment",
+    [
+        ({"max_new_tokens": 0}, "at least"),
+        ({"max_new_tokens": -3}, "at least"),
+        ({}, "max_new_tokens"),
+        ({"max_new_tokens": 4, "temperature": 0.7}, "temperature"),
+        (8, "expected an object"),
+    ],
+)
+def test_generated_budget_shapes(budget, fragment):
+    """The budget is a mapping so stopping conditions can join it later —
+    a bare int, a missing budget, and sampling knobs all refuse."""
+    raw = base_doc()
+    raw["reads"]["v_cf"]["pos"] = {"generated": budget, "index": -1}
+    with pytest.raises(ParseError) as err:
+        parse_document(raw)
+    assert fragment in str(err.value)
+
+
+def test_generated_budget_is_sweepable():
+    raw = base_doc()
+    raw["positions"] = {
+        "tail": {"generated": {"max_new_tokens": {"sweep": [4, 16]}}, "index": -1}
+    }
+    raw["reads"]["v_cf"]["pos"] = "tail"
+    pos = parse_document(in_order(raw)).positions["tail"]
+    assert isinstance(pos, PositionSpec)
+    assert isinstance(pos.generated["max_new_tokens"], Sweep)
+
+
+def test_prompt_frame_positions_carry_no_generated():
+    """Every pre-existing position stays prompt-frame: the field is absent,
+    not defaulted, so existing canonical forms are untouched."""
+    pos = parse_document(base_doc()).reads["v_cf"].pos
+    assert isinstance(pos, PositionSpec) and pos.generated is None

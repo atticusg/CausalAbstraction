@@ -1,6 +1,6 @@
 """The load-error checklist (spec §5) over one concrete document.
 
-:func:`validate_document` runs rules 3–13 on a parsed, *concrete*
+:func:`validate_document` runs rules 3–13 and 16 on a parsed, *concrete*
 :class:`~causalab.protocol.schema.Document` — a point protocol, or an
 un-swept document. The other rules live where their information lives:
 
@@ -59,7 +59,7 @@ _TRAINABLE_KINDS = frozenset({"subspace", "gate", "sae"})
 
 
 def validate_document(doc: Document, *, backend_is_local: bool | None = None) -> None:
-    """Run checklist rules 3–13 (and 13 only when ``backend_is_local`` is
+    """Run checklist rules 3–13 and 16 (13 only when ``backend_is_local`` is
     given). Raises :class:`ValidationError` on the first violation."""
     names = _check_namespace(doc)  # rule 3
     _check_references(doc, names)  # rule 4 (+ the rule-5 read bindings)
@@ -69,6 +69,7 @@ def validate_document(doc: Document, *, backend_is_local: bool | None = None) ->
     _check_save(doc)  # rule 10
     _check_sinks(doc)  # rule 11
     _check_trainability(doc)  # rule 12
+    _check_generation(doc)  # rule 16
     if backend_is_local is not None:
         _check_pytorch_fn(doc, backend_is_local)  # rule 13
 
@@ -882,6 +883,63 @@ def _check_trainability(doc: Document) -> None:
                     "train section (§2.6)",
                     path=f"params.{pname}",
                 )
+
+
+# --------------------------------------------------------------------------- #
+# rule 16 — generation is read-only and prefill-only
+# --------------------------------------------------------------------------- #
+
+
+def _generated_positions(doc: Document) -> dict[str, PositionSpec]:
+    """Every declared position that selects the continuation frame, by the
+    name (or ``"<section>.<entry>"`` path) it was authored under."""
+    found: dict[str, PositionSpec] = {}
+    for name, entry in doc.positions.items():
+        if isinstance(entry, PositionSpec) and entry.generated is not None:
+            found[name] = entry
+    for section in ("reads", "writes"):
+        for name, spec in getattr(doc, section).items():
+            pos = spec.pos
+            if isinstance(pos, PositionSpec) and pos.generated is not None:
+                found[f"{section}.{name}"] = pos
+    return found
+
+
+def _check_generation(doc: Document) -> None:
+    """§5.16 — a decode is something a read *addresses*, never something a
+    write or a fit runs inside.
+
+    Two refusals, one rule. **Writes stay prefill-only**: the continuation
+    only exists because the prefill already ran, and a write there would be
+    a decode-step intervention — out of scope for v1 by §7's scope clause,
+    and the reason no other rule has to reason about two frames (rules 8/9
+    compare writes only, so both sides are always prompt-frame). **Training
+    cannot see a decode**: `train` differentiates through the graph a
+    forward builds, and a greedy continuation is an argmax chain, not a
+    differentiable path.
+    """
+    for ename, write in doc.writes.items():
+        pos = write.pos
+        spec = doc.positions.get(pos) if isinstance(pos, str) else pos
+        if isinstance(spec, PositionSpec) and spec.generated is not None:
+            where = f" (position {pos!r})" if isinstance(pos, str) else ""
+            raise ValidationError(
+                16,
+                f"write {ename!r} addresses the continuation frame{where} — writes "
+                "are prefill-only (§2.3): reads may address generated tokens, "
+                "writes may not",
+                path=f"writes.{ename}",
+            )
+    if doc.train is not None:
+        generated = _generated_positions(doc)
+        if generated:
+            raise ValidationError(
+                16,
+                f"train and the continuation frame do not combine: {sorted(generated)} "
+                "select generated tokens, and a greedy decode is an argmax chain "
+                "with no gradient path (§2.11)",
+                path="train",
+            )
 
 
 # --------------------------------------------------------------------------- #

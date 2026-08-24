@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import pytest
 
 from causalab.protocol.canonical import canonical_bytes, canonicalize, digest
@@ -165,3 +167,29 @@ def test_column_position_canonicalizes_verbatim(env):
     raw["reads"]["v_cf"]["pos"] = "subj"
     canonical = canonicalize(in_order(raw), env)
     assert canonical["positions"]["subj"] == {"column": "entity"}
+
+
+def test_generated_frame_canonicalizes_verbatim(env):
+    """The frame selector is authored data with no defaults to materialize,
+    so it carries through untouched — and a different budget is a different
+    document, because the position enters the read's closure."""
+    raw = base_doc()
+    raw["positions"] = {"tail": {"generated": {"max_new_tokens": 8}, "index": -1}}
+    raw["reads"]["v_cf"]["pos"] = "tail"
+    canonical = canonicalize(in_order(raw), env)
+    assert canonical["positions"]["tail"] == {
+        "generated": {"max_new_tokens": 8},
+        "index": -1,
+    }
+    # deep-copied: canonicalize passes this section through by reference, so
+    # mutating a shared nested dict would rewrite the form just measured
+    longer = copy.deepcopy(in_order(raw))
+    longer["positions"]["tail"]["generated"]["max_new_tokens"] = 16
+    assert digest(canonical) != digest(canonicalize(longer, env))
+
+
+def test_prompt_frame_documents_digest_unchanged(env):
+    """The new field is absent, not defaulted, on every position that does
+    not ask for a continuation — the reason no existing digest moves."""
+    canonical = canonicalize(base_doc(), env)
+    assert "generated" not in canonical["reads"]["v_cf"]["pos"]
