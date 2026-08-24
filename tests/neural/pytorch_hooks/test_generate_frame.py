@@ -47,7 +47,10 @@ def _doc(
         "model": {"key": key, "revision": "main"},
         "data": {"base": {"dataset": "probe", "field": "input"}},
         "positions": {
-            "cont": {"generated": {"max_new_tokens": BUDGET}, **(anchor or {"all": True})}
+            "cont": {
+                "generated": {"max_new_tokens": BUDGET},
+                **(anchor or {"all": True}),
+            }
         },
         "sites": {
             "lm_head": {"component": "lm_head"},

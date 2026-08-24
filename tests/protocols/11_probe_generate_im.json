@@ -1,0 +1,30 @@
+{
+  "version": "1",
+  "description": "Exploration probe: greedy-decode 8 tokens under a residual-stream steer, then read the distribution at the last generated token. The continuation is addressed by an ordinary position (the `generated` frame), so it is a read, and an ordinary metric scores it — top_k with k=1 is the greedy continuation itself.",
+  "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
+  "data": {
+    "base": {"dataset": "weekdays/train", "field": "input"}
+  },
+  "positions": {
+    "last_new": {"generated": {"max_new_tokens": 8}, "index": -1}
+  },
+  "sites": {
+    "target":  {"component": "block_output", "layer": 18},
+    "lm_head": {"component": "lm_head"}
+  },
+  "reads": {
+    "tail": {"site": "lm_head", "pos": "last_new", "model": "probed", "input": "base"}
+  },
+  "writes": {
+    "push": {"site": "target", "pos": -1, "do": {"add_scaled": {"op": 1.0, "alpha": 2.0}}}
+  },
+  "intervened_models": {
+    "probed": {"input": "base", "writes": ["push"]}
+  },
+  "metrics": {
+    "greedy": {"kind": "top_k", "of": "tail", "k": 1}
+  },
+  "save": [
+    {"value": "greedy", "model": "probed", "input": "base", "file_path": "probe.parquet"}
+  ]
+}

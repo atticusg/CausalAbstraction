@@ -650,3 +650,17 @@ def test_rule_16_train_with_a_generated_position():
     doc["save"].append({"value": "rot", "site": "tgt", "file_path": "rot.safetensors"})
     err = expect_rule(16, doc)
     assert "gradient path" in str(err)
+
+
+def test_the_checklist_and_the_spec_agree_on_how_many_rules_there_are():
+    """`CHECKLIST_RULES` guards every ValidationError's number, so it has to
+    match §5 or the guard silently drifts from the document it enforces."""
+    import re
+    from pathlib import Path
+
+    from causalab.protocol.errors import CHECKLIST_RULES
+
+    spec = Path(__file__).resolve().parents[2] / "docs" / "intervention_protocol.md"
+    section = spec.read_text().split("## 5. Validation")[1].split("\n## ")[0]
+    numbered = {int(m) for m in re.findall(r"^(\d+)\. ", section, flags=re.M)}
+    assert numbered == set(range(1, CHECKLIST_RULES + 1))
