@@ -41,6 +41,7 @@ Every pinned file follows the same rule: **regenerate via its script, review the
 | Pin | Script | What a diff means |
 |---|---|---|
 | `tests/protocol/corpus_digests.json` | `tests/protocol/update_corpus_digests.py` | the canonical form changed — spec §7 treats it as a loader migration |
+| `tests/protocol/workflow_digests.json` | `tests/protocol/update_workflow_digests.py` | a shipped workflow's canonical form changed (workflow spec §7). It is also what makes "adding a step type changed no existing document" a check rather than a claim |
 | `tests/golden/golden_digests.json` | `tests/golden/update_golden_digests.py` | a golden document or its fixture dataset changed (dataset content digests are part of the canonical form) |
 | `tests/golden/drift/drift_goldens.json` | `tests/golden/drift/update_drift_goldens.py` (GPU) | the stack's real-model numerics moved |
 | `tests/tasks/<task>/pinned_samples.json` | `scripts/update_task_pins.py` | task prompt/causal-model semantics changed |
@@ -51,7 +52,9 @@ Every pinned file follows the same rule: **regenerate via its script, review the
 
 ### Smoke
 
-Corpus documents (`tests/protocols/*_im.json`) run through the real CLI on `hf-internal-testing/tiny-random-LlamaForCausalLM` with `--set` overrides retargeting layers/model at tiny scale. Assertions are existence/shape/dtype only — tiny-random output content is garbage by design. The workflow capstone (`tests/neural/pytorch_hooks/test_workflow_run.py`) runs the whole weekdays pipeline shape the same way, and `test_bundle_entries_run.py` covers the two tensor handoffs between steps: a *swept* fit applied at one selected coordinate (the capstone deliberately collapses that sweep, which is how the gap went unseen) and a mean-ablation harvest reduced at save time.
+Corpus documents (`tests/protocols/*_im.json`) run through the real CLI on `hf-internal-testing/tiny-random-LlamaForCausalLM` with `--set` overrides retargeting layers/model at tiny scale. Assertions are existence/shape/dtype only — tiny-random output content is garbage by design. The workflow capstone (`tests/neural/pytorch_hooks/test_workflow_run.py`) runs the whole weekdays pipeline shape the same way, and `test_bundle_entries_run.py` covers the two tensor handoffs between steps: a *swept* fit applied at one selected coordinate (the capstone deliberately collapses that sweep, which is how the gap went unseen) and a mean-ablation harvest reduced at save time. `test_transform_run.py` is the `transform`-step capstone, covering both of its directions in one pipeline: protocol → transform → select/plot, and protocol → transform → protocol (a fitted basis re-entering a model-touching run, with its ArtifactIdentity checked).
+
+Transform ops themselves are unit-tested under `tests/transform/`: each op against a hand-computed oracle plus a determinism assertion (`numerical_unit`), the registry's refusals and record invariants (`unit`), and — in a subprocess, since `tests/conftest.py` imports torch at session scope — that a real `causalab validate` of a transform workflow never imports torch.
 
 ### Golden
 
