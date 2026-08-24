@@ -16,17 +16,30 @@ mask mode pins the hard-eval split.
 
 Everything here is per-position math on ``(..., d)`` tensors; widths come
 from the resolved site, never from the document.
+
+**Device.** Stages are built on CPU and moved to the run's device by
+:func:`build_stack`. Building on CPU is deliberate: a ``subspace`` init draws
+from a CPU generator, so a seeded init stays bit-identical across devices.
+Dtype is *not* forced — every stage casts at the boundary, so featurizers
+stay fp32 against a bf16 backbone.
+
+**Seed.** ``subspace`` is the only kind with a random init, and it draws from a
+*local* generator rather than the global RNG, so its starting rotation cannot
+depend on build order or on whether a train loop ran. :func:`build_stack` takes
+the ``seed``; the executor resolves it from ``train.seed`` (0 when the document
+declares no fit). ``gate`` inits to zeros and the rest load from files.
 """
 
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import torch
 
+from causalab.protocol.bundles import entry_selection
 from causalab.protocol.errors import ProtocolError
-from causalab.protocol.schema import FeaturizerSpec
+from causalab.protocol.schema import FEATURIZER_SLOTS, FeaturizerSpec
 
 __all__ = ["FeaturizerStack", "Stage", "build_stack"]
 
@@ -55,7 +68,11 @@ class Identity(Stage):
 
 class Subspace(Stage):
     """An orthonormal ``(d, k)`` map ``Q``; features are the coordinates in
-    its column space, ``err`` the complement (module docstring)."""
+    its column space, ``err`` the complement (module docstring).
+
+    ``seed`` picks the initial rotation and is kept on the instance so a
+    cached stage can be checked against the seed a later use site asks for
+    (:func:`build_stack`)."""
 
     kind = "subspace"
 
@@ -64,6 +81,7 @@ class Subspace(Stage):
     ) -> None:
         super().__init__()
         self.k = k
+        self.seed = seed
         generator = torch.Generator().manual_seed(seed)
         init = torch.linalg.qr(torch.randn(width, k, generator=generator))[0]
         self.weight = torch.nn.Parameter(init)
@@ -260,6 +278,9 @@ def build_stack(
     width: int,
     load_tensors: Any,
     stage_cache: dict[str, Stage],
+    device: str | torch.device = "cpu",
+    seed: int = 0,
+    coords: Mapping[str, Any] | None = None,
 ) -> FeaturizerStack:
     """Build (or reuse from ``stage_cache``) the stack a read/write
     references. ``width`` is the SITE width; each later stage in a
@@ -267,7 +288,20 @@ def build_stack(
     a gate after a k=3 rotation is a 3-wide gate). ``load_tensors`` supplies
     loaded bundles; caching by name keeps one stage instance per declared
     featurizer, so training one featurizer updates every use site — a name
-    reused at a different chain width is a contradiction and refuses."""
+    reused at a different chain width is a contradiction and refuses.
+
+    ``device`` is the run's device; stages are built on CPU and moved there
+    (module docstring). The ``"cpu"`` default leaves CPU-only callers alone.
+
+    ``seed`` is the document's featurizer-init seed (``train.seed``, 0 with no
+    fit — ``executor.document_seed``). Explicit rather than read from the global
+    RNG because this also runs on apply/inference paths, where a global-RNG init
+    would make a rotation depend on construction order. The cache is keyed by
+    name, so a cached stage built from a different seed refuses, as with width.
+
+    ``coords`` are the executing point's sweep coordinates: they select the
+    matching entry of a swept bundle when the spec authored no ``entry``
+    (§2.5)."""
     if ref is None:
         return FeaturizerStack(names=(), stages=(Identity(),))
     chain = (ref,) if isinstance(ref, str) else tuple(ref)
@@ -284,6 +318,15 @@ def build_stack(
                     f"featurizer {name!r} is used at width {running} here but was "
                     f"built for width {built_for} — one featurizer, one width",
                 )
+            built_seed = getattr(stage, "seed", None)
+            if built_seed is not None and built_seed != seed:
+                raise ProtocolError(
+                    "P2",
+                    f"featurizer {name!r} is used at init seed {seed} here but the "
+                    f"cached stage was initialised from seed {built_seed} — one "
+                    "featurizer, one seed; a stage cache belongs to one point, so "
+                    "two points differing in train.seed must not share one",
+                )
         else:
             if running is None:
                 raise ProtocolError(
@@ -291,7 +334,15 @@ def build_stack(
                     f"cannot size featurizer {name!r}: the preceding stage's "
                     "output width is not derivable from its spec",
                 )
-            stage = _build_stage(name, spec, width=running, load_tensors=load_tensors)
+            stage = _build_stage(
+                name,
+                spec,
+                width=running,
+                load_tensors=load_tensors,
+                seed=seed,
+                coords=coords,
+            )
+            stage.to(device)  # parameters and registered buffers alike
             # inference documents get eval semantics (a gate's hard split);
             # the train loop flips modes around its steps explicitly
             stage.eval()
@@ -304,20 +355,63 @@ def build_stack(
     return FeaturizerStack(names=chain, stages=tuple(stages))
 
 
+def _check_entry_identity(
+    record: Mapping[str, Any], spec: FeaturizerSpec, what: str
+) -> None:
+    """Refuse an entry whose stamped fit contradicts the spec that selected
+    it (§2.5).
+
+    The load-time check (``loader._check_loaded_featurizers``) covers a
+    bundle whose entry is knowable there; when the selection is the
+    executing point's — implicit matching against a swept producer — this is
+    where the claim is finally tested, so "apply the k=8 fit" cannot quietly
+    apply the k=32 one. Only the per-entry fields are compared: everything
+    file-level was already checked at load.
+    """
+    for field, value in (
+        ("k", spec.k),
+        ("parametrization", spec.parametrization),
+    ):
+        if value is None or not isinstance(value, (int, str)):
+            continue
+        stamped = record.get(field)
+        if stamped is not None and str(stamped) != str(value):
+            raise ProtocolError(
+                "P2",
+                f"{what}: the document says {field}={value!r} but the selected "
+                f"entry was fitted with {field}={stamped!r}",
+            )
+
+
 def _build_stage(
-    name: str, spec: FeaturizerSpec, *, width: int, load_tensors: Any
+    name: str,
+    spec: FeaturizerSpec,
+    *,
+    width: int,
+    load_tensors: Any,
+    seed: int = 0,
+    coords: Mapping[str, Any] | None = None,
 ) -> Stage:
     kind = spec.kind if isinstance(spec.kind, str) else "identity"
     if isinstance(spec.file_path, str):
-        tensors = load_tensors(spec.file_path)
-        if kind in ("subspace", "pca"):
-            return LoadedLinear(kind, tensors["weight"])
-        if kind == "standardize":
-            return Standardize(tensors["mu"], tensors["sigma"])
-        if kind == "sae":
-            return Sae(
-                tensors["enc"], tensors["dec"], tensors["b_enc"], tensors["b_dec"]
+        slots = FEATURIZER_SLOTS.get(kind, ())
+        if not slots:
+            raise ProtocolError(
+                "P2", f"featurizer kind {kind!r} cannot be loaded from a file"
             )
+        want, implicit = entry_selection(spec.entry, coords, name)
+        what = f"featurizer {name!r} ({spec.file_path})"
+        point = load_tensors(spec.file_path).point(
+            slots[0], want, what=what, implicit=implicit
+        )
+        _check_entry_identity(point.record, spec, what)
+        slot = point.tensor
+        if kind in ("subspace", "pca"):
+            return LoadedLinear(kind, slot("weight"))
+        if kind == "standardize":
+            return Standardize(slot("mu"), slot("sigma"))
+        if kind == "sae":
+            return Sae(slot("enc"), slot("dec"), slot("b_enc"), slot("b_dec"))
         raise ProtocolError(
             "P2", f"featurizer kind {kind!r} cannot be loaded from a file"
         )
@@ -330,8 +424,9 @@ def _build_stage(
         )
         if k is None:
             raise ProtocolError("P2", f"subspace featurizer {name!r} needs k")
-        return Subspace(width, k, parametrization)
+        return Subspace(width, k, parametrization, seed=seed)
     if kind == "gate":
+        # θ starts at zeros — no draw, so nothing for `seed` to influence
         return Gate(width)
     raise ProtocolError(
         "P2",

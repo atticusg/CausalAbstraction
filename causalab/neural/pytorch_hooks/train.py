@@ -4,10 +4,15 @@ backend owns the loop.
 Semantics implemented exactly as declared — none of the legacy loop's
 ambient state survives:
 
-* ``seed`` drives featurizer init, data order, and every draw
-  (``torch.manual_seed`` at loop entry — the one deliberate use of the
-  global RNG, so a ``{"sweep": [0,1,2]}`` on ``seed`` yields three
-  genuinely different fits);
+* ``seed`` drives featurizer init, data order, and every draw, so a
+  ``{"sweep": [0,1,2]}`` on ``seed`` yields three genuinely different fits.
+  Init reaches the featurizer as an explicit argument (``executor.seed`` →
+  ``build_stack(seed=…)``, a *local* generator) rather than through the
+  global RNG, because the same construction runs on apply paths where no
+  loop entry ever executes; the batch order has its own local ``order_rng``;
+  ``torch.manual_seed`` at loop entry — the one deliberate use of the global
+  RNG — covers everything else that draws (dropout, and torch's own
+  orthogonal-parametrization basis);
 * ``objective`` terms are differentiable metric tensors plus regularizers
   (``l1``/``l2`` over a featurizer's params; a ``gate``'s l1 is the mean
   soft mask — the DBM sparsity semantics);
@@ -29,9 +34,9 @@ from typing import Any, Mapping
 
 import torch
 
-from causalab.neural.pytorch_hooks.executor import PointExecutor
+from causalab.neural.pytorch_hooks.executor import PointExecutor, document_seed
 from causalab.neural.pytorch_hooks.featurizers import Gate, Stage
-from causalab.neural.pytorch_hooks.metrics import column_token_id
+from causalab.neural.pytorch_hooks.metrics import column_token_ids
 from causalab.protocol.backend import ExecutionRequest
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import Document, MetricSpec, concrete_int, concrete_str
@@ -54,10 +59,17 @@ def metric_tensor(
     logits = logits.float()
     kind = str(metric.kind)
 
+    form = str(metric.token_form)  # §2.10; `auto` is the historical default
+
     def ids(field: str) -> torch.Tensor:
         column = concrete_str(metric.fields[field], f"metric field {field}")
         return torch.tensor(
-            [column_token_id(tokenizer, str(row[column])) for row in rows],
+            column_token_ids(
+                tokenizer,
+                [str(row[column]) for row in rows],
+                token_form=form,
+                where=f"metric {kind}.{field}",
+            ),
             dtype=torch.long,
             device=logits.device,
         )
@@ -117,7 +129,9 @@ def run_training(
     it later evaluates are the fitted ones."""
     train = doc.train
     assert train is not None
-    seed = int(train.seed) if isinstance(train.seed, int) else 0
+    # one reader of train.seed, shared with the featurizer inits the executor
+    # builds below — the loop and the init cannot disagree about the seed
+    seed = document_seed(doc)
     torch.manual_seed(seed)
 
     trained_names = sorted({p.split(".", 1)[0] for p in train.params})
@@ -174,6 +188,7 @@ def run_training(
             load_tensors=executor.load_tensors,
             stage_cache=executor.stage_cache,  # shared: one stage per name
             grad_enabled=True,
+            coords=executor.coords,
         )
         for indices in batches
     ]
@@ -330,6 +345,7 @@ def _run_eval(
         load_tensors=executor.load_tensors,
         stage_cache=executor.stage_cache,
         grad_enabled=False,
+        coords=executor.coords,
     )
     assert doc.train is not None and doc.train.eval is not None
     scores: dict[str, float] = {}

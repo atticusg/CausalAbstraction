@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "description": "Apply a previously fitted DAS rotation on the test split instead of re-computing it: the featurizer's file_path loads the artifact, and its ArtifactIdentity (model, site, k, parametrization, dtype) is checked on load - a mismatch refuses. No train section; a featurizer with file_path may not appear in train.params.",
+  "description": "Apply a previously fitted DAS rotation on the test split instead of re-computing it: the featurizer's file_path loads the artifact, and its ArtifactIdentity (model, site, k, parametrization, dtype) is checked on load - a mismatch refuses. 'entry' names which fit to apply: against this single-bundle artifact it is documentation, but the same document loaded against a swept fit's bundle (one entry per k x seed point) is how one rotation is picked out. No train section; a featurizer with file_path may not appear in train.params.",
   "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
   "causal_model": {"key": "weekdays.causal_model"},
   "data": {
@@ -13,7 +13,8 @@
   },
   "featurizers": {
     "rot": {"kind": "subspace", "k": 8, "parametrization": "cayley",
-            "file_path": "artifacts/weekdays/llama31_8b/subspace/rot_k8.safetensors"}
+            "file_path": "artifacts/weekdays/llama31_8b/subspace/rot_k8.safetensors",
+            "entry": {"k": 8, "seed": 0}}
   },
   "reads": {
     "v_cf":  {"site": "target",  "pos": -1, "model": "original", "input": "counterfactual", "featurizer": "rot"},

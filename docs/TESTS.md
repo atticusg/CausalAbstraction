@@ -51,7 +51,7 @@ Every pinned file follows the same rule: **regenerate via its script, review the
 
 ### Smoke
 
-Corpus documents (`tests/protocols/*_im.json`) run through the real CLI on `hf-internal-testing/tiny-random-LlamaForCausalLM` with `--set` overrides retargeting layers/model at tiny scale. Assertions are existence/shape/dtype only — tiny-random output content is garbage by design. The workflow capstone (`tests/neural/pytorch_hooks/test_workflow_run.py`) runs the whole weekdays pipeline shape the same way.
+Corpus documents (`tests/protocols/*_im.json`) run through the real CLI on `hf-internal-testing/tiny-random-LlamaForCausalLM` with `--set` overrides retargeting layers/model at tiny scale. Assertions are existence/shape/dtype only — tiny-random output content is garbage by design. The workflow capstone (`tests/neural/pytorch_hooks/test_workflow_run.py`) runs the whole weekdays pipeline shape the same way, and `test_bundle_entries_run.py` covers the two tensor handoffs between steps: a *swept* fit applied at one selected coordinate (the capstone deliberately collapses that sweep, which is how the gap went unseen) and a mean-ablation harvest reduced at save time.
 
 ### Golden
 

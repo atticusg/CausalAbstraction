@@ -65,6 +65,9 @@ __all__ = [
     "SECTION_ORDER",
     "SaveEntry",
     "SiteSpec",
+    "TOKEN_COLUMN_METRIC_KINDS",
+    "TOKEN_FORMS",
+    "TokenForm",
     "concrete_int",
     "concrete_str",
     "Sweep",
@@ -167,6 +170,24 @@ METRIC_FIELDS: dict[str, tuple[str, ...]] = {
     "top_k": ("k",),
     "match": ("expected",),
 }
+
+TokenForm = Literal["auto", "bare", "space_prefixed"]
+
+#: How a metric's string answers become token ids (§2.10). ``auto`` is the
+#: historical resolver — try ``" " + s`` first, fall back to ``s`` — which is
+#: right for answers that follow a space (weekdays, names, MCQA letters) and
+#: wrong for answers that do not (punctuation: gpt2 emits ``"?"`` = 30, but
+#: ``" ?"`` = 5633 is also one token and wins). ``bare`` and ``space_prefixed``
+#: pin one form, so a document can say which one it means.
+TOKEN_FORMS: tuple[TokenForm, ...] = get_args(TokenForm)
+
+#: Metric kinds whose value fields carry string answers that must resolve to
+#: token ids — the kinds ``token_form`` applies to. ``kl`` compares two reads'
+#: distributions and ``top_k`` decodes ids it found, so neither resolves a
+#: string and neither accepts the key.
+TOKEN_COLUMN_METRIC_KINDS: frozenset[str] = frozenset(
+    {"logit_diff", "token_logit", "cross_entropy", "class_probs", "match"}
+)
 
 #: Optional value fields per metric kind (§2.10). An omitted optional field is
 #: materialized to its default in the canonical form (§7), so an authored
@@ -388,16 +409,19 @@ class FeaturizerSpec:
     init: Leaf | None = None
     dtype: Leaf | None = None
     file_path: Leaf | None = None
+    entry: Any = None
     description: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
 class ParamSpec:
     """§2.6 — a free tensor owned by no featurizer: either a loaded constant
-    (``file_path``) or a trainable free tensor (``shape`` + ``init``, which
-    must then appear in ``train.params``)."""
+    (``file_path``, optionally narrowed to one bundle entry by ``entry``) or
+    a trainable free tensor (``shape`` + ``init``, which must then appear in
+    ``train.params``)."""
 
     file_path: Leaf | None = None
+    entry: Any = None
     shape: Leaf | None = None
     init: Leaf | None = None
     description: str | None = None
@@ -452,11 +476,15 @@ class IMSpec:
 @dataclasses.dataclass(frozen=True)
 class MetricSpec:
     """§2.10 — a closed-vocabulary reduction over one read (``of``) plus
-    dataset columns. ``fields`` holds the kind's extra value fields."""
+    dataset columns. ``fields`` holds the kind's extra value fields.
+    ``token_form`` says how this metric's string answers become token ids
+    (``TOKEN_FORMS``); the ``auto`` default is the historical resolver, so an
+    unauthored metric behaves exactly as before."""
 
     kind: Leaf
     of: Leaf
     fields: Mapping[str, Leaf]
+    token_form: Leaf = "auto"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -482,13 +510,16 @@ class TrainSpec:
 class SaveEntry:
     """§2.12 — one manifest entry. Read/metric entries carry
     ``model``/``input``; trained-featurizer entries carry ``site``. The
-    restated binding is cross-checked at validation, never trusted."""
+    restated binding is cross-checked at validation, never trusted.
+    ``reduce`` (reads only) saves a statistic over the gathered rows
+    instead of the rows themselves (§2.12)."""
 
     value: str
     file_path: str
     model: str | None = None
     input: str | None = None
     site: str | None = None
+    reduce: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -672,6 +703,51 @@ def _parse_sweep(spec: Any, elem: Callable[[Any, str], Any], path: str) -> Sweep
     return Sweep(
         values=tuple(elem(v, f"{path}.sweep[{i}]") for i, v in enumerate(values))
     )
+
+
+#: Reductions a ``save`` entry may apply to a read (§2.12). Closed, and
+#: deliberately one entry wide: ``mean`` is what mean-ablation needs, and a
+#: second kind should arrive with the consumer that needs it.
+SAVE_REDUCTIONS: tuple[str, ...] = ("mean",)
+
+
+def _entry_selector(
+    value: Any, path: str, *, allow_slot: bool = False
+) -> dict[str, Any]:
+    """§2.5/§2.6 ``entry``: a mapping of coordinate name to scalar value,
+    naming one entry inside a loaded bundle
+    (:mod:`causalab.protocol.bundles`). Names are the coordinate names as
+    they appear in the producer's keys (``k``, ``seed``,
+    ``target.layer``) — not full axis ids, which the consuming document has
+    no reason to know."""
+    obj = _require_mapping(value, path)
+    if not obj:
+        raise ParseError(
+            "P2", "an 'entry' selector names at least one coordinate", path=path
+        )
+    selector: dict[str, Any] = {}
+    for name, coord in obj.items():
+        if name == "slot":
+            if not allow_slot:
+                raise ParseError(
+                    "P2",
+                    "a featurizer bundle's slots are fixed by its kind — "
+                    "'slot' selects only inside a params bundle",
+                    path=f"{path}.slot",
+                )
+            if not isinstance(coord, str):
+                raise ParseError("P2", "'slot' names one tensor", path=f"{path}.slot")
+            selector[name] = coord
+            continue
+        if isinstance(coord, (dict, list)):
+            raise ParseError(
+                "P2",
+                f"entry coordinate {name!r} must be a scalar — a bundle key "
+                "records one value per coordinate",
+                path=f"{path}.{name}",
+            )
+        selector[name] = coord
+    return selector
 
 
 def _scalar_str(value: Any, path: str) -> str:
@@ -941,10 +1017,16 @@ def _parse_featurizer(raw: Any, path: str) -> FeaturizerSpec:
         f"{path}.kind",
     )
     kind_key = kind if isinstance(kind, str) else "identity"
-    allowed = {"kind", "file_path", "dtype", "description"} | set(
+    allowed = {"kind", "file_path", "entry", "dtype", "description"} | set(
         FEATURIZER_FIELDS.get(kind_key, frozenset())
     )
     _check_keys(obj, allowed, path)
+    if "entry" in obj and "file_path" not in obj:
+        raise ParseError(
+            "P2",
+            "'entry' selects inside a loaded bundle — it needs a file_path",
+            path=path,
+        )
     parametrization = None
     if "parametrization" in obj:
         parametrization = _wrapped(
@@ -967,6 +1049,9 @@ def _parse_featurizer(raw: Any, path: str) -> FeaturizerSpec:
         file_path=_wrapped(obj["file_path"], _scalar_str, f"{path}.file_path")
         if "file_path" in obj
         else None,
+        entry=_wrapped(obj["entry"], _entry_selector, f"{path}.entry")
+        if "entry" in obj
+        else None,
         description=obj.get("description"),
     )
 
@@ -980,9 +1065,15 @@ def _parse_featurizers(raw: Any, path: str) -> dict[str, FeaturizerSpec]:
 
 def _parse_param(raw: Any, path: str) -> ParamSpec:
     obj = _require_mapping(raw, path)
-    _check_keys(obj, ("file_path", "shape", "init", "description"), path)
+    _check_keys(obj, ("file_path", "entry", "shape", "init", "description"), path)
     loaded = "file_path" in obj
     trainable = "shape" in obj or "init" in obj
+    if "entry" in obj and not loaded:
+        raise ParseError(
+            "P2",
+            "'entry' selects inside a loaded bundle — it needs a file_path",
+            path=path,
+        )
     if loaded == trainable:
         raise ParseError(
             "P2",
@@ -996,6 +1087,13 @@ def _parse_param(raw: Any, path: str) -> ParamSpec:
     return ParamSpec(
         file_path=_wrapped(obj["file_path"], _scalar_str, f"{path}.file_path")
         if loaded
+        else None,
+        entry=_wrapped(
+            obj["entry"],
+            lambda v, p: _entry_selector(v, p, allow_slot=True),
+            f"{path}.entry",
+        )
+        if "entry" in obj
         else None,
         shape=_wrapped(obj["shape"], _int_list, f"{path}.shape")
         if "shape" in obj
@@ -1203,10 +1301,29 @@ def _parse_metric(raw: Any, path: str) -> MetricSpec:
             path=f"{path}.kind",
         )
     extra = METRIC_FIELDS[kind]
+    takes_token_form = kind in TOKEN_COLUMN_METRIC_KINDS
     optional = OPTIONAL_METRIC_FIELDS.get(kind, ())
-    _check_keys(obj, ("kind", "of", *extra, *optional), path)
+    _check_keys(
+        obj,
+        (
+            "kind",
+            "of",
+            *extra,
+            *optional,
+            *(("token_form",) if takes_token_form else ()),
+        ),
+        path,
+    )
     if "of" not in obj:
         raise ParseError("P2", "a metric needs 'of' (a read name)", path=path)
+    token_form: Any = "auto"
+    if "token_form" in obj:
+        token_form = _wrapped(
+            obj["token_form"],
+            lambda v, p: _enum(v, TOKEN_FORMS, p),
+            f"{path}.token_form",
+            allow_sweep=False,
+        )
     fields: dict[str, Any] = {}
     for field in extra:
         if field not in obj:
@@ -1230,7 +1347,10 @@ def _parse_metric(raw: Any, path: str) -> MetricSpec:
                 path=f"{path}.{field}",
             )
     return MetricSpec(
-        kind=kind, of=_wrapped(obj["of"], _scalar_str, f"{path}.of"), fields=fields
+        kind=kind,
+        of=_wrapped(obj["of"], _scalar_str, f"{path}.of"),
+        fields=fields,
+        token_form=token_form,
     )
 
 
@@ -1440,7 +1560,7 @@ def _parse_save(raw: Any, path: str) -> tuple[SaveEntry, ...]:
     for i, entry_raw in enumerate(raw):
         p = f"{path}[{i}]"
         obj = _require_mapping(entry_raw, p)
-        _check_keys(obj, ("value", "model", "input", "site", "file_path"), p)
+        _check_keys(obj, ("value", "model", "input", "site", "file_path", "reduce"), p)
         for field in ("value", "file_path"):
             if field not in obj:
                 raise ParseError("P2", f"a save entry needs {field!r}", path=p)
@@ -1471,6 +1591,9 @@ def _parse_save(raw: Any, path: str) -> tuple[SaveEntry, ...]:
                 if "input" in obj
                 else None,
                 site=_scalar_str(obj["site"], f"{p}.site") if "site" in obj else None,
+                reduce=_enum(obj["reduce"], SAVE_REDUCTIONS, f"{p}.reduce")
+                if "reduce" in obj
+                else None,
             )
         )
     return tuple(entries)

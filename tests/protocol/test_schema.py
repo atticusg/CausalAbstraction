@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from causalab.protocol.errors import ParseError
+from causalab.protocol.errors import ParseError, ValidationError
 from causalab.protocol.schema import PositionSpec, Sweep, load_raw, parse_document
 
 from tests.protocol._docs import base_doc, in_order
@@ -146,3 +146,54 @@ def test_entry_level_sweep_on_positions():
     doc = parse_document(in_order(raw))
     tap = doc.positions["tap"]
     assert isinstance(tap, Sweep) and len(tap.values) == 2
+
+
+# --------------------------------------------------------------------------- #
+# §2.10 token_form — the metric-level answer-tokenization knob
+# --------------------------------------------------------------------------- #
+
+
+def test_metric_token_form_defaults_to_auto():
+    """Every pre-``token_form`` document keeps the historical resolver."""
+    doc = parse_document(base_doc())
+    assert doc.metrics["ld"].token_form == "auto"
+
+
+@pytest.mark.parametrize("form", ["auto", "bare", "space_prefixed"])
+def test_metric_token_form_parses_each_form(form: str):
+    raw = base_doc()
+    raw["metrics"]["ld"]["token_form"] = form
+    assert parse_document(in_order(raw)).metrics["ld"].token_form == form
+
+
+def test_metric_token_form_rejects_an_unknown_form():
+    raw = base_doc()
+    raw["metrics"]["ld"]["token_form"] = "spaced"
+    with pytest.raises(ParseError) as err:
+        parse_document(in_order(raw))
+    assert err.value.code == "P4"
+
+
+def test_metric_token_form_is_refused_on_kinds_that_resolve_no_string():
+    """``kl`` compares two reads and ``top_k`` decodes ids it found — neither
+    turns an authored string into a token id, so the knob is meaningless."""
+    raw = base_doc()
+    raw["metrics"]["ld"] = {
+        "kind": "top_k",
+        "of": "logits",
+        "k": 3,
+        "token_form": "bare",
+    }
+    with pytest.raises(ParseError) as err:
+        parse_document(in_order(raw))
+    assert err.value.code == "P3"
+
+
+def test_metric_token_form_is_not_sweepable():
+    """A sweep over token_form would fork a campaign on a tokenizer detail
+    rather than a research variable; §3 wrappers stay off this field."""
+    raw = base_doc()
+    raw["metrics"]["ld"]["token_form"] = {"sweep": ["bare", "space_prefixed"]}
+    with pytest.raises(ValidationError) as err:
+        parse_document(in_order(raw))
+    assert err.value.rule == 14
