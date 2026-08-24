@@ -270,3 +270,13 @@ def test_validate_data_flags_a_missing_relative_to_column(env):
     with pytest.raises(Exception) as err:
         check_data_columns(load(raw, env), env)
     assert "not_a_column" in str(err.value)
+
+
+def test_explain_reports_the_decode_and_what_it_obliges(capsys, artifacts_root):
+    """A generate document's cost is legible before it runs: how far it
+    decodes, and which reads oblige a vocabulary tensor."""
+    assert main(_argv("explain", "11_probe_generate_im.json", artifacts_root)) == 0
+    out = capsys.readouterr().out
+    assert "generate" in out
+    assert "decode 8 tokens (greedy)" in out
+    assert "tail at lm_head: distribution per addressed position" in out
