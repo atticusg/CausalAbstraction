@@ -434,3 +434,311 @@ def test_deferred_doc_with_external_featurizer_loads(env, tmp_path):
     )
     loaded = load_workflow(raw, env, workflow_dir=tmp_path)
     assert loaded.inner_digest_kind["apply"] == "authored"
+
+
+# --------------------------------------------------------------------------- #
+# transform steps (§2.4)
+# --------------------------------------------------------------------------- #
+
+
+def transform_workflow(tmp_path: Path) -> dict[str, Any]:
+    """A minimal harvest → fit_pca → plot workflow."""
+    methods = tmp_path / "methods"
+    methods.mkdir(exist_ok=True)
+    shutil.copyfile(
+        REPO / "causalab/configs/methods/harvest.json", methods / "harvest.json"
+    )
+    return {
+        "version": "1",
+        "steps": {
+            "harvest": {"type": "protocol", "document": "methods/harvest.json"},
+            "fit": {
+                "type": "transform",
+                "op": "fit_pca@1",
+                "inputs": {
+                    "acts": {"step": "harvest", "value": "acts_L8_ans.safetensors"}
+                },
+                "params": {"k": 2},
+                "outputs": {
+                    "weight": "weight.safetensors",
+                    "spectrum": "spectrum.parquet",
+                },
+            },
+            "scree": {
+                "type": "plot",
+                "plot": "lines",
+                "from": "fit",
+                "table": "spectrum.parquet",
+                "x": "pc",
+                "value": "explained_variance_ratio",
+                "file_path": "scree.png",
+            },
+        },
+        "save": [{"step": "scree", "value": "scree.png", "file_path": "scree.png"}],
+    }
+
+
+class TestTransformParse:
+    def test_it_loads_and_schedules_after_its_input(self, env, tmp_path):
+        """`inputs` ARE the dependency edges — nobody authored this order."""
+        loaded = load_workflow(transform_workflow(tmp_path), env, workflow_dir=tmp_path)
+        assert loaded.order == ("harvest", "fit", "scree")
+        assert loaded.dependencies["fit"] == ("harvest",)
+
+    def test_rule_1_unknown_op_suggests(self, env, tmp_path):
+        raw = transform_workflow(tmp_path)
+        raw["steps"]["fit"]["op"] = "fit_pcaa@1"
+        err = expect_rule(1, raw, env, tmp_path)
+        assert "fit_pca" in str(err)
+
+    def test_rule_1_unknown_version_of_a_known_op(self, env, tmp_path):
+        raw = transform_workflow(tmp_path)
+        raw["steps"]["fit"]["op"] = "fit_pca@9"
+        err = expect_rule(1, raw, env, tmp_path)
+        assert "has no version 9" in str(err)
+
+    def test_rule_1_a_missing_output_slot(self, env, tmp_path):
+        raw = transform_workflow(tmp_path)
+        del raw["steps"]["fit"]["outputs"]["spectrum"]
+        err = expect_rule(1, raw, env, tmp_path)
+        assert "spectrum" in str(err)
+
+    def test_rule_1_an_undeclared_output_slot(self, env, tmp_path):
+        raw = transform_workflow(tmp_path)
+        raw["steps"]["fit"]["outputs"]["loadings"] = "loadings.parquet"
+        err = expect_rule(1, raw, env, tmp_path)
+        assert "no output slot 'loadings'" in str(err)
+
+    def test_rule_1_an_undeclared_input_slot(self, env, tmp_path):
+        raw = transform_workflow(tmp_path)
+        raw["steps"]["fit"]["inputs"]["extra"] = {
+            "step": "harvest",
+            "value": "x.safetensors",
+        }
+        expect_rule(1, raw, env, tmp_path)
+
+    def test_rule_1_a_bad_param_type(self, env, tmp_path):
+        raw = transform_workflow(tmp_path)
+        raw["steps"]["fit"]["params"]["k"] = "2"
+        err = expect_rule(1, raw, env, tmp_path)
+        assert "integer" in str(err)
+
+    def test_rule_1_a_missing_required_param(self, env, tmp_path):
+        raw = transform_workflow(tmp_path)
+        raw["steps"]["fit"]["params"] = {}
+        err = expect_rule(1, raw, env, tmp_path)
+        assert "missing required parameter 'k'" in str(err)
+
+    def test_rule_1_an_unknown_param_suggests(self, env, tmp_path):
+        raw = transform_workflow(tmp_path)
+        raw["steps"]["fit"]["params"]["kk"] = 2
+        err = expect_rule(1, raw, env, tmp_path)
+        assert "unknown parameter 'kk'" in str(err)
+
+    def test_rule_8_an_output_slot_keeps_its_file_kind(self, env, tmp_path):
+        """A tensor slot cannot be written as a .parquet — the record says
+        which format the slot is, so a typo is a load error, not a surprise
+        at read time."""
+        raw = transform_workflow(tmp_path)
+        raw["steps"]["fit"]["outputs"]["weight"] = "weight.parquet"
+        expect_rule(8, raw, env, tmp_path)
+
+    def test_rule_4_an_input_naming_an_unknown_step(self, env, tmp_path):
+        raw = transform_workflow(tmp_path)
+        raw["steps"]["fit"]["inputs"]["acts"]["step"] = "nowhere"
+        expect_rule(4, raw, env, tmp_path)
+
+    def test_rule_4_an_input_the_producer_does_not_save(self, env, tmp_path):
+        raw = transform_workflow(tmp_path)
+        raw["steps"]["fit"]["inputs"]["acts"]["value"] = "acts_L99.safetensors"
+        err = expect_rule(4, raw, env, tmp_path)
+        assert "produces no 'acts_L99.safetensors'" in str(err)
+
+
+class TestTransformAsAProducer:
+    def test_rule_7_columns_are_checked_against_the_declaration(self, env, tmp_path):
+        """A transform producer has no sweep axes; its op's declared columns
+        are what rule 7 checks instead."""
+        raw = transform_workflow(tmp_path)
+        raw["steps"]["scree"]["x"] = "component"
+        err = expect_rule(7, raw, env, tmp_path)
+        assert "explained_variance_ratio" in str(err)  # what it does have
+
+    def test_rule_7_there_is_no_implicit_value_column(self, env, tmp_path):
+        """`value` defaults to 'value' for a protocol producer's metric table;
+        a transform table is only what its op declares, so the default must be
+        refused rather than silently failing at run time."""
+        raw = transform_workflow(tmp_path)
+        del raw["steps"]["scree"]["value"]
+        err = expect_rule(7, raw, env, tmp_path)
+        assert "'value'" in str(err)
+
+    def test_a_select_step_may_rank_a_transform_table(self, env, tmp_path):
+        raw = transform_workflow(tmp_path)
+        raw["steps"]["top"] = {
+            "type": "select",
+            "from": "fit",
+            "table": "spectrum.parquet",
+            "choose": "max",
+            "value": "explained_variance_ratio",
+            "emit": {"best_pc": "pc"},
+        }
+        raw["save"].append(
+            {"step": "top", "value": "values.json", "file_path": "top.json"}
+        )
+        loaded = load_workflow(raw, env, workflow_dir=tmp_path)
+        assert loaded.dependencies["top"] == ("fit",)
+
+    def test_rule_4_a_tensor_slot_cannot_be_ranked(self, env, tmp_path):
+        raw = transform_workflow(tmp_path)
+        raw["steps"]["scree"]["table"] = "weight.safetensors"
+        expect_rule(8, raw, env, tmp_path)  # .parquet is required first
+
+    def test_a_protocol_step_may_load_a_transform_tensor(self, env, tmp_path):
+        """Rule 10's run-tree half: the fitted-artifact direction #37 needs."""
+        raw = transform_workflow(tmp_path)
+        project = {
+            "version": "1",
+            "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
+            "data": {"base": {"dataset": "weekdays/train", "field": "input"}},
+            "positions": {"tap": {"index": -1}},
+            "sites": {"L0": {"component": "block_output", "layer": 0}},
+            "featurizers": {
+                "basis": {"kind": "pca", "k": 2, "file_path": "fit/weight.safetensors"}
+            },
+            "reads": {
+                "coords": {
+                    "site": "L0",
+                    "pos": "tap",
+                    "model": "original",
+                    "input": "base",
+                    "featurizer": "basis",
+                }
+            },
+            "save": [
+                {
+                    "value": "coords",
+                    "model": "original",
+                    "input": "base",
+                    "file_path": "coords.safetensors",
+                }
+            ],
+        }
+        (tmp_path / "methods/project.json").write_text(json.dumps(project))
+        raw["steps"]["project"] = {
+            "type": "protocol",
+            "document": "methods/project.json",
+        }
+        raw["save"].append(
+            {
+                "step": "project",
+                "value": "coords.safetensors",
+                "file_path": "coords.safetensors",
+            }
+        )
+        loaded = load_workflow(raw, env, workflow_dir=tmp_path)
+        assert "fit" in loaded.dependencies["project"]
+
+    def test_rule_10_a_protocol_step_cannot_load_what_a_transform_never_writes(
+        self, env, tmp_path
+    ):
+        raw = transform_workflow(tmp_path)
+        project = {
+            "version": "1",
+            "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
+            "data": {"base": {"dataset": "weekdays/train", "field": "input"}},
+            "positions": {"tap": {"index": -1}},
+            "sites": {"L0": {"component": "block_output", "layer": 0}},
+            "featurizers": {
+                "basis": {"kind": "pca", "k": 2, "file_path": "fit/basis.safetensors"}
+            },
+            "reads": {
+                "coords": {
+                    "site": "L0",
+                    "pos": "tap",
+                    "model": "original",
+                    "input": "base",
+                    "featurizer": "basis",
+                }
+            },
+            "save": [
+                {
+                    "value": "coords",
+                    "model": "original",
+                    "input": "base",
+                    "file_path": "coords.safetensors",
+                }
+            ],
+        }
+        (tmp_path / "methods/project.json").write_text(json.dumps(project))
+        raw["steps"]["project"] = {
+            "type": "protocol",
+            "document": "methods/project.json",
+        }
+        raw["save"].append(
+            {
+                "step": "project",
+                "value": "coords.safetensors",
+                "file_path": "coords.safetensors",
+            }
+        )
+        err = expect_rule(10, raw, env, tmp_path)
+        assert "saves no 'basis.safetensors'" in str(err)
+
+
+class TestTransformCanonicalForm:
+    def test_the_op_version_and_params_enter_the_form(self, env, tmp_path):
+        loaded = load_workflow(transform_workflow(tmp_path), env, workflow_dir=tmp_path)
+        entry = loaded.canonical["steps"]["fit"]
+        assert entry["op"] == "fit_pca@1"
+        assert entry["params"] == {"k": 2}
+        assert entry["outputs"] == {
+            "weight": "weight.safetensors",
+            "spectrum": "spectrum.parquet",
+        }
+        assert entry["inputs"] == {
+            "acts": {"step": "harvest", "value": "acts_L8_ans.safetensors"}
+        }
+
+    def test_optional_selectors_add_no_key_when_unauthored(self, env, tmp_path):
+        loaded = load_workflow(transform_workflow(tmp_path), env, workflow_dir=tmp_path)
+        acts = loaded.canonical["steps"]["fit"]["inputs"]["acts"]
+        assert "slot" not in acts and "entry" not in acts
+
+    def test_a_param_change_moves_the_digest(self, env, tmp_path):
+        original = load_workflow(
+            transform_workflow(tmp_path), env, workflow_dir=tmp_path
+        )
+        raw = transform_workflow(tmp_path)
+        raw["steps"]["fit"]["params"]["k"] = 3
+        edited = load_workflow(raw, env, workflow_dir=tmp_path)
+        assert edited.digest != original.digest
+
+    def test_each_transform_step_gets_a_provenance_digest(self, env, tmp_path):
+        loaded = load_workflow(transform_workflow(tmp_path), env, workflow_dir=tmp_path)
+        assert len(loaded.transform_digests["fit"]) == 64
+        assert set(loaded.transform_digests) == {"fit"}
+
+
+# --------------------------------------------------------------------------- #
+# shipped-workflow digest pins
+# --------------------------------------------------------------------------- #
+
+WORKFLOW_DIR = REPO / "causalab/configs/workflows"
+WORKFLOW_PINS = Path(__file__).parent / "workflow_digests.json"
+
+
+class TestShippedWorkflowDigests:
+    """`workflow_digests.json`, regenerated by update_workflow_digests.py.
+
+    A diff is a loader migration (§7), never a silent re-pin — and it is what
+    makes "a new step type changed no existing document" a check rather than
+    a claim."""
+
+    def test_every_shipped_workflow_is_pinned(self):
+        pins = json.loads(WORKFLOW_PINS.read_text())
+        assert sorted(pins) == sorted(p.name for p in WORKFLOW_DIR.glob("*.json"))
+
+    def test_digests_match_their_pins(self, env):
+        for name, digest in json.loads(WORKFLOW_PINS.read_text()).items():
+            assert load_workflow(WORKFLOW_DIR / name, env).digest == digest, name

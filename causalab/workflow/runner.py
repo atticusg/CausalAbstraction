@@ -29,6 +29,7 @@ from causalab.protocol.workflow import (
     PlotStep,
     ProtocolStep,
     SelectStep,
+    TransformStep,
 )
 
 __all__ = ["OverlayArtifacts", "WorkflowRunResult", "run_workflow"]
@@ -108,6 +109,13 @@ def run_workflow(
     )
     step_manifest: dict[str, Any] = {}
     run_axes: dict[str, tuple[Any, ...]] = {}
+    # a transform step's table is consumed as written: its op already decided
+    # what a row is, and it carries no sweep coordinates to group by (§2.4)
+    as_written = frozenset(
+        name
+        for name, step in loaded.document.steps.items()
+        if isinstance(step, TransformStep)
+    )
 
     for name in loaded.order:
         step = loaded.document.steps[name]
@@ -117,11 +125,17 @@ def run_workflow(
             entry = _run_protocol_step(
                 name, step, loaded, run_env, step_dir, backends, run_axes
             )
+        elif isinstance(step, TransformStep):
+            entry = _run_transform_step(name, step, loaded, output_dir, step_dir)
         elif isinstance(step, SelectStep):
-            entry = _run_select_step(name, step, output_dir, step_dir, run_axes)
+            entry = _run_select_step(
+                name, step, output_dir, step_dir, run_axes, as_written
+            )
         else:
             assert isinstance(step, PlotStep)
-            entry = _run_plot_step(name, step, output_dir, step_dir, run_axes)
+            entry = _run_plot_step(
+                name, step, output_dir, step_dir, run_axes, as_written
+            )
         step_manifest[name] = entry
 
     published: dict[str, Path] = {}
@@ -194,6 +208,95 @@ def _run_protocol_step(
 
 
 # --------------------------------------------------------------------------- #
+# transform steps
+# --------------------------------------------------------------------------- #
+
+
+def _run_transform_step(
+    name: str,
+    step: TransformStep,
+    loaded: LoadedWorkflow,
+    output_dir: Path,
+    step_dir: Path,
+) -> dict[str, Any]:
+    """Run one registered op over earlier steps' outputs (§2.4).
+
+    The op body and its numerics are imported here, not at module scope: this
+    package drives backends but links against none, and a workflow with no
+    transform step must not pay for torch.
+
+    Inputs are read straight out of the run tree rather than through the
+    artifact overlay: unlike a protocol step's document, which may name either
+    an in-run step or the external artifacts root, a transform input *always*
+    names a step — rule 4 checked it at load."""
+    from causalab.transform import io as transform_io
+    from causalab.transform.registry import lookup
+    from causalab.transform.schema import Table, TransformError
+
+    op = lookup(step.op)
+    inputs: dict[str, Any] = {}
+    inherited: list[Mapping[str, Any]] = []
+    for slot, ref in step.inputs.items():
+        source = output_dir / ref.step / ref.value
+        what = f"step {name!r}: input {slot!r} ({ref.step}/{ref.value})"
+        if isinstance(op.inputs[slot], Table):
+            inputs[slot] = transform_io.read_table(source)
+            continue
+        tensor, identity = transform_io.read_tensor(
+            source, slot=ref.slot, entry=ref.entry, what=what
+        )
+        inputs[slot] = tensor
+        inherited.append(identity)
+
+    # typed as `object`: the record says an op returns {slot: value}, but an op
+    # body is ordinary Python, so the shape is checked rather than assumed
+    returned: object = op.fn(inputs=inputs, params=dict(step.params))
+    if not isinstance(returned, Mapping):
+        raise TransformError(
+            f"step {name!r}: op {op.id} returned {type(returned).__name__}, not "
+            "a {slot: value} mapping"
+        )
+    produced: Mapping[str, Any] = returned
+    undeclared = sorted(set(produced) - set(op.outputs))
+    absent = sorted(set(op.outputs) - set(produced))
+    if undeclared or absent:
+        raise TransformError(
+            f"step {name!r}: op {op.id} must return exactly its declared slots "
+            f"{sorted(op.outputs)}"
+            + (f"; it added {undeclared}" if undeclared else "")
+            + (f"; it omitted {absent}" if absent else "")
+        )
+
+    identity = transform_io.inherited_identity(inherited)
+    identity.update(
+        {field: step.params[param] for field, param in op.identity_from_params.items()}
+    )
+    identity["produced_by"] = loaded.transform_digests[name]
+    identity["backend"] = "transform"
+
+    for slot, file_path in step.outputs.items():
+        target = step_dir / file_path
+        what = f"step {name!r}: output {slot!r} ({file_path})"
+        decl = op.outputs[slot]
+        if isinstance(decl, Table):
+            transform_io.write_table(produced[slot], target, decl, what=what)
+        else:
+            transform_io.write_tensor(
+                produced[slot], target, slot=slot, identity=identity, what=what
+            )
+    return {
+        "type": "transform",
+        "status": "completed",
+        "op": op.id,
+        "digest": loaded.transform_digests[name],  # the provenance unit (§2.4)
+        "inputs": {
+            slot: f"{ref.step}/{ref.value}" for slot, ref in step.inputs.items()
+        },
+        "files": sorted(step.outputs.values()),
+    }
+
+
+# --------------------------------------------------------------------------- #
 # select steps
 # --------------------------------------------------------------------------- #
 
@@ -204,14 +307,21 @@ def _aggregated(
     table: str,
     value_column: str,
     run_axes: Mapping[str, tuple[Any, ...]],
+    as_written: frozenset[str] = frozenset(),
 ) -> "Any":
     """The mean-over-examples table, one row per sweep-coordinate group
-    (§2.3): columns = the producing document's axis ids + the value."""
+    (§2.3): columns = the producing document's axis ids + the value.
+
+    A **transform** producer is exempt: its op already decided what a row
+    means, and its table carries no sweep coordinates, so re-aggregating here
+    would silently collapse the rows the document was validated against."""
     import pandas as pd
 
     frame = pd.read_parquet(output_dir / from_step / table)
     if value_column not in frame.columns:
         raise ProtocolError("P2", f"{from_step}/{table} has no column {value_column!r}")
+    if from_step in as_written:
+        return frame
     coord_columns = [
         axis.id for axis in run_axes.get(from_step, ()) if axis.id in frame.columns
     ]
@@ -239,8 +349,11 @@ def _run_select_step(
     output_dir: Path,
     step_dir: Path,
     run_axes: Mapping[str, tuple[Any, ...]],
+    as_written: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    table = _aggregated(output_dir, step.from_, step.table, step.value, run_axes)
+    table = _aggregated(
+        output_dir, step.from_, step.table, step.value, run_axes, as_written
+    )
     chosen_index = (
         table[step.value].idxmax()
         if step.choose == "max"
@@ -280,13 +393,16 @@ def _run_plot_step(
     output_dir: Path,
     step_dir: Path,
     run_axes: Mapping[str, tuple[Any, ...]],
+    as_written: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    table = _aggregated(output_dir, step.from_, step.table, step.value, run_axes)
+    table = _aggregated(
+        output_dir, step.from_, step.table, step.value, run_axes, as_written
+    )
     figure, axes = plt.subplots(figsize=(7, 5), constrained_layout=True)
     if step.plot == "heatmap":
         assert step.y is not None  # parse guarantees it
