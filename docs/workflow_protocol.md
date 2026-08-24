@@ -160,7 +160,10 @@ One mechanism, inherited from the IM spec: **artifact references**.
   canonical form stamps every resolved value, so the record shows which
   store answered.
 - The same overlay applies to `file_path` loads (a featurizer bundle
-  fitted by an earlier step: `"fit/rot.safetensors"`).
+  fitted by an earlier step: `"fit/rot.safetensors"`). A step that swept
+  writes one bundle holding one entry per point, so the loading document
+  names which with `entry` (IM spec §2.5) — authored, or implied by its own
+  sweep coordinates.
 - These references **are** the derived dependency edges, together with
   `from` on select/plot steps and `after`. The step graph must be
   acyclic; its topological order is the schedule skeleton, and steps with
@@ -213,7 +216,12 @@ One mechanism, inherited from the IM spec: **artifact references**.
 10. An artifact ref that names a step must name a `select` step (only
     they emit values tables), and a run-tree `file_path` load must name a
     file its step actually saves — both checkable at load from the emit
-    table and the inner save manifests.
+    table and the inner save manifests. The load must also select an
+    **entry** the producer will write, for every point of the consuming
+    document: a producing document's entry names follow from its own
+    expansion, which is deterministic at load (IM spec §3), so a mis-aimed
+    tensor handoff fails before any step runs rather than after the
+    producing step has spent its compute.
 
 ## 6. Derived — never authored
 
@@ -283,8 +291,17 @@ split), as one workflow over the golden-corpus documents 07/08/09:
     "fit": {"type": "protocol", "document": "../methods/weekdays_das_sweep.json",
              "set": {"positions.best": {"artifact": "best", "key": "best_pos"},
                      "sites.target.layer": {"artifact": "best", "key": "best_layer"}}},
+    "best_fit": {
+      "type": "select", "from": "fit", "table": "iia.parquet",
+      "choose": "max",
+      "emit": {"best_k": "featurizers.rot.k", "best_seed": "train.seed"}
+    },
     "apply": {"type": "protocol", "document": "../methods/weekdays_das_apply.json",
-               "set": {"featurizers.rot.file_path": "fit/rot.safetensors"}},
+               "set": {"featurizers.rot.file_path": "fit/rot.safetensors",
+                       "featurizers.rot.k": {"artifact": "best_fit", "key": "best_k"},
+                       "featurizers.rot.entry": {
+                         "k": {"artifact": "best_fit", "key": "best_k"},
+                         "seed": {"artifact": "best_fit", "key": "best_seed"}}}},
     "scan_heatmap": {"type": "plot", "plot": "heatmap", "from": "locate",
                       "table": "iia.parquet", "x": "sites.target.layer",
                       "y": "positions.tap", "value": "value",
@@ -296,6 +313,7 @@ split), as one workflow over the golden-corpus documents 07/08/09:
   },
   "save": [
     {"step": "best", "value": "values.json", "file_path": "best_cell.json"},
+    {"step": "best_fit", "value": "values.json", "file_path": "best_fit.json"},
     {"step": "fit", "value": "iia.parquet", "file_path": "fit_iia.parquet"},
     {"step": "apply", "value": "iia.parquet", "file_path": "apply_iia.parquet"},
     {"step": "scan_heatmap", "value": "scan_iia.png", "file_path": "scan_iia.png"},
@@ -304,13 +322,16 @@ split), as one workflow over the golden-corpus documents 07/08/09:
 }
 ```
 
-Derived schedule: `locate` → `best` → `fit` → `apply`, with
+Derived schedule: `locate` → `best` → `fit` → `best_fit` → `apply`, with
 `scan_heatmap` free to run as soon as `locate` finishes and `iia_by_k`
 after `fit` — two levels of parallelism nobody authored. The `set`
 overrides on `fit` re-point the corpus document's artifact refs at the
 in-run `best` step (the authored 08 document names a prior standalone
-run's artifact path); `apply` loads the rotation the `fit` step saved,
-with its ArtifactIdentity checked at load exactly as in a standalone run.
+run's artifact path). `fit` sweeps k × seed, so its bundle holds nine
+rotations: `best_fit` names the winning cell the same way `best` named the
+winning site, and `apply` selects that entry — one fit applied, provably the
+one the numbers chose, with its ArtifactIdentity checked exactly as in a
+standalone run.
 
 ## 11. Open (for the gate review)
 

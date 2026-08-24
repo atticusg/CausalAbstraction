@@ -47,14 +47,33 @@ from causalab.neural.pytorch_hooks.mechanisms import (
     operand_names,
 )
 from causalab.neural.pytorch_hooks.sites import ResolvedSite, resolve_site
+from causalab.protocol.bundles import entry_selection, selector_slot
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.registry import component_width
 from causalab.protocol.schema import Document, WriteSpec, PositionSpec, ReadSpec
 
-__all__ = ["PointExecutor", "RaggedValue"]
+__all__ = ["PointExecutor", "RaggedValue", "document_seed"]
 
 
 import dataclasses
+
+
+def document_seed(doc: Document) -> int:
+    """The one seed a document implies: ``train.seed``, or **0** when it
+    declares no fit.
+
+    Read in one place so the three consumers cannot drift apart: the
+    ``subspace`` featurizer's initial rotation (:func:`build_stack`),
+    ``torch.manual_seed`` at train-loop entry, and the batch-order RNG.
+
+    The 0 for a document with no ``train`` block is deliberate rather than
+    accidental: an apply/inference document has no seed to name, and pinning
+    it means the same document builds the same (unfitted) featurizer whether
+    or not a fit is running — which a global-RNG init could not promise."""
+    train = doc.train
+    if train is None:
+        return 0
+    return int(train.seed) if isinstance(train.seed, int) else 0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -85,9 +104,10 @@ class PointExecutor:
         *,
         role_rows: Mapping[str, list[dict[str, Any]]],
         role_fields: Mapping[str, str],
-        load_tensors: Callable[[str], dict[str, torch.Tensor]],
+        load_tensors: Callable[[str], Any],
         stage_cache: dict[str, Stage] | None = None,
         grad_enabled: bool = False,
+        coords: Mapping[str, Any] | None = None,
     ) -> None:
         self.doc = doc
         self.bundle = bundle
@@ -98,6 +118,12 @@ class PointExecutor:
             stage_cache if stage_cache is not None else {}
         )
         self.grad_enabled = grad_enabled
+        # the seed every freshly built featurizer initialises from; the stage
+        # cache is keyed by name alone, so it belongs to this one point
+        self.seed = document_seed(doc)
+        #: this point's sweep coordinates — they select the matching entry of
+        #: a swept bundle a loaded featurizer/param points at (§2.5)
+        self.coords = dict(coords or {})
         self._read_values: dict[str, torch.Tensor | RaggedValue] = {}
         self._groups_run: set[tuple[str, str]] = set()
         self._batches: dict[str, EncodedBatch] = {}
@@ -140,6 +166,9 @@ class PointExecutor:
                 width=self._featurizer_width(name),
                 load_tensors=self.load_tensors,
                 stage_cache=self.stage_cache,
+                device=self.bundle.device,
+                seed=self.seed,
+                coords=self.coords,
             )
         return self.stage_cache[name]
 
@@ -315,6 +344,9 @@ class PointExecutor:
             width=width,
             load_tensors=self.load_tensors,
             stage_cache=self.stage_cache,
+            device=self.bundle.device,
+            seed=self.seed,
+            coords=self.coords,
         )
 
     def _finalize_read(
@@ -369,7 +401,13 @@ class PointExecutor:
         if value in self.doc.params:
             spec = self.doc.params[value]
             if isinstance(spec.file_path, str):
-                return self.load_tensors(spec.file_path)["value"]
+                want, implicit = entry_selection(spec.entry, self.coords, value)
+                slot = selector_slot(spec.entry, "value")
+                what = f"params entry {value!r} ({spec.file_path})"
+                point = self.load_tensors(spec.file_path).point(
+                    slot, want, what=what, implicit=implicit
+                )
+                return point.tensor(slot)
             raise NotImplementedError(
                 f"trainable free params ({value!r}) arrive with the train loop"
             )

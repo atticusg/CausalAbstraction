@@ -164,6 +164,22 @@ Component vocabulary (per-backend `SiteResolver` maps each to a tap):
 - **`file_path`** (optional): load a fitted artifact instead of computing.
   Its `ArtifactIdentity` (sec. 8) is checked; mismatch refuses. A loaded
   featurizer may not appear in `train.params`.
+- **`entry`** (optional, only with `file_path`): which entry of that bundle.
+  A swept document writes one file across all its points, keyed by
+  coordinate (`weight[k=8,seed=0]`, sec. 2.12), so "the fit at k=8, seed=0"
+  is `{"entry": {"k": 8, "seed": 0}}` — coordinate *names*, as they appear
+  in the key, not full axis ids.
+  - Omitted, the entry is implied by the **consuming point's own
+    coordinates**: axis identity is name identity (sec. 3), so a document
+    swept on `featurizers.rot.k` selects the fit at *its* `k` and the two
+    sweeps zip instead of crossing. Coordinates the producer never had are
+    ignored; a bundle with a single entry needs nothing.
+  - A selection that matches no entry, or more than one, is a **load
+    error** — never first-hit-wins. Inside a workflow it is caught before
+    any step runs, since a producing document's entry names follow from its
+    own expansion (workflow spec sec. 5.10).
+  - All of a bundle's slots for one entry come from the same point: an
+    SAE's `enc` and `dec` cannot be crossed between fits.
 
 ### 2.6 `params` (optional)
 
@@ -172,7 +188,13 @@ Free tensors owned by no featurizer (steering vectors, a free written value):
 | field | meaning |
 |---|---|
 | `file_path` | constant tensor, loaded |
+| `entry` | which entry of that bundle (sec. 2.5), plus the reserved `slot` key |
 | `shape`, `init` | trainable free tensor (must then appear in `train.params`) |
+
+- A loaded constant is read from the bundle's `value` tensor by convention.
+  A bundle *harvested from a read* is keyed by that read's name instead, so
+  `{"entry": {"slot": "acts"}}` names it. `slot` is a params-only key — a
+  featurizer's slots are fixed by its kind.
 
 ### 2.7 `reads`
 
@@ -269,6 +291,21 @@ Closed vocabulary; `of` names a read; other value fields name dataset columns.
   nothing else. Cross-read arithmetic (differences of saved metrics) is
   post-hoc analysis. The vocabulary stays closed so backends can lower kinds
   to fused/vocab-parallel implementations.
+- **`token_form`** (optional, `auto` | `bare` | `space_prefixed`; default
+  `auto`) — how this metric's string answers become token ids. Legal on every
+  kind that names token strings (`logit_diff`, `token_logit`, `cross_entropy`,
+  `class_probs`, `match`); `kl` and `top_k` never resolve a string and refuse
+  the key.
+  - `auto` tries `" " + s` first and falls back to `s`. That is right when the
+    answer follows a space in the prompt — weekdays, names, MCQA letters — and
+    it is the default so pre-`token_form` documents are unchanged.
+  - It is **wrong** when the answer does not follow a space and both forms
+    happen to be single tokens. Under gpt2, `"?"` is token 30 and `" ?"` is
+    token 5633: a `match` on a punctuation answer scores 5633, the model emits
+    30, and the metric reads a flat 0.000 with no error raised anywhere. Pin
+    `token_form: "bare"` for those. `auto` warns when the two forms disagree.
+  - The form applies to every token string in the metric, so a `class_probs`
+    whose groups mix spaced and bare answers must stay on `auto`.
 - A column value resolves to **one token**, space-prefixed form first; a
   multi-token value refuses rather than silently scoring its first piece.
 - `match` is the exception, and only when told: its `expected` column may hold
@@ -321,7 +358,18 @@ everything that leaves the run. Three saveable kinds, two entry shapes:
   drift-protected documentation, never a second source of truth.
 - `file_path` is relative to the run's output directory. Tensors →
   `.safetensors`; per-example metric tables → `.parquet`. In swept documents
-  the path is unchanged; axis coordinates become columns / keyed entries.
+  the path is unchanged; axis coordinates become columns / keyed entries
+  (`weight[k=8,seed=0]`, one record per entry in the header's `entries`
+  table — sec. 8).
+- **`reduce`** (optional, reads only): save a statistic over the read's
+  gathered rows instead of the rows. Closed vocabulary, `mean` in v1:
+  `(…, width)` collapses to `(width,)`, the broadcast form a write operand
+  takes (sec. 2.8) — mean ablation is a harvest with `reduce: mean` feeding
+  a `params` constant. The reduction happens where the rows are gathered, so
+  the un-reduced harvest never reaches disk: an ablation grid over an 8B
+  model's layers is gigabytes of activations for kilobytes of means. A
+  metric already reduces its read, and a featurizer bundle holds fitted
+  parameters rather than rows; `reduce` on either is a load error.
 - Rules (all load errors): every metric saved (no objective/eval exception —
   the loss trajectory is always in the results) · every trained featurizer
   saved · untrained or `file_path`-loaded featurizers not saveable · writes
@@ -456,6 +504,15 @@ A backend implements these services:
 refuses): `produced_by` digest · model key + revision · tokenizer · site
 record · `k` · parametrization · dtype · trained-on data ref + digest ·
 backend · code commit.
+
+**Per entry, not per file.** A swept document writes one file from many
+points, so the file-level stamp carries only what every point agrees on;
+whatever differs (`k`, the point digest, a swept site) is stamped per tensor
+key in an `entries` table in the same header — `{key: {slot, coords, …identity}}`.
+That table is what makes an entry selectable (sec. 2.5) and provable: the
+check runs against the record of the entry a document actually selects. A
+bundle with no table is a single-point or hand-made artifact and is checked
+at file level, as before.
 
 **Capabilities.** `requires` is derived from the document; a backend declares
 what it supports; `choose_backend = first b where requires ⊆ b.capabilities`;
