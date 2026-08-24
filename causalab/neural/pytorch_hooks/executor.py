@@ -28,9 +28,11 @@ from typing import Any, Callable, Iterator, Mapping
 import torch
 
 from causalab.neural.pytorch_hooks.encoding import (
+    Continuation,
     EncodedBatch,
     encode,
     resolve_position,
+    resolve_steps,
     select_field,
 )
 from causalab.neural.pytorch_hooks.featurizers import (
@@ -49,8 +51,15 @@ from causalab.neural.pytorch_hooks.mechanisms import (
 from causalab.neural.pytorch_hooks.sites import ResolvedSite, resolve_site
 from causalab.protocol.bundles import entry_selection, selector_slot
 from causalab.protocol.errors import ProtocolError
+from causalab.protocol.plan import generated_budget
 from causalab.protocol.registry import component_width
-from causalab.protocol.schema import Document, WriteSpec, PositionSpec, ReadSpec
+from causalab.protocol.schema import (
+    Document,
+    PositionSpec,
+    ReadSpec,
+    SiteSpec,
+    WriteSpec,
+)
 
 __all__ = ["PointExecutor", "RaggedValue", "document_seed"]
 
@@ -127,6 +136,7 @@ class PointExecutor:
         self._read_values: dict[str, torch.Tensor | RaggedValue] = {}
         self._groups_run: set[tuple[str, str]] = set()
         self._batches: dict[str, EncodedBatch] = {}
+        self._continuations: dict[tuple[str, str], Continuation] = {}
 
     # ------------------------------------------------------------------ #
     # public surface
@@ -219,6 +229,7 @@ class PointExecutor:
         forwards with updated featurizer parameters)."""
         self._read_values.clear()
         self._groups_run.clear()
+        self._continuations.clear()
 
     # ------------------------------------------------------------------ #
     # group execution
@@ -248,16 +259,43 @@ class PointExecutor:
                         self.read_value(operand)
 
         batch = self._batch(input_role)
-        taps = [
+        all_taps = [
             (rname, read)
             for rname, read in self.doc.reads.items()
             if str(read.model) == model and str(read.input) == input_role
         ]
+        depth = 0
+        taps: list[tuple[str, ReadSpec]] = []
+        gen_taps: list[tuple[str, ReadSpec]] = []
+        for rname, read in all_taps:
+            budget = generated_budget(self.doc, read.pos)
+            if budget is None:
+                taps.append((rname, read))
+            else:
+                gen_taps.append((rname, read))
+                depth = max(depth, budget)
+
         write_hooks = self._build_write_hooks(write_names, input_role, batch)
         capture: dict[tuple[int, str], torch.Tensor] = {}
         capture_sites = {
             (rname): resolve_site(self.bundle, self.doc.sites[str(read.site)])
             for rname, read in taps
+        }
+        # A continuation read at lm_head is served from kept ln_final
+        # activations (d_model, not vocab) and projected at its addressed
+        # steps — the same value, without ever building the whole vocabulary
+        # for every step. Any other site is captured as itself.
+        gen_sites = {
+            rname: resolve_site(self.bundle, self.doc.sites[str(read.site)])
+            for rname, read in gen_taps
+        }
+        gen_capture_sites = {
+            rname: (
+                resolve_site(self.bundle, SiteSpec(component="ln_final"))
+                if site.component == "lm_head"
+                else site
+            )
+            for rname, site in gen_sites.items()
         }
 
         with contextlib.ExitStack() as hooks:
@@ -271,10 +309,11 @@ class PointExecutor:
                         _capturing(site.module, site.kind, capture, key)
                     )
             with torch.enable_grad() if self.grad_enabled else torch.no_grad():
-                self.bundle.model(
+                prefill = self.bundle.model(
                     input_ids=batch.input_ids,
                     attention_mask=batch.attention_mask,
                     position_ids=batch.position_ids(),
+                    use_cache=depth > 0,
                 )
 
         for rname, read in taps:
@@ -283,7 +322,129 @@ class PointExecutor:
             self._read_values[rname] = self._finalize_read(
                 rname, read, site, raw, batch, input_role
             )
+
+        if depth:
+            self._decode(
+                model,
+                input_role,
+                batch=batch,
+                prefill=prefill,
+                depth=depth,
+                gen_taps=gen_taps,
+                gen_sites=gen_sites,
+                gen_capture_sites=gen_capture_sites,
+            )
         self._groups_run.add((model, input_role))
+
+    # ------------------------------------------------------------------ #
+    # generation
+    # ------------------------------------------------------------------ #
+
+    def _decode(
+        self,
+        model: str,
+        input_role: str,
+        *,
+        batch: EncodedBatch,
+        prefill: Any,
+        depth: int,
+        gen_taps: list[tuple[str, ReadSpec]],
+        gen_sites: Mapping[str, ResolvedSite],
+        gen_capture_sites: Mapping[str, ResolvedSite],
+    ) -> None:
+        """Greedy-decode this group's continuation and finalize its reads.
+
+        The prefill above produced the first token; each step here consumes
+        the token before it, so ``depth`` tokens need ``depth`` steps and
+        every generated position has activations — including the last, whose
+        ``lm_head`` value is the distribution *after* it (§2.3).
+
+        **Write hooks are gone by now**: they lived in the prefill's
+        ``ExitStack``, which closed before this runs. That is the whole of
+        "writes are prefill-only" — an intervention reaches the continuation
+        through the first token's logits and through what it left in the KV
+        cache, and nothing re-fires per step.
+        """
+        eos = self.bundle.tokenizer.eos_token_id
+        mask = batch.attention_mask
+        next_pos = batch.position_ids()[:, -1:]
+        nxt = prefill.logits[:, -1:, :].argmax(dim=-1)
+        rows = int(mask.shape[0])
+
+        tokens: list[torch.Tensor] = [nxt]
+        steps: dict[tuple[int, str], list[torch.Tensor]] = {}
+        cache = prefill.past_key_values
+        with contextlib.ExitStack() as hooks:
+            for site in gen_capture_sites.values():
+                key = (id(site.module), site.kind)
+                if key not in steps:
+                    steps[key] = []
+                    hooks.enter_context(
+                        _accumulating(site.module, site.kind, steps[key])
+                    )
+            for _ in range(depth):
+                mask = torch.cat([mask, torch.ones_like(nxt)], dim=1)
+                next_pos = next_pos + 1
+                with torch.enable_grad() if self.grad_enabled else torch.no_grad():
+                    out = self.bundle.model(
+                        input_ids=nxt,
+                        attention_mask=mask,
+                        position_ids=next_pos,
+                        past_key_values=cache,
+                        use_cache=True,
+                    )
+                cache = out.past_key_values
+                nxt = out.logits[:, -1:, :].argmax(dim=-1)
+                tokens.append(nxt)
+
+        # tokens[i] entered step i; the last draw is never consumed, so the
+        # generated sequence is exactly the first `depth` of them
+        generated = torch.cat(tokens[:depth], dim=1)
+        widths: list[int] = []
+        for row in range(rows):
+            width = depth
+            if eos is not None:
+                hit = (generated[row] == eos).nonzero()
+                if hit.numel():
+                    width = int(hit[0].item())
+            widths.append(width)
+        continuation = _continuation_frame(
+            self.bundle.tokenizer, generated, tuple(widths)
+        )
+        self._continuations[(model, input_role)] = continuation
+
+        head = None
+        for rname, read in gen_taps:
+            site = gen_sites[rname]
+            capture_site = gen_capture_sites[rname]
+            stacked = torch.cat(steps[(id(capture_site.module), capture_site.kind)], 1)
+            per_row = [
+                resolve_steps(self._spec(read.pos), continuation, row)
+                for row in range(rows)
+            ]
+            project = None
+            if capture_site is not site:  # ln_final kept, lm_head owed
+                head = (
+                    head
+                    or resolve_site(self.bundle, SiteSpec(component="lm_head")).module
+                )
+                project = head
+            self._read_values[rname] = self._finalize_read(
+                rname,
+                read,
+                site,
+                stacked,
+                batch,
+                input_role,
+                per_row=per_row,
+                project=project,
+            )
+
+    def _spec(self, pos: Any) -> PositionSpec:
+        spec = self.doc.positions[pos] if isinstance(pos, str) else pos
+        if not isinstance(spec, PositionSpec):
+            raise ProtocolError("P2", f"unresolved position {pos!r}")
+        return spec
 
     # ------------------------------------------------------------------ #
     # reads
@@ -357,9 +518,29 @@ class PointExecutor:
         raw: torch.Tensor,
         batch: EncodedBatch,
         input_role: str,
+        *,
+        per_row: list[list[int]] | None = None,
+        project: Callable[[torch.Tensor], torch.Tensor] | None = None,
     ) -> "torch.Tensor | RaggedValue":
-        per_row = self._positions(read.pos, batch, input_role)
+        """One read's value: gather at its positions, then featurize.
+
+        ``per_row`` overrides position resolution — the continuation frame
+        resolves to decode steps, which the caller has already worked out
+        against the decode. ``project`` runs on the gathered slice before
+        anything else, which is how an ``lm_head`` continuation read is
+        served from kept ``ln_final`` activations: the vocabulary projection
+        happens at the addressed positions and nowhere else.
+        """
+        if per_row is None:
+            per_row = self._positions(read.pos, batch, input_role)
         gathered = self._gather(raw, per_row, f"read {rname!r}")
+        if project is not None:
+            if isinstance(gathered, RaggedValue):
+                gathered = RaggedValue(
+                    flat=project(gathered.flat), widths=gathered.widths
+                )
+            else:
+                gathered = project(gathered)
         ragged = isinstance(gathered, RaggedValue)
         value = gathered.flat if isinstance(gathered, RaggedValue) else gathered
         if site.feature_slice is not None:
@@ -572,3 +753,61 @@ def _capturing(
         yield
     finally:
         handle.remove()
+
+
+@contextlib.contextmanager
+def _accumulating(module: Any, kind: str, sink: list[torch.Tensor]) -> Iterator[None]:
+    """Like :func:`_capturing`, but append instead of overwrite.
+
+    A decode calls the same modules once per step, so the single-tensor sink
+    would keep only the last step. Continuation reads need every step, and
+    stacking them on the sequence axis gives a ``(batch, steps, …)`` tensor
+    that gathers exactly like a padded frame does.
+    """
+    if kind == "out":
+
+        def out_hook(_m: Any, _i: Any, out: Any) -> None:
+            sink.append(_hidden_of(out))
+
+        handle = module.register_forward_hook(out_hook)
+    else:
+
+        def pre_hook(_m: Any, args: tuple[Any, ...]) -> None:
+            sink.append(args[0])
+
+        handle = module.register_forward_pre_hook(pre_hook)
+    try:
+        yield
+    finally:
+        handle.remove()
+
+
+def _continuation_frame(
+    tokenizer: Any, generated: torch.Tensor, widths: tuple[int, ...]
+) -> Continuation:
+    """Build the frame the decode produced, characters included.
+
+    Token spans come from incremental detokenization — decode the row's
+    first ``k`` tokens, then ``k + 1``, and the growth is token ``k``'s
+    span. Re-encoding the finished text would not do: a tokenizer is free
+    to merge across a boundary the decode never saw, and the spans have to
+    describe the tokens the model actually emitted.
+    """
+    texts: list[str] = []
+    offsets: list[tuple[tuple[int, int], ...]] = []
+    for row, width in enumerate(widths):
+        ids = [int(t) for t in generated[row, :width]]
+        spans: list[tuple[int, int]] = []
+        text = ""
+        for k in range(width):
+            grown = tokenizer.decode(ids[: k + 1], skip_special_tokens=True)
+            spans.append((len(text), len(grown)))
+            text = grown
+        texts.append(text)
+        offsets.append(tuple(spans))
+    return Continuation(
+        token_ids=generated.detach().cpu(),
+        widths=widths,
+        texts=tuple(texts),
+        offsets=tuple(offsets),
+    )
