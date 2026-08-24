@@ -8,6 +8,7 @@ import pytest
 import torch
 
 from causalab.neural.pytorch_hooks.metrics import (
+    column_first_token_id,
     column_token_id,
     column_token_ids,
     compute_metric,
@@ -202,3 +203,76 @@ def test_auto_is_silent_when_there_is_nothing_to_disambiguate(tokenizer, recwarn
 def test_a_pinned_form_never_warns(gpt2_tokenizer, recwarn):
     column_token_ids(gpt2_tokenizer, ["?", "."], token_form="bare")
     assert [w for w in recwarn if issubclass(w.category, UserWarning)] == []
+
+
+#  match: answer-form groups and first-token grading (§2.10)                   #
+# --------------------------------------------------------------------------- #
+
+
+def test_match_accepts_any_form_in_a_group(tokenizer):
+    """A list-valued expected column is a group of equivalent surface forms:
+    the argmax matching any member scores 1.0 (the synonym channel — 'US' /
+    'USA' / 'United States' — with the group serialized by the task)."""
+    metric = MetricSpec(kind="match", of="logits", fields={"expected": "forms"})
+    logits = _logits(tokenizer, " Monday", " Friday")
+    assert compute_metric(
+        metric, logits, [{"forms": [" Sunday", " Monday"]}], tokenizer
+    ) == [1.0]
+    assert compute_metric(
+        metric, logits, [{"forms": [" Sunday", " Friday"]}], tokenizer
+    ) == [0.0]
+
+
+def test_match_scalar_column_is_a_group_of_one(tokenizer):
+    """The pre-existing spelling keeps its meaning — a scalar column is a
+    one-member group, so no existing document changes behaviour."""
+    grouped = MetricSpec(kind="match", of="logits", fields={"expected": "ans"})
+    logits = _logits(tokenizer, " Monday", " Friday")
+    assert compute_metric(grouped, logits, [{"ans": " Monday"}], tokenizer) == [1.0]
+
+
+def test_match_empty_group_refuses(tokenizer):
+    metric = MetricSpec(kind="match", of="logits", fields={"expected": "forms"})
+    with pytest.raises(ProtocolError):
+        compute_metric(
+            metric, _logits(tokenizer, " Monday", " Friday"), [{"forms": []}], tokenizer
+        )
+
+
+def test_first_token_mode_credits_a_multi_token_answer(tokenizer):
+    """``exact`` refuses " Thursday" (3 sentencepiece pieces either spelling);
+    ``first_token`` credits its first *content* piece — what the model emits
+    in context, and what the retired string-prefix grading meant."""
+    exact = MetricSpec(kind="match", of="logits", fields={"expected": "ans"})
+    first = MetricSpec(
+        kind="match", of="logits", fields={"expected": "ans", "mode": "first_token"}
+    )
+    thursday_first = tokenizer.encode("Thursday", add_special_tokens=False)[0]
+    logits = torch.zeros(1, 1, 32000)
+    logits[0, 0, thursday_first] = 4.0
+
+    with pytest.raises(ProtocolError):
+        compute_metric(exact, logits, [{"ans": " Thursday"}], tokenizer)
+    assert compute_metric(first, logits, [{"ans": " Thursday"}], tokenizer) == [1.0]
+
+
+def test_first_token_skips_the_lone_space_piece(tokenizer):
+    """The sentencepiece trap: " Thursday" encodes as ▁ + Th + urs + day, so
+    crediting the *first* id would credit the bare-space piece — which every
+    space-prefixed answer shares, making every answer match."""
+    space_piece = tokenizer.encode(" Thursday", add_special_tokens=False)[0]
+    assert tokenizer.decode([space_piece]).strip() == ""
+    assert column_first_token_id(tokenizer, " Thursday") != space_piece
+    assert (
+        column_first_token_id(tokenizer, " Thursday")
+        == tokenizer.encode("Thursday", add_special_tokens=False)[0]
+    )
+
+
+def test_first_token_agrees_with_exact_on_single_token_answers(tokenizer):
+    """``first_token`` is a strict generalization: where ``exact`` resolves, it
+    resolves to the same id."""
+    for value in (" Monday", " Friday", " Sunday", "Monday"):
+        assert column_first_token_id(tokenizer, value) == column_token_id(
+            tokenizer, value
+        )

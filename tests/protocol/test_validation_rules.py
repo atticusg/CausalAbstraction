@@ -536,3 +536,68 @@ def test_rule_15_artifact_identity_match_passes(env):
     doc["reads"]["v_cf"]["featurizer"] = "rot"
     doc["writes"]["patch"]["featurizer"] = "rot"
     load(in_order(doc), env)
+
+
+# §2.3 column positions / §2.10 match modes ---------------------------------- #
+
+
+def test_position_needs_exactly_one_anchor_form():
+    doc = base_doc()
+    doc["positions"] = {"p": {"variable": "entity", "column": "entity"}}
+    with pytest.raises(ParseError):
+        parse_and_validate(doc)
+
+
+def test_position_column_and_scope_are_exclusive():
+    doc = base_doc()
+    doc["positions"] = {"p": {"column": "entity", "scope": {"variable": "x"}}}
+    with pytest.raises(ParseError):
+        parse_and_validate(doc)
+
+
+def test_anchor_ref_takes_one_of_variable_or_column():
+    doc = base_doc()
+    doc["positions"] = {"p": {"index": 1, "relative_to": {"nope": "x"}}}
+    with pytest.raises(ParseError):
+        parse_and_validate(doc)
+
+
+def test_unknown_match_mode_is_a_closed_enum_error():
+    doc = base_doc()
+    doc["metrics"]["m"] = {
+        "kind": "match",
+        "of": "logits",
+        "expected": "label",
+        "mode": "prefix",  # the task-side spelling; the metric's is first_token
+    }
+    doc["save"].append(
+        {
+            "value": "m",
+            "model": "patched",
+            "input": "base",
+            "file_path": "m.parquet",
+        }
+    )
+    with pytest.raises(ParseError) as err:
+        parse_and_validate(doc)
+    assert "first_token" in str(err.value)  # the suggestion names the real mode
+
+
+def test_rule_8_column_positions_are_conservatively_overlapping():
+    """Two writes at one address whose positions come from *different* columns
+    could hit the same token — a column holds data, not a template slot — so
+    the absolute-write rule refuses rather than assuming disjointness."""
+    doc = base_doc()
+    doc["positions"] = {"a": {"column": "entity"}, "b": {"column": "number"}}
+    doc["reads"]["v2"] = {
+        "site": "tgt",
+        "pos": "a",
+        "model": "original",
+        "input": "counterfactual",
+    }
+    doc["writes"] = {
+        "patch": {"site": "tgt", "pos": "a", "do": {"swap": "v_cf"}},
+        "patch2": {"site": "tgt", "pos": "b", "do": {"swap": "v2"}},
+    }
+    doc["intervened_models"]["patched"]["writes"] = ["patch", "patch2"]
+    expect_rule(8, doc)

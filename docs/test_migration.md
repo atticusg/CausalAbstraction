@@ -70,8 +70,8 @@ file* paths are relative to `tests/`. Parametrized data dirs (`configs/`,
 | `test_token_positions.py` | replaced interface | kept task suites via `tests/_helpers/pipeline_shim.py` | `neural/token_positions.py` is KEPT; its `LMPipeline`-bound suite is replaced by the frozen task trees driving the same factories through `PipelineShim` |
 | `test_trainable.py` | replaced interface | `neural/pytorch_hooks/test_train.py` | ED3 DAS/DBM primitives → the train loop: seeded determinism, params-moved-only, gate anneal, objective floor |
 | `test_validate.py` | retired | retired | the nnterp load-validation gate left with nnterp; loading is `pytorch_hooks.load_model` against the registry, no CLI gate in v1 |
-| `test_walking_skeleton.py` | retired | retired | the task-driven IIA pin needs the dataset-serialization seam (see gaps); the interchange+IIA mechanism runs as corpus 02 at tiny scale |
-| `walking_skeleton_pins.json` | retired | retired | pins of the retired walking skeleton |
+| `test_walking_skeleton.py` | replaced interface | `neural/pytorch_hooks/test_end_to_end_iia.py` | the task-driven IIA pin, restored over a serialized task table (corpus 10) once the dataset seam existed; values captured fresh (see gaps) |
+| `walking_skeleton_pins.json` | retired | retired | its successor pins live in the test module above, not a sidecar |
 
 ## tests/methods
 
@@ -304,12 +304,22 @@ site tooling that hooks in via the CLI's `--points` shard selector.
 - **Cross-model / two-pipeline patching** — one model per document in v1;
   `test_cross_model_hook_oracle.py`'s source-pipeline injection contract has no
   new carrier.
-- **Walking-skeleton IIA pins** — task-driven end-to-end IIA numbers
-  (`test_walking_skeleton.py`) need the dataset-serialization seam before a
-  protocol document can drive a real task's counterfactual dataset.
-- **Dynamic per-row positions** — no v1 spelling; position specs resolve
-  statically per row (index / variable / span / all), with no per-row computed
-  indexer.
+- ~~**Task-driven end-to-end IIA pins**~~ — **closed** by the
+  dataset-serialization seam (§2.2): a task's counterfactual dataset is
+  serialized by `causalab/tasks/serialize.py` and driven as corpus document
+  `10_task_table_iia_im.json`; the pin is
+  `tests/neural/pytorch_hooks/test_end_to_end_iia.py`. Values are captured
+  fresh, not carried over — the retired test scored generated strings through
+  `task.checker`, a document scores an argmax against the answer's declared
+  forms, and its coherent-model half used a chat template v1 cannot express.
+  The retired pins' *shape* (flat IIA at tiny scale, guarded by a
+  non-inertness assertion on the patched logits) is reproduced.
+- ~~**Dynamic per-row positions**~~ — **closed**: a position may read a
+  per-row `column` (§2.3), as anchor or as a `scope`/`relative_to` anchor,
+  resolved per row like a prompt variable. Values a task computes per row
+  (MCQA's correct answer symbol) are serialized columns rather than a
+  computed-indexer vocabulary. Integer token indices remain out of v1
+  deliberately: they would bind a table to one tokenizer.
 - **Per-position metric grids** — `{"all": true}` makes an every-token *read*
   expressible, but metric lowering still reduces exactly one position per
   example, so a logit-lens grid comes out as a saved tensor, not a metric

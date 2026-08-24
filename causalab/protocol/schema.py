@@ -49,12 +49,15 @@ __all__ = [
     "FeaturizerKind",
     "FeaturizerSpec",
     "IMSpec",
+    "MATCH_MODES",
     "MECHANISMS",
+    "METRIC_FIELD_DEFAULTS",
     "METRIC_KINDS",
     "Mechanism",
     "MetricKind",
     "MetricSpec",
     "ModelRef",
+    "OPTIONAL_METRIC_FIELDS",
     "ParamSpec",
     "PositionSpec",
     "ReadSpec",
@@ -185,6 +188,25 @@ TOKEN_FORMS: tuple[TokenForm, ...] = get_args(TokenForm)
 TOKEN_COLUMN_METRIC_KINDS: frozenset[str] = frozenset(
     {"logit_diff", "token_logit", "cross_entropy", "class_probs", "match"}
 )
+
+#: Optional value fields per metric kind (§2.10). An omitted optional field is
+#: materialized to its default in the canonical form (§7), so an authored
+#: default and an omitted one digest identically — the same treatment
+#: ``train.optimizer`` defaults get.
+OPTIONAL_METRIC_FIELDS: dict[str, tuple[str, ...]] = {
+    "match": ("mode",),
+}
+
+#: Defaults for the optional fields above, by ``(kind, field)``.
+METRIC_FIELD_DEFAULTS: dict[tuple[str, str], Any] = {
+    ("match", "mode"): "exact",
+}
+
+#: How ``match`` compares the argmax token to an expected form (§2.10):
+#: ``exact`` needs the form to be one token; ``first_token`` credits the
+#: form's first token, which is what "prefix" means with logits at one
+#: position (a multi-token answer's first piece).
+MATCH_MODES: tuple[str, ...] = ("exact", "first_token")
 
 #: The bare-string spelling of an all-positions spec (§2.3 sugar). Reserved as
 #: a name so a ``positions`` entry can never shadow the sugar.
@@ -342,18 +364,25 @@ class DataRole:
 @dataclasses.dataclass(frozen=True)
 class PositionSpec:
     """§2.3 — a token-position spec. Exactly one of ``index`` / ``span`` /
-    ``variable`` / ``all`` is set; ``scope`` / ``relative_to`` (each a
-    prompt-variable name) only modify ``index``/``span`` and are mutually
-    exclusive. ``all`` selects every content token of the row and takes no
-    modifiers. Positions are never resolved to integers in the document —
-    resolution is a backend service against a ``PositionFrame`` (§2.3, §8)."""
+    ``variable`` / ``column`` / ``all`` is set; ``scope`` /
+    ``relative_to`` name an anchor (a prompt variable, or a dataset
+    column when ``anchor_source`` is ``"column"``), only modify
+    ``index``/``span``, and are mutually exclusive. ``all`` selects every
+    content token of the row and takes no modifiers. Positions are never
+    resolved to integers in the document — resolution is a backend
+    service against a ``PositionFrame`` (§2.3, §8)."""
 
     index: Leaf | None = None
     span: Leaf | None = None
     variable: Leaf | None = None
+    column: Leaf | None = None
     all: Leaf | None = None
     scope: Leaf | None = None
     relative_to: Leaf | None = None
+    #: Where ``scope``/``relative_to`` resolve from: ``"variable"`` (the
+    #: role's prompt variables) or ``"column"`` (a top-level row column).
+    #: Not authored on its own — it comes from the anchor's spelling.
+    anchor_source: str = "variable"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -820,13 +849,17 @@ def _parse_position_spec(raw: Any, path: str) -> PositionSpec:
     if raw == ALL_POSITIONS:
         return PositionSpec(all=True)  # §6.1 "all" sugar
     obj = _require_mapping(raw, path)
-    _check_keys(obj, ("index", "span", "variable", "all", "scope", "relative_to"), path)
-    anchors = [k for k in ("index", "span", "variable", "all") if k in obj]
+    _check_keys(
+        obj,
+        ("index", "span", "variable", "column", "all", "scope", "relative_to"),
+        path,
+    )
+    anchors = [k for k in ("index", "span", "variable", "column", "all") if k in obj]
     if len(anchors) != 1:
         raise ParseError(
             "P2",
-            "a position spec needs exactly one of index/span/variable/all, got "
-            f"{anchors}",
+            "a position spec needs exactly one of "
+            f"index/span/variable/column/all, got {anchors}",
             path=path,
         )
     if "all" in obj and obj["all"] is not True:
@@ -845,23 +878,32 @@ def _parse_position_spec(raw: Any, path: str) -> PositionSpec:
         if "variable" in obj
         else None
     )
+    column = (
+        _wrapped(obj["column"], _scalar_str, f"{path}.column")
+        if "column" in obj
+        else None
+    )
     every = True if "all" in obj else None
-    scope = (
-        _wrapped(obj["scope"], _parse_var_ref, f"{path}.scope")
+    scope_ref = (
+        _wrapped(obj["scope"], _parse_anchor_ref, f"{path}.scope")
         if "scope" in obj
         else None
     )
-    relative_to = (
-        _wrapped(obj["relative_to"], _parse_var_ref, f"{path}.relative_to")
+    relative_ref = (
+        _wrapped(obj["relative_to"], _parse_anchor_ref, f"{path}.relative_to")
         if "relative_to" in obj
         else None
     )
+    anchor_ref = scope_ref if scope_ref is not None else relative_ref
+    anchor_source = anchor_ref[0] if anchor_ref is not None else "variable"
+    scope = scope_ref[1] if scope_ref is not None else None
+    relative_to = relative_ref[1] if relative_ref is not None else None
     if (scope is not None or relative_to is not None) and (
-        variable is not None or every is not None
+        variable is not None or column is not None or every is not None
     ):
         raise ParseError(
             "P2",
-            "scope/relative_to modify an index or span, not a variable or all spec",
+            "scope/relative_to modify an index or span, not a variable/column/all spec",
             path=path,
         )
     if scope is not None and relative_to is not None:
@@ -889,9 +931,11 @@ def _parse_position_spec(raw: Any, path: str) -> PositionSpec:
         index=index,
         span=span,
         variable=variable,
+        column=column,
         all=every,
         scope=scope,
         relative_to=relative_to,
+        anchor_source=anchor_source,
     )
 
 
@@ -902,12 +946,18 @@ def _parse_span(value: Any, path: str) -> tuple[int, int]:
     return (ints[0], ints[1])
 
 
-def _parse_var_ref(value: Any, path: str) -> str:
+def _parse_anchor_ref(value: Any, path: str) -> tuple[str, str]:
+    """A ``scope``/``relative_to`` anchor: ``(source, name)`` where source is
+    ``"variable"`` (per-role prompt variable) or ``"column"`` (a top-level row
+    column) — §2.3."""
     obj = _require_mapping(value, path)
-    _check_keys(obj, ("variable",), path)
-    if "variable" not in obj or not isinstance(obj["variable"], str):
-        raise ParseError("P2", 'expected {"variable": "<name>"}', path=path)
-    return obj["variable"]
+    _check_keys(obj, ("variable", "column"), path)
+    named = [key for key in ("variable", "column") if key in obj]
+    if len(named) != 1 or not isinstance(obj[named[0]], str):
+        raise ParseError(
+            "P2", 'expected {"variable": "<name>"} or {"column": "<name>"}', path=path
+        )
+    return named[0], obj[named[0]]
 
 
 def _parse_positions(
@@ -1252,9 +1302,16 @@ def _parse_metric(raw: Any, path: str) -> MetricSpec:
         )
     extra = METRIC_FIELDS[kind]
     takes_token_form = kind in TOKEN_COLUMN_METRIC_KINDS
+    optional = OPTIONAL_METRIC_FIELDS.get(kind, ())
     _check_keys(
         obj,
-        ("kind", "of", *extra, *(("token_form",) if takes_token_form else ())),
+        (
+            "kind",
+            "of",
+            *extra,
+            *optional,
+            *(("token_form",) if takes_token_form else ()),
+        ),
         path,
     )
     if "of" not in obj:
@@ -1277,6 +1334,18 @@ def _parse_metric(raw: Any, path: str) -> MetricSpec:
             fields[field] = _wrapped(obj[field], _any_leaf, f"{path}.{field}")
         else:
             fields[field] = _wrapped(obj[field], _scalar_str, f"{path}.{field}")
+    for field in optional:
+        value = obj.get(field, METRIC_FIELD_DEFAULTS[(kind, field)])
+        fields[field] = _wrapped(value, _scalar_str, f"{path}.{field}")
+        if (kind, field) == ("match", "mode") and fields[field] not in MATCH_MODES:
+            raise ParseError(
+                "P4",
+                f"unknown match mode {fields[field]!r} — one of "
+                f"{list(MATCH_MODES)}{suggest(str(fields[field]), MATCH_MODES)}. "
+                "(A task's own 'prefix' match mode is 'first_token' here: with "
+                "logits at one position, a prefix is the answer's first token.)",
+                path=f"{path}.{field}",
+            )
     return MetricSpec(
         kind=kind,
         of=_wrapped(obj["of"], _scalar_str, f"{path}.of"),

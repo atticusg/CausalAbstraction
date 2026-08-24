@@ -36,6 +36,7 @@ CORPUS_SHAPE = [
     ("07_weekdays_locate_scan_im.json", 64, 2, {"paired_forward"}),
     ("08_weekdays_das_sweep_im.json", 9, 2, {"grad", "paired_forward"}),
     ("09_das_apply_im.json", 1, 2, {"paired_forward"}),
+    ("10_task_table_iia_im.json", 1, 3, {"full_logits", "paired_forward"}),
 ]
 
 
