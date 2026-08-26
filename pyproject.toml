@@ -101,6 +101,9 @@ exclude = [
     "causalab/tasks/IOI",
     # Research-run output dir (generated at runtime, gitignored) — not shipped code
     "agent_logs",
+    # Copy-from scaffolds under pipelines/ carry {{PLACEHOLDER}} markers and are
+    # deliberately not valid Python until a caller fills them in.
+    "pipelines/**/templates",
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -120,6 +123,9 @@ exclude = [
     "causalab/tasks/IOI",
     # Research-run output dir (generated at runtime, gitignored) — not shipped code
     "agent_logs",
+    # Copy-from scaffolds under pipelines/ carry {{PLACEHOLDER}} markers and are
+    # deliberately not valid Python until a caller fills them in.
+    "pipelines/**/templates",
 ]
 # Disable cascading inference rules to avoid untyped code propagating errors
 reportUnknownVariableType = "none"

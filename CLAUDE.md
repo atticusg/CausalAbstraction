@@ -17,3 +17,5 @@
 ## Repository layout & conventions
 
 See [`docs/CODEBASE.md`](docs/CODEBASE.md) for the codebase architecture, layering rules, and invariants, and [`docs/TESTS.md`](docs/TESTS.md) for the test-tier conventions.
+
+For *doing research* with causalab rather than working on it, see [`pipelines/`](pipelines/) — the six-step protocol for answering a question about a model's internals starts at [`pipelines/answer-research-question/answer-research-question.md`](pipelines/answer-research-question/answer-research-question.md).

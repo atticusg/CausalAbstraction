@@ -22,6 +22,13 @@ You write a high-level causal model describing *how you think* an LM solves a ta
        --data-root <data> --out runs/interchange --device cuda --dtype bf16
    ```
 
+## Research protocols
+
+`docs/` says what causalab *is*. [`pipelines/`](pipelines/) says how to use it to
+answer a question — six steps from establishing a behavior through to a saved,
+scoped claim, with the flow chart and the routing rules in
+[`pipelines/answer-research-question/`](pipelines/answer-research-question/answer-research-question.md).
+
 ## The CLI
 
 | verb | effect |
@@ -69,6 +76,8 @@ causalab/
 ├── io/              # disk I/O + plotting primitives
 └── configs/         # method presets (JSON documents) + workflow documents
 docs/                # the two specs, CODEBASE.md, TESTS.md, test_migration.md
+pipelines/           # research protocols that run ON causalab — start at
+                     #   pipelines/answer-research-question/
 tests/               # tiered suite — see docs/TESTS.md
 ```
 
