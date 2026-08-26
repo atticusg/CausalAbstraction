@@ -165,3 +165,17 @@ def test_a_swept_dtype_expands_like_any_other_axis(env):
     assert len(loaded.expansion.points) == 2
     assert [c["model"]["dtype"] for c in loaded.canonical_points] == ["fp32", "bf16"]
     assert len(set(loaded.point_digests)) == 2
+
+
+def test_a_fit_bundle_is_refused_at_a_different_realization(env, artifacts_root):
+    """The other half of stamping: corpus 09 loads a rotation fitted in fp32,
+    so asking to apply it at bf16 refuses rather than quietly mixing the two."""
+    from tests.protocol._env import CORPUS_DIR
+
+    assert load(CORPUS_DIR / "09_das_apply_im.json", env)  # fp32, as fitted
+    with pytest.raises(ValidationError) as err:
+        load(
+            CORPUS_DIR / "09_das_apply_im.json", env, overrides={"model.dtype": "bf16"}
+        )
+    assert err.value.rule == 15
+    assert "model_dtype" in str(err.value)
