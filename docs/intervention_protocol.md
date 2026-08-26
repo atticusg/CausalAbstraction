@@ -7,12 +7,14 @@ The **Intervention Protocol** defines causal intervention experiments on neural 
 
 ## 1. Document layout
 
-Sections in this order (order enforced; `save` last):
+Sections in this order (order enforced; `save` last). A document may also be
+written in two halves — `application` then `method` — which carry these same
+sections between them (§1.1):
 
 | # | key | required | content |
 |---|---|---|---|
 | 1 | `version` | ✓ | `"1"` |
-| 2 | `type` | –* | `protocol` \| `method` \| `application` \| `workflow` — what this file is (*required in a method, §1.1) |
+| 2 | `type` | –* | `protocol` \| `method` \| `workflow` — what this file is (*required in a method file, §1.1) |
 | 3 | `description` | – | free text, the file's intent |
 | 4 | `model` | ✓ | the neural network ℒ, and how it is realized numerically (alias: `neural_model`) |
 | 5 | `causal_model` | – | the high-level algorithm ℋ, provenance only |
@@ -36,40 +38,61 @@ Sections in this order (order enforced; `save` last):
   `{"artifact": "<path>", "key": "<field>"}` reads one value from a prior
   run's artifact at load. Missing artifact = load error.
 
-### 1.1 Methods and applications
+### 1.1 The method / application split
 
 A document answers two questions at once: *what is the experiment* — the
 hypothesis, what is read, what is written into whom, how it is scored — and
-*what was it run on* — which network, at which addresses, in which precision.
-The first half transfers to another model; the second half is exactly the part
-that does not. A document may therefore be authored as two files:
+*what was it run on* — which network, over which rows, at which addresses, in
+which precision. The first half transfers to another model and another task;
+the second half is exactly the part that does not. A document may therefore
+say both, in two labelled halves:
 
-| | a **method** | an **application** |
+```json
+{
+  "version": "1",
+  "description": "the run's intent",
+  "application": {
+    "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main", "dtype": "bf16"},
+    "data":  {"base": {...}, "counterfactual": {...}},
+    "sites": {"target": {"layer": 18}}
+  },
+  "method": { "...": "reads, writes, intervened_models, metrics, save" }
+}
+```
+
+**One file is one experiment run.** The split is a shape *inside* the
+document, not a second file to keep in step with the first: a run document is
+self-contained, hashable and shareable exactly as a flat one is. The `method`
+half may instead be a **path** to a reusable method file (relative to the
+document, `"type": "method"` at its top level) — the loader inlines it, and
+the record of what ran carries the whole thing either way.
+
+| | the **method** half | the **application** half |
 |---|---|---|
-| declares | `"type": "method"` | `method` — a path (relative to itself) or the method inline |
-| holds | the experiment: `causal_model`, `reads`, `writes`, `intervened_models`, `metrics`, `train`, `save`, and the site *names* it addresses | the binding: `model` (key, revision, dtype, quantization), the site addresses, and anything else the method left open |
-| may not hold | `model` — a method that named a network would not be a method | — |
-| must hold | `reads` and `save`: what is measured is the method's, never the application's | `method` |
+| holds | the experiment: `causal_model`, `positions`, `featurizers`, `reads`, `writes`, `intervened_models`, `metrics`, `train`, `save`, and the site *names* it addresses | the inputs and the addresses: `model` (key, revision, dtype, quantization), `data`, and the site records |
+| must hold | `reads` and `save` — what is measured is the method's, never the application's | `model` and `data` — the network and the rows a method leaves open |
+| may not hold | `model`, `data` | — |
 
 A method's `sites` entries may be partial or empty — `"target": {}` names an
 address the application supplies, `{"component": "block_output"}` fixes the
 component and leaves the layer open, `{"component": "lm_head"}` is already
-closed. Its `data` roles may be bound or left open the same way. Everything
-still open is the method's **signature**, and `explain` prints it.
+closed. Everything still open is the method's **signature**, and `explain`
+prints it.
 
-Composition is a **disjoint-or-equal merge**: every leaf comes from exactly one
-side, or from both with the same value (a restatement, cross-checked like a
-`save` entry's bindings, §2.12). An application may *complete* a method, never
-overrule it — a contradiction is a load error (rule 18), because an application
-that could overrule its method would make the method's digest a claim about
-nothing. The two `description`s join, method first.
+Composition is a **disjoint-or-equal merge**: every leaf comes from exactly
+one half, or from both with the same value (a restatement, cross-checked like
+a `save` entry's bindings, §2.12). An application may *complete* a method,
+never overrule it — a contradiction is a load error (rule 18), because an
+application that could overrule its method would make the method's digest a
+claim about nothing. The two `description`s join, method first.
 
 The composition is an ordinary protocol document: it validates, expands,
-canonicalizes and digests **exactly as the same experiment written as one
-file**. Splitting is an authoring choice, not a second dialect, and the point
-digest — the provenance unit — is unmoved by it (§7). Which method a run used
-is reported by `explain`, written into the run record, and stamped into
-artifacts; it is not part of the canonical bytes.
+canonicalizes and digests **exactly as the same experiment written flat**.
+Splitting is an authoring choice, not a second dialect, and the point digest —
+the provenance unit — is unmoved by it (§7). Dotted paths (`--set`, a workflow
+step's `set`) address the *composition*, so they mean the same thing in both
+forms. Which method a run used is reported by `explain`, written into the run
+record, and stamped into artifacts; it is not part of the canonical bytes.
 
 ## 2. Section reference
 
@@ -554,11 +577,13 @@ A conforming loader rejects the document unless all of these hold:
 17. The model's realization is coherent: a `quantization` block carries only
     the knobs its own scheme has (`double_quant` is 4-bit vocabulary,
     `int8_threshold` is int8 vocabulary).
-18. Composition (§1.1): a method declares no `model` and does declare `reads`
-    and `save`; an application names a `method`; the two agree on `version`;
-    every leaf is supplied by exactly one side, or by both with the same
-    value; and the composition is closed — every site address and every data
-    role bound. An unfilled hole is refused with the list of what is missing.
+18. Composition (§1.1): a split document carries both halves, `application`
+    first; the method declares neither `model` nor `data` and does declare
+    `reads` and `save`; the application declares `model` and `data`; a method
+    *file* agrees with the document on `version`; every leaf is supplied by
+    exactly one half, or by both with the same value; and the composition is
+    closed — every input and every site address bound. An unfilled hole is
+    refused with the list of what is missing.
 
 ## 6. Derived — never authored
 
@@ -704,10 +729,10 @@ never name devices, hosts, or job systems. The division of labor:
 ## 9. CLI
 
 The four verbs dispatch on the document's type (§1.1): a **workflow** runs its
-step graph, a **method** answers only what a method can answer (`validate`,
-`digest`, and `explain`, which prints its signature — `run` is refused: there
-is no network and no address), and a **protocol** or **application** runs the
-full pipeline, the application composing with its method first.
+step graph, a **method file** answers only what a method can answer
+(`validate`, `digest`, and `explain`, which prints its signature — `run` is
+refused: there are no inputs and no addresses), and a **protocol document**
+runs the full pipeline, a split one composing its halves first.
 
 | verb | effect |
 |---|---|
@@ -722,58 +747,53 @@ full pipeline, the application composing with its method first.
 
 ## 10. Worked examples
 
-The same interchange experiment, split into a method and an application
-(§1.1). The method fixes the mechanism and the scoring and leaves the network
-and the layer open; the application closes it. Their composition is the
-one-file document further down, digest for digest.
+The same interchange experiment as one run document, split into its two halves
+(§1.1). The method fixes the mechanism and the scoring and leaves the inputs
+and the layer open; the application closes them. It composes to the one-file
+flat document further down, digest for digest.
 
 ```json
 {
   "version": "1",
-  "type": "method",
-  "description": "Interchange intervention: swap the answer-slot residual from the counterfactual into base; IIA scoring.",
-  "causal_model": {"key": "weekdays.causal_model"},
-  "data": {
-    "base":   {"dataset": "weekdays/train", "field": "input"},
-    "counterfactual": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
+  "description": "Llama-3.1-8B in bf16, answer-slot residual at layer 18, over the weekdays training pairs.",
+  "application": {
+    "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main", "dtype": "bf16"},
+    "data": {
+      "base":   {"dataset": "weekdays/train", "field": "input"},
+      "counterfactual": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
+    },
+    "sites": {"target": {"layer": 18}}
   },
-  "sites": {
-    "target":  {"component": "block_output"},
-    "lm_head": {"component": "lm_head"}
-  },
-  "reads": {
-    "v_cf":   {"site": "target",  "pos": -1, "model": "original", "input": "counterfactual"},
-    "logits": {"site": "lm_head", "pos": -1, "model": "patched",  "input": "base"}
-  },
-  "writes": {"patch": {"site": "target", "pos": -1, "do": {"swap": "v_cf"}}},
-  "intervened_models": {"patched": {"input": "base", "writes": ["patch"]}},
-  "metrics": {
-    "iia":        {"kind": "match",      "of": "logits", "expected": "cf_answer"},
-    "logit_diff": {"kind": "logit_diff", "of": "logits", "a": "cf_answer", "b": "base_answer"}
-  },
-  "save": [
-    {"value": "iia",        "model": "patched", "input": "base", "file_path": "iia.parquet"},
-    {"value": "logit_diff", "model": "patched", "input": "base", "file_path": "logit_diff.parquet"}
-  ]
+  "method": {
+    "description": "Interchange intervention: swap the answer-slot residual from the counterfactual into base; IIA scoring.",
+    "causal_model": {"key": "weekdays.causal_model"},
+    "sites": {
+      "target":  {"component": "block_output"},
+      "lm_head": {"component": "lm_head"}
+    },
+    "reads": {
+      "v_cf":   {"site": "target",  "pos": -1, "model": "original", "input": "counterfactual"},
+      "logits": {"site": "lm_head", "pos": -1, "model": "patched",  "input": "base"}
+    },
+    "writes": {"patch": {"site": "target", "pos": -1, "do": {"swap": "v_cf"}}},
+    "intervened_models": {"patched": {"input": "base", "writes": ["patch"]}},
+    "metrics": {
+      "iia":        {"kind": "match",      "of": "logits", "expected": "cf_answer"},
+      "logit_diff": {"kind": "logit_diff", "of": "logits", "a": "cf_answer", "b": "base_answer"}
+    },
+    "save": [
+      {"value": "iia",        "model": "patched", "input": "base", "file_path": "iia.parquet"},
+      {"value": "logit_diff", "model": "patched", "input": "base", "file_path": "logit_diff.parquet"}
+    ]
+  }
 }
 ```
 
-```json
-{
-  "version": "1",
-  "type": "application",
-  "description": "Llama-3.1-8B in bf16, answer-slot residual at layer 18.",
-  "method": "../methods/interchange.json",
-  "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main", "dtype": "bf16"},
-  "sites": {"target": {"layer": 18}}
-}
-```
-
-`causalab explain` on the method prints what is still to bind — `model` and
-`sites.target.layer` — and on the application prints the composed plan plus
-the method's digest. A layer scan is then a one-line edit *of the
-application*: `"sites": {"target": {"layer": {"sweep": {"range": [0, 32]}}}}`,
-with the method untouched and still hashing the same.
+`causalab explain` on that document prints the composed plan and the method's
+digest; on a method *file* it prints what is still to bind — `model`, `data`,
+and `sites.target.layer`. A layer scan is a one-line edit of the application
+half: `"sites": {"target": {"layer": {"sweep": {"range": [0, 32]}}}}`, with the
+method untouched and still hashing the same.
 
 Path patching (sender → receiver, off-path frozen; shows cross-model flow):
 

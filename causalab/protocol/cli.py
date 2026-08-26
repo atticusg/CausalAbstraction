@@ -169,10 +169,16 @@ def _ensure_model_registered(args: argparse.Namespace) -> None:
     network."""
     from causalab.protocol.loader import apply_overrides, load_text
 
-    # an application declares its own ``model`` (a method never does, §1.1),
-    # so this reads the same section either way
-    raw = apply_overrides(dict(load_text(args.document)), _overrides(args))
-    _register_model_key(raw)
+    # flatten first: in a split document the model lives in the `application`
+    # half (§1.1), and `--set model.key=…` addresses the composition
+    from causalab.protocol.loader import flatten
+
+    raw = dict(load_text(args.document))
+    try:
+        raw, _, _ = flatten(raw, base_dir=args.document.resolve().parent)
+    except ProtocolError:
+        return  # a malformed document refuses properly in the real load
+    _register_model_key(apply_overrides(raw, _overrides(args)))
 
 
 def _register_model_key(raw: dict[str, Any]) -> None:
@@ -289,18 +295,18 @@ def _run(
 
 
 def _method_main(args: argparse.Namespace, raw: dict[str, Any]) -> int:
-    """The verbs on a method document (§1.1).
+    """The verbs on a method file (§1.1).
 
-    A method has no network, so there is nothing to plan, expand or run: what
+    A method has no inputs, so there is nothing to plan, expand or run: what
     it can answer is "is this a well-formed method", "what does it hash to"
     and "what must I bind to use it" — the last being the thing a reader of a
     shared method actually needs.
     """
     if args.verb == "run":
         print(
-            "refused: this is a method document — it declares no network and "
-            "no addresses. Write an application that binds it (§1.1), and run "
-            "that.",
+            "refused: this is a method file — it names no network, no data and "
+            "no addresses. Bind it from a document's `application` half "
+            "(§1.1), and run that.",
             file=sys.stderr,
         )
         return 1
@@ -318,7 +324,7 @@ def _method_main(args: argparse.Namespace, raw: dict[str, Any]) -> int:
     print(f"digest    {method_digest(raw)}")
     if method.description:
         print(f"about     {method.description.splitlines()[0]}")
-    print("binds     an application must supply")
+    print("binds     the application half must supply")
     for line in method.signature.lines():
         print(f"  {line}")
     print("save")
@@ -455,9 +461,12 @@ def _workflow_main(args: argparse.Namespace, env: ResolutionEnv) -> int:
             if not doc_path.is_file():
                 continue
             try:
-                inner_raw = _apply(
-                    dict(_load_text(doc_path)), dict(step_raw.get("set", {}) or {})
+                from causalab.protocol.loader import flatten
+
+                flat, _, _ = flatten(
+                    dict(_load_text(doc_path)), base_dir=doc_path.parent
                 )
+                inner_raw = _apply(flat, dict(step_raw.get("set", {}) or {}))
             except ProtocolError:
                 continue
             _register_model_key(inner_raw)

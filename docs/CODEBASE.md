@@ -11,7 +11,7 @@
 | `transform/` | the registry of deterministic, versioned ops a workflow `transform` step runs |
 | `workflow/` | the workflow runner |
 | `io/` | disk I/O + shared plotting primitives |
-| `configs/` | shipped documents: `protocols/` (complete), `methods/` + `applications/` (the §1.1 split), `workflows/` — JSON, not code |
+| `configs/` | shipped documents: `protocols/` (flat), `runs/` (split into `application` + `method`, §1.1), `methods/` (reusable halves), `workflows/` — JSON, not code |
 
 **Dependency flow:** `tasks/` and `causal/` are independent. `protocol/` is torch-free and links against no execution engine — the CLI imports the reference backend lazily. `neural/pytorch_hooks/` implements `protocol.backend.Backend`. `transform/` depends only on `protocol/` and is torch-free at module level: its op *records* are what load-time validation reads, so an op's numerics are imported inside its function body. `workflow/` depends on `protocol/`, drives whichever backends it is handed, and reaches `transform/` lazily when it runs a transform step; the workflow loader likewise reaches the op registry through a function-local import, so `protocol/` keeps no module-level edge to anything that executes. `io/` depends only on `neural/`, `tasks/`, `causal/`. `tests/test_architecture_layering.py` enforces the static half of all this; `tests/transform/test_load_is_torch_free.py` the behavioural half.
 
@@ -75,7 +75,7 @@ A document names a dataset ref; a resolver reads bytes (`protocol/resolve.py`). 
 
 ## 6. Configs are documents
 
-`causalab/configs/protocols/*.json` are the nine shipped protocol documents (byte-comparable to the corpus documents under `tests/protocols/`); `causalab/configs/methods/` + `causalab/configs/applications/` carry the same experiment split into its transferable and its model-bound halves (spec §1.1, implemented in `protocol/method.py`); `causalab/configs/workflows/weekdays_8b.json` is the worked workflow. There is no Python config system: a "config" is a protocol or workflow document, overridden ad hoc with `--set` and promoted into a file when it matters.
+`causalab/configs/protocols/*.json` are the nine shipped protocol documents (byte-comparable to the corpus documents under `tests/protocols/`); `causalab/configs/runs/weekdays_8b_interchange.json` carries the same experiment as one document split into its transferable and its input-bound halves, and `causalab/configs/methods/interchange.json` is that method on its own (spec §1.1, implemented in `protocol/method.py`); `causalab/configs/workflows/weekdays_8b.json` is the worked workflow. There is no Python config system: a "config" is a protocol or workflow document, overridden ad hoc with `--set` and promoted into a file when it matters.
 
 ## 7. Tests
 

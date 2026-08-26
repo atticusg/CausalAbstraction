@@ -312,9 +312,7 @@ def test_explain_reports_the_decode_and_what_it_obliges(capsys, artifacts_root):
 
 REPO = Path(__file__).resolve().parents[2]
 SHIPPED_METHOD = REPO / "causalab/configs/methods/interchange.json"
-SHIPPED_APPLICATION = (
-    REPO / "causalab/configs/applications/weekdays_8b_interchange.json"
-)
+SHIPPED_RUN = REPO / "causalab/configs/runs/weekdays_8b_interchange.json"
 
 
 def _file_argv(verb: str, path, artifacts_root, *extra: str) -> list[str]:
@@ -349,14 +347,14 @@ def test_a_method_cannot_be_run(capsys, artifacts_root, tmp_path):
         _file_argv("run", SHIPPED_METHOD, artifacts_root, "--out", str(tmp_path))
     )
     assert code == 1
-    assert "method document" in capsys.readouterr().err
+    assert "method file" in capsys.readouterr().err
 
 
-def test_explain_on_an_application_names_its_method(capsys, artifacts_root):
-    assert main(_file_argv("explain", SHIPPED_APPLICATION, artifacts_root)) == 0
+def test_explain_on_a_split_document_names_its_method(capsys, artifacts_root):
+    assert main(_file_argv("explain", SHIPPED_RUN, artifacts_root)) == 0
     out = capsys.readouterr().out
     assert "method    " in out
-    assert "../methods/interchange.json" in out
+    assert "(inline)" in out  # one file is one run
     assert "bf16" in out
 
 
@@ -364,11 +362,7 @@ def test_run_writes_the_protocol_record(capturing_backend, artifacts_root, tmp_p
     """The record a reproducer reads first: what ran, at what precision, from
     which method, with the provenance digest of every point."""
     assert (
-        main(
-            _file_argv(
-                "run", SHIPPED_APPLICATION, artifacts_root, "--out", str(tmp_path)
-            )
-        )
+        main(_file_argv("run", SHIPPED_RUN, artifacts_root, "--out", str(tmp_path)))
         == 0
     )
     record = json.loads((tmp_path / "protocol.json").read_text())
@@ -377,7 +371,7 @@ def test_run_writes_the_protocol_record(capturing_backend, artifacts_root, tmp_p
         "revision": "main",
         "dtype": "bf16",
     }
-    assert record["method"]["ref"] == "../methods/interchange.json"
+    assert record["method"]["ref"] is None  # inlined in the run document
     assert len(record["method"]["digest"]) == 64
     assert [point["index"] for point in record["points"]] == [0]
     assert record["points"][0]["digest"] == record["document_digest"]

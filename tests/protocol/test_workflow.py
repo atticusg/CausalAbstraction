@@ -745,38 +745,44 @@ class TestShippedWorkflowDigests:
 
 
 # --------------------------------------------------------------------------- #
-# applications as steps (§1.1)
+# split documents as steps (§1.1)
 # --------------------------------------------------------------------------- #
 
 
-def test_a_step_may_point_at_an_application(env, tmp_path):
+def test_a_step_may_point_at_a_split_document(env, tmp_path):
     """A workflow composes protocol documents; whether a step's document was
-    authored as one file or as a method plus an application is the author's
-    business, and the relative `method` path resolves against the document."""
+    written flat or in `application` + `method` halves is the author's
+    business, and a `method` path resolves against the document itself."""
     raw = tiny_workflow(tmp_path)
-    monolithic = json.loads((tmp_path / "methods/locate.json").read_text())
+    flat = json.loads((tmp_path / "methods/locate.json").read_text())
     method = {
         "version": "1",
         "type": "method",
-        **{key: value for key, value in monolithic.items() if key != "model"},
+        **{
+            key: value
+            for key, value in flat.items()
+            if key not in ("version", "model", "data")
+        },
     }
     method["sites"] = {
         name: {key: value for key, value in site.items() if key != "layer"}
-        for name, site in monolithic["sites"].items()
+        for name, site in flat["sites"].items()
     }
     (tmp_path / "methods/locate_method.json").write_text(json.dumps(method))
     (tmp_path / "methods/locate.json").write_text(
         json.dumps(
             {
                 "version": "1",
-                "type": "application",
-                "method": "locate_method.json",
-                "model": monolithic["model"],
-                "sites": {
-                    name: {"layer": site["layer"]}
-                    for name, site in monolithic["sites"].items()
-                    if "layer" in site
+                "application": {
+                    "model": flat["model"],
+                    "data": flat["data"],
+                    "sites": {
+                        name: {"layer": site["layer"]}
+                        for name, site in flat["sites"].items()
+                        if "layer" in site
+                    },
                 },
+                "method": "locate_method.json",
             }
         )
     )

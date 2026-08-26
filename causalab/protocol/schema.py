@@ -287,11 +287,13 @@ QUANT_METHODS: tuple[str, ...] = ("bitsandbytes",)
 _QUANT_4BIT_FIELDS: tuple[str, ...] = ("double_quant",)
 _QUANT_INT8_FIELDS: tuple[str, ...] = ("int8_threshold",)
 
-#: The document types (§1.1). ``type`` is authoring metadata — it declares
-#: what a file is so a typo cannot masquerade as a different document kind —
-#: and canonicalization drops it: the canonical form is the experiment, not
-#: the file.
-DOCUMENT_TYPES: tuple[str, ...] = ("protocol", "method", "application", "workflow")
+#: The document types (§1.1). A protocol document may be written flat or split
+#: into ``application`` + ``method`` halves — both are ``protocol``; ``method``
+#: is a reusable method *file*, the one shape structure cannot name. ``type``
+#: is authoring metadata — it declares what a file is so a typo cannot
+#: masquerade as a different kind — and canonicalization drops it: the
+#: canonical form is the experiment, not the file.
+DOCUMENT_TYPES: tuple[str, ...] = ("protocol", "method", "workflow")
 
 #: Optimizer field vocabulary and per-name defaults, materialized into the
 #: canonical form (§7: "every default (constant LR, optimizer betas, dtypes)").

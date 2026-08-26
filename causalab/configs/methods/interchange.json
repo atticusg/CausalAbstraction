@@ -2,31 +2,73 @@
   "version": "1",
   "type": "method",
   "description": "Interchange intervention: swap the answer-slot residual from the counterfactual into base; IIA scoring.",
-  "causal_model": {"key": "weekdays.causal_model"},
-  "data": {
-    "base":   {"dataset": "weekdays/train", "field": "input"},
-    "counterfactual": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
+  "causal_model": {
+    "key": "weekdays.causal_model"
   },
   "sites": {
-    "target": {"component": "block_output"},
-    "lm_head": {"component": "lm_head"}
+    "target": {
+      "component": "block_output"
+    },
+    "lm_head": {
+      "component": "lm_head"
+    }
   },
   "reads": {
-    "v_cf":  {"site": "target",  "pos": -1, "model": "original", "input": "counterfactual"},
-    "logits": {"site": "lm_head", "pos": -1, "model": "patched", "input": "base"}
+    "v_cf": {
+      "site": "target",
+      "pos": -1,
+      "model": "original",
+      "input": "counterfactual"
+    },
+    "logits": {
+      "site": "lm_head",
+      "pos": -1,
+      "model": "patched",
+      "input": "base"
+    }
   },
   "writes": {
-    "patch": {"site": "target", "pos": -1, "do": {"swap": "v_cf"}}
+    "patch": {
+      "site": "target",
+      "pos": -1,
+      "do": {
+        "swap": "v_cf"
+      }
+    }
   },
   "intervened_models": {
-    "patched": {"input": "base", "writes": ["patch"]}
+    "patched": {
+      "input": "base",
+      "writes": [
+        "patch"
+      ]
+    }
   },
   "metrics": {
-    "iia":        {"kind": "match",      "of": "logits", "expected": "cf_answer"},
-    "logit_diff": {"kind": "logit_diff", "of": "logits", "a": "cf_answer", "b": "base_answer"}
+    "iia": {
+      "kind": "match",
+      "of": "logits",
+      "expected": "cf_answer"
+    },
+    "logit_diff": {
+      "kind": "logit_diff",
+      "of": "logits",
+      "a": "cf_answer",
+      "b": "base_answer"
+    }
   },
   "save": [
-    {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.parquet"},
-    {"value": "logit_diff", "model": "patched", "input": "base", "file_path": "logit_diff.parquet"}
+    {
+      "value": "iia",
+      "model": "patched",
+      "input": "base",
+      "file_path": "iia.parquet"
+    },
+    {
+      "value": "logit_diff",
+      "model": "patched",
+      "input": "base",
+      "file_path": "logit_diff.parquet"
+    }
   ]
 }
