@@ -36,6 +36,10 @@ dependencies = [
     # (both were transitive before — via hydra-core/omegaconf and datasets)
     "pyyaml>=6.0",
     "pyarrow>=15.0",
+    # transform ops: the t-distribution CDF `paired_ttest@1` needs. Transitive
+    # before (via scikit-learn), but an op's dependency belongs in the record
+    # of what this package requires, not in another library's install tree.
+    "scipy>=1.10",
 ]
 
 [tool.pytest.ini_options]
@@ -86,6 +90,7 @@ dev = [
     "basedpyright",
     "scikit-learn-stubs",
     "pandas-stubs",
+    "scipy-stubs",
     "ipdb>=0.13.13",
     "hypothesis>=6.0",
 ]

@@ -142,12 +142,24 @@ class PytorchHooksBackend(Backend):
                     entry.value, metric_values[entry.value], coords, point_digest
                 )
             elif entry.value in doc.reads:
+                # the site goes on the entry too: a harvested activation is
+                # bound to where it was read, and a consumer (a transform op
+                # fitting a basis on it, then a document loading that basis)
+                # has no other way to prove the two agree
+                read_site = _site_identity(doc, str(doc.reads[entry.value].site))
                 tensor_files.setdefault(entry.file_path, TensorFile()).add(
                     entry.value,
                     executor.read_value(entry.value),
                     coords,
                     reduce=entry.reduce,
-                    identity={"produced_by": point_digest},
+                    identity={
+                        "produced_by": point_digest,
+                        **(
+                            {"site": json.dumps(read_site, sort_keys=True)}
+                            if read_site
+                            else {}
+                        ),
+                    },
                 )
             else:  # a trained featurizer bundle
                 stage = trained_stages.get(entry.value)
@@ -187,26 +199,32 @@ def _summary_stat(values: list[Any]) -> Any:
     return f"{len(values)} rows"
 
 
+def _site_identity(doc: Document, site_name: str | None) -> dict[str, Any] | None:
+    """One site as the ArtifactIdentity records it — the non-null address
+    fields only, the shape ``loader.py`` builds its expectation in."""
+    if site_name is None or site_name not in doc.sites:
+        return None
+    record = doc.sites[site_name]
+    return {
+        key: value
+        for key, value in {
+            "component": record.component,
+            "layer": record.layer,
+            "head": record.head,
+            "expert": record.expert,
+            "stream": record.stream,
+        }.items()
+        if value is not None
+    }
+
+
 def _featurizer_identity(
     doc: Document, name: str, site_name: str | None, point_digest: str
 ) -> dict[str, str]:
     from causalab.protocol.resolve import build_artifact_identity
 
     spec = doc.featurizers[name]
-    site: Mapping[str, Any] | None = None
-    if site_name is not None:
-        record = doc.sites[site_name]
-        site = {
-            key: value
-            for key, value in {
-                "component": record.component,
-                "layer": record.layer,
-                "head": record.head,
-                "expert": record.expert,
-                "stream": record.stream,
-            }.items()
-            if value is not None
-        }
+    site = _site_identity(doc, site_name)
     base = doc.data["base"]
     trained_on = base.dataset if not isinstance(base, tuple) else base[0].dataset
     return build_artifact_identity(

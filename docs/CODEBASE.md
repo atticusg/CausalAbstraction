@@ -8,11 +8,12 @@
 | `tasks/` | task definitions (causal models + counterfactual generators) + `serialize.py`, which writes them out as dataset tables |
 | `protocol/` | the backend-free document layer |
 | `neural/pytorch_hooks/` | the reference execution backend |
+| `transform/` | the registry of deterministic, versioned ops a workflow `transform` step runs |
 | `workflow/` | the workflow runner |
 | `io/` | disk I/O + shared plotting primitives |
 | `configs/` | method presets and workflow documents (JSON, not code) |
 
-**Dependency flow:** `tasks/` and `causal/` are independent. `protocol/` is torch-free and links against no execution engine — the CLI imports the reference backend lazily. `neural/pytorch_hooks/` implements `protocol.backend.Backend`. `workflow/` depends on `protocol/` and drives whichever backends it is handed. `io/` depends only on `neural/`, `tasks/`, `causal/`.
+**Dependency flow:** `tasks/` and `causal/` are independent. `protocol/` is torch-free and links against no execution engine — the CLI imports the reference backend lazily. `neural/pytorch_hooks/` implements `protocol.backend.Backend`. `transform/` depends only on `protocol/` and is torch-free at module level: its op *records* are what load-time validation reads, so an op's numerics are imported inside its function body. `workflow/` depends on `protocol/`, drives whichever backends it is handed, and reaches `transform/` lazily when it runs a transform step; the workflow loader likewise reaches the op registry through a function-local import, so `protocol/` keeps no module-level edge to anything that executes. `io/` depends only on `neural/`, `tasks/`, `causal/`. `tests/test_architecture_layering.py` enforces the static half of all this; `tests/transform/test_load_is_torch_free.py` the behavioural half.
 
 ## 2. The protocol layer (`causalab/protocol/`)
 
@@ -55,7 +56,18 @@ Known limits (tracked in the intervention-protocol epic): one device per run (no
 
 ## 4. The workflow runner (`causalab/workflow/`)
 
-Executes workflow documents: topological step order from derived references, per-step output dirs under the run tree, an artifact overlay so later steps resolve earlier steps' products, select/plot steps, save publication, and a `workflow.json` manifest. The runner knows only the step graph — device/dtype live in the backends it is handed, and job dispatch is site tooling outside the repo (spec §8, "Execution scale").
+Executes workflow documents: topological step order from derived references, per-step output dirs under the run tree, an artifact overlay so later steps resolve earlier steps' products, transform/select/plot steps, save publication, and a `workflow.json` manifest. The runner knows only the step graph — device/dtype live in the backends it is handed, and job dispatch is site tooling outside the repo (spec §8, "Execution scale").
+
+**Transform ops (`causalab/transform/`)** are what a `transform` step runs (workflow spec §2.4):
+
+| module | owns |
+|---|---|
+| `schema.py` | the slot kinds (`Table` with declared columns, `Tensor`) and the parameter primitives, plus `TransformError` |
+| `registry.py` | the `TransformOp` record, the `@register` decorator, and `lookup("name@version")` with suggestions |
+| `io.py` | reading inputs and writing outputs — parquet tables, `.safetensors` bundles, and the identity a tensor output is stamped with |
+| `ops/` | the registered ops, one module each, numerics imported inside the function body |
+
+An op is a pure `(inputs, params) -> {slot: value}` function; the runner owns paths, formats and provenance so an op's unit test needs no filesystem. Adding one means adding a record, a body and an oracle test — a document can never introduce an op, which is what keeps a workflow run a pure function of the document.
 
 ## 5. Datasets are build products
 
