@@ -14,7 +14,7 @@ from causalab.protocol.backend import (
 from causalab.protocol.errors import ValidationError
 from causalab.protocol.schema import parse_document
 
-from tests.protocol._docs import base_doc
+from tests.protocol._docs import base_doc, in_order
 
 pytestmark = pytest.mark.unit
 
@@ -89,3 +89,18 @@ def test_refusal_names_missing_capabilities():
         choose_backend(doc, [weak])
     message = str(err.value)
     assert "paired_forward" in message and "serving" in message
+
+
+def test_a_backend_without_generate_refuses_with_the_capability_named():
+    """Routing is how a decode-less backend declines a continuation document,
+    and the refusal names what it lacks rather than failing mid-run."""
+    raw = base_doc()
+    raw["positions"] = {"tail": {"generated": {"max_new_tokens": 8}, "index": -1}}
+    raw["reads"]["logits"]["pos"] = "tail"
+    doc = parse_document(in_order(raw))
+    prefill_only = _Stub("prefill_only", frozenset({"paired_forward", "full_logits"}))
+    with pytest.raises(ValidationError) as err:
+        choose_backend(doc, [prefill_only])
+    assert "generate" in str(err.value)
+    decoder = _Stub("decoder", prefill_only.capabilities | {"generate"})
+    assert choose_backend(doc, [prefill_only, decoder]) is decoder

@@ -18,6 +18,7 @@ would hand seed 0's rotation to every other seed and no unit test on
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -256,3 +257,15 @@ def test_run_output_is_stamped(roots, tmp_path):
     assert meta["model_key"] == TINY_LLAMA
     assert meta["backend"] == "pytorch_hooks"
     assert len(meta["produced_by"]) == 64
+
+
+def test_11_probe_generate_runs_and_scores(roots, tmp_path):
+    """The exploration probe end to end: decode under a steer, score the last
+    generated token with an ordinary metric."""
+    code = _run("11_probe_generate_im.json", roots, tmp_path, "sites.target.layer=1")
+    assert code == 0
+    probe = pd.read_parquet(tmp_path / "probe.parquet")
+    assert len(probe) == 4  # one row per example
+    for value in probe["value"]:
+        top = json.loads(value)
+        assert len(top["tokens"]) == 1 and len(top["probs"]) == 1

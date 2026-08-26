@@ -272,6 +272,17 @@ def _explain(loaded: LoadedProtocol) -> None:
     for group in plan.groups:
         taps = ", ".join(t.read for t in group.taps) or "(no reads — operands only)"
         print(f"  {group.model} on {group.input}: {taps}")
+        if group.decode_depth:
+            # print what the decode obliges, so the bill of a document is
+            # readable before it runs — the mechanism stays the backend's
+            print(f"    decode {group.decode_depth} tokens (greedy)")
+            for item in group.materialize:
+                needs = (
+                    "distribution per addressed position"
+                    if item.needs_distribution
+                    else "no distribution — ids and activations only"
+                )
+                print(f"    {item.read} at {item.site}: {needs}")
     print("save")
     for entry in doc.save:
         binding = (

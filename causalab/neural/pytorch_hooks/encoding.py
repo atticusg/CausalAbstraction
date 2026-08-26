@@ -35,6 +35,22 @@ Position rules implemented against this frame (spec §2.3, §6.1):
 Every resolved index is bounds-checked in the padded frame — a stale or
 impossible position must fail here as a legible error, never reach a
 gather (the #176 failure class the old resolver guarded the same way).
+
+**The continuation frame.** A position carrying ``generated`` resolves
+against a :class:`Continuation` instead: the greedy decode's steps, indexed
+from 0, one per generated token. Step indices are not padded-frame indices
+and the two never mix — a decode *step* is the unit here, and the same
+anchors mean what they say inside it (``{"index": -1}`` is the last real
+generated token, ``{"all": true}`` is every one).
+
+Rows end where they end: the frame stops at a row's first EOS, so widths
+differ and continuation reads are ragged. A window that reaches past a
+row's end **clips** rather than refusing, and a row that generated nothing
+contributes no positions at all. That is deliberate and it is where this
+frame differs from the prompt: how far a row generates is a *result*, so
+refusing on it would make a document fail on data rather than on authoring
+(the prompt frame keeps its strict bounds check, where an out-of-range
+index really is an authoring error).
 """
 
 from __future__ import annotations
@@ -48,7 +64,13 @@ import torch
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import PositionSpec, concrete_int
 
-__all__ = ["EncodedBatch", "encode", "resolve_position"]
+__all__ = [
+    "Continuation",
+    "EncodedBatch",
+    "encode",
+    "resolve_position",
+    "resolve_steps",
+]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -75,6 +97,41 @@ class EncodedBatch:
         plain-forward convention (RoPE is shift-blind, absolute embeddings
         like GPT-2's ``wpe`` are not, so this must always be passed)."""
         return (self.attention_mask.cumsum(dim=1) - 1).clamp(min=0)
+
+
+@dataclasses.dataclass(frozen=True)
+class Continuation:
+    """One batch's greedy continuation: the frame ``generated`` addresses.
+
+    ``token_ids`` is ``(batch, steps)`` as decoded — every row runs the same
+    number of steps, because a batched decode has no way not to — and
+    ``widths`` says how much of each row is real: the count before its first
+    EOS, or every step for a row that never emitted one. Positions resolve
+    against ``widths``, so a row that stopped early simply contributes fewer
+    of them.
+
+    ``texts`` and ``offsets`` describe the same tokens as characters (per
+    row: the decoded continuation, and each token's ``[start, end)`` span
+    inside it), which is what a ``variable`` anchor searches. They come from
+    incremental detokenization rather than a tokenizer's offset mapping:
+    re-encoding ``prompt + continuation`` is not the same token sequence the
+    decode produced (merges cross the boundary), so the spans have to be
+    built as the tokens arrive.
+    """
+
+    token_ids: torch.Tensor
+    widths: tuple[int, ...]
+    texts: tuple[str, ...] = ()
+    offsets: tuple[tuple[tuple[int, int], ...], ...] = ()
+
+    @property
+    def steps(self) -> int:
+        """How many steps the decode ran — the same for every row."""
+        return int(self.token_ids.shape[1])
+
+    def real_ids(self, row: int) -> list[int]:
+        """``row``'s generated ids up to its first EOS."""
+        return [int(t) for t in self.token_ids[row, : self.widths[row]]]
 
 
 def encode(
@@ -190,6 +247,37 @@ def _variable_token_run(batch: EncodedBatch, row: int, value: str) -> list[int]:
     return run
 
 
+def resolve_steps(
+    spec: PositionSpec, continuation: Continuation, row: int
+) -> list[int]:
+    """Resolve one ``generated`` spec for one row into **decode-step** indices.
+
+    Indices are 0-based into the decode, bounded by the row's real width —
+    see the module docstring on why a window past a row's end clips and a
+    row that generated nothing yields nothing.
+    """
+    width = continuation.widths[row]
+    if width == 0:
+        return []
+    if spec.all is not None:
+        return list(range(width))
+    if spec.index is not None:
+        n = concrete_int(spec.index, "position index")
+        step = width + n if n < 0 else n
+        return [step] if 0 <= step < width else []
+    if spec.span is not None:
+        span = spec.span
+        if not isinstance(span, tuple) or len(span) != 2:
+            raise ProtocolError("P2", f"span is not concrete: {span!r}")
+        a, b = (int(v) for v in span)
+        return list(range(min(a, width), min(b, width)))
+    raise ProtocolError(
+        "P2",
+        f"anchor {spec!r} has no continuation-frame resolution — v1 addresses "
+        "generated tokens by index, span or all",
+    )
+
+
 def resolve_position(
     spec: PositionSpec,
     batch: EncodedBatch,
@@ -197,8 +285,18 @@ def resolve_position(
     *,
     dataset_row: Mapping[str, Any] | None = None,
     field: str | None = None,
+    continuation: Continuation | None = None,
 ) -> list[int]:
-    """Resolve one position spec for one row into padded-frame indices."""
+    """Resolve one position spec for one row into padded-frame indices, or
+    into decode-step indices when the spec selects the continuation frame."""
+    if spec.generated is not None:
+        if continuation is None:
+            raise ProtocolError(
+                "P2",
+                "a generated position needs the decode's continuation — the "
+                "frame it addresses does not exist until the model has run",
+            )
+        return resolve_steps(spec, continuation, row)
     padded = batch.padded_len
     start = batch.content_start(row)
 

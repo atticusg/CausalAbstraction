@@ -20,13 +20,15 @@ import hashlib
 import json
 from typing import Any, Mapping
 
-from causalab.protocol.schema import Document, PositionSpec
+from causalab.protocol.schema import Document, PositionSpec, concrete_int
 
 __all__ = [
     "COMPONENT_RANK",
     "ForwardGroup",
+    "Materialization",
     "PointPlan",
     "Tap",
+    "generated_budget",
     "plan_point",
     "closure_digest",
 ]
@@ -61,22 +63,46 @@ class Tap:
 
 
 @dataclasses.dataclass(frozen=True)
+class Materialization:
+    """What one continuation read obliges a backend to build.
+
+    ``needs_distribution`` is the expensive bit: a vocabulary-wide tensor
+    per addressed position. It is false when the read is neither saved nor
+    reduced by a metric that consumes distributions, in which case the
+    backend must not build one (§8). *How* it avoids building one — a
+    narrowed projection, per-step captures, a replay — is the backend's
+    choice; this is the requirement, not the mechanism."""
+
+    read: str
+    site: str
+    needs_distribution: bool
+
+
+@dataclasses.dataclass(frozen=True)
 class ForwardGroup:
     """One forward pass: a model (original or an IM) on one input role.
 
     ``digest`` is the content identity of everything that determines this
     group's activations — equal digests across points mean one shared
-    forward."""
+    forward. ``decode_depth`` is the greedy budget this group must decode
+    for (0 = prefill only), and ``materialize`` states what its
+    continuation reads oblige — both derived, never authored (§6)."""
 
     model: str
     input: str
     taps: tuple[Tap, ...]
     digest: str
+    decode_depth: int = 0
+    materialize: tuple[Materialization, ...] = ()
 
     @property
     def stop_after(self) -> tuple[int, int] | None:
         """The deepest tap's depth — a backend may end the forward there
-        (§4 elision). ``None`` when the group has no taps."""
+        (§4 elision). ``None`` when the group has no taps, and also when it
+        decodes: every decode step needs the head, so there is nothing to
+        elide."""
+        if self.decode_depth:
+            return None
         return max((tap.depth for tap in self.taps), default=None)
 
 
@@ -135,7 +161,63 @@ def _build_group(
             body, sort_keys=True, separators=(",", ":"), default=_encode
         ).encode()
     ).hexdigest()
-    return ForwardGroup(model=model, input=input_role, taps=taps, digest=digest)
+    # The digest stays activation-identity: a decode changes what the group
+    # *produces*, not what its prefill computes — the same reason taps are
+    # not in it. Two points that differ only in decode depth share a prefill.
+    depth = 0
+    materialize: list[Materialization] = []
+    for rname, read in doc.reads.items():
+        if read.model != model or str(read.input) != input_role:
+            continue
+        budget = generated_budget(doc, read.pos)
+        if budget is None:
+            continue
+        depth = max(depth, budget)
+        materialize.append(
+            Materialization(
+                read=rname,
+                site=str(read.site),
+                needs_distribution=_needs_distribution(doc, rname),
+            )
+        )
+    return ForwardGroup(
+        model=model,
+        input=input_role,
+        taps=taps,
+        digest=digest,
+        decode_depth=depth,
+        materialize=tuple(materialize),
+    )
+
+
+def generated_budget(doc: Document, pos: Any) -> int | None:
+    """The decode budget of a position, or ``None`` for the prompt frame.
+
+    Takes the spelling a read carries (a positions-table name or an inline
+    spec) and returns the concrete budget — points are concrete by the time
+    they are planned, so a surviving sweep wrapper is a caller error."""
+    spec = doc.positions.get(pos) if isinstance(pos, str) else pos
+    if not isinstance(spec, PositionSpec) or spec.generated is None:
+        return None
+    return concrete_int(spec.generated["max_new_tokens"], "generated.max_new_tokens")
+
+
+def _needs_distribution(doc: Document, read: str) -> bool:
+    """Whether anything downstream of ``read`` consumes a full distribution.
+
+    Saving the read is the obvious case. So is any metric over it: every v1
+    metric kind reduces logits. When metric kinds declare a domain, an
+    ids-only kind stops counting here — and a text-only probe then obliges
+    no vocabulary projection at all."""
+    if any(entry.value == read for entry in doc.save):
+        return True
+    for metric in doc.metrics.values():
+        if str(metric.of) == read:
+            return True
+        target = metric.fields.get("target")
+        if isinstance(target, str) and target == read:
+            return True
+    return False
 
 
 def closure_digest(

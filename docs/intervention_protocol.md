@@ -91,10 +91,42 @@ Named entries; a read/write `pos` is a name here, or an inline spec.
 | `{"all": true}` | every content token of the row — ragged across rows |
 | + `"scope": {"variable": "x"}` / `{"column": "c"}` | interpret the index/span inside the anchor's span |
 | + `"relative_to": {"variable": "x"}` / `{"column": "c"}` | offset from the anchor's span |
+| + `"generated": {"max_new_tokens": n}` | resolve the anchor inside the row's greedy continuation instead of its prompt |
 
 - Positions are **never resolved to integers in the document**. Resolution is
   a backend service against a `PositionFrame` (pad side, packing, sequence
   shard map) — sec. 8.
+
+**The continuation frame (`generated`).** A decode produces a second frame, so
+addressing it needs no new vocabulary: `generated` is a **frame selector**, not
+an anchor, and exactly one anchor accompanies it. `{"generated": {…}, "index":
+-1}` is the last generated token, `{…, "all": true}` every generated token,
+`{…, "span": [0, 3]}` the first three, `{…, "variable": "x"}` the tokens where
+the model said the row's value for `x`.
+
+- The decode is **greedy** — argmax at every step. Sampling is not expressible:
+  a document is a value (sec. 7), and a sampled continuation is not a function
+  of it.
+- `max_new_tokens` is required, ≥ 1, and sweepable. It is a mapping rather than a
+  bare int so stopping conditions can join it later. Two positions on one
+  (model, input) with different budgets are legal: the run decodes the deepest,
+  and each read windows its own.
+- The frame **ends at the row's first EOS**, so widths differ and continuation
+  reads are ragged. A window reaching past a row's end clips; a row that
+  generated nothing contributes no positions. Unlike the prompt frame — where an
+  out-of-range index is an authoring error and refused — how far a row generates
+  is a *result*, and refusing on it would make a document fail on data.
+- **Reads only.** A write may not carry `generated` (rule 16): the continuation
+  exists because the prefill already ran, and an intervention reaches it through
+  the first token's logits and through what the prefill left in the KV cache —
+  nothing re-fires per decode step. `train` and `generated` do not combine
+  either: a greedy decode is an argmax chain with no gradient path.
+- **`lm_head` at generated position `j` is the distribution *after* token `j`.**
+  The one that *produced* token `j` sits at `j − 1`, and for `j = 0` that is the
+  last prompt position — an ordinary `{"index": -1}`. Stated here so no document
+  has to rediscover it.
+- `column`, `scope` and `relative_to` are refused with `generated`: they resolve
+  against the prompt, which the continuation does not contain.
 - `variable` vs `column`. A **prompt variable** is looked up per role: the
   `<field>_variables` sibling of the role's text column first, then a
   same-named column. A **column** is looked up only as a top-level column of
@@ -407,7 +439,14 @@ everything that leaves the run. Three saveable kinds, two entry shapes:
   the backend stages them (fused multi-pass, saved constants, or microbatch
   wiring — its call).
 - **Elision**: a model whose reads are all satisfied may stop its forward
-  after the deepest tap; a full-depth pass is never owed.
+  after the deepest tap; a full-depth pass is never owed. A group that
+  decodes is the exception — every step needs the head, so nothing is
+  elided.
+- **Decoding groups.** A group whose reads address the continuation
+  (sec. 2.3) runs one prefill plus `max_new_tokens` greedy steps: `n` tokens
+  need `n` steps, because the last generated token must be consumed by a
+  forward for its own activations to exist. Writes apply in the prefill only.
+  The depth is derived from the group's positions, never authored.
 - **Determinism**: `gaussian` draws from its declared seed; sweep expansion
   and canonicalization are pure functions of the document.
 
@@ -441,6 +480,8 @@ A conforming loader rejects the document unless all of these hold:
     be capped without an explicit override flag).
 15. Artifact-valued fields resolve (missing artifact = error, never a
     default).
+16. Generation is read-only and prefill-only: no write's `pos` carries
+    `generated`, and `train` does not co-occur with a `generated` position.
 
 ## 6. Derived — never authored
 
@@ -450,6 +491,7 @@ A conforming loader rejects the document unless all of these hold:
 | param slots | per featurizer kind (sec. 2.5) |
 | `requires` | capability set, sec. 8 |
 | `num_forwards`, fusion, staging | from the model graph; a compile property |
+| decode depth, and what a continuation read obliges | from the group's `generated` positions, `save` and the metrics over it (sec. 8) |
 | dataset content digest | resolved + stamped at load |
 | point protocols + digests | deterministic sweep expansion |
 | `ArtifactIdentity` | stamped into artifacts, sec. 8 |
@@ -469,8 +511,9 @@ A conforming loader rejects the document unless all of these hold:
 - **Format**: strict JSON (unknown keys = error). YAML is accepted at the
   authoring surface; the object model is normative. JSON has no comments —
   use `description`.
-- **v1 scope**: prefill-only. No generation, no decode-step writes, one neural
-  model per document.
+- **v1 scope**: prefill-only *interventions*. Greedy decode is addressable as a
+  position frame (sec. 2.3) and readable; there are no decode-step writes, no
+  sampling, and one neural model per document.
 - **Canonical-stamp principle**: the authored file may be minimal; the
   canonical form materializes *everything* — every default (constant LR,
   optimizer betas, dtypes), every resolved reference (dataset digests,
@@ -496,6 +539,7 @@ A backend implements these services:
 | mechanisms | the closed `do` set, class order per address; refuse `pytorch_fn` if non-local |
 | featurizers | kinds table with declared dtypes; error-term contract |
 | metrics | lower kinds to native ops; derive minimal logit materialization (`logits_to_keep`, vocab-parallel CE) from `save` + metric needs |
+| generation | greedy-decode a group to its derived depth; materialize a distribution only where `save` or a metric needs one (see below); writes stay in the prefill |
 | training | own the `train` loop (optimizer, accumulation, anneal, early stop, checkpoints) — the document never changes across backends |
 | RNG | realize `gaussian` per declared seed + axis semantics, bit-stable across parallelism layouts |
 | stamping | write canonical point protocols + digests; `ArtifactIdentity` into every featurizer bundle's safetensors header |
@@ -523,6 +567,7 @@ refusal messages generate from the missing capability.
 | `grad` | `train` present |
 | `paired_forward` | a write's operand read has a different `input` than the write's model |
 | `full_logits` | a full `lm_head` read is saved, or a metric needs the full vocab (`top_k`, `class_probs`) |
+| `generate` | any position carries `generated` (sec. 2.3) |
 | `writable_attention_probs` | a write targets `attention_probs` |
 | `pytorch_fn_local` | any `pytorch_fn` |
 
@@ -535,6 +580,22 @@ Reference matrix:
 | arbitrary writes | ✓ | ✓ | additive steering only |
 | `full_logits` | ✓ | ✗ vocab-parallel only | ✓ |
 | `pytorch_fn_local` | ✓ | ✗ | ✗ |
+
+**Materialization (generation).** A continuation read's cost is not the decode,
+it is the vocabulary: at batch 32 and 16 steps, every step's distribution over a
+128k vocabulary is ~260 MB in fp32, one step is ~16 MB, a site's activations
+~8 MB, the token ids ~2 KB. The planner therefore derives, per group, the decode
+depth and — per continuation read — whether anything downstream consumes a
+distribution (it is saved, or a metric over it reduces one). A backend **must
+not** build one where the answer is no.
+
+*How* it complies is its own business: keeping only the addressed steps,
+projecting a narrower slice (`logits_to_keep` takes an index tensor), replaying
+the sequence teacher-forced, or a vocab-parallel reduction. The reference
+backend keeps `ln_final` activations across steps and projects through the head
+only at the addressed positions, which needs no second pass — an implementation
+note, not a requirement. `explain` prints the obligation so the bill is legible
+before a run.
 
 **Execution scale.** Documents and workflows are scheduler-agnostic — they
 never name devices, hosts, or job systems. The division of labor:
