@@ -2,7 +2,6 @@
   "version": "1",
   "description": "DAS: interchange through a trained 8-dim orthogonal subspace at L18. The feature dim d is DERIVED by the parser from (model, site); only k is authored.",
   "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
-  "causal_model": {"key": "weekdays.causal_model"},
   "data": {
     "base":   {"dataset": "weekdays/train", "field": "input"},
     "counterfactual": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}

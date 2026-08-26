@@ -14,20 +14,19 @@ Sections in this order (order enforced; `save` last):
 | 1 | `version` | ✓ | `"1"` |
 | 2 | `description` | – | free text, the file's intent |
 | 3 | `model` | ✓ | the neural network ℒ (alias: `neural_model`) |
-| 4 | `causal_model` | – | the high-level algorithm ℋ, provenance only |
-| 5 | `data` | ✓ | input rows: `base` (+ `counterfactual`) |
-| 6 | `positions` | – | named token-position specs |
-| 7 | `sites` | ✓ | named activation addresses — the complete tap inventory |
-| 8 | `featurizers` | – | named feature-space maps |
-| 9 | `params` | – | free/constant tensors owned by no featurizer |
-| 10 | `reads` | ✓ | value producers |
-| 11 | `writes` | – | effect definitions (inert until listed) |
-| 12 | `intervened_models` | –* | which writes are in force on which input (*required if `writes` present) |
-| 13 | `metrics` | – | closed reductions over read values |
-| 14 | `train` | – | the fit, declared |
-| 15 | `save` | ✓ | the complete output manifest — non-empty, last |
+| 4 | `data` | ✓ | input rows: `base` (+ `counterfactual`) |
+| 5 | `positions` | – | named token-position specs |
+| 6 | `sites` | ✓ | named activation addresses — the complete tap inventory |
+| 7 | `featurizers` | – | named feature-space maps |
+| 8 | `params` | – | free/constant tensors owned by no featurizer |
+| 9 | `reads` | ✓ | value producers |
+| 10 | `writes` | – | effect definitions (inert until listed) |
+| 11 | `intervened_models` | –* | which writes are in force on which input (*required if `writes` present) |
+| 12 | `metrics` | – | closed reductions over read values |
+| 13 | `train` | – | the fit, declared |
+| 14 | `save` | ✓ | the complete output manifest — non-empty, last |
 
-- **One global namespace**: every name in sections 6–13 must be unique across
+- **One global namespace**: every name in sections 5–12 must be unique across
   all of them; reserved names: `base`, `counterfactual`, `counterfactual[j]`, `original`.
 - All cross-references must resolve; references are by name, never inline
   duplication.
@@ -37,13 +36,12 @@ Sections in this order (order enforced; `save` last):
 
 ## 2. Section reference
 
-### 2.1 `model`, `causal_model`
+### 2.1 `model`
 
 | field | meaning |
 |---|---|
 | `model.key` | model name (HF key or registry name) — the network as a *name* |
 | `model.revision` | checkpoint revision |
-| `causal_model.key` | name of the high-level causal model (provenance; not executed) |
 
 - `neural_model` is accepted as an alias of `model`; canonical form uses `model`.
 
@@ -457,7 +455,7 @@ A conforming loader rejects the document unless all of these hold:
 1. Strict keys: unknown fields anywhere are errors; closed enums reject with
    suggestions. Derived fields (sec. 7) may not be authored.
 2. Section order per sec. 1; `save` last.
-3. Global namespace: no duplicate names across sections 6–13; no reserved
+3. Global namespace: no duplicate names across sections 5–12; no reserved
    names (`base`, `counterfactual`, `counterfactual[j]`, `original`, `all`)
    declared.
 4. Every reference resolves: sites (declared inventory only), positions,
@@ -676,7 +674,6 @@ featurizer save):
 {
   "version": "1",
   "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
-  "causal_model": {"key": "weekdays.causal_model"},
   "data": {
     "base":   {"dataset": "weekdays/train", "field": "input"},
     "counterfactual": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
@@ -724,7 +721,7 @@ featurizer save):
 
 | this spec | causal abstraction |
 |---|---|
-| `model` / `causal_model` | low-level model ℒ / high-level model ℋ |
+| `model` | the low-level model ℒ (the high-level model ℋ lives with the task's dataset, not in documents) |
 | `intervened_models.<name>` | ℒ_{b∪𝕀} — the intervened model |
 | a write's `do` | an interventional 𝕀_X |
 | `swap` from a counterfactual read | interchange intervention (`IntInv`; `DistIntInv` when featurized) |

@@ -2,7 +2,6 @@
   "version": "1",
   "description": "Interchange intervention at L18: swap the answer-slot residual from the counterfactual into base; IIA scoring.",
   "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
-  "causal_model": {"key": "weekdays.causal_model"},
   "data": {
     "base":   {"dataset": "weekdays/train", "field": "input"},
     "counterfactual": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
