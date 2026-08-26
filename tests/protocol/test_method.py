@@ -31,7 +31,9 @@ pytestmark = pytest.mark.unit
 
 REPO = Path(__file__).resolve().parents[2]
 SHIPPED_METHOD = REPO / "causalab/configs/methods/interchange.json"
-SHIPPED_APPLICATION = REPO / "causalab/configs/applications/weekdays_8b_interchange.json"
+SHIPPED_APPLICATION = (
+    REPO / "causalab/configs/applications/weekdays_8b_interchange.json"
+)
 
 
 def as_method(raw: dict[str, Any]) -> dict[str, Any]:
@@ -151,13 +153,17 @@ def test_composition_is_transparent(env):
     bytes — and so the digest, the provenance unit — are the same."""
     method, application = split_doc()
     assert compose(method, application) == in_order(base_doc())
-    assert load(application, env).document_digest == load(base_doc(), env).document_digest
+    assert (
+        load(application, env).document_digest == load(base_doc(), env).document_digest
+    )
 
 
 def test_an_application_may_restate_what_the_method_already_fixed(env):
     method, application = split_doc()
     application["sites"]["lm_head"] = {"component": "lm_head"}  # the same value
-    assert load(application, env).document_digest == load(base_doc(), env).document_digest
+    assert (
+        load(application, env).document_digest == load(base_doc(), env).document_digest
+    )
 
 
 def test_an_application_may_not_overrule_its_method():

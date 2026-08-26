@@ -267,9 +267,7 @@ def signature_of(raw: Mapping[str, Any]) -> MethodSignature:
             isinstance(entry, Mapping) and not {"dataset", "field"} <= set(entry)
         ):
             data.append(role)
-    return MethodSignature(
-        model="model" not in raw, sites=sites, data=tuple(data)
-    )
+    return MethodSignature(model="model" not in raw, sites=sites, data=tuple(data))
 
 
 def _site_names(raw: Mapping[str, Any]) -> tuple[str, ...]:
@@ -302,7 +300,11 @@ def _roles(raw: Mapping[str, Any]) -> tuple[str, ...]:
         for entry in table.values():
             role = entry.get("input") if isinstance(entry, Mapping) else None
             if isinstance(role, str) and role not in roles:
-                roles.append(role.split("[", 1)[0] if role.startswith("counterfactual[") else role)
+                roles.append(
+                    role.split("[", 1)[0]
+                    if role.startswith("counterfactual[")
+                    else role
+                )
     declared = raw.get("data")
     if isinstance(declared, Mapping):
         for role in declared:
