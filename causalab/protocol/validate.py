@@ -39,6 +39,7 @@ from causalab.protocol.errors import ValidationError
 from causalab.protocol.schema import (
     ADDITIVE_MECHANISMS,
     FEATURIZER_SLOTS,
+    METRIC_DOMAINS,
     Do,
     Document,
     WriteSpec,
@@ -227,6 +228,23 @@ def _check_references(doc: Document, names: dict[str, str]) -> None:
                 "kinds bind to lm_head reads",
                 path=f"{p}.of",
             )
+        if METRIC_DOMAINS.get(str(metric.kind)) == "ids":
+            # an ids-domain kind reduces the tokens a decode produced, so its
+            # read has to be one that decoded something: in the prompt frame
+            # there are no produced tokens to reduce, only given ones
+            of_pos = of_read.pos
+            of_spec = doc.positions.get(of_pos) if isinstance(of_pos, str) else of_pos
+            if not (
+                isinstance(of_spec, PositionSpec) and of_spec.generated is not None
+            ):
+                raise ValidationError(
+                    4,
+                    f"metric {qname!r} is a {metric.kind!r} over {metric.of!r}, but "
+                    f"that read addresses the prompt — {metric.kind!r} reduces the "
+                    "tokens a decode produced, so it binds to a read whose position "
+                    "carries 'generated' (§2.3, §2.10)",
+                    path=f"{p}.of",
+                )
         if metric.kind == "kl":
             target = metric.fields.get("target")
             if target not in doc.reads:

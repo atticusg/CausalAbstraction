@@ -664,3 +664,34 @@ def test_the_checklist_and_the_spec_agree_on_how_many_rules_there_are():
     section = spec.read_text().split("## 5. Validation")[1].split("\n## ")[0]
     numbered = {int(m) for m in re.findall(r"^(\d+)\. ", section, flags=re.M)}
     assert numbered == set(range(1, CHECKLIST_RULES + 1))
+
+
+def test_rule_4_decode_over_a_prompt_frame_read():
+    """``decode`` reduces tokens a decode produced; in the prompt frame there
+    are none — only tokens that were given."""
+    doc = base_doc()
+    doc["metrics"] = {"said": {"kind": "decode", "of": "logits"}}
+    doc["save"] = [
+        {
+            "value": "said",
+            "model": "patched",
+            "input": "base",
+            "file_path": "said.parquet",
+        }
+    ]
+    err = expect_rule(4, doc)
+    assert "generated" in str(err)
+
+
+def test_decode_over_a_continuation_read_is_legal():
+    doc = _reads_the_continuation(base_doc())
+    doc["metrics"] = {"said": {"kind": "decode", "of": "logits"}}
+    doc["save"] = [
+        {
+            "value": "said",
+            "model": "patched",
+            "input": "base",
+            "file_path": "said.parquet",
+        }
+    ]
+    parse_and_validate(doc)

@@ -12,6 +12,7 @@ routing refuses those documents before anything runs.
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import json
 from pathlib import Path
@@ -20,7 +21,10 @@ from typing import Any, Mapping
 
 from causalab.neural.pytorch_hooks.executor import PointExecutor
 from causalab.neural.pytorch_hooks.loading import TensorBundle, load_model
-from causalab.neural.pytorch_hooks.metrics import compute_metric
+from causalab.neural.pytorch_hooks.metrics import (
+    compute_metric,
+    compute_windowed_metric,
+)
 from causalab.neural.pytorch_hooks.outputs import (
     MetricTable,
     TensorFile,
@@ -29,9 +33,25 @@ from causalab.neural.pytorch_hooks.outputs import (
 )
 from causalab.protocol.backend import Backend, ExecutionRequest, RunResult
 from causalab.protocol.errors import ProtocolError
-from causalab.protocol.schema import Document, parse_document
+from causalab.protocol.schema import (
+    METRIC_DOMAINS,
+    WHOLE_WINDOW_METRIC_KINDS,
+    Document,
+    parse_document,
+)
 
 __all__ = ["PytorchHooksBackend"]
+
+
+@dataclasses.dataclass(frozen=True)
+class _Windowed:
+    """One continuation metric's per-example results, plus what the rows need
+    to stay legible: the steps each value scored, and whether the example
+    addressed anything at all."""
+
+    values: list[list[Any]]
+    steps: list[list[int]] | None
+    matched: list[bool]
 
 
 class PytorchHooksBackend(Backend):
@@ -125,23 +145,69 @@ class PytorchHooksBackend(Backend):
             trained_stages = run_training(doc, executor, request)
         executor.run_all()
         metric_values: dict[str, list[Any]] = {}
+        windowed: dict[str, _Windowed] = {}
         for qname, metric in doc.metrics.items():
-            of_value = executor.dense_value(str(metric.of))
-            target = None
-            if metric.kind == "kl":
-                target = executor.dense_value(str(metric.fields["target"]))
+            of_name = str(metric.of)
+            target_name = str(metric.fields["target"]) if metric.kind == "kl" else None
+            if executor.is_generated(of_name):
+                # a continuation read addresses as many positions as the row
+                # generated, so its metric reduces per step and reports which
+                # steps it saw (§2.3, §2.10)
+                windowed[qname] = _Windowed(
+                    values=compute_windowed_metric(
+                        metric,
+                        executor.windowed_value(of_name),
+                        executor.rows_for_metrics(),
+                        executor.bundle.tokenizer,
+                        target_windows=(
+                            executor.windowed_value(target_name)
+                            if target_name is not None
+                            else None
+                        ),
+                        generated_ids=(
+                            executor.generated_ids(of_name)
+                            if METRIC_DOMAINS.get(str(metric.kind)) == "ids"
+                            else None
+                        ),
+                    ),
+                    steps=(
+                        None
+                        if str(metric.kind) in WHOLE_WINDOW_METRIC_KINDS
+                        else executor.addressed_steps(of_name)
+                    ),
+                    matched=[
+                        bool(steps) for steps in executor.addressed_steps(of_name)
+                    ],
+                )
+                continue
             metric_values[qname] = compute_metric(
                 metric,
-                of_value,
+                executor.dense_value(of_name),
                 executor.rows_for_metrics(),
                 executor.bundle.tokenizer,
-                target_value=target,
+                target_value=(
+                    executor.dense_value(target_name)
+                    if target_name is not None
+                    else None
+                ),
             )
         for entry in doc.save:
             if entry.value in doc.metrics:
-                metric_files.setdefault(entry.file_path, MetricTable()).add(
-                    entry.value, metric_values[entry.value], coords, point_digest
-                )
+                table = metric_files.setdefault(entry.file_path, MetricTable())
+                if entry.value in windowed:
+                    window = windowed[entry.value]
+                    table.add_windowed(
+                        entry.value,
+                        window.values,
+                        coords,
+                        point_digest,
+                        steps=window.steps,
+                        matched=window.matched,
+                    )
+                else:
+                    table.add(
+                        entry.value, metric_values[entry.value], coords, point_digest
+                    )
             elif entry.value in doc.reads:
                 # the site goes on the entry too: a harvested activation is
                 # bound to where it was read, and a consumer (a transform op
