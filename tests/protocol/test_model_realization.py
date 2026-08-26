@@ -9,7 +9,6 @@ realize a quantization refuses instead of running something else.
 
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 import pytest
@@ -104,7 +103,9 @@ def test_int8_materializes_its_own_knob(env):
 
 def test_quantization_moves_the_digest(env):
     plain = digest(canonicalize(doc_with_model(dtype="bf16"), env))
-    quantized = digest(canonicalize(doc_with_model(dtype="bf16", quantization=NF4), env))
+    quantized = digest(
+        canonicalize(doc_with_model(dtype="bf16", quantization=NF4), env)
+    )
     assert plain != quantized
 
 
