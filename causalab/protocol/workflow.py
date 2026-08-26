@@ -28,7 +28,7 @@ import dataclasses
 import hashlib
 import re
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from causalab.protocol.bundles import (
     entry_key,
@@ -57,6 +57,8 @@ __all__ = [
     "LoadedWorkflow",
     "PLOT_KINDS",
     "STEP_TYPES",
+    "TransformInput",
+    "TransformStep",
     "WorkflowError",
     "WorkflowDocument",
     "is_workflow",
@@ -64,7 +66,7 @@ __all__ = [
     "parse_workflow",
 ]
 
-STEP_TYPES: tuple[str, ...] = ("protocol", "select", "plot")
+STEP_TYPES: tuple[str, ...] = ("protocol", "transform", "select", "plot")
 PLOT_KINDS: tuple[str, ...] = ("heatmap", "lines")
 CHOOSE_KINDS: tuple[str, ...] = ("max", "min")
 
@@ -101,6 +103,34 @@ class ProtocolStep:
 
 
 @dataclasses.dataclass(frozen=True)
+class TransformInput:
+    """One slot of a transform step's ``inputs``: an earlier step's output.
+
+    ``slot``/``entry`` address one entry inside a swept producer's tensor
+    bundle (IM spec §2.5). They are *authored only* — a transform step has no sweep
+    coordinates of its own, so the implicit coordinate matching a protocol
+    step gets does not apply here."""
+
+    step: str
+    value: str
+    slot: str | None = None
+    entry: Mapping[str, Any] | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class TransformStep:
+    type: str
+    op: str
+    inputs: Mapping[str, TransformInput]
+    outputs: Mapping[str, str]
+    #: materialized at parse against the op's schema, so the defaults are in
+    #: the canonical form and therefore in the digest (§7)
+    params: Mapping[str, Any] = dataclasses.field(default_factory=dict)
+    after: tuple[str, ...] = ()
+    description: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
 class SelectStep:
     type: str
     from_: str
@@ -127,7 +157,7 @@ class PlotStep:
     description: str | None = None
 
 
-Step = ProtocolStep | SelectStep | PlotStep
+Step = ProtocolStep | TransformStep | SelectStep | PlotStep
 
 
 @dataclasses.dataclass(frozen=True)
@@ -161,6 +191,9 @@ class LoadedWorkflow:
     inner_digests: Mapping[str, str]
     canonical: Mapping[str, Any]
     digest: str
+    #: ``{transform step: digest of its canonical entry}`` — the provenance
+    #: unit a tensor that step writes is stamped with (§2.4)
+    transform_digests: Mapping[str, str] = dataclasses.field(default_factory=dict)
 
 
 def is_workflow(raw: Mapping[str, Any]) -> bool:
@@ -267,6 +300,13 @@ def _parse_step(name: str, raw: Any, path: str) -> Step:
             after=_after(raw, path),
             description=raw.get("description"),
         )
+    if step_type == "transform":
+        return _parse_transform_step(raw, path, common)
+    # every branch above returns, so this is the plot parser — spelled out
+    # rather than left as a fall-through, so a fifth step type added to
+    # STEP_TYPES without a branch fails loudly instead of parsing as a
+    # malformed plot
+    assert step_type == "plot", step_type
     _check_keys(
         raw,
         (*common, "plot", "from", "table", "x", "y", "series", "value", "file_path"),
@@ -304,9 +344,158 @@ def _parse_step(name: str, raw: Any, path: str) -> Step:
     )
 
 
+def _parse_transform_step(
+    raw: Mapping[str, Any], path: str, common: Sequence[str]
+) -> TransformStep:
+    """A ``transform`` step, checked against its op's record (§2.4).
+
+    The registry is imported *inside* this function on purpose. This package
+    is the backend-free document layer, so it keeps no module-level edge to a
+    package that executes numerics — the discipline ``cli.py`` follows for the
+    reference backend. The registry itself is torch-free, so ``validate`` and
+    ``digest`` still cost nothing but stdlib.
+    """
+    from causalab.transform.registry import lookup
+    from causalab.transform.schema import Table, TransformError, validate_params
+
+    _check_keys(raw, (*common, "op", "inputs", "params", "outputs"), path)
+    _need(raw, ("op", "inputs", "outputs"), path)
+    try:
+        op = lookup(raw["op"])
+    except TransformError as err:
+        raise WorkflowError(1, err.message, path=f"{path}.op") from err
+
+    inputs_raw = raw["inputs"]
+    if not isinstance(inputs_raw, Mapping):
+        raise WorkflowError(
+            1,
+            "'inputs' maps each of the op's input slots to an earlier step's output",
+            path=f"{path}.inputs",
+        )
+    for slot in inputs_raw:
+        if slot not in op.inputs:
+            raise WorkflowError(
+                1,
+                f"op {op.id} has no input slot {str(slot)!r}"
+                f"{suggest(str(slot), tuple(op.inputs))}",
+                path=f"{path}.inputs",
+            )
+    absent = [slot for slot in op.inputs if slot not in inputs_raw]
+    if absent:
+        raise WorkflowError(
+            1, f"op {op.id} needs input slot(s) {absent}", path=f"{path}.inputs"
+        )
+    inputs: dict[str, TransformInput] = {}
+    for slot, in_decl in op.inputs.items():
+        ref = inputs_raw[slot]
+        ref_path = f"{path}.inputs.{slot}"
+        if not isinstance(ref, Mapping):
+            raise WorkflowError(
+                1, "an input names {'step': …, 'value': …}", path=ref_path
+            )
+        _check_keys(ref, ("step", "value", "slot", "entry"), ref_path)
+        _need(ref, ("step", "value"), ref_path)
+        entry = ref.get("entry")
+        if entry is not None and (
+            not isinstance(entry, Mapping) or not all(isinstance(k, str) for k in entry)
+        ):
+            raise WorkflowError(
+                1,
+                "'entry' selects one bundle entry by coordinate (IM spec §2.5)",
+                path=ref_path,
+            )
+        bundle_slot = ref.get("slot")
+        if bundle_slot is not None and not isinstance(bundle_slot, str):
+            raise WorkflowError(
+                1, "'slot' is the producer's name for the tensor", path=ref_path
+            )
+        if isinstance(in_decl, Table) and (
+            bundle_slot is not None or entry is not None
+        ):
+            raise WorkflowError(
+                1,
+                f"input slot {slot!r} is a table — 'slot'/'entry' address a "
+                "tensor bundle",
+                path=ref_path,
+            )
+        value = _str_field(ref, "value", ref_path)
+        if not value.endswith(in_decl.suffix):
+            raise WorkflowError(
+                8,
+                f"input slot {slot!r} reads a {in_decl.suffix} output, got {value!r}",
+                path=ref_path,
+            )
+        inputs[slot] = TransformInput(
+            step=_str_field(ref, "step", ref_path),
+            value=value,
+            slot=bundle_slot,
+            entry=dict(entry) if entry is not None else None,
+        )
+
+    outputs_raw = raw["outputs"]
+    if not isinstance(outputs_raw, Mapping):
+        raise WorkflowError(
+            1,
+            "'outputs' maps each of the op's output slots to a file path",
+            path=f"{path}.outputs",
+        )
+    for slot in outputs_raw:
+        if slot not in op.outputs:
+            raise WorkflowError(
+                1,
+                f"op {op.id} declares no output slot {str(slot)!r}"
+                f"{suggest(str(slot), tuple(op.outputs))}",
+                path=f"{path}.outputs",
+            )
+    absent = [slot for slot in op.outputs if slot not in outputs_raw]
+    if absent:
+        raise WorkflowError(
+            1,
+            f"op {op.id} writes output slot(s) {absent} — every declared slot "
+            "needs a file path, so the record says what the step produces",
+            path=f"{path}.outputs",
+        )
+    outputs: dict[str, str] = {}
+    claimed: dict[str, str] = {}
+    for slot, out_decl in op.outputs.items():
+        out_path = f"{path}.outputs.{slot}"
+        file_path = _str_field(outputs_raw, slot, out_path)
+        if not file_path.endswith(out_decl.suffix):
+            raise WorkflowError(
+                8,
+                f"output slot {slot!r} writes a {out_decl.suffix} file, got "
+                f"{file_path!r}",
+                path=out_path,
+            )
+        _check_contained_path(file_path, 8, out_path)
+        if file_path in claimed:
+            raise WorkflowError(
+                3,
+                f"output slots {claimed[file_path]!r} and {slot!r} both write "
+                f"{file_path!r}",
+                path=out_path,
+            )
+        claimed[file_path] = slot
+        outputs[slot] = file_path
+
+    try:
+        params = validate_params(op.params, raw.get("params"), path=f"{path}.params")
+    except TransformError as err:
+        raise WorkflowError(1, err.message, path=err.path) from err
+    return TransformStep(
+        type="transform",
+        op=op.id,
+        inputs=inputs,
+        outputs=outputs,
+        params=params,
+        after=_after(raw, path),
+        description=raw.get("description"),
+    )
+
+
 def _check_contained_path(value: str, rule: int, path: str) -> None:
     """A workflow-owned file path stays inside its root: relative, no
-    parent escapes (§2.4 "within the step's output dir", §2.5 "under the
+    parent escapes (§2.5 "within the step's output dir", §2.6 "under the
     workflow's output root")."""
     parts = Path(value).parts
     if Path(value).is_absolute() or ".." in parts:
@@ -519,11 +708,11 @@ def load_workflow(
                 raise WorkflowError(
                     4, f"'from' names unknown step {step.from_!r}", path=f"steps.{name}"
                 )
-            if not isinstance(steps[step.from_], ProtocolStep):
+            if not isinstance(steps[step.from_], (ProtocolStep, TransformStep)):
                 raise WorkflowError(
                     4,
-                    f"'from' must name a protocol step; {step.from_!r} is a "
-                    f"{steps[step.from_].type} step",
+                    f"'from' must name a protocol or transform step; "
+                    f"{step.from_!r} is a {steps[step.from_].type} step",
                     path=f"steps.{name}",
                 )
             deps[name].add(step.from_)
@@ -540,6 +729,19 @@ def load_workflow(
                 f"a plot file_path ends in .png/.pdf, got {step.file_path!r}",
                 path=f"steps.{name}",
             )
+        if isinstance(step, TransformStep):
+            # a transform step's `inputs` ARE its dependency edges (§3) — the
+            # same rule artifact refs and run-tree loads follow, spelled once
+            # per slot instead of discovered by walking a nested document
+            for slot, ref in step.inputs.items():
+                if ref.step not in steps:
+                    raise WorkflowError(
+                        4,
+                        f"input {slot!r} names unknown step {ref.step!r}",
+                        path=f"steps.{name}.inputs.{slot}",
+                    )
+                deps[name].add(ref.step)
+                data_deps[name].add(ref.step)
         if isinstance(step, ProtocolStep):
             doc_path = (workflow_dir / step.document).resolve()
             if not doc_path.is_file():
@@ -612,6 +814,26 @@ def load_workflow(
     representatives: dict[tuple[str, str], Any] = {}
 
     def compute_representatives(select_name: str, select: SelectStep) -> None:
+        producer_step = steps[select.from_]
+        if isinstance(producer_step, TransformStep):
+            # a transform table's columns are declared, not swept, so the
+            # stand-in is a type-appropriate zero. Representatives only exist
+            # to type-check a consuming document at load; the real values
+            # arrive at run time (module docstring).
+            declared = _transform_table_columns(
+                producer_step, select.table, path=f"steps.{select_name}.table"
+            )
+            for key, column in select.emit.items():
+                if column not in declared:
+                    raise WorkflowError(
+                        7,
+                        f"emit column {column!r} is not a column of "
+                        f"{select.from_!r}'s {select.table!r} "
+                        f"({sorted(declared)})",
+                        path=f"steps.{select_name}.emit",
+                    )
+                representatives[(select_name, key)] = _COLUMN_ZERO[declared[column]]
+            return
         producer = inner.get(select.from_)
         if producer is None:
             return  # the producer failed earlier; its error already raised
@@ -677,6 +899,26 @@ def load_workflow(
     def check_columns(
         name: str, from_: str, table: str, columns: Sequence[str]
     ) -> None:
+        producing = steps[from_]
+        if isinstance(producing, TransformStep):
+            # a transform producer has no sweep axes; what it *does* have is a
+            # declared column list per table output, so rule 7 keeps its
+            # load-time bite against that instead (§2.4). Note there is no
+            # implicit 'value' column here: a transform table is whatever its
+            # op declares, so a select must name the column it ranks.
+            declared = _transform_table_columns(
+                producing, table, path=f"steps.{name}.table"
+            )
+            for column in columns:
+                if column not in declared:
+                    raise WorkflowError(
+                        7,
+                        f"column {column!r} is not a column of {from_!r}'s "
+                        f"{table!r} ({sorted(declared)}) — a transform op "
+                        "declares the columns of every table it writes (§2.4)",
+                        path=f"steps.{name}",
+                    )
+            return
         producer = inner[from_]
         outputs = {entry.file_path for entry in producer.document.save}
         if table not in outputs:
@@ -705,8 +947,10 @@ def load_workflow(
                 c for c in (step.y, step.series) if c is not None
             ]
             check_columns(name, step.from_, step.table, columns)
+            if isinstance(steps[step.from_], TransformStep):
+                continue  # a transform producer has no axes to leave uncovered
             # a figure must account for every axis of what it renders — an
-            # uncovered axis would collapse into duplicate cells (§2.4)
+            # uncovered axis would collapse into duplicate cells (§2.5)
             axis_ids = {axis.id for axis in inner[step.from_].expansion.axes}
             covered = (
                 {step.x}
@@ -728,6 +972,8 @@ def load_workflow(
         step = steps[name]
         if isinstance(step, ProtocolStep):
             return {entry.file_path for entry in inner[name].document.save}
+        if isinstance(step, TransformStep):
+            return set(step.outputs.values())
         if isinstance(step, SelectStep):
             return {"values.json"}
         return {step.file_path}
@@ -738,6 +984,13 @@ def load_workflow(
             producer_step = steps[producer]
             if isinstance(producer_step, ProtocolStep):
                 produced = {e.file_path for e in inner[producer].document.save}
+            elif isinstance(producer_step, TransformStep):
+                # rule 10, run-tree half: a protocol step may load a tensor a
+                # transform step wrote — the fitted-artifact direction the
+                # manifold pipelines need. The bundle is stamped with an
+                # ArtifactIdentity at write time, so the loading document's
+                # IM spec §2.5 identity check is a real check, not a waived one.
+                produced = set(producer_step.outputs.values())
             elif isinstance(producer_step, SelectStep):
                 produced = {"values.json"}
             else:
@@ -758,6 +1011,13 @@ def load_workflow(
                     rest=rest,
                     step=name,
                 )
+
+    # ---- rules 4 + 10 for transform inputs (§2.4, §3) ----------------------- #
+    for name, step in steps.items():
+        if isinstance(step, TransformStep):
+            _check_transform_inputs(
+                name, step, steps=steps, inner=inner, outputs_of=outputs_of
+            )
 
     for i, entry in enumerate(document.save):
         if entry.step not in steps:
@@ -788,6 +1048,15 @@ def load_workflow(
     # ---- canonical form + digest (§7) --------------------------------------- #
     canonical = _canonicalize(document, inner_digests, inner_digest_kind)
     digest = hashlib.sha256(canonical_bytes(canonical)).hexdigest()
+    # a transform step's provenance unit: the digest of its own canonical
+    # entry, which is a pure function of op@version + inputs + params +
+    # outputs. It is what a tensor it writes is stamped `produced_by`, the
+    # analogue of a protocol point's digest.
+    transform_digests = {
+        name: hashlib.sha256(canonical_bytes(canonical["steps"][name])).hexdigest()
+        for name, step in steps.items()
+        if isinstance(step, TransformStep)
+    }
 
     return LoadedWorkflow(
         document=document,
@@ -800,6 +1069,46 @@ def load_workflow(
         inner_digests=inner_digests,
         canonical=canonical,
         digest=digest,
+        transform_digests=transform_digests,
+    )
+
+
+#: Load-time stand-in per declared column dtype, for the representative a
+#: select step over a transform-produced table substitutes into a consuming
+#: document. Only the *type* is load-bearing — the real value arrives at run
+#: time (module docstring).
+_COLUMN_ZERO: Mapping[str, Any] = {
+    "int64": 0,
+    "float64": 0.0,
+    "bool": False,
+    "string": "",
+}
+
+
+def _transform_table_columns(
+    step: TransformStep, table: str, *, path: str
+) -> dict[str, str]:
+    """The declared columns of the table a transform step writes as ``table``."""
+    from causalab.transform.registry import lookup
+    from causalab.transform.schema import Table
+
+    op = lookup(step.op)
+    for slot, file_path in step.outputs.items():
+        if file_path != table:
+            continue
+        decl = op.outputs[slot]
+        if not isinstance(decl, Table):
+            raise WorkflowError(
+                4,
+                f"{table!r} is {op.id}'s {slot!r} slot, a tensor bundle — only "
+                "tables are ranked and plotted (§2.3, §2.5)",
+                path=path,
+            )
+        return dict(decl.columns or {})
+    raise WorkflowError(
+        4,
+        f"the step writes no {table!r} (has {sorted(step.outputs.values())})",
+        path=path,
     )
 
 
@@ -833,6 +1142,72 @@ def _bundle_entries(
             for slot in slots:
                 entries[entry_key(slot, label)] = {"slot": slot, "coords": short}
     return entries or None
+
+
+def _sole_bundle_slot(entries: Mapping[str, Mapping[str, Any]]) -> str | None:
+    """The one slot a bundle holds, or ``None`` when it holds several."""
+    slots = {str(entry.get("slot")) for entry in entries.values()}
+    return slots.pop() if len(slots) == 1 else None
+
+
+def _check_transform_inputs(
+    name: str,
+    step: TransformStep,
+    *,
+    steps: Mapping[str, Step],
+    inner: Mapping[str, LoadedProtocol],
+    outputs_of: Callable[[str], set[str]],
+) -> None:
+    """Every transform input names an output its producer really writes, and
+    selects an entry that producer will really hold (§5.4, §5.10).
+
+    The entry half is checkable for the same reason it is for a protocol
+    consumer: a producing document's sweep expands deterministically at load,
+    so a mis-aimed tensor handoff fails before the producing step spends its
+    compute rather than after."""
+    from causalab.transform.registry import lookup
+    from causalab.transform.schema import Tensor
+
+    op = lookup(step.op)
+    for slot, ref in step.inputs.items():
+        produced = outputs_of(ref.step)
+        if ref.value not in produced:
+            raise WorkflowError(
+                4,
+                f"input {slot!r} reads {ref.step}/{ref.value}, but "
+                f"{ref.step!r} produces no {ref.value!r} (has {sorted(produced)})",
+                path=f"steps.{name}.inputs.{slot}",
+            )
+        producer = steps[ref.step]
+        if not isinstance(op.inputs[slot], Tensor) or not isinstance(
+            producer, ProtocolStep
+        ):
+            continue
+        entries = _bundle_entries(inner[ref.step], ref.value)
+        if entries is None:
+            continue
+        bundle_slot = ref.slot or _sole_bundle_slot(entries)
+        if bundle_slot is None:
+            held = sorted({str(e.get("slot")) for e in entries.values()})
+            raise WorkflowError(
+                10,
+                f"input {slot!r} reads a bundle holding several slots ({held}) "
+                "— name one with 'slot'",
+                path=f"steps.{name}.inputs.{slot}",
+            )
+        try:
+            select_entry(
+                entries.keys(),
+                bundle_slot,
+                ref.entry,
+                what=f"step {name!r}: input {slot!r} reads {ref.step}/{ref.value}",
+                coords_by_key=entries,
+                implicit=False,
+            )
+        except ValidationError as err:
+            raise WorkflowError(
+                10, str(err), path=f"steps.{name}.inputs.{slot}"
+            ) from err
 
 
 def _check_entry_selection(
@@ -874,6 +1249,17 @@ def _check_entry_selection(
                 raise WorkflowError(10, str(err), path=f"steps.{step}") from err
 
 
+def _canon_transform_input(ref: TransformInput) -> dict[str, Any]:
+    """One ``inputs`` entry in canonical form: the optional bundle selectors
+    appear only when authored, so a step that needs neither adds no key."""
+    entry: dict[str, Any] = {"step": ref.step, "value": ref.value}
+    if ref.slot is not None:
+        entry["slot"] = ref.slot
+    if ref.entry:
+        entry["entry"] = dict(ref.entry)
+    return entry
+
+
 def _canonicalize(
     document: WorkflowDocument,
     inner_digests: Mapping[str, str],
@@ -894,6 +1280,23 @@ def _canonicalize(
                 entry["max_points"] = step.max_points
             entry["document_digest"] = inner_digests[name]
             entry["digest_kind"] = inner_digest_kind[name]
+        elif isinstance(step, TransformStep):
+            entry.update(
+                {
+                    # name@version: the version IS the numerics contract, so a
+                    # behavioural change ships as a new op and old documents
+                    # keep digesting as written. The op's *implementation*
+                    # never enters the form, the rule that keeps backends out
+                    # of protocol digests.
+                    "op": step.op,
+                    "inputs": {
+                        slot: _canon_transform_input(ref)
+                        for slot, ref in step.inputs.items()
+                    },
+                    "params": dict(step.params),  # defaults already materialized
+                    "outputs": dict(step.outputs),
+                }
+            )
         elif isinstance(step, SelectStep):
             entry.update(
                 {

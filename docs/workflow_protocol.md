@@ -18,9 +18,11 @@ IM spec" below); it never touches a neural network itself.
   parallelism, and `explain` reports the derived schedule.
 - **Everything declared must reach a sink.** A step nothing consumes and
   nothing saves is a load error, exactly as in the IM spec.
-- **Closed vocabularies.** Step kinds, reductions, and plots are closed
-  sets. Anything they cannot express is post-hoc analysis outside the
-  record — the same trade the IM spec makes for metrics.
+- **Closed vocabularies.** Step kinds, reductions, plots, and the
+  transform ops are closed sets. Anything they cannot express is post-hoc
+  analysis outside the record — the same trade the IM spec makes for
+  metrics. Closed is not frozen: the op registry grows by pull request
+  (§11), never by document.
 - **Format**: strict JSON (unknown keys = error); YAML accepted at the
   authoring surface. **v1 scope**: a finite acyclic step graph — no
   loops, no conditionals, no nested workflows, one workflow per run.
@@ -46,7 +48,7 @@ Sections in this order (order enforced; `save` last):
 ### 2.1 `steps` — common fields
 
 Every step is an object with a `type` from the closed set
-`protocol · select · plot`, plus:
+`protocol · transform · select · plot`, plus:
 
 | field | meaning |
 |---|---|
@@ -103,12 +105,76 @@ notebook.
   aggregated by **mean** over examples — v1's one aggregation. `choose`
   then picks the best group; `emit` reads that group's coordinate (or
   value) columns.
+- **A `transform` producer is the exception: its table is ranked as
+  written.** A transform step carries no sweep coordinates, and its op
+  already decided what a row is, so there is nothing to group by and
+  re-aggregating would collapse the very rows the document was validated
+  against. The columns `value` and `emit` may name are exactly the ones
+  the op declares (§2.4) — there is no implicit `value` column, so a
+  select over a transform table names the column it ranks.
 - Output: `<run>/<step>/values.json` — an artifact **values table** in
   exactly the shape the IM spec's artifact-valued fields read
   (`{"artifact": "<step>", "key": "<emit key>"}`; the store resolves a
   step name to its `values.json`).
 
-### 2.4 `plot` steps — closed figure vocabulary
+### 2.4 `transform` steps — a registered, versioned, deterministic op
+
+The other half of what an analysis does: turn a table or a tensor into
+another one, deterministically, *inside* the record. Fitting a basis,
+aggregating per-head statistics, running a paired t-test — none of these
+touch a model, and before this step type each one was post-hoc analysis
+over saved files, which is exactly what makes a pipeline inexpressible as
+a document.
+
+```json
+"fit": {
+  "type": "transform", "op": "fit_pca@1",
+  "inputs": {"acts": {"step": "harvest", "value": "acts.safetensors"}},
+  "params": {"k": 8},
+  "outputs": {"weight": "basis.safetensors", "spectrum": "spectrum.parquet"}
+}
+```
+
+| field | meaning |
+|---|---|
+| `op` | ✓ — `name@version` from the registry (`causalab/transform/`); an unknown name, or an unknown version of a known name, is a load error with suggestions |
+| `inputs` | ✓ — `{slot: {step, value}}`, one entry per input slot the op declares; each **is** a derived dependency edge (§3). `slot`/`entry` additionally address one entry of a swept producer's bundle (IM spec §2.5) |
+| `params` | – the op's declared parameters, checked against its schema at load; defaults are materialized into the canonical form |
+| `outputs` | ✓ — `{slot: file_path}` under the step dir, one per output slot the op declares. A missing slot, an extra slot, or a path whose extension contradicts the slot's kind is a load error |
+
+- **The op vocabulary is closed, and versioned.** `name@version` is the
+  numerics contract: two runs of the same document must agree, so a
+  behavioural change ships as `fit_pca@2` and documents written against
+  `@1` keep digesting — and running — as written. The version is part of
+  the canonical form; the op's *implementation* never is, the same rule
+  that keeps backends out of protocol digests.
+- **Determinism is the registry's admission criterion.** An op must be a
+  pure function of its declared inputs and params. Anything stochastic
+  takes an explicit `seed` param and must be bit-stable across devices;
+  an op that cannot meet that does not belong in the registry, and that
+  refusal is the point of a closed set. (`fit_pca@1` declares no seed
+  because a full SVD has no randomness to pin — only a sign convention,
+  which it fixes.)
+- **An op declares the columns of every table it writes.** That is what a
+  consuming `select`/`plot` step's column references are checked against
+  at load (§5.7), since a transform step has no sweep axes to check
+  against instead.
+- **A transform step is not a new tensor channel.** Its tensor outputs are
+  ordinary `.safetensors` bundles in the run tree, read back through the
+  same `file_path` overlay and `entry` selector every other handoff uses
+  (§3) — including by a later *protocol* step, which is how a fitted
+  artifact re-enters a model-touching run.
+- **Provenance.** A tensor a transform step writes is stamped with an
+  ArtifactIdentity, so the §5.10 check a consuming document performs is a
+  real one: the fields its tensor inputs agree on are **inherited** (a fit
+  over activations from model X at site S is bound to X and S), the op may
+  declare fields its params define (a basis's rank `k`), and the step
+  stamps `produced_by` with the digest of its own canonical entry — its
+  provenance unit, the analogue of a protocol point's digest. An op with
+  no tensor input has nothing to inherit, so its tensor output cannot be
+  consumed as a featurizer bundle; that is a limit, not an oversight.
+
+### 2.5 `plot` steps — closed figure vocabulary
 
 ```json
 "scan": {"type": "plot", "plot": "heatmap", "from": "locate",
@@ -130,7 +196,7 @@ notebook.
   metric-vs-axis curves (`lines`). Every other figure is post-hoc
   analysis over the saved tables — deliberately outside the record.
 
-### 2.5 `save`
+### 2.6 `save`
 
 Mandatory, non-empty, the last section — the complete manifest of what
 leaves the workflow run, in the IM spec's binding-restated style:
@@ -164,9 +230,13 @@ One mechanism, inherited from the IM spec: **artifact references**.
   writes one bundle holding one entry per point, so the loading document
   names which with `entry` (IM spec §2.5) — authored, or implied by its own
   sweep coordinates.
+- A `transform` step's `inputs` are the third spelling of the same idea:
+  each entry names a prior step's output directly, so the table of inputs
+  **is** the step's dependency edges — nothing is discovered by walking a
+  nested document, because a transform step has none.
 - These references **are** the derived dependency edges, together with
-  `from` on select/plot steps and `after`. The step graph must be
-  acyclic; its topological order is the schedule skeleton, and steps with
+  `from` on select/plot steps, `inputs` on transform steps, and `after`.
+  The step graph must be acyclic; its topological order is the schedule skeleton, and steps with
   no path between them may run in parallel — the runner's choice, never
   authored.
 
@@ -192,31 +262,45 @@ One mechanism, inherited from the IM spec: **artifact references**.
 
 ## 5. Validation — load-error checklist
 
-1. Strict keys everywhere; closed enums (`type`, `choose`, `plot`) reject
-   with suggestions; derived fields may not be authored.
+1. Strict keys everywhere; closed enums (`type`, `choose`, `plot`, and a
+   transform step's `op`) reject with suggestions; derived fields may not
+   be authored. A transform step's `inputs`/`outputs` must name exactly
+   the slots its op declares — no missing slot, no extra one — and its
+   `params` must satisfy the op's parameter schema.
 2. Section order per §1; `save` last, non-empty.
 3. Step names unique and filesystem-safe; `save` file_paths unique,
    contained (relative, no parent escapes), and colliding with neither a
    step directory nor the reserved `workflow.json`.
-4. Every reference resolves: `from`/`after` name declared steps; every
-   `document` file exists and **loads as a valid intervention protocol**
-   (with the step's `set` applied); a save entry's `step`/`value` name an
-   actual output.
-5. The derived step graph (artifact refs + `from` + `after`) is acyclic.
+4. Every reference resolves: `from`/`after` name declared steps (`from`
+   names a `protocol` or a `transform` step — the two that produce
+   tables); every `document` file exists and **loads as a valid
+   intervention protocol** (with the step's `set` applied); a transform
+   `inputs` entry names an output its producer really writes; a save
+   entry's `step`/`value` name an actual output.
+5. The derived step graph (artifact refs + `from` + `inputs` + `after`)
+   is acyclic.
 6. Sink rule: every step is consumed by a later step or by `save`.
 7. `select`/`plot` column references (`x`, `y`, `series`, the ranked
    `value` column, `emit` values) must be sweep-coordinate columns (or
    `value`) of the referenced table's producing document — checkable at
    load from the inner document's axes; a plot must cover *every* axis of
    its producer (an uncovered axis would collapse into duplicate cells).
+   Over a **transform** producer the same rule reads against the op's
+   *declared* columns (§2.4) instead of sweep axes, with no implicit
+   `value`; axis coverage is vacuous, since there are no axes.
 8. `select.table`/`plot.table` name `.parquet` outputs; plot `file_path`
-   ends in `.png`/`.pdf`.
+   ends in `.png`/`.pdf`; a transform `outputs` path matches its slot's
+   kind (`.parquet` for a table, `.safetensors` for a tensor) and stays
+   inside the step dir.
 9. A protocol step's `set` paths must exist in the target document (an
    override that would create structure is a typo).
 10. An artifact ref that names a step must name a `select` step (only
-    they emit values tables), and a run-tree `file_path` load must name a
-    file its step actually saves — both checkable at load from the emit
-    table and the inner save manifests. The load must also select an
+    they emit values tables) — a transform step's outputs are *files*,
+    reached by the run-tree overlay, not a values table. A run-tree
+    `file_path` load must name a file its step actually saves, whether
+    that step is a `protocol` or a `transform` one — both checkable at
+    load from the emit table, the inner save manifests, and a transform
+    step's declared outputs. The load must also select an
     **entry** the producer will write, for every point of the consuming
     document: a producing document's entry names follow from its own
     expansion, which is deterministic at load (IM spec §3), so a mis-aimed
@@ -228,15 +312,19 @@ One mechanism, inherited from the IM spec: **artifact references**.
 | property | derivation |
 |---|---|
 | step dependencies, schedule, parallelism | the reference graph (§3) |
-| group-by columns of `select`/`plot` | the producing document's sweep axes |
+| group-by columns of `select`/`plot` | the producing document's sweep axes — none for a transform producer, whose table is used as written (§2.3) |
+| the columns of a transform step's table | its op's declared record (§2.4) |
+| a transform step's digest, and the identity it stamps | its canonical entry, plus what its tensor inputs agree on (§2.4) |
 | inner-document digests | the IM spec's canonicalization |
 | the run manifest | stamped at execution |
 
 ## 7. Canonical form and digests
 
 - The canonical form materializes every default (`value: "value"`, the
-  mean aggregation), sorts `after` lists, and **stamps each protocol
-  step with its document's digest**, computed with `set` applied: for a
+  mean aggregation, a transform op's parameter defaults), sorts `after`
+  lists, records a transform step's `op` as `name@version`, and **stamps
+  each protocol step with its document's digest**, computed with `set`
+  applied: for a
   document with no in-run references this is the IM spec §7 campaign
   digest; a document that references step outputs (its values exist only
   at run time) stamps the digest of its overridden authored form, and
@@ -343,6 +431,19 @@ standalone run.
 - **Plot vocabulary**: deliberately two kinds. The old analyses' bespoke
   figures (manifolds, pullback visualizations) are post-hoc consumers of
   saved tables/tensors, not workflow steps — confirm this boundary.
+- **Growing the op registry.** A new op, or a new version of one, is a
+  pull request against `causalab/transform/ops/`: a record (name, version,
+  parameter schema, input and output slots, declared table columns), a
+  body whose numerics are imported inside the function, and a unit test
+  against a hand-computed oracle plus a determinism assertion. A document
+  can never introduce one — that is what makes "the same document runs
+  the same way" checkable. The seed set is `fit_pca@1`, `head_stats@1`
+  and `paired_ttest@1`, chosen to exercise both directions of the IO
+  contract and multi-input slots rather than to cover the analyses.
+- **Ops with no consumer yet stay out.** The manifold family
+  (`fit_spline`, `geodesic_path`, `hellinger_pca`, `path_scores`) arrives
+  with the workflows that consume it, rather than pinning an API before
+  its caller exists.
 - **Multi-tenant steps**: a step per backend (fit on Megatron, apply on
   serving) needs per-step backend pinning — deferred until a second
   backend exists; the field would be one optional `backend` per protocol
