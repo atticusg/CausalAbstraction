@@ -269,3 +269,32 @@ def test_11_probe_generate_runs_and_scores(roots, tmp_path):
     for value in probe["value"]:
         top = json.loads(value)
         assert len(top["tokens"]) == 1 and len(top["probs"]) == 1
+
+
+def test_12_probe_variable_scores_every_step_and_reports_what_was_said(roots, tmp_path):
+    """PR-2's surface end to end: a metric per decode step, an ids-domain
+    metric that never touches the vocabulary, and a `variable` anchor whose
+    misses come back as data.
+
+    Tiny-random says nothing resembling a weekday, so `said_answer` matches
+    nowhere — which is the case worth pinning: the run finishes, the rows
+    survive, and `matched` says why the values are null.
+    """
+    code = _run("12_probe_variable_im.json", roots, tmp_path, "sites.target.layer=1")
+    assert code == 0
+
+    per_step = pd.read_parquet(tmp_path / "per_step.parquet")
+    examples = per_step["example"].nunique()
+    assert len(per_step) == examples * 8  # one row per (example, decode step)
+    assert sorted(per_step["step"].unique()) == list(range(8))
+    assert per_step["matched"].all()
+
+    said = pd.read_parquet(tmp_path / "said.parquet")
+    assert len(said) == examples  # decode reduces the window to one string
+    assert said["step"].isna().all()  # no single step owns a joined string
+    assert said["value"].notna().all()
+
+    where = load_file(tmp_path / "where.safetensors")
+    # every row missed, so every row addressed zero positions: the harvest is
+    # empty but still shaped per example, and nothing about the run failed
+    assert where["where"].shape[:2] == (examples, 0)
