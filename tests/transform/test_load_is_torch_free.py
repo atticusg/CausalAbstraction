@@ -26,7 +26,7 @@ from tests.protocol._env import FIXTURES
 pytestmark = pytest.mark.unit
 
 REPO = Path(__file__).resolve().parents[2]
-METHODS = REPO / "causalab/configs/methods"
+METHODS = REPO / "causalab/configs/protocols"
 
 _PROBE = """
 import json, sys

@@ -3,7 +3,8 @@
   "description": "IOI clean baseline (Wang et al. 2023, arXiv:2211.00593): mean logit(IO) - logit(S) at END over the clean IOI distribution. Golden: paper reports 3.56 on 100k examples (band +/-1.2 from the VeriFires ioi-circuit checklist); the IO-over-S rate follows post-hoc as the fraction of positive per-row values.",
   "model": {
     "key": "gpt2",
-    "revision": "main"
+    "revision": "main",
+    "dtype": "fp32"
   },
   "data": {
     "base": {

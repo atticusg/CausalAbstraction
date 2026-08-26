@@ -28,6 +28,7 @@ from causalab.neural.pytorch_hooks.outputs import (
     write_outputs,
 )
 from causalab.protocol.backend import Backend, ExecutionRequest, RunResult
+from causalab.protocol.canonical import canonical_model
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import Document, parse_document
 
@@ -37,13 +38,21 @@ __all__ = ["PytorchHooksBackend"]
 class PytorchHooksBackend(Backend):
     name = "pytorch_hooks"
     capabilities = frozenset(
-        {"grad", "paired_forward", "full_logits", "generate", "pytorch_fn_local"}
+        {
+            "grad",
+            "paired_forward",
+            "full_logits",
+            "generate",
+            "pytorch_fn_local",
+            "quantized_weights",
+        }
     )
     is_local = True
 
-    def __init__(self, *, device: str = "cpu", dtype: str = "fp32") -> None:
+    def __init__(self, *, device: str = "cpu") -> None:
+        # placement is execution (the backend's call, §8); precision is not —
+        # dtype and quantization come from each point's own `model` section
         self.device = device
-        self.dtype = dtype
 
     # ------------------------------------------------------------------ #
 
@@ -65,10 +74,13 @@ class PytorchHooksBackend(Backend):
             )
             summaries.append(summary)
         first_doc = parse_document(request.points[0])
+        first_realization = canonical_model(first_doc.raw["model"])
         identity_base = {
             "produced_by": request.document_digest,
             "model_key": str(first_doc.model.key),
             "model_revision": str(first_doc.model.revision),
+            "model_dtype": str(first_realization["dtype"]),
+            "model_quantization": first_realization.get("quantization"),
             "backend": self.name,
             "commit": code_commit(Path(__file__).resolve().parents[3]),
         }
@@ -90,11 +102,13 @@ class PytorchHooksBackend(Backend):
         grad_enabled: bool = False,
         coords: Mapping[str, Any] | None = None,
     ) -> PointExecutor:
+        realization = canonical_model(doc.raw["model"])
         bundle = load_model(
             str(doc.model.key),
             str(doc.model.revision),
-            dtype=self.dtype,
+            dtype=str(realization["dtype"]),
             device=self.device,
+            quantization=_quantization_key(realization),
         )
         role_rows, role_fields = _resolve_roles(doc, request)
         return PointExecutor(
@@ -228,10 +242,13 @@ def _featurizer_identity(
     site = _site_identity(doc, site_name)
     base = doc.data["base"]
     trained_on = base.dataset if not isinstance(base, tuple) else base[0].dataset
+    realization = canonical_model(doc.raw["model"])
     return build_artifact_identity(
         produced_by=point_digest,
         model_key=str(doc.model.key),
         model_revision=str(doc.model.revision),
+        model_dtype=str(realization["dtype"]),
+        model_quantization=realization.get("quantization"),
         site=site,
         k=spec.k if isinstance(spec.k, int) else None,
         parametrization=spec.parametrization
@@ -240,6 +257,17 @@ def _featurizer_identity(
         dtype=spec.dtype if isinstance(spec.dtype, str) else "fp32",
         trained_on=str(trained_on),
     )
+
+
+def _quantization_key(
+    realization: Mapping[str, Any],
+) -> tuple[tuple[str, Any], ...] | None:
+    """The materialized ``quantization`` block as a hashable, order-free key —
+    :func:`load_model` caches on it, so it must hash and compare by value."""
+    quantization = realization.get("quantization")
+    if quantization is None:
+        return None
+    return tuple(sorted(quantization.items()))
 
 
 def _resolve_roles(

@@ -229,6 +229,8 @@ ARTIFACT_IDENTITY_KEYS: tuple[str, ...] = (
     "produced_by",
     "model_key",
     "model_revision",
+    "model_dtype",
+    "model_quantization",
     "tokenizer",
     "site",
     "k",

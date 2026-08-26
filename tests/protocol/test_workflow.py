@@ -29,7 +29,7 @@ def tiny_workflow(tmp_path: Path) -> dict[str, Any]:
     methods = tmp_path / "methods"
     methods.mkdir(exist_ok=True)
     shutil.copyfile(
-        REPO / "causalab/configs/methods/weekdays_locate_scan.json",
+        REPO / "causalab/configs/protocols/weekdays_locate_scan.json",
         methods / "locate.json",
     )
     return {
@@ -237,11 +237,11 @@ class TestWeekdaysWorkflow:
         assert first.canonical == second.canonical
 
     def test_digest_tracks_the_inner_document(self, env, tmp_path):
-        """Editing a referenced method file changes the workflow digest —
+        """Editing a referenced protocol document changes the workflow digest —
         the §7 content-addressing claim."""
         workflow_dir = tmp_path / "workflows"
         shutil.copytree(WEEKDAYS_WF.parent.parent, tmp_path, dirs_exist_ok=True)
-        target = tmp_path / "methods/weekdays_locate_scan.json"
+        target = tmp_path / "protocols/weekdays_locate_scan.json"
         original = load_workflow(workflow_dir / "weekdays_8b.json", env)
         doc = json.loads(target.read_text())
         doc["description"] = "same campaign, different words"
@@ -314,7 +314,7 @@ def test_rule_10_artifact_ref_must_name_a_select_step(env, tmp_path):
 def test_rule_10_run_tree_file_path_must_be_saved(env, tmp_path):
     raw = tiny_workflow(tmp_path)
     apply_doc = json.loads(
-        (REPO / "causalab/configs/methods/weekdays_das_apply.json").read_text()
+        (REPO / "causalab/configs/protocols/weekdays_das_apply.json").read_text()
     )
     (tmp_path / "methods/apply.json").write_text(json.dumps(apply_doc))
     raw["steps"]["apply"] = {
@@ -421,7 +421,7 @@ def test_deferred_doc_with_external_featurizer_loads(env, tmp_path):
     layer is 0)."""
     raw = tiny_workflow(tmp_path)
     apply_doc = json.loads(
-        (REPO / "causalab/configs/methods/weekdays_das_apply.json").read_text()
+        (REPO / "causalab/configs/protocols/weekdays_das_apply.json").read_text()
     )
     (tmp_path / "methods/apply.json").write_text(json.dumps(apply_doc))
     raw["steps"]["apply"] = {
@@ -446,7 +446,7 @@ def transform_workflow(tmp_path: Path) -> dict[str, Any]:
     methods = tmp_path / "methods"
     methods.mkdir(exist_ok=True)
     shutil.copyfile(
-        REPO / "causalab/configs/methods/harvest.json", methods / "harvest.json"
+        REPO / "causalab/configs/protocols/harvest.json", methods / "harvest.json"
     )
     return {
         "version": "1",
@@ -742,3 +742,43 @@ class TestShippedWorkflowDigests:
     def test_digests_match_their_pins(self, env):
         for name, digest in json.loads(WORKFLOW_PINS.read_text()).items():
             assert load_workflow(WORKFLOW_DIR / name, env).digest == digest, name
+
+
+# --------------------------------------------------------------------------- #
+# applications as steps (§1.1)
+# --------------------------------------------------------------------------- #
+
+
+def test_a_step_may_point_at_an_application(env, tmp_path):
+    """A workflow composes protocol documents; whether a step's document was
+    authored as one file or as a method plus an application is the author's
+    business, and the relative `method` path resolves against the document."""
+    raw = tiny_workflow(tmp_path)
+    monolithic = json.loads((tmp_path / "methods/locate.json").read_text())
+    method = {
+        "version": "1",
+        "type": "method",
+        **{key: value for key, value in monolithic.items() if key != "model"},
+    }
+    method["sites"] = {
+        name: {key: value for key, value in site.items() if key != "layer"}
+        for name, site in monolithic["sites"].items()
+    }
+    (tmp_path / "methods/locate_method.json").write_text(json.dumps(method))
+    (tmp_path / "methods/locate.json").write_text(
+        json.dumps(
+            {
+                "version": "1",
+                "type": "application",
+                "method": "locate_method.json",
+                "model": monolithic["model"],
+                "sites": {
+                    name: {"layer": site["layer"]}
+                    for name, site in monolithic["sites"].items()
+                    if "layer" in site
+                },
+            }
+        )
+    )
+    loaded = load_workflow(raw, env, workflow_dir=tmp_path)
+    assert loaded.inner["locate"].method_ref == "locate_method.json"

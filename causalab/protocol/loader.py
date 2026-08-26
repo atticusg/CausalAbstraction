@@ -27,6 +27,12 @@ from typing import Any, Mapping
 from causalab.protocol import canonical as _canonical
 from causalab.protocol.bundles import select_entry, selector_slot
 from causalab.protocol.errors import ParseError, ValidationError
+from causalab.protocol.method import (
+    compose,
+    document_type,
+    method_digest,
+    resolve_method_source,
+)
 from causalab.protocol.resolve import ResolutionEnv, resolve_artifact_fields
 from causalab.protocol.schema import (
     FEATURIZER_SLOTS,
@@ -54,6 +60,13 @@ class LoadedProtocol:
     document_digest: str
     canonical_points: tuple[Mapping[str, Any], ...]
     point_digests: tuple[str, ...]
+    #: The method this document was composed from (§1.1), when it was authored
+    #: as a method + an application: its content hash and the reference the
+    #: application named. The *composed* document digests as if it had been
+    #: written as one file, so method provenance is reported and stamped, never
+    #: folded into the canonical bytes (§7).
+    method_digest: str | None = None
+    method_ref: str | None = None
 
 
 def load_text(path: Path) -> dict[str, Any]:
@@ -128,9 +141,40 @@ def load(
     overrides: Mapping[str, Any] | None = None,
     point_cap: int | None = DEFAULT_POINT_CAP,
     backend_is_local: bool | None = None,
+    base_dir: Path | None = None,
 ) -> LoadedProtocol:
-    """Load one protocol document through the full pipeline."""
+    """Load one protocol document through the full pipeline.
+
+    ``base_dir`` is where a relative ``method`` reference resolves from when
+    the document arrives as a tree rather than a file (a workflow step reads
+    its inner document itself); a document loaded from a path uses its own
+    directory.
+
+    An *application* (§1.1) composes with its method first: the composition is
+    an ordinary protocol document, and everything after this line — overrides,
+    artifact fields, sweeps, validation, canonicalization — cannot tell how the
+    document was authored.
+    """
     raw = dict(load_text(source)) if isinstance(source, Path) else dict(source)
+    kind = document_type(raw)
+    if kind == "method":
+        raise ValidationError(
+            18,
+            "this is a method document: it declares no network and no "
+            "addresses, so there is nothing to run. Bind it from an "
+            "application (§1.1), or ask for its signature with "
+            "`causalab explain`.",
+            path="type",
+        )
+    method_digest_value: str | None = None
+    method_ref: str | None = None
+    if kind == "application":
+        method_raw, method_ref = resolve_method_source(
+            raw["method"],
+            base_dir=source.parent if isinstance(source, Path) else base_dir,
+        )
+        method_digest_value = method_digest(method_raw)
+        raw = compose(method_raw, raw)
     if overrides:
         raw = apply_overrides(raw, overrides)
     # artifact fields resolve first (§1: legal anywhere a value is), then the
@@ -158,6 +202,8 @@ def load(
         document_digest=_canonical.digest(canonical_document),
         canonical_points=canonical_points,
         point_digests=tuple(_canonical.digest(c) for c in canonical_points),
+        method_digest=method_digest_value,
+        method_ref=method_ref,
     )
 
 
@@ -302,6 +348,13 @@ def _entry_identity(
 
 _INDEX = re.compile(r"^(.*)\[(\d+)\]$")
 
+#: Dotted paths an override may *create*. An override normally has to hit a
+#: field that exists — inventing structure is how a typo becomes an
+#: experiment. These two are the exception because the document is never
+#: really silent about them: canonicalization materializes both (§7), so
+#: setting one fills a default rather than adding a field.
+CREATABLE_PATHS: frozenset[str] = frozenset({"model.dtype", "model.revision"})
+
 
 def apply_overrides(
     raw: dict[str, Any], overrides: Mapping[str, Any]
@@ -309,7 +362,8 @@ def apply_overrides(
     """Apply ``--set path=value`` overrides (§9): dotted paths, ``[i]`` for
     list entries, values as JSON (bare words fall back to strings). The
     path must exist — an override that would *create* structure is a typo,
-    not an experiment."""
+    not an experiment — except for :data:`CREATABLE_PATHS`, the fields the
+    canonical form materializes whether or not they are authored."""
     out = json.loads(json.dumps(raw))  # deep copy, stays plain JSON types
     for dotted, value in overrides.items():
         node: Any = out
@@ -320,7 +374,9 @@ def apply_overrides(
             key, index = (
                 (match.group(1), int(match.group(2))) if match else (part, None)
             )
-            if not isinstance(node, dict) or key not in node:
+            if not isinstance(node, dict) or (
+                key not in node and not (last and dotted in CREATABLE_PATHS)
+            ):
                 raise ParseError(
                     "P2",
                     f"--set {dotted}: {key!r} does not exist in the document",

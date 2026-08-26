@@ -33,7 +33,7 @@ from tests.protocol._env import FIXTURES
 pytestmark = pytest.mark.smoke
 
 REPO = Path(__file__).resolve().parents[3]
-METHODS = str(REPO / "causalab/configs/methods")  # absolute: the workflow is in tmp
+METHODS = str(REPO / "causalab/configs/protocols")  # absolute: the workflow is in tmp
 
 #: A pure-read document that loads the fitted basis as a ``pca`` featurizer.
 #: Its ``file_path`` names the transform step's run tree, which is what makes

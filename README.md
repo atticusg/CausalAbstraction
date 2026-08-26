@@ -15,11 +15,19 @@ You write a high-level causal model describing *how you think* an LM solves a ta
    uv sync
    ```
 2. **Read the two specs.** [`docs/intervention_protocol.md`](docs/intervention_protocol.md) — the document format (sections, the `do` algebra, sweeps, validation, digests, the backend contract). [`docs/workflow_protocol.md`](docs/workflow_protocol.md) — chaining protocol runs with select/plot steps and a save manifest.
-3. **Run a method preset:**
+3. **Run a shipped protocol:**
    ```bash
-   uv run causalab explain  causalab/configs/methods/interchange.json --data-root <data>
-   uv run causalab run      causalab/configs/methods/interchange.json \
+   uv run causalab explain  causalab/configs/protocols/interchange.json --data-root <data>
+   uv run causalab run      causalab/configs/protocols/interchange.json \
        --data-root <data> --out runs/interchange --device cuda --dtype bf16
+   ```
+   Or run the same experiment as a **method** plus an **application** — the
+   method is the transferable half, the application names the network, the
+   addresses and the precision (spec §1.1):
+   ```bash
+   uv run causalab explain causalab/configs/methods/interchange.json          # what must be bound
+   uv run causalab run     causalab/configs/applications/weekdays_8b_interchange.json \
+       --data-root <data> --out runs/interchange --device cuda
    ```
 
 ## The CLI
@@ -31,15 +39,17 @@ You write a high-level causal model describing *how you think* an LM solves a ta
 | `explain <doc>` | models, forward plan, point count, derived `requires`, digest, save products |
 | `digest <doc>` | the campaign digest |
 
-Common flags: `--set path=value` (ad-hoc override — exploration only), `--data-root` / `--artifacts-root` (resolution roots), `--device` / `--dtype` (reference-backend placement, `run` only), `--points START:STOP` (execute one shard of a swept campaign — the seam external schedulers dispatch on; digests are unaffected). The same verbs dispatch on workflow documents (they carry a `steps` section).
+Common flags: `--set path=value` (ad-hoc override — exploration only), `--data-root` / `--artifacts-root` (resolution roots), `--device` (reference-backend placement, `run` only), `--dtype` (shorthand for `--set model.dtype=…`: precision is a document fact, so it enters the digest), `--points START:STOP` (execute one shard of a swept campaign — the seam external schedulers dispatch on; digests are unaffected). The same verbs dispatch on workflow documents (they carry a `steps` section).
+
+`run` also writes `<out>/protocol.json`: the canonical document (every default materialized — dtype and quantization included), its digest, the per-point provenance digests, and the method it was composed from. That file is what someone reproducing the run reads first.
 
 **Execution scale is not document vocabulary.** Documents and workflows never name devices, hosts, or job systems: backends own intra-run execution, and job dispatch is site tooling outside this repository (spec §8, "Execution scale").
 
-## Method presets
+## Shipped documents
 
-The golden-corpus documents ship as user-facing presets in [`causalab/configs/methods/`](causalab/configs/methods/):
+The golden-corpus documents ship as user-facing presets in [`causalab/configs/protocols/`](causalab/configs/protocols/) — complete protocol documents, network and all:
 
-| preset | method |
+| preset | experiment |
 |---|---|
 | `harvest` | activation harvesting at named sites/positions |
 | `interchange` | interchange intervention + IIA scoring |
@@ -51,7 +61,7 @@ The golden-corpus documents ship as user-facing presets in [`causalab/configs/me
 | `weekdays_das_sweep` | k × seed DAS fits at a located cell |
 | `weekdays_das_apply` | apply a fitted rotation (ArtifactIdentity-checked) |
 
-[`causalab/configs/workflows/weekdays_8b.json`](causalab/configs/workflows/weekdays_8b.json) chains locate → select → fit → apply → plots as one workflow document.
+[`causalab/configs/methods/`](causalab/configs/methods/) holds the same experiments with the network left open — methods, in the spec's §1.1 sense — and [`causalab/configs/applications/`](causalab/configs/applications/) the bindings that close them. [`causalab/configs/workflows/weekdays_8b.json`](causalab/configs/workflows/weekdays_8b.json) chains locate → select → fit → apply → plots as one workflow document.
 
 ## Repository layout
 
@@ -67,7 +77,8 @@ causalab/
 ├── causal/          # causal model primitives
 ├── tasks/           # task definitions (causal models + counterfactual generators)
 ├── io/              # disk I/O + plotting primitives
-└── configs/         # method presets (JSON documents) + workflow documents
+└── configs/         # protocols/ (complete documents) + methods/ + applications/
+                    #   + workflows/ — all JSON, no Python config system
 docs/                # the two specs, CODEBASE.md, TESTS.md, test_migration.md
 tests/               # tiered suite — see docs/TESTS.md
 ```
@@ -76,6 +87,7 @@ tests/               # tiered suite — see docs/TESTS.md
 
 - **Causal model**: your hypothesis about how the LM solves a task — variables, values, parent–child dependencies, mechanisms (`causalab/causal/`).
 - **Task**: a prompt distribution plus a causal model and counterfactual generators (`causalab/tasks/`).
+- **Method / application**: the two halves of a document — the method is what transfers between models (hypothesis, reads, writes, metrics, save), the application is what cannot (which network, which addresses, which precision). They compose into an ordinary protocol document, digest for digest.
 - **Intervention protocol**: one experiment as data — which activations are read, which are edited (`swap`, `add_scaled`, `gaussian`, …), in which intervened models, scored by which metrics. Sweeps expand a document into a campaign of points with content-deduped shared work.
 - **Workflow**: a chain of protocol executions plus select/plot/save steps, with dependencies derived from references — never authored ordering.
 
@@ -85,4 +97,4 @@ See [`docs/TESTS.md`](docs/TESTS.md). CPU tiers run with `uv run pytest -m "not 
 
 ## History
 
-The Hydra runner, `analyses/` chains, `methods/` as Python, SLURM dispatch, and the notebook demos were retired in the protocol refactor (PR #20); [`docs/test_migration.md`](docs/test_migration.md) is the ledger. Their intervention cores return as method presets and workflow documents.
+The Hydra runner, `analyses/` chains, `methods/` as Python, SLURM dispatch, and the notebook demos were retired in the protocol refactor (PR #20); [`docs/test_migration.md`](docs/test_migration.md) is the ledger. Their intervention cores return as shipped protocol documents and workflows.
