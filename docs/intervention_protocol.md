@@ -65,7 +65,9 @@ document, not a second file to keep in step with the first: a run document is
 self-contained, hashable and shareable exactly as a flat one is. The `method`
 half may instead be a **path** to a reusable method file (relative to the
 document, `"type": "method"` at its top level) — the loader inlines it, and
-the record of what ran carries the whole thing either way.
+the record of what ran carries the whole thing either way. A method file may
+also simply be pasted into the half; the `type` and `version` it brings along
+are checked, and a method digests the same inline as in its file.
 
 | | the **method** half | the **application** half |
 |---|---|---|

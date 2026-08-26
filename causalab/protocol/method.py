@@ -189,25 +189,27 @@ def parse_method(
     ``"type": "method"``, since nothing else identifies it — from the
     ``method`` section of a run document, which its key already labels.
     """
-    if standalone and raw.get("type") != "method":
+    declared = raw.get("type")
+    if standalone and declared != "method":
         raise ParseError(
             "P2",
             'a method file declares "type": "method" — it is the one document '
             "type that cannot be recognized by its shape",
             path="type",
         )
-    allowed = (
-        SECTION_ORDER
-        if standalone
-        else tuple(
-            section for section in SECTION_ORDER if section not in ("version", "type")
+    if declared is not None and declared != "method":
+        # an inline method needs no `type` (its key labels it), but a method
+        # file pasted in verbatim keeps one — legal, as long as it is honest
+        raise ParseError(
+            "P2",
+            f"this method declares type {declared!r}",
+            path=f"{path}.type",
         )
-    )
-    unknown = [key for key in raw if key not in allowed]
+    unknown = [key for key in raw if key not in SECTION_ORDER]
     if unknown:
         raise ParseError(
             "P3",
-            f"unknown section {unknown[0]!r}{suggest(unknown[0], allowed)}",
+            f"unknown section {unknown[0]!r}{suggest(unknown[0], SECTION_ORDER)}",
             path=f"{path}.{unknown[0]}",
         )
     _check_order(list(raw), what="method")
@@ -457,11 +459,15 @@ def compose(
     """
     method = parse_method(method_raw, standalone=method_is_file)
     _check_application_shape(application_raw)
-    if method_is_file and method_raw.get("version") != version:
+    # a method file states its version, and an inlined one may keep it; either
+    # way it is the same document's version or the two disagree about what
+    # they are
+    method_version = method_raw.get("version")
+    if method_version is not None and method_version != version:
         raise ValidationError(
             18,
-            f"version mismatch: the method file is version "
-            f"{method_raw.get('version')!r}, the document {version!r}",
+            f"version mismatch: the method is version {method_version!r}, the "
+            f"document {version!r}",
             path="version",
         )
     merged: dict[str, Any] = {}
