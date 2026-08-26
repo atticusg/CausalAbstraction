@@ -2,7 +2,6 @@
   "version": "1",
   "description": "DBM: a plain swap through a gate featurizer computes sigma(theta)*x_src + (1-sigma(theta))*x_base; theta trained under L1 with a temperature anneal. Gate width derived from (model, site); note anneal's value IS a list (start, end, frac) - list-typed fields are never sweep axes.",
   "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
-  "causal_model": {"key": "weekdays.causal_model"},
   "data": {
     "base":   {"dataset": "weekdays/train", "field": "input"},
     "counterfactual": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}

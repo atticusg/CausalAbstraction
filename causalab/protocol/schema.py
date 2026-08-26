@@ -225,7 +225,6 @@ SECTION_ORDER: tuple[str, ...] = (
     "version",
     "description",
     "model",
-    "causal_model",
     "data",
     "positions",
     "sites",
@@ -544,7 +543,6 @@ class Document:
     reads: Mapping[str, ReadSpec]
     save: tuple[SaveEntry, ...]
     description: str | None = None
-    causal_model: Mapping[str, Any] | None = None
     positions: Mapping[str, PositionSpec | Sweep | ArtifactRef] = dataclasses.field(
         default_factory=dict
     )
@@ -1724,15 +1722,6 @@ def parse_document(raw: Mapping[str, Any]) -> Document:
     description = normalized.get("description")
     if description is not None and not isinstance(description, str):
         raise ParseError("P2", "description is free text", path="description")
-    causal_model = None
-    if "causal_model" in normalized:
-        cm = _require_mapping(normalized["causal_model"], "causal_model")
-        _check_keys(cm, ("key",), "causal_model")
-        if "key" not in cm or not isinstance(cm["key"], str):
-            raise ParseError(
-                "P2", "causal_model needs a string 'key'", path="causal_model"
-            )
-        causal_model = dict(cm)
     save = _parse_save(normalized["save"], "save")
     if not save:
         raise ValidationError(10, "save must be non-empty", path="save")
@@ -1740,7 +1729,6 @@ def parse_document(raw: Mapping[str, Any]) -> Document:
         version=version,
         description=description,
         model=_parse_model(normalized["model"], "model"),
-        causal_model=causal_model,
         data=_parse_data(normalized["data"], "data"),
         positions=_parse_positions(normalized.get("positions", {}), "positions"),
         sites=_parse_sites(normalized["sites"], "sites"),

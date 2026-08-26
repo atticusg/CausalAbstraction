@@ -2,7 +2,6 @@
   "version": "1",
   "description": "Subspace stage: DAS at the located cell, k x seed = 9 fits from ONE harvest. k and seed are explicit {sweep: ...} axes; the parser trains all nine rotations in parallel against the same collected activations - where CLI multirun ran 9 processes, each re-loading the model and re-harvesting. The located cell arrives from stage 1's artifact, resolved by the parser at load; a missing artifact is a load error, never a silent default.",
   "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
-  "causal_model": {"key": "weekdays.causal_model"},
   "data": {
     "base":   {"dataset": "weekdays/train", "field": "input"},
     "counterfactual": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
