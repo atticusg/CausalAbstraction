@@ -33,7 +33,7 @@ PINS = Path(__file__).parent / "drift_goldens.json"
 _META_COLUMNS = {"value", "example", "point", "produced_by", "metric", "name"}
 
 
-def run_drift_documents(out_root: Path, device: str, dtype: str) -> dict[str, Path]:
+def run_drift_documents(out_root: Path, device: str) -> dict[str, Path]:
     dirs: dict[str, Path] = {}
     for name in DOCS:
         out = out_root / name.removesuffix("_im.json")
@@ -48,8 +48,6 @@ def run_drift_documents(out_root: Path, device: str, dtype: str) -> dict[str, Pa
             str(out),
             "--device",
             device,
-            "--dtype",
-            dtype,
         ]
         code = main(argv)
         if code != 0:

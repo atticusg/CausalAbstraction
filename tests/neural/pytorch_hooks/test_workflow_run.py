@@ -29,7 +29,7 @@ pytestmark = pytest.mark.smoke
 
 REPO = Path(__file__).resolve().parents[3]
 METHODS = str(
-    REPO / "causalab/configs/methods"
+    REPO / "causalab/configs/protocols"
 )  # absolute: the workflow file lives in tmp
 
 

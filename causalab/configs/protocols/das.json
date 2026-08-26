@@ -1,7 +1,7 @@
 {
   "version": "1",
   "description": "DAS: interchange through a trained 8-dim orthogonal subspace at L18. The feature dim d is DERIVED by the parser from (model, site); only k is authored.",
-  "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
+  "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main", "dtype": "bf16"},
   "causal_model": {"key": "weekdays.causal_model"},
   "data": {
     "base":   {"dataset": "weekdays/train", "field": "input"},
@@ -34,7 +34,7 @@
     "optimizer":  {"name": "adamw", "lr": 1e-3, "weight_decay": 0.0},
     "steps":      {"epochs": 10},
     "batch":      {"pairs": 16},
-    "precision":  {"feature": "fp32", "loss": "fp32", "model": "bf16"},
+    "precision":  {"feature": "fp32", "loss": "fp32"},
     "eval":       {"every": {"epochs": 1}, "split": "weekdays/test", "metrics": ["iia"]},
     "early_stop": {"metric": "iia", "patience": 3, "mode": "max"},
     "seed": 0

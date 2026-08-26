@@ -370,13 +370,13 @@ split), as one workflow over the golden-corpus documents 07/08/09:
   "version": "1",
   "description": "weekdays-8b: locate -> DAS k x seed fits at the best cell -> apply on test; scan heatmap + IIA-vs-k curves.",
   "steps": {
-    "locate": {"type": "protocol", "document": "../methods/weekdays_locate_scan.json"},
+    "locate": {"type": "protocol", "document": "../protocols/weekdays_locate_scan.json"},
     "best": {
       "type": "select", "from": "locate", "table": "iia.parquet",
       "choose": "max",
       "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}
     },
-    "fit": {"type": "protocol", "document": "../methods/weekdays_das_sweep.json",
+    "fit": {"type": "protocol", "document": "../protocols/weekdays_das_sweep.json",
              "set": {"positions.best": {"artifact": "best", "key": "best_pos"},
                      "sites.target.layer": {"artifact": "best", "key": "best_layer"}}},
     "best_fit": {
@@ -384,7 +384,7 @@ split), as one workflow over the golden-corpus documents 07/08/09:
       "choose": "max",
       "emit": {"best_k": "featurizers.rot.k", "best_seed": "train.seed"}
     },
-    "apply": {"type": "protocol", "document": "../methods/weekdays_das_apply.json",
+    "apply": {"type": "protocol", "document": "../protocols/weekdays_das_apply.json",
                "set": {"featurizers.rot.file_path": "fit/rot.safetensors",
                        "featurizers.rot.k": {"artifact": "best_fit", "key": "best_k"},
                        "featurizers.rot.entry": {

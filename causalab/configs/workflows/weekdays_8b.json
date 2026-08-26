@@ -2,14 +2,14 @@
   "version": "1",
   "description": "weekdays-8b: locate the best layer x position cell by interchange scan, fit DAS rotations (k x seed) at it, pick the best fit, apply it on the test split; scan heatmap and IIA-vs-k curves. The workflow-protocol worked example (docs/workflow_protocol.md sec. 10). The fit step is a 3 x 3 sweep, so its bundle holds nine rotations - 'best_fit' names the winning (k, seed) and 'apply' selects that entry.",
   "steps": {
-    "locate": {"type": "protocol", "document": "../methods/weekdays_locate_scan.json"},
+    "locate": {"type": "protocol", "document": "../protocols/weekdays_locate_scan.json"},
     "best": {
       "type": "select", "from": "locate", "table": "iia.parquet",
       "choose": "max",
       "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}
     },
     "fit": {
-      "type": "protocol", "document": "../methods/weekdays_das_sweep.json",
+      "type": "protocol", "document": "../protocols/weekdays_das_sweep.json",
       "set": {
         "positions.best": {"artifact": "best", "key": "best_pos"},
         "sites.target.layer": {"artifact": "best", "key": "best_layer"}
@@ -21,7 +21,7 @@
       "emit": {"best_k": "featurizers.rot.k", "best_seed": "train.seed"}
     },
     "apply": {
-      "type": "protocol", "document": "../methods/weekdays_das_apply.json",
+      "type": "protocol", "document": "../protocols/weekdays_das_apply.json",
       "set": {
         "featurizers.rot.file_path": "fit/rot.safetensors",
         "featurizers.rot.k": {"artifact": "best_fit", "key": "best_k"},

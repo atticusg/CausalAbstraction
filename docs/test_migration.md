@@ -168,7 +168,7 @@ file* paths are relative to `tests/`. Parametrized data dirs (`configs/`,
 | `_helpers/golden.py` | retired | retired | golden-runner capture/replay harness of the deleted runner tier |
 | `_helpers/runner_completion.py` | retired | retired | artifact-completion assertion bundle for deleted runners |
 | `_helpers/test_runner_completion.py` | retired | retired | unit tests of the retired helper above |
-| `configs/` (53 YAML: 3 top-level, `golden/` 21, `model/` 2, `smoke/` 27) | retired | retired | hydra runner configs; method presets moved to `causalab/configs/methods/*.json` and the corpus documents (`tests/protocols/*.json`) |
+| `configs/` (53 YAML: 3 top-level, `golden/` 21, `model/` 2, `smoke/` 27) | retired | retired | hydra runner configs; the presets moved to `causalab/configs/protocols/*.json` and the corpus documents (`tests/protocols/*.json`) |
 | `goldens/` (21 JSON) | retired | retired | runner-golden pins of the deleted chains; the numeric-anchor role passes to `protocol/corpus_digests.json` + the parity goldens — the chat-coherent GPU tier itself is a gap |
 | `test_compose.py` | retired | retired | tests hydra composition of deleted configs |
 | `test_exploration_pca.py` | retired | retired | GPU golden pin of the deleted exploration analysis on chat-coherent |

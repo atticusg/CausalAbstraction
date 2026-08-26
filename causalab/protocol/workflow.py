@@ -692,6 +692,7 @@ def load_workflow(
 
     # ---- rule 4 (references) + derived dependency edges (§3) -------------- #
     overridden_raw: dict[str, dict[str, Any]] = {}
+    inner_dirs: dict[str, Path] = {}
     deps: dict[str, set[str]] = {name: set() for name in steps}
     data_deps: dict[str, set[str]] = {name: set() for name in steps}
     step_refs: dict[str, set[tuple[str, str]]] = {}
@@ -757,6 +758,7 @@ def load_workflow(
                     path=f"steps.{name}",
                 ) from err
             overridden_raw[name] = inner_raw
+            inner_dirs[name] = doc_path.parent
             refs = _walk_step_refs(inner_raw, step_names)
             step_refs[name] = refs
             run_tree_loads[name] = _walk_run_tree_paths(inner_raw, step_names)
@@ -877,6 +879,7 @@ def load_workflow(
             loaded = load(
                 overridden_raw[name],
                 load_env,
+                base_dir=inner_dirs.get(name),
                 point_cap=step.max_points
                 if step.max_points is not None
                 else DEFAULT_POINT_CAP,

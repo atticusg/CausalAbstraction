@@ -33,7 +33,7 @@ from tests.protocol._env import FIXTURES
 pytestmark = pytest.mark.smoke
 
 REPO = Path(__file__).resolve().parents[3]
-METHODS = str(REPO / "causalab/configs/methods")
+METHODS = str(REPO / "causalab/configs/protocols")
 
 TINY = {"model.key": TINY_LLAMA}
 
