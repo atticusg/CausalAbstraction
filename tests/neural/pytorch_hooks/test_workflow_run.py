@@ -34,7 +34,7 @@ METHODS = str(
 
 
 def _tiny_workflow() -> dict:
-    tiny = {"model.key": TINY_LLAMA}
+    tiny = {"model.key": TINY_LLAMA, "model.dtype": "fp32"}
     return {
         "version": "1",
         "description": "the weekdays pipeline shape at tiny scale",

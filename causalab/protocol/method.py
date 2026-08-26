@@ -358,7 +358,7 @@ def compose(
     than a silent override: an application that could overrule its method
     would make the method's digest a claim about nothing.
     """
-    method = parse_method(method_raw)
+    parse_method(method_raw)  # the method half is checked as a method first
     _check_application_shape(application_raw)
     if application_raw.get("version") != method_raw.get("version"):
         raise ValidationError(

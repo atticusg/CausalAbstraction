@@ -267,9 +267,15 @@ def _check_loaded_featurizers(doc: Document, env: ResolutionEnv) -> None:
             )
             if fname in chain and str(entry.site) not in used_sites:
                 used_sites.append(str(entry.site))
+        realization = _canonical.canonical_model(doc.raw["model"])
         expected: dict[str, Any] = {
             "model_key": doc.model.key,
             "model_revision": doc.model.revision,
+            # the realization the bundle was fitted against is part of its
+            # identity (§8): a rotation fitted in bf16 does not apply to fp32
+            # activations just because the shapes agree
+            "model_dtype": realization["dtype"],
+            "model_quantization": realization.get("quantization"),
             "k": spec.k,
             "parametrization": spec.parametrization,
             "dtype": spec.dtype if spec.dtype is not None else "fp32",

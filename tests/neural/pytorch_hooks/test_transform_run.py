@@ -69,7 +69,7 @@ PROJECT_DOC = {
 
 
 def _workflow(project_doc: Path) -> dict:
-    tiny = {"model.key": TINY_LLAMA}
+    tiny = {"model.key": TINY_LLAMA, "model.dtype": "fp32"}
     return {
         "version": "1",
         "description": "harvest -> fit_pca -> (select, plot) and back into a protocol step",
