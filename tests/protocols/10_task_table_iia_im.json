@@ -2,7 +2,6 @@
   "version": "1",
   "description": "Interchange over a task-generated table (the dataset-serialization seam): swap the answer-slot residual from the counterfactual into base and score IIA against the causal model's post-intervention label. The answer forms come from the task's output_tokens declaration, and first_token grading keeps the table tokenizer-agnostic.",
   "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
-  "causal_model": {"key": "natural_domains_arithmetic.weekdays"},
   "data": {
     "base":   {"dataset": "weekdays/task_n4_s0", "field": "input"},
     "counterfactual": {"dataset": "weekdays/task_n4_s0", "field": "counterfactual_inputs[0]"}
