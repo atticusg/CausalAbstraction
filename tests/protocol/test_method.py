@@ -332,3 +332,18 @@ def test_the_shipped_method_is_open_exactly_where_it_should_be():
     assert method.signature.model is True
     assert method.signature.data == ("base", "counterfactual")
     assert method.signature.sites == {"target": ("layer",), "lm_head": ()}
+
+
+def test_a_method_file_may_be_pasted_in_verbatim(env):
+    """The obvious thing to do with a method file is paste it into the half —
+    its `type` and `version` come along, and both are simply checked."""
+    raw = split_doc()
+    inline = method_file(raw["method"])
+    raw["method"] = inline
+    assert load(raw, env).document_digest == load(base_doc(), env).document_digest
+    assert load(raw, env).method_digest == method_digest(inline)
+
+    wrong = dict(inline, version="2")
+    with pytest.raises(ValidationError) as err:
+        split_document({**raw, "method": wrong})
+    assert err.value.rule == 18
