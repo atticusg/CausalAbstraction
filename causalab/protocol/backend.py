@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from causalab.protocol.errors import ValidationError
+from causalab.protocol.plan import generated_budget
 from causalab.protocol.resolve import ResolutionEnv
 from causalab.protocol.schema import Document
 
@@ -37,6 +38,7 @@ CAPABILITIES: tuple[str, ...] = (
     "full_logits",
     "writable_attention_probs",
     "pytorch_fn_local",
+    "generate",
 )
 
 #: Metric kinds that need the whole vocabulary materialized (§8).
@@ -82,6 +84,11 @@ def requires(doc: Document) -> frozenset[str]:
     for metric in doc.metrics.values():
         if metric.kind in _FULL_VOCAB_METRICS:
             needed.add("full_logits")
+    for read in doc.reads.values():
+        if generated_budget(doc, read.pos) is not None:
+            # a continuation to address means the backend must decode one
+            needed.add("generate")
+            break
     return frozenset(needed)
 
 

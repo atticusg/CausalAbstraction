@@ -8,9 +8,9 @@ that something raised:
   bad JSON/YAML, a non-object where a table is required, a wrong value type,
   an unknown key (code ``P<n>``).
 * :class:`ValidationError` — the document parses but violates one of the
-  fifteen load-error rules of the spec's validation checklist
+  load-error rules of the spec's validation checklist
   (``docs/intervention_protocol.md`` §5); ``rule`` is the checklist item
-  number (code ``V1`` … ``V15``).
+  number (code ``V1`` … ``V<CHECKLIST_RULES>``).
 
 Both derive from :class:`ProtocolError` so callers that only care about
 "this document was refused" catch one type. ``path`` is the JSON-pointer-ish
@@ -25,11 +25,17 @@ import difflib
 from typing import Iterable, Sequence
 
 __all__ = [
+    "CHECKLIST_RULES",
     "ParseError",
     "ProtocolError",
     "ValidationError",
     "suggest",
 ]
+
+#: How many rules the §5 load-error checklist has. Named so the range guard
+#: below and the spec move together: adding a rule means editing §5 and this
+#: number, and nothing else.
+CHECKLIST_RULES: int = 16
 
 
 class ProtocolError(ValueError):
@@ -74,7 +80,7 @@ class ValidationError(ProtocolError):
     """
 
     def __init__(self, rule: int, message: str, *, path: str | None = None) -> None:
-        if not 1 <= rule <= 15:
+        if not 1 <= rule <= CHECKLIST_RULES:
             raise AssertionError(f"checklist rule out of range: {rule}")
         self.rule = rule
         super().__init__(f"V{rule}", message, path=path)

@@ -6,7 +6,14 @@ from __future__ import annotations
 
 import pytest
 
-from causalab.neural.pytorch_hooks.encoding import encode, resolve_position
+import torch
+
+from causalab.neural.pytorch_hooks.encoding import (
+    Continuation,
+    encode,
+    resolve_position,
+    resolve_steps,
+)
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import PositionSpec
 
@@ -156,3 +163,70 @@ def test_out_of_bounds_refuses(tokenizer):
     with pytest.raises(ProtocolError) as err:
         resolve_position(PositionSpec(index=500), batch, 0)
     assert "out of bounds" in str(err.value)
+
+
+# the continuation frame (§2.3) ---------------------------------------------- #
+
+
+def _continuation(widths: tuple[int, ...], steps: int = 4) -> Continuation:
+    """A decode of ``steps`` steps whose rows stopped at ``widths``."""
+    ids = torch.arange(len(widths) * steps).reshape(len(widths), steps)
+    return Continuation(token_ids=ids, widths=widths)
+
+
+def test_all_steps_is_the_rows_real_width():
+    cont = _continuation((4, 2))
+    spec = PositionSpec(generated={"max_new_tokens": 4}, all=True)
+    assert resolve_steps(spec, cont, 0) == [0, 1, 2, 3]
+    assert resolve_steps(spec, cont, 1) == [0, 1]
+
+
+def test_last_step_is_the_last_real_token():
+    """``index: -1`` on a row that stopped early means *its* last generated
+    token, not the batch's last step — that is what "the final generated
+    token" has to mean when rows end at different places."""
+    cont = _continuation((4, 2))
+    spec = PositionSpec(generated={"max_new_tokens": 4}, index=-1)
+    assert resolve_steps(spec, cont, 0) == [3]
+    assert resolve_steps(spec, cont, 1) == [1]
+
+
+def test_a_row_that_generated_nothing_contributes_no_positions():
+    """An immediate EOS is a result, not an authoring error: the row drops
+    out of the read instead of failing the run."""
+    cont = _continuation((3, 0))
+    for spec in (
+        PositionSpec(generated={"max_new_tokens": 3}, all=True),
+        PositionSpec(generated={"max_new_tokens": 3}, index=-1),
+        PositionSpec(generated={"max_new_tokens": 3}, index=0),
+    ):
+        assert resolve_steps(spec, cont, 1) == []
+
+
+def test_a_window_past_a_rows_end_clips():
+    cont = _continuation((4, 2))
+    spec = PositionSpec(generated={"max_new_tokens": 4}, span=(0, 3))
+    assert resolve_steps(spec, cont, 0) == [0, 1, 2]
+    assert resolve_steps(spec, cont, 1) == [0, 1]
+
+
+def test_an_index_past_a_rows_end_drops_it():
+    cont = _continuation((4, 2))
+    spec = PositionSpec(generated={"max_new_tokens": 4}, index=3)
+    assert resolve_steps(spec, cont, 0) == [3]
+    assert resolve_steps(spec, cont, 1) == []
+
+
+def test_real_ids_stop_at_the_rows_width():
+    cont = _continuation((4, 2))
+    assert cont.real_ids(1) == [4, 5]
+    assert cont.steps == 4
+
+
+def test_a_generated_position_without_a_decode_refuses():
+    """The frame does not exist until the model has run, so asking for it
+    outside a decode is a backend misuse, not a document error."""
+    batch = None
+    spec = PositionSpec(generated={"max_new_tokens": 4}, index=-1)
+    with pytest.raises(ProtocolError, match="does not exist until"):
+        resolve_position(spec, batch, 0)  # type: ignore[arg-type]

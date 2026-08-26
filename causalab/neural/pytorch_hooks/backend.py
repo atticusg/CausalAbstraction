@@ -1,9 +1,10 @@
 """The reference backend: intervention protocols on native pytorch hooks.
 
-Implements the spec §8 services for prefill-only documents on the two
-supported architecture families. Capabilities: ``grad`` (the train loop,
-train.py), ``paired_forward`` (cross-input operand flow via the lazy group
-executor), ``full_logits`` (lm_head is an ordinary tap), and
+Implements the spec §8 services on the two supported architecture families.
+Capabilities: ``grad`` (the train loop, train.py), ``paired_forward``
+(cross-input operand flow via the lazy group executor), ``full_logits``
+(lm_head is an ordinary tap), ``generate`` (the greedy decode in
+executor.py, which interventions reach only through the prefill), and
 ``pytorch_fn_local`` (this backend is local). ``writable_attention_probs``
 is deliberately absent — no attention-internal tap yet — so capability
 routing refuses those documents before anything runs.
@@ -36,7 +37,7 @@ __all__ = ["PytorchHooksBackend"]
 class PytorchHooksBackend(Backend):
     name = "pytorch_hooks"
     capabilities = frozenset(
-        {"grad", "paired_forward", "full_logits", "pytorch_fn_local"}
+        {"grad", "paired_forward", "full_logits", "generate", "pytorch_fn_local"}
     )
     is_local = True
 
