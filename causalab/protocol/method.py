@@ -1,26 +1,47 @@
-"""Methods and applications: the two halves of a protocol document (§1.1).
+"""The method / application split of a protocol document (§1.1).
 
 A protocol document answers two different questions at once. *What is the
 experiment* — the causal hypothesis, which values are read, what is written
 into whom, how the result is scored — and *what was it run on* — which
-network, at which addresses, in which precision. The first half transfers
-between models; the second half is exactly the part that cannot.
+network, over which rows, at which addresses, in which precision. The first
+half transfers to another model and another dataset; the second half is
+exactly the part that cannot.
 
-So a document may be authored as two files:
+So one document may say both, in two labelled halves:
 
-* a **method** (``"type": "method"``) — a protocol document with the
-  network-facing fields left open. It declares the site *names* it addresses
-  (``"target": {}``) without saying where they are, and it never declares
-  ``model``: a method that named a network would not be a method.
-* an **application** — the binding. It names the method, supplies ``model``
-  (key, revision, dtype, quantization) and the addresses, and may fill in
+```json
+{
+  "version": "1",
+  "application": {
+    "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main", "dtype": "bf16"},
+    "data":  {"base": {...}, "counterfactual": {...}},
+    "sites": {"target": {"layer": 18}}
+  },
+  "method": { ... reads, writes, intervened_models, metrics, save ... }
+}
+```
+
+**One file is one experiment run.** The split is a shape *inside* the
+document, not a second file to keep in step with the first: a run document is
+self-contained, hashable and shareable exactly as a flat one is. A ``method``
+may also be a path to a reusable method file, which the loader inlines at
+load — the record of what ran still carries the whole thing.
+
+The division of labour:
+
+* the **method** never names its inputs — no ``model``, no ``data``. It
+  declares the site *names* it addresses (``"target": {}``) without saying
+  where they are, and it must declare ``reads`` and ``save``: what is
+  measured is the method's, never the application's.
+* the **application** supplies the inputs — ``model`` (key, revision, dtype,
+  quantization) and ``data`` are required of it — plus the addresses and
   anything else the method left open.
 
-:func:`compose` puts them back together, and the composition is an ordinary
-protocol document: it validates, expands, canonicalizes and digests exactly
-as the same experiment written as one file. That transparency is the point —
-splitting a document is an authoring choice, never a second dialect, and a
-point protocol keeps digesting identically however it was reached (§7).
+:func:`compose` puts the halves back together, and the composition is an
+ordinary protocol document: it validates, expands, canonicalizes and digests
+exactly as the same experiment written flat. That transparency is the point —
+splitting is an authoring choice, never a second dialect, and a point protocol
+keeps digesting identically however it was reached (§7).
 
 The composition rule is one sentence: **an application may complete the
 method, never contradict it.** Every leaf comes from exactly one side, or
@@ -46,32 +67,42 @@ from causalab.protocol.schema import (
 )
 
 __all__ = [
-    "MethodDocument",
+    "MethodSection",
     "MethodSignature",
+    "SPLIT_SECTIONS",
     "compose",
     "document_type",
-    "is_method",
+    "is_split",
     "method_digest",
     "parse_method",
     "resolve_method_source",
     "signature_of",
+    "split_document",
 ]
 
-#: Sections an application supplies on top of a method. Everything else is
-#: legal on both sides — the split is a boundary an author draws, and the
-#: only structural rule is that the *method* never names the network.
-_APPLICATION_ONLY: frozenset[str] = frozenset({"model"})
+#: The two halves, in the order they appear in a split document (§1.1).
+SPLIT_SECTIONS: tuple[str, ...] = ("application", "method")
+
+#: Sections that name the run's *inputs*. A method declares neither — that is
+#: what makes it a method — and an application declares both.
+_INPUT_SECTIONS: tuple[str, ...] = ("model", "data")
+
+#: What a method must declare: the two sections that make it a method at all.
+_METHOD_SECTIONS: tuple[str, ...] = ("reads", "save")
+
+#: Keys legal at the top level of a split document.
+_TOP_LEVEL: tuple[str, ...] = ("version", "type", "description", *SPLIT_SECTIONS)
 
 
 def document_type(raw: Mapping[str, Any]) -> str:
-    """Which of the four document types ``raw`` is (§1.1).
+    """Which of the three document types ``raw`` is (§1.1).
 
-    Structure decides — ``steps`` is a workflow, ``method`` is an application,
-    anything else is a protocol document — except for methods, which are the
-    one shape structure cannot name (a method is a protocol document with
-    pieces missing, and so is a broken protocol document). A method therefore
-    declares ``"type": "method"``, and any document *may* declare its type to
-    have the claim checked.
+    Structure decides — ``steps`` is a workflow, anything else is a protocol
+    document, flat or split — except for a standalone **method** file, which
+    is the one shape structure cannot name (a method is a protocol document
+    with pieces missing, and so is a broken protocol document). A method file
+    therefore declares ``"type": "method"``, and any document *may* declare
+    its type to have the claim checked.
     """
     declared = raw.get("type")
     if declared is not None and declared not in DOCUMENT_TYPES:
@@ -86,9 +117,7 @@ def document_type(raw: Mapping[str, Any]) -> str:
     structural, because = (
         ("workflow", "it has a 'steps' section")
         if "steps" in raw
-        else ("application", "it has a 'method' section")
-        if "method" in raw
-        else ("protocol", "it has neither a 'method' nor a 'steps' section")
+        else ("protocol", "it has no 'steps' section")
     )
     if declared is not None and declared != structural:
         raise ParseError(
@@ -100,9 +129,10 @@ def document_type(raw: Mapping[str, Any]) -> str:
     return structural
 
 
-def is_method(raw: Mapping[str, Any]) -> bool:
-    """``True`` for a method document — the one type that cannot be run."""
-    return document_type(raw) == "method"
+def is_split(raw: Mapping[str, Any]) -> bool:
+    """``True`` for a protocol document written as ``application`` + ``method``
+    rather than flat (§1.1)."""
+    return any(section in raw for section in SPLIT_SECTIONS)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -110,8 +140,9 @@ class MethodSignature:
     """What an application must supply to close one method.
 
     ``sites`` maps a declared site name to the address fields still missing;
-    ``data`` names the input roles the method reads but does not bind;
-    ``model`` is always in the signature (a method never names a network).
+    ``data`` names the input roles nothing binds; ``model`` says the network
+    is unnamed — both are always true of a method on its own, which is the
+    definition rather than an accident.
     """
 
     model: bool
@@ -126,83 +157,93 @@ class MethodSignature:
         out: list[str] = []
         if self.model:
             out.append("model: key, revision, dtype (+ optional quantization)")
+        for role in self.data:
+            out.append(f"data.{role}: dataset, field")
         for name, fields in self.sites.items():
             if fields:
                 out.append(f"sites.{name}: {', '.join(fields)}")
-        for role in self.data:
-            out.append(f"data.{role}: dataset, field")
         return tuple(out)
 
 
 @dataclasses.dataclass(frozen=True)
-class MethodDocument:
-    """One parsed method: the raw tree plus the signature it exposes."""
+class MethodSection:
+    """One parsed method — a section of a run document, or a file of its own."""
 
     raw: Mapping[str, Any]
     signature: MethodSignature
     description: str | None = None
 
 
-def parse_method(raw: Mapping[str, Any]) -> MethodDocument:
-    """Strict-parse a method document.
+def parse_method(
+    raw: Mapping[str, Any], *, standalone: bool = True, path: str = "method"
+) -> MethodSection:
+    """Strict-parse a method.
 
-    A method is checked for everything that is checkable without a network:
-    its own key set and section order (§5.1–5.2), one global namespace
-    (§5.3), no reserved names, every site it addresses declared, and the two
-    sections that make it a method at all — ``reads`` (what it measures) and
-    ``save`` (what leaves the run). The rest of the §5 checklist needs the
-    addresses, and runs on the composition.
+    A method is checked for everything that is checkable without inputs: its
+    own key set and section order (§5.1–5.2), one global namespace (§5.3), no
+    reserved names, that it names neither ``model`` nor ``data``, and that it
+    declares ``reads`` and ``save``. The rest of the §5 checklist needs the
+    inputs and the addresses, and runs on the composition.
+
+    ``standalone`` distinguishes a method *file* — which must say
+    ``"type": "method"``, since nothing else identifies it — from the
+    ``method`` section of a run document, which its key already labels.
     """
-    if raw.get("type") != "method":
+    if standalone and raw.get("type") != "method":
         raise ParseError(
             "P2",
-            'a method document declares "type": "method" — it is the one '
-            "document type that cannot be recognized by its shape",
+            'a method file declares "type": "method" — it is the one document '
+            "type that cannot be recognized by its shape",
             path="type",
         )
-    unknown = [key for key in raw if key not in SECTION_ORDER]
+    allowed = (
+        SECTION_ORDER
+        if standalone
+        else tuple(
+            section for section in SECTION_ORDER if section not in ("version", "type")
+        )
+    )
+    unknown = [key for key in raw if key not in allowed]
     if unknown:
         raise ParseError(
             "P3",
-            f"unknown section {unknown[0]!r}{suggest(unknown[0], SECTION_ORDER)}",
-            path=unknown[0],
+            f"unknown section {unknown[0]!r}{suggest(unknown[0], allowed)}",
+            path=f"{path}.{unknown[0]}",
         )
     _check_order(list(raw), what="method")
-    if raw.get("version") != "1":
+    if standalone and raw.get("version") != "1":
         raise ParseError(
             "P2",
             f"unsupported version {raw.get('version')!r}; this loader reads "
             'version "1"',
         )
-    for section in _APPLICATION_ONLY:
+    for section in _INPUT_SECTIONS:
         if section in raw:
             raise ValidationError(
                 18,
-                f"a method declares no {section!r} — naming the network is what "
-                "makes a document an application (§1.1)",
-                path=section,
+                f"a method declares no {section!r}: naming the network and the "
+                "rows it runs over is the application's half (§1.1)",
+                path=f"{path}.{section}",
             )
-    for section in ("reads", "save"):
+    for section in _METHOD_SECTIONS:
         if section not in raw:
             raise ValidationError(
                 18,
                 f"a method needs {section!r}: the reads and the save manifest are "
-                "what the method *is* — an application supplies addresses, never "
-                "what is measured (§1.1)",
-                path=section,
+                "what the method *is* — an application supplies inputs and "
+                "addresses, never what is measured (§1.1)",
+                path=path,
             )
     _check_namespace(raw)
-    signature = signature_of(raw)
     description = raw.get("description")
     if description is not None and not isinstance(description, str):
-        raise ParseError("P2", "description is free text", path="description")
-    return MethodDocument(raw=raw, signature=signature, description=description)
+        raise ParseError("P2", "description is free text", path=f"{path}.description")
+    return MethodSection(raw=raw, signature=signature_of(raw), description=description)
 
 
 def _check_order(sections: list[str], *, what: str) -> None:
-    """§5.2 on a half-document: the sections a method or an application does
-    carry appear in the §1 order, and ``save`` — carried only by a method — is
-    still last."""
+    """§5.2 on a half-document: the sections this half does carry appear in the
+    §1 order, and ``save`` — carried only by a method — is still last."""
     ranks = {name: i for i, name in enumerate(SECTION_ORDER)}
     order = [ranks[section] for section in sections if section in ranks]
     if order != sorted(order):
@@ -241,8 +282,8 @@ def _check_namespace(raw: Mapping[str, Any]) -> None:
 
 def signature_of(raw: Mapping[str, Any]) -> MethodSignature:
     """What is still open in ``raw`` — computed the same way for a method and
-    for a composition, so "what is missing" and "did the application close it"
-    are one question asked twice."""
+    for a composition, so "what must be bound" and "did the application bind
+    it" are one question asked twice."""
     sites_raw = raw.get("sites")
     sites: dict[str, tuple[str, ...]] = {}
     for name in _site_names(raw):
@@ -316,23 +357,23 @@ def _roles(raw: Mapping[str, Any]) -> tuple[str, ...]:
 def resolve_method_source(
     reference: Any, *, base_dir: Path | None
 ) -> tuple[Mapping[str, Any], str | None]:
-    """Read an application's ``method`` field: an inline method object, or a
-    path relative to the application file (the same rule a workflow step's
-    ``document`` follows). Returns the method tree and the reference as
-    written (``None`` for an inline method)."""
+    """Read a document's ``method`` half: the method object inline (the usual
+    case — one file is one run), or a path to a reusable method file, relative
+    to the document (the rule a workflow step's ``document`` follows). Returns
+    the method tree and the reference as written (``None`` when inline)."""
     if isinstance(reference, Mapping):
         return reference, None
     if not isinstance(reference, str):
         raise ParseError(
             "P2",
-            "method is a path to a method document, or the method object inline",
+            "method is the method object inline, or a path to a method file",
             path="method",
         )
     if base_dir is None:
         raise ParseError(
             "P2",
-            f"method {reference!r} is a path, but this application was loaded "
-            "from memory — pass the document as a file, or inline the method",
+            f"method {reference!r} is a path, but this document was loaded from "
+            "memory — pass it as a file, or inline the method",
             path="method",
         )
     from causalab.protocol.loader import load_text
@@ -348,29 +389,84 @@ def resolve_method_source(
     return load_text(resolved), reference
 
 
+def split_document(
+    raw: Mapping[str, Any], *, base_dir: Path | None = None
+) -> tuple[dict[str, Any], Mapping[str, Any], str | None]:
+    """Flatten one split protocol document (§1.1).
+
+    Returns the composed flat document, the method half as it was read, and
+    the ``method`` reference when the method came from a file.
+    """
+    unknown = [key for key in raw if key not in _TOP_LEVEL]
+    if unknown:
+        raise ParseError(
+            "P3",
+            f"unknown section {unknown[0]!r}{suggest(unknown[0], _TOP_LEVEL)} — a "
+            f"split document's own sections are {list(SPLIT_SECTIONS)}, and every "
+            "protocol section lives inside one of them",
+            path=unknown[0],
+        )
+    order = [key for key in raw if key in SPLIT_SECTIONS]
+    if order != [section for section in SPLIT_SECTIONS if section in order]:
+        raise ValidationError(
+            2,
+            f"split sections out of order: got {order}, expected "
+            f"{list(SPLIT_SECTIONS)}",
+        )
+    for section in SPLIT_SECTIONS:
+        if section not in raw:
+            raise ValidationError(
+                18,
+                f"a split document carries both halves; {section!r} is missing (§1.1)",
+                path=section,
+            )
+    if raw.get("version") != "1":
+        raise ParseError(
+            "P2",
+            f"unsupported version {raw.get('version')!r}; this loader reads "
+            'version "1"',
+        )
+    method_raw, method_ref = resolve_method_source(raw["method"], base_dir=base_dir)
+    application_raw = raw["application"]
+    if not isinstance(application_raw, Mapping):
+        raise ParseError("P2", "application is an object", path="application")
+    composed = compose(
+        method_raw,
+        application_raw,
+        version=raw["version"],
+        description=raw.get("description"),
+        method_is_file=method_ref is not None,
+    )
+    return composed, method_raw, method_ref
+
+
 def compose(
-    method_raw: Mapping[str, Any], application_raw: Mapping[str, Any]
+    method_raw: Mapping[str, Any],
+    application_raw: Mapping[str, Any],
+    *,
+    version: str = "1",
+    description: Any = None,
+    method_is_file: bool = False,
 ) -> dict[str, Any]:
-    """Merge a method and an application into one protocol document (rule 18).
+    """Merge a method and an application into one flat protocol document.
 
     Sections merge recursively; at every leaf exactly one side supplies a
     value, or both supply the same one. A contradiction is a load error rather
     than a silent override: an application that could overrule its method
-    would make the method's digest a claim about nothing.
+    would make the method's digest a claim about nothing (rule 18).
     """
-    parse_method(method_raw)  # the method half is checked as a method first
+    method = parse_method(method_raw, standalone=method_is_file)
     _check_application_shape(application_raw)
-    if application_raw.get("version") != method_raw.get("version"):
+    if method_is_file and method_raw.get("version") != version:
         raise ValidationError(
             18,
-            f"version mismatch: the method is version "
-            f"{method_raw.get('version')!r}, the application "
-            f"{application_raw.get('version')!r}",
+            f"version mismatch: the method file is version "
+            f"{method_raw.get('version')!r}, the document {version!r}",
             path="version",
         )
     merged: dict[str, Any] = {}
     for section in SECTION_ORDER:
-        if section in ("type", "description"):
+        if section in ("version", "type", "description"):
             continue
         in_method = section in method_raw
         in_app = section in application_raw
@@ -382,37 +478,40 @@ def compose(
             merged[section] = method_raw[section]
         elif in_app:
             merged[section] = application_raw[section]
-    description = _join_descriptions(
-        method_raw.get("description"), application_raw.get("description")
-    )
-    composed: dict[str, Any] = {"version": merged.pop("version")}
-    if description is not None:
-        composed["description"] = description
+    composed: dict[str, Any] = {"version": version}
+    joined = _join_descriptions(method.description, description)
+    if joined is not None:
+        composed["description"] = joined
     composed.update(merged)
     _check_closed(composed)
     return composed
 
 
 def _check_application_shape(raw: Mapping[str, Any]) -> None:
-    kind = document_type(raw)  # a declared `type` is checked against the shape
-    if kind != "application" and "method" not in raw:
-        raise ValidationError(
-            18, "an application names the method it binds", path="method"
-        )
-    allowed = ("method", *SECTION_ORDER)
-    unknown = [key for key in raw if key not in allowed]
+    """The application half: protocol sections only, in order, and the two
+    input sections it exists to supply."""
+    unknown = [key for key in raw if key not in SECTION_ORDER or key == "type"]
     if unknown:
         raise ParseError(
             "P3",
-            f"unknown section {unknown[0]!r}{suggest(unknown[0], allowed)}",
-            path=unknown[0],
+            f"unknown section {unknown[0]!r}{suggest(unknown[0], SECTION_ORDER)}",
+            path=f"application.{unknown[0]}",
         )
-    if "method" not in raw:
+    if "version" in raw:
         raise ValidationError(
-            18, "an application names the method it binds", path="method"
+            2,
+            "'version' is the document's, not the application half's (§1.1)",
+            path="application.version",
         )
-    ordered = [key for key in raw if key != "method"]
-    _check_order(ordered, what="application")
+    _check_order(list(raw), what="application")
+    for section in _INPUT_SECTIONS:
+        if section not in raw:
+            raise ValidationError(
+                18,
+                f"the application declares {section!r}: the network and the rows "
+                "it runs over are the inputs a method leaves open (§1.1)",
+                path=f"application.{section}",
+            )
 
 
 def _merge(left: Any, right: Any, *, path: str) -> Any:
@@ -428,17 +527,18 @@ def _merge(left: Any, right: Any, *, path: str) -> Any:
         return left  # a restatement, cross-checked (§2.12)
     raise ValidationError(
         18,
-        f"the application sets {path} to {right!r}, but its method already "
+        f"the application sets {path} to {right!r}, but the method already "
         f"fixed it at {left!r} — an application completes a method, it never "
         "overrules one (§1.1). Drop the field here, or fork the method.",
         path=path,
     )
 
 
-def _join_descriptions(method: Any, application: Any) -> str | None:
-    """Both halves describe themselves; the composition keeps both, method
-    first — one document, one ``description``, nothing dropped."""
-    parts = [part for part in (method, application) if isinstance(part, str) and part]
+def _join_descriptions(method: Any, document: Any) -> str | None:
+    """The method describes itself and the document describes the run; the
+    composition keeps both, method first — one document, one ``description``,
+    nothing dropped."""
+    parts = [part for part in (method, document) if isinstance(part, str) and part]
     if not parts:
         return None
     return "\n\n".join(parts)
@@ -446,7 +546,7 @@ def _join_descriptions(method: Any, application: Any) -> str | None:
 
 def _check_closed(composed: Mapping[str, Any]) -> None:
     """Every hole filled — reported as the list of what is still open, so a
-    half-bound application says what it forgot instead of failing as a parse
+    half-bound document says what it forgot instead of failing as a parse
     error three layers down."""
     signature = signature_of(composed)
     if signature.is_closed():
@@ -454,23 +554,28 @@ def _check_closed(composed: Mapping[str, Any]) -> None:
     lines = "\n  ".join(signature.lines())
     raise ValidationError(
         18,
-        "the composition is still open — the application binds no value for:"
-        f"\n  {lines}",
+        f"the composition is still open — nothing binds:\n  {lines}",
     )
 
 
 def method_digest(method_raw: Mapping[str, Any]) -> str:
     """The method's content hash.
 
-    Not a canonical protocol digest: a method has no model, so nothing about
-    it can be derived (widths, dataset digests) and there is nothing to
-    materialize. It is the sha256 of the method's own bytes under the
-    canonical serialization (sorted keys, normalized numbers), minus the
-    ``type`` declaration — enough to answer "is this the same method?", which
-    is the question a shared method is asked.
+    Not a canonical protocol digest: a method has no model and no data, so
+    nothing about it can be derived (widths, dataset digests) and there is
+    nothing to materialize. It is the sha256 of the method's own bytes under
+    the canonical serialization (sorted keys, normalized numbers), minus the
+    bookkeeping a method *file* carries — enough to answer "is this the same
+    method?", which is the question a shared method is asked, and to answer it
+    identically for a method inlined in a run and the file it came from.
     """
-    from causalab.protocol.canonical import canonical_bytes
     import hashlib
 
-    body = {key: value for key, value in method_raw.items() if key != "type"}
+    from causalab.protocol.canonical import canonical_bytes
+
+    body = {
+        key: value
+        for key, value in method_raw.items()
+        if key not in ("type", "version")
+    }
     return hashlib.sha256(canonical_bytes(body)).hexdigest()

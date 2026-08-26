@@ -1,9 +1,10 @@
-"""Methods, applications and their composition (spec §1.1, checklist rule 18).
+"""The method / application split of a protocol document (§1.1, rule 18).
 
-The contract under test is one sentence — *an application may complete a
-method, never contradict it* — plus the property that makes the split safe to
-use: composing is **transparent**, so the same experiment digests identically
-whether it was authored as one file or as two.
+One file is one experiment run; the split is a shape *inside* it. The contract
+under test is one sentence — *an application may complete a method, never
+contradict it* — plus the property that makes the split safe to use: composing
+is **transparent**, so the same experiment digests identically whether it was
+written flat or in halves.
 """
 
 from __future__ import annotations
@@ -18,12 +19,15 @@ import pytest
 from causalab.protocol.errors import ParseError, ValidationError
 from causalab.protocol.loader import load
 from causalab.protocol.method import (
-    compose,
     document_type,
+    is_split,
     method_digest,
     parse_method,
     signature_of,
+    split_document,
 )
+
+from causalab.protocol.schema import SECTION_ORDER
 
 from tests.protocol._docs import base_doc, in_order
 
@@ -31,34 +35,40 @@ pytestmark = pytest.mark.unit
 
 REPO = Path(__file__).resolve().parents[2]
 SHIPPED_METHOD = REPO / "causalab/configs/methods/interchange.json"
-SHIPPED_APPLICATION = (
-    REPO / "causalab/configs/applications/weekdays_8b_interchange.json"
-)
+SHIPPED_RUN = REPO / "causalab/configs/runs/weekdays_8b_interchange.json"
+
+#: What the application half owns: the run's inputs, plus the addresses.
+APPLICATION_SECTIONS = ("model", "data", "sites")
 
 
-def as_method(raw: dict[str, Any]) -> dict[str, Any]:
-    """A method file: ``type`` second, sections in the §1 order."""
-    ordered = in_order(raw)
-    return {"version": ordered.pop("version"), "type": "method", **ordered}
-
-
-def split_doc() -> tuple[dict[str, Any], dict[str, Any]]:
-    """The minimal document of ``base_doc()``, authored as a method plus an
-    application: the method keeps everything but the network and the layer."""
-    doc = base_doc()
-    method = as_method({k: v for k, v in doc.items() if k != "model"})
+def split_doc() -> dict[str, Any]:
+    """``base_doc()``, written in halves: the method keeps everything but the
+    inputs and the layer."""
+    doc = in_order(base_doc())
+    method = {
+        key: value
+        for key, value in doc.items()
+        if key not in ("version", *APPLICATION_SECTIONS)
+    }
     method["sites"] = {
         "tgt": {"component": "block_output"},
         "lm_head": {"component": "lm_head"},
     }
-    application = {
+    method = {key: method[key] for key in doc if key in method}
+    return {
         "version": "1",
-        "type": "application",
+        "application": {
+            "model": doc["model"],
+            "data": doc["data"],
+            "sites": {"tgt": {"layer": 3}},
+        },
         "method": method,
-        "model": doc["model"],
-        "sites": {"tgt": {"layer": 3}},
     }
-    return method, application
+
+
+def method_file(raw: dict[str, Any]) -> dict[str, Any]:
+    """The same method as a standalone, reusable file."""
+    return {"version": "1", "type": "method", **raw}
 
 
 # --------------------------------------------------------------------------- #
@@ -66,12 +76,14 @@ def split_doc() -> tuple[dict[str, Any], dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 
 
-def test_document_type_dispatches_on_structure_and_declaration():
-    method, application = split_doc()
+def test_a_split_document_is_a_protocol_document():
+    """Flat or split, it is one experiment — the type does not fork."""
     assert document_type(base_doc()) == "protocol"
-    assert document_type(method) == "method"
-    assert document_type(application) == "application"
+    assert document_type(split_doc()) == "protocol"
+    assert not is_split(base_doc())
+    assert is_split(split_doc())
     assert document_type({"version": "1", "steps": {}}) == "workflow"
+    assert document_type(method_file(split_doc()["method"])) == "method"
 
 
 def test_a_declared_type_that_contradicts_the_structure_is_refused():
@@ -83,42 +95,75 @@ def test_a_declared_type_that_contradicts_the_structure_is_refused():
 
 def test_an_unknown_type_is_refused_with_suggestions():
     with pytest.raises(ParseError) as err:
-        document_type({"version": "1", "type": "aplication"})
+        document_type({"version": "1", "type": "methods"})
     assert err.value.code == "P4"
-    assert "application" in str(err.value)
+    assert "method" in str(err.value)
 
 
 # --------------------------------------------------------------------------- #
-# what a method is
+# what each half is
 # --------------------------------------------------------------------------- #
 
 
-def test_a_method_may_not_name_a_network():
-    method, _ = split_doc()
-    method["model"] = {"key": "gpt2"}
+@pytest.mark.parametrize("section", ["model", "data"])
+def test_a_method_may_not_name_its_inputs(section):
+    """The network and the rows are what a method leaves open — including the
+    data, which is why a method transfers to another task."""
+    raw = split_doc()
+    method = {section: raw["application"][section], **raw["method"]}
+    raw["method"] = {key: method[key] for key in SECTION_ORDER if key in method}
     with pytest.raises(ValidationError) as err:
-        parse_method(in_order(method) | {"type": "method"})
+        split_document(raw)
     assert err.value.rule == 18
+    assert section in str(err.value)
 
 
 @pytest.mark.parametrize("section", ["reads", "save"])
 def test_a_method_declares_what_it_measures(section):
-    method, _ = split_doc()
-    del method[section]
+    raw = split_doc()
+    del raw["method"][section]
     with pytest.raises(ValidationError) as err:
-        parse_method(method)
+        split_document(raw)
     assert err.value.rule == 18
 
 
+@pytest.mark.parametrize("section", ["model", "data"])
+def test_the_application_declares_the_inputs(section):
+    raw = split_doc()
+    del raw["application"][section]
+    with pytest.raises(ValidationError) as err:
+        split_document(raw)
+    assert err.value.rule == 18
+    assert section in str(err.value)
+
+
+def test_both_halves_are_required():
+    with pytest.raises(ValidationError) as err:
+        split_document({"version": "1", "application": split_doc()["application"]})
+    assert err.value.rule == 18
+    assert "method" in str(err.value)
+
+
+def test_a_protocol_section_at_the_top_level_of_a_split_document_is_refused():
+    """Every protocol section lives inside one half — the error says so."""
+    raw = split_doc()
+    raw["sites"] = {"tgt": {"layer": 3}}
+    with pytest.raises(ParseError) as err:
+        split_document(raw)
+    assert err.value.code == "P3"
+    assert "application" in str(err.value)
+
+
 def test_method_signature_names_exactly_what_is_open():
-    method, _ = split_doc()
-    signature = parse_method(method).signature
-    assert signature.model is True
-    assert signature.sites == {"tgt": ("layer",), "lm_head": ()}
-    assert signature.data == ()
-    assert not signature.is_closed()
-    assert signature.lines() == (
+    method = parse_method(split_doc()["method"], standalone=False)
+    assert method.signature.model is True
+    assert method.signature.data == ("base", "counterfactual")
+    assert method.signature.sites == {"tgt": ("layer",), "lm_head": ()}
+    assert not method.signature.is_closed()
+    assert method.signature.lines() == (
         "model: key, revision, dtype (+ optional quantization)",
+        "data.base: dataset, field",
+        "data.counterfactual: dataset, field",
         "sites.tgt: layer",
     )
 
@@ -126,18 +171,15 @@ def test_method_signature_names_exactly_what_is_open():
 def test_an_unbound_site_name_is_in_the_signature():
     """A site a read references but the method leaves undeclared still has to
     be supplied — the signature is about addresses, not about declarations."""
-    method, _ = split_doc()
-    del method["sites"]["tgt"]
-    assert signature_of(method).sites["tgt"] == ("component",)
+    raw = split_doc()["method"]
+    del raw["sites"]["tgt"]
+    assert signature_of(raw).sites["tgt"] == ("component",)
 
 
-def test_a_method_digests_by_content_not_by_declaration():
-    method, _ = split_doc()
-    same_words_different_order = {
-        "type": "method",
-        **{k: v for k, v in method.items() if k != "type"},
-    }
-    assert method_digest(method) == method_digest(same_words_different_order)
+def test_a_method_digests_by_content_not_by_bookkeeping():
+    """An inlined method and the file it came from are the same method."""
+    method = split_doc()["method"]
+    assert method_digest(method) == method_digest(method_file(method))
     edited = copy.deepcopy(method)
     edited["metrics"]["ld"]["a"] = "other_answer"
     assert method_digest(edited) != method_digest(method)
@@ -149,113 +191,120 @@ def test_a_method_digests_by_content_not_by_declaration():
 
 
 def test_composition_is_transparent(env):
-    """The property the whole split rests on: two files or one, the canonical
+    """The property the whole split rests on: halves or flat, the canonical
     bytes — and so the digest, the provenance unit — are the same."""
-    method, application = split_doc()
-    assert compose(method, application) == in_order(base_doc())
+    composed, _, _ = split_document(split_doc())
+    assert composed == in_order(base_doc())
     assert (
-        load(application, env).document_digest == load(base_doc(), env).document_digest
+        load(split_doc(), env).document_digest == load(base_doc(), env).document_digest
     )
 
 
 def test_an_application_may_restate_what_the_method_already_fixed(env):
-    method, application = split_doc()
-    application["sites"]["lm_head"] = {"component": "lm_head"}  # the same value
-    assert (
-        load(application, env).document_digest == load(base_doc(), env).document_digest
-    )
+    raw = split_doc()
+    raw["application"]["sites"]["lm_head"] = {"component": "lm_head"}  # same value
+    assert load(raw, env).document_digest == load(base_doc(), env).document_digest
 
 
 def test_an_application_may_not_overrule_its_method():
-    method, application = split_doc()
-    application["sites"]["tgt"]["component"] = "mlp_output"
+    raw = split_doc()
+    raw["application"]["sites"]["tgt"]["component"] = "mlp_output"
     with pytest.raises(ValidationError) as err:
-        compose(method, application)
+        split_document(raw)
     assert err.value.rule == 18
     assert "never overrules one" in str(err.value)
 
 
 def test_an_unfilled_hole_is_refused_by_name():
-    method, application = split_doc()
-    del application["sites"]["tgt"]["layer"]
+    raw = split_doc()
+    del raw["application"]["sites"]["tgt"]["layer"]
     with pytest.raises(ValidationError) as err:
-        compose(method, application)
+        split_document(raw)
     assert err.value.rule == 18
     assert "sites.tgt: layer" in str(err.value)
 
 
-def test_a_version_mismatch_is_refused():
-    method, application = split_doc()
-    application["version"] = "2"
+def test_the_halves_appear_in_order():
+    raw = split_doc()
+    reordered = {
+        "version": raw["version"],
+        "method": raw["method"],
+        "application": raw["application"],
+    }
     with pytest.raises(ValidationError) as err:
-        compose(method, application)
-    assert err.value.rule == 18
+        split_document(reordered)
+    assert err.value.rule == 2
 
 
 def test_descriptions_join_method_first():
-    method, application = split_doc()
-    method = as_method({**method, "description": "swap the residual"})
-    application = {
-        "version": "1",
-        "type": "application",
-        "description": "at L3 in gpt2",
-        "method": method,
-        **{k: v for k, v in application.items() if k in ("model", "sites")},
-    }
-    assert compose(method, application)["description"] == (
-        "swap the residual\n\nat L3 in gpt2"
-    )
+    raw = split_doc()
+    raw["description"] = "at L3 in gpt2"
+    raw["method"] = {"description": "swap the residual", **raw["method"]}
+    composed, _, _ = split_document(raw)
+    assert composed["description"] == "swap the residual\n\nat L3 in gpt2"
 
 
-def test_composed_documents_sweep_from_the_application(env):
-    """A layer scan is an edit of the application; the method is untouched and
-    keeps its digest."""
-    method, application = split_doc()
-    before = method_digest(method)
-    application["sites"]["tgt"]["layer"] = {"sweep": [1, 2, 3]}
-    loaded = load(application, env)
+def test_a_sweep_in_the_application_expands(env):
+    """A layer scan is an edit of the application half; the method is
+    untouched and keeps its digest."""
+    raw = split_doc()
+    before = method_digest(raw["method"])
+    raw["application"]["sites"]["tgt"]["layer"] = {"sweep": [1, 2, 3]}
+    loaded = load(raw, env)
     assert len(loaded.expansion.points) == 3
-    assert method_digest(method) == before
+    assert method_digest(raw["method"]) == before
 
 
-def test_a_method_cannot_be_run(env):
-    method, _ = split_doc()
+def test_overrides_address_the_composition(env):
+    """``--set`` paths are the flat document's, whichever form was authored —
+    one override vocabulary for both."""
+    loaded = load(
+        split_doc(), env, overrides={"sites.tgt.layer": 5, "model.dtype": "bf16"}
+    )
+    assert loaded.canonical_document["sites"]["tgt"]["layer"] == 5
+    assert loaded.canonical_document["model"]["dtype"] == "bf16"
+
+
+# --------------------------------------------------------------------------- #
+# method files, and the loaded record
+# --------------------------------------------------------------------------- #
+
+
+def test_a_method_file_cannot_be_run(env):
     with pytest.raises(ValidationError) as err:
-        load(method, env)
+        load(method_file(split_doc()["method"]), env)
     assert err.value.rule == 18
     assert "nothing to run" in str(err.value)
 
 
-# --------------------------------------------------------------------------- #
-# the loaded record
-# --------------------------------------------------------------------------- #
-
-
-def test_the_load_reports_the_method_it_composed(env, tmp_path):
-    method, application = split_doc()
-    loaded = load(application, env)
-    assert loaded.method_digest == method_digest(method)
-    assert loaded.method_ref is None  # inline
+def test_the_load_reports_the_method_it_composed(env):
+    raw = split_doc()
+    loaded = load(raw, env)
+    assert loaded.method_digest == method_digest(raw["method"])
+    assert loaded.method_ref is None  # inline: one file is one run
     assert load(base_doc(), env).method_digest is None
 
 
-def test_a_method_path_resolves_against_the_application_file(env, tmp_path):
-    method, application = split_doc()
+def test_a_method_path_resolves_against_the_document(env, tmp_path):
+    raw = split_doc()
     (tmp_path / "methods").mkdir()
-    (tmp_path / "methods/m.json").write_text(json.dumps(method))
-    application["method"] = "methods/m.json"
-    path = tmp_path / "app.json"
-    path.write_text(json.dumps(application))
+    (tmp_path / "methods/m.json").write_text(json.dumps(method_file(raw["method"])))
+    inline_digest = method_digest(raw["method"])
+    raw["method"] = "methods/m.json"
+    path = tmp_path / "run.json"
+    path.write_text(json.dumps(raw))
     loaded = load(path, env)
     assert loaded.method_ref == "methods/m.json"
-    assert loaded.method_digest == method_digest(method)
+    # the same method, whether it was inlined or referenced
+    assert loaded.method_digest == inline_digest
+    assert loaded.document_digest == load(split_doc(), env).document_digest
 
 
 def test_a_missing_method_file_is_a_load_error(env, tmp_path):
-    _, application = split_doc()
-    application["method"] = "methods/nowhere.json"
-    path = tmp_path / "app.json"
-    path.write_text(json.dumps(application))
+    raw = split_doc()
+    raw["method"] = "methods/nowhere.json"
+    path = tmp_path / "run.json"
+    path.write_text(json.dumps(raw))
     with pytest.raises(ValidationError) as err:
         load(path, env)
     assert err.value.rule == 18
@@ -266,19 +315,20 @@ def test_a_missing_method_file_is_a_load_error(env, tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def test_the_shipped_application_composes_and_binds_everything(env):
-    loaded = load(SHIPPED_APPLICATION, env)
-    assert loaded.method_ref == "../methods/interchange.json"
-    model = loaded.canonical_document["model"]
-    assert model["dtype"] == "bf16"
+def test_the_shipped_run_document_composes_and_binds_everything(env):
+    loaded = load(SHIPPED_RUN, env)
+    assert loaded.method_ref is None
+    assert loaded.canonical_document["model"]["dtype"] == "bf16"
     assert loaded.canonical_document["sites"]["target"] == {
         "component": "block_output",
         "layer": 18,
     }
+    # the inlined method is the shipped method file, byte for byte
+    assert loaded.method_digest == method_digest(json.loads(SHIPPED_METHOD.read_text()))
 
 
 def test_the_shipped_method_is_open_exactly_where_it_should_be():
     method = parse_method(json.loads(SHIPPED_METHOD.read_text()))
-    assert method.signature.sites == {"target": ("layer",), "lm_head": ()}
-    assert method.signature.data == ()
     assert method.signature.model is True
+    assert method.signature.data == ("base", "counterfactual")
+    assert method.signature.sites == {"target": ("layer",), "lm_head": ()}

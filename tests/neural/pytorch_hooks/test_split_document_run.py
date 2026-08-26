@@ -1,9 +1,9 @@
-"""An application executes, end to end, on tiny-random (CPU).
+"""A split run document executes, end to end, on tiny-random (CPU).
 
-The composition tests in ``tests/protocol/test_method.py`` prove that a method
-plus an application *is* a protocol document. This one proves the boring half
-of the same claim: nothing downstream — planner, executor, stamping — has to
-know, and the run's record names the method it came from.
+The composition tests in ``tests/protocol/test_method.py`` prove that an
+``application`` + ``method`` document *is* a protocol document. This one
+proves the boring half of the same claim: nothing downstream — planner,
+executor, stamping — has to know, and the run's record names the method.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from tests.neural.pytorch_hooks.conftest import TINY_LLAMA
 pytestmark = pytest.mark.smoke
 
 REPO = Path(__file__).resolve().parents[3]
-APPLICATION = REPO / "causalab/configs/applications/weekdays_8b_interchange.json"
+RUN_DOCUMENT = REPO / "causalab/configs/runs/weekdays_8b_interchange.json"
 
 
 @pytest.fixture(scope="module")
@@ -33,12 +33,12 @@ def artifacts_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return root
 
 
-def test_the_shipped_application_runs_and_records_its_method(artifacts_root, tmp_path):
+def test_the_shipped_run_document_runs_and_records_its_method(artifacts_root, tmp_path):
     out = tmp_path / "out"
     code = main(
         [
             "run",
-            str(APPLICATION),
+            str(RUN_DOCUMENT),
             "--data-root",
             str(FIXTURES / "data"),
             "--artifacts-root",
@@ -60,6 +60,7 @@ def test_the_shipped_application_runs_and_records_its_method(artifacts_root, tmp
     assert set(iia.unique()) <= {0.0, 1.0}
 
     record = json.loads((out / "protocol.json").read_text())
-    assert record["method"]["ref"] == "../methods/interchange.json"
+    assert record["method"]["ref"] is None  # inlined: one file is one run
+    assert len(record["method"]["digest"]) == 64
     assert record["canonical"]["model"]["dtype"] == "fp32"
     assert record["canonical"]["sites"]["target"]["layer"] == 1

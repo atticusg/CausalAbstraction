@@ -21,12 +21,12 @@ You write a high-level causal model describing *how you think* an LM solves a ta
    uv run causalab run      causalab/configs/protocols/interchange.json \
        --data-root <data> --out runs/interchange --device cuda --dtype bf16
    ```
-   Or run the same experiment as a **method** plus an **application** — the
-   method is the transferable half, the application names the network, the
-   addresses and the precision (spec §1.1):
+   Or run the same experiment as one document split into its two halves — the
+   **method** is the transferable half, the **application** names the network,
+   the data, the addresses and the precision (spec §1.1):
    ```bash
    uv run causalab explain causalab/configs/methods/interchange.json          # what must be bound
-   uv run causalab run     causalab/configs/applications/weekdays_8b_interchange.json \
+   uv run causalab run     causalab/configs/runs/weekdays_8b_interchange.json \
        --data-root <data> --out runs/interchange --device cuda
    ```
 
@@ -61,7 +61,7 @@ The golden-corpus documents ship as user-facing presets in [`causalab/configs/pr
 | `weekdays_das_sweep` | k × seed DAS fits at a located cell |
 | `weekdays_das_apply` | apply a fitted rotation (ArtifactIdentity-checked) |
 
-[`causalab/configs/methods/`](causalab/configs/methods/) holds the same experiments with the network left open — methods, in the spec's §1.1 sense — and [`causalab/configs/applications/`](causalab/configs/applications/) the bindings that close them. [`causalab/configs/workflows/weekdays_8b.json`](causalab/configs/workflows/weekdays_8b.json) chains locate → select → fit → apply → plots as one workflow document.
+[`causalab/configs/runs/`](causalab/configs/runs/) holds the same experiment as a **split run document** (`application` + `method` in one file, spec §1.1), and [`causalab/configs/methods/`](causalab/configs/methods/) the reusable method on its own — the network- and data-independent half. [`causalab/configs/workflows/weekdays_8b.json`](causalab/configs/workflows/weekdays_8b.json) chains locate → select → fit → apply → plots as one workflow document.
 
 ## Repository layout
 
@@ -77,8 +77,8 @@ causalab/
 ├── causal/          # causal model primitives
 ├── tasks/           # task definitions (causal models + counterfactual generators)
 ├── io/              # disk I/O + plotting primitives
-└── configs/         # protocols/ (complete documents) + methods/ + applications/
-                    #   + workflows/ — all JSON, no Python config system
+└── configs/         # protocols/ (flat documents) + runs/ (split ones) +
+                    #   methods/ + workflows/ — JSON, no Python config system
 docs/                # the two specs, CODEBASE.md, TESTS.md, test_migration.md
 tests/               # tiered suite — see docs/TESTS.md
 ```
@@ -87,7 +87,7 @@ tests/               # tiered suite — see docs/TESTS.md
 
 - **Causal model**: your hypothesis about how the LM solves a task — variables, values, parent–child dependencies, mechanisms (`causalab/causal/`).
 - **Task**: a prompt distribution plus a causal model and counterfactual generators (`causalab/tasks/`).
-- **Method / application**: the two halves of a document — the method is what transfers between models (hypothesis, reads, writes, metrics, save), the application is what cannot (which network, which addresses, which precision). They compose into an ordinary protocol document, digest for digest.
+- **Method / application**: the two halves one document may be written in — the method is what transfers (hypothesis, reads, writes, metrics, save), the application is what cannot (which network, which data, which addresses, which precision). One file is still one run: the halves compose into an ordinary protocol document, digest for digest.
 - **Intervention protocol**: one experiment as data — which activations are read, which are edited (`swap`, `add_scaled`, `gaussian`, …), in which intervened models, scored by which metrics. Sweeps expand a document into a campaign of points with content-deduped shared work.
 - **Workflow**: a chain of protocol executions plus select/plot/save steps, with dependencies derived from references — never authored ordering.
 

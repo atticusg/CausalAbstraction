@@ -43,7 +43,13 @@ from causalab.protocol.errors import (
     ValidationError,
     suggest,
 )
-from causalab.protocol.loader import LoadedProtocol, apply_overrides, load, load_text
+from causalab.protocol.loader import (
+    LoadedProtocol,
+    apply_overrides,
+    flatten,
+    load,
+    load_text,
+)
 from causalab.protocol.resolve import ArtifactStore, ResolutionEnv
 from causalab.protocol.schema import FEATURIZER_SLOTS
 from causalab.protocol.sweep import (
@@ -693,6 +699,9 @@ def load_workflow(
     # ---- rule 4 (references) + derived dependency edges (§3) -------------- #
     overridden_raw: dict[str, dict[str, Any]] = {}
     inner_dirs: dict[str, Path] = {}
+    #: per step, the method its document was composed from (§1.1) — the
+    #: flatten happens here, so the provenance is attached back below
+    inner_methods: dict[str, tuple[str | None, str | None]] = {}
     deps: dict[str, set[str]] = {name: set() for name in steps}
     data_deps: dict[str, set[str]] = {name: set() for name in steps}
     step_refs: dict[str, set[tuple[str, str]]] = {}
@@ -750,7 +759,14 @@ def load_workflow(
                     4, f"document {step.document!r} not found", path=f"steps.{name}"
                 )
             try:
-                inner_raw = apply_overrides(dict(load_text(doc_path)), step.set)
+                # flatten a split inner document first (§1.1), so a step's
+                # `set` paths are the composition's — one vocabulary for both
+                # authoring forms
+                flat, method_hash, method_ref = flatten(
+                    dict(load_text(doc_path)), base_dir=doc_path.parent
+                )
+                inner_methods[name] = (method_hash, method_ref)
+                inner_raw = apply_overrides(flat, step.set)
             except ParseError as err:
                 raise WorkflowError(
                     9,
@@ -890,6 +906,11 @@ def load_workflow(
                 f"document {step.document!r} does not load: {err}",
                 path=f"steps.{name}",
             ) from err
+        method_hash, method_ref = inner_methods.get(name, (None, None))
+        if method_hash is not None:
+            loaded = dataclasses.replace(
+                loaded, method_digest=method_hash, method_ref=method_ref
+            )
         inner[name] = loaded
         if deferred:
             inner_digests[name] = _authored_digest(overridden_raw[name])

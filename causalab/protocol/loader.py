@@ -28,10 +28,10 @@ from causalab.protocol import canonical as _canonical
 from causalab.protocol.bundles import select_entry, selector_slot
 from causalab.protocol.errors import ParseError, ValidationError
 from causalab.protocol.method import (
-    compose,
     document_type,
+    is_split,
     method_digest,
-    resolve_method_source,
+    split_document,
 )
 from causalab.protocol.resolve import ResolutionEnv, resolve_artifact_fields
 from causalab.protocol.schema import (
@@ -45,7 +45,7 @@ from causalab.protocol.schema import (
 from causalab.protocol.sweep import DEFAULT_POINT_CAP, Expansion, expand
 from causalab.protocol.validate import validate_document
 
-__all__ = ["LoadedProtocol", "apply_overrides", "load", "load_text"]
+__all__ = ["LoadedProtocol", "apply_overrides", "flatten", "load", "load_text"]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -60,11 +60,11 @@ class LoadedProtocol:
     document_digest: str
     canonical_points: tuple[Mapping[str, Any], ...]
     point_digests: tuple[str, ...]
-    #: The method this document was composed from (§1.1), when it was authored
-    #: as a method + an application: its content hash and the reference the
-    #: application named. The *composed* document digests as if it had been
-    #: written as one file, so method provenance is reported and stamped, never
-    #: folded into the canonical bytes (§7).
+    #: The method this document was composed from (§1.1), when it was written
+    #: in split form: its content hash, and the ``method`` reference when the
+    #: method came from a reusable file rather than inline. The *composed*
+    #: document digests as if it had been written flat, so method provenance is
+    #: reported and stamped, never folded into the canonical bytes (§7).
     method_digest: str | None = None
     method_ref: str | None = None
 
@@ -134,6 +134,23 @@ def _check_json_values(raw: Any, *, _path: str = "") -> None:
         )
 
 
+def flatten(
+    raw: Mapping[str, Any], *, base_dir: Path | None = None
+) -> tuple[dict[str, Any], str | None, str | None]:
+    """One protocol document as a flat tree, whichever form it was written in
+    (§1.1). Returns the flat document, the method's content digest, and the
+    ``method`` reference when the method came from a file.
+
+    Everything that addresses fields by path — ``--set`` overrides, a workflow
+    step's ``set`` block, the run verb's model pre-registration — flattens
+    first, so a dotted path means the same thing in both forms.
+    """
+    if not is_split(raw):
+        return dict(raw), None, None
+    composed, method_raw, method_ref = split_document(raw, base_dir=base_dir)
+    return composed, method_digest(method_raw), method_ref
+
+
 def load(
     source: Path | Mapping[str, Any],
     env: ResolutionEnv,
@@ -148,33 +165,29 @@ def load(
     ``base_dir`` is where a relative ``method`` reference resolves from when
     the document arrives as a tree rather than a file (a workflow step reads
     its inner document itself); a document loaded from a path uses its own
-    directory.
+    directory. An inlined method — the usual case, one file per run — needs
+    neither.
 
-    An *application* (§1.1) composes with its method first: the composition is
-    an ordinary protocol document, and everything after this line — overrides,
+    A *split* document (§1.1) is flattened first: the composition is an
+    ordinary protocol document, and everything after this line — overrides,
     artifact fields, sweeps, validation, canonicalization — cannot tell how the
-    document was authored.
+    document was authored. ``--set`` paths therefore address the *composed*
+    document, whichever form it was written in.
     """
     raw = dict(load_text(source)) if isinstance(source, Path) else dict(source)
     kind = document_type(raw)
     if kind == "method":
         raise ValidationError(
             18,
-            "this is a method document: it declares no network and no "
-            "addresses, so there is nothing to run. Bind it from an "
-            "application (§1.1), or ask for its signature with "
+            "this is a method file: it names no network, no data and no "
+            "addresses, so there is nothing to run. Bind it from a document's "
+            "`application` half (§1.1), or ask for its signature with "
             "`causalab explain`.",
             path="type",
         )
-    method_digest_value: str | None = None
-    method_ref: str | None = None
-    if kind == "application":
-        method_raw, method_ref = resolve_method_source(
-            raw["method"],
-            base_dir=source.parent if isinstance(source, Path) else base_dir,
-        )
-        method_digest_value = method_digest(method_raw)
-        raw = compose(method_raw, raw)
+    raw, method_digest_value, method_ref = flatten(
+        raw, base_dir=source.parent if isinstance(source, Path) else base_dir
+    )
     if overrides:
         raw = apply_overrides(raw, overrides)
     # artifact fields resolve first (§1: legal anywhere a value is), then the
