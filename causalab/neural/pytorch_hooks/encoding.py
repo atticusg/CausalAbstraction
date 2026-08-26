@@ -41,7 +41,16 @@ against a :class:`Continuation` instead: the greedy decode's steps, indexed
 from 0, one per generated token. Step indices are not padded-frame indices
 and the two never mix — a decode *step* is the unit here, and the same
 anchors mean what they say inside it (``{"index": -1}`` is the last real
-generated token, ``{"all": true}`` is every one).
+generated token, ``{"all": true}`` is every one, ``{"variable": "x"}`` is
+the tokens where the model *said* the row's value for ``x``).
+
+The ``variable`` anchor differs from its prompt-side twin in two ways, both
+because the continuation is a result rather than an input: it takes the
+**first** occurrence instead of demanding exactly one (a repetitive
+generation is a normal outcome, not an authoring error), and **zero**
+occurrences yield zero positions instead of refusing — whether the model
+says the thing is usually the experiment, so it has to be a value the run
+reports, not an exception that ends it.
 
 Rows end where they end: the frame stops at a row's first EOS, so widths
 differ and continuation reads are ragged. A window that reaches past a
@@ -62,7 +71,7 @@ from typing import Any, Mapping, Sequence
 import torch
 
 from causalab.protocol.errors import ProtocolError
-from causalab.protocol.schema import PositionSpec, concrete_int
+from causalab.protocol.schema import PositionSpec, concrete_int, concrete_str
 
 __all__ = [
     "Continuation",
@@ -247,8 +256,39 @@ def _variable_token_run(batch: EncodedBatch, row: int, value: str) -> list[int]:
     return run
 
 
+def _generated_variable_run(
+    continuation: Continuation, row: int, value: str
+) -> list[int]:
+    """Step indices covering the **first** occurrence of ``value`` in the
+    row's generated text, or ``[]`` when the model never said it.
+
+    Char spans come from the decode's incremental detokenization
+    (:class:`Continuation`), so a match that starts mid-piece still lands on
+    the steps that produced it — the sentencepiece case a post-hoc
+    ``offset_mapping`` cannot resolve.
+    """
+    if row >= len(continuation.texts):
+        return []
+    text = continuation.texts[row]
+    start = text.find(value)
+    if start < 0:
+        return []
+    lo, hi = start, start + len(value)
+    width = continuation.widths[row]
+    return [
+        step
+        for step, (a, b) in enumerate(continuation.offsets[row][:width])
+        if a < hi and b > lo
+    ]
+
+
 def resolve_steps(
-    spec: PositionSpec, continuation: Continuation, row: int
+    spec: PositionSpec,
+    continuation: Continuation,
+    row: int,
+    *,
+    dataset_row: Mapping[str, Any] | None = None,
+    field: str | None = None,
 ) -> list[int]:
     """Resolve one ``generated`` spec for one row into **decode-step** indices.
 
@@ -271,10 +311,20 @@ def resolve_steps(
             raise ProtocolError("P2", f"span is not concrete: {span!r}")
         a, b = (int(v) for v in span)
         return list(range(min(a, width), min(b, width)))
+    if spec.variable is not None:
+        if dataset_row is None or field is None:
+            raise ProtocolError(
+                "P2",
+                "a generated 'variable' position needs its dataset row — the "
+                "value the model may have said comes from the table",
+            )
+        variable = concrete_str(spec.variable, "position variable")
+        value = variable_value(dataset_row, field, variable)
+        return _generated_variable_run(continuation, row, value)
     raise ProtocolError(
         "P2",
         f"anchor {spec!r} has no continuation-frame resolution — v1 addresses "
-        "generated tokens by index, span or all",
+        "generated tokens by index, span, variable or all",
     )
 
 
@@ -296,7 +346,9 @@ def resolve_position(
                 "a generated position needs the decode's continuation — the "
                 "frame it addresses does not exist until the model has run",
             )
-        return resolve_steps(spec, continuation, row)
+        return resolve_steps(
+            spec, continuation, row, dataset_row=dataset_row, field=field
+        )
     padded = batch.padded_len
     start = batch.content_start(row)
 
