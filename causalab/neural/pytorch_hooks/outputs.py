@@ -2,7 +2,7 @@
 
 Tensors (reads, featurizer bundles) land in ``.safetensors`` with the
 point's ``ArtifactIdentity`` in the header; per-example metric tables land
-in ``.json`` as an array of row objects (spec §2.7 — JSON and safetensors
+in ``.json`` as an array of row objects (IM spec §2.12 — JSON and safetensors
 are the only two formats). In swept documents the authored ``file_path`` is
 unchanged: axis coordinates become columns of the metric tables and key
 suffixes on tensor entries (``rot[k=8,seed=0]``).
