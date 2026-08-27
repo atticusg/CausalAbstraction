@@ -42,11 +42,17 @@ __all__ = [
 #: data used only to find a group's deepest tap (elision, §4). ``ln_final``
 #: and ``lm_head`` sort after every block.
 COMPONENT_RANK: dict[str, int] = {
+    "input_ids": -1,  # the model's input: before every activation
     "embeddings": 0,
     "block_input": 10,
+    "attention_input_norm": 15,  # input_layernorm, between resid_pre and the mixer
     "attention_probs": 20,
     "attention_value": 30,
     "attention_output": 40,
+    # resid_mid is post_attention_layernorm's INPUT and mlp_input_norm its
+    # OUTPUT, so the two straddle that one module in this order
+    "block_mid": 45,
+    "mlp_input_norm": 47,
     "mlp_input": 50,
     "mlp_activation": 60,
     "mlp_output": 70,

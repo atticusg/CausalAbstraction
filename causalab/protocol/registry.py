@@ -14,8 +14,10 @@ Widths per component (the ``(model, site) → d`` rule of §2.5):
 component          feature width
 =================  =======================================================
 ``embeddings``, ``block_input``, ``block_output``, ``attention_output``,
-``mlp_input``, ``mlp_output``, ``ln_final``, ``expert_output``
-                   ``hidden_size``
+``mlp_input``, ``mlp_output``, ``ln_final``, ``expert_output``,
+``attention_input_norm``, ``block_mid``, ``mlp_input_norm``
+                   ``hidden_size`` — the three norm taps are residual-stream
+                   shaped, being an RMSNorm's input or output
 ``mlp_activation`` ``intermediate_size`` (the family caveat of what tensor
                    this names lives in the backend, not here)
 ``attention_value``
@@ -26,6 +28,8 @@ component          feature width
 ``attention_probs``
                    no static width — sequence-shaped; featurizers are
                    refused on it
+``input_ids``      no static width — token ids are not a feature space at all
+                   (§5.4): no featurizer, no gradient, read-only
 =================  =======================================================
 """
 
@@ -133,6 +137,11 @@ def component_width(info: ModelInfo, component: str, *, head: int | None = None)
         "mlp_output",
         "ln_final",
         "expert_output",
+        # the three norm taps: an RMSNorm maps the residual stream to itself,
+        # so both its sides are hidden_size-wide
+        "attention_input_norm",
+        "block_mid",
+        "mlp_input_norm",
     ):
         return info.hidden_size
     if component == "mlp_activation":
@@ -149,6 +158,15 @@ def component_width(info: ModelInfo, component: str, *, head: int | None = None)
                 4, f"model {info.key!r} declares no experts; router_logits has no width"
             )
         return info.num_experts
+    if component == "input_ids":
+        raise ValidationError(
+            4,
+            "component 'input_ids' is the model's token input, not a feature "
+            "space (§5.4): it carries integer ids on a position axis, so it has "
+            "no width for a featurizer to match, no gradient to train through, "
+            "and no meaningful subspace. Read it directly, or read 'embeddings' "
+            "if you want the vector the ids look up.",
+        )
     raise ValidationError(
         4,
         f"component {component!r} has no static feature width — featurizers "

@@ -19,6 +19,8 @@ layout               native shape                where it shows up
                                                   and shared-expert taps are flat
 ``"bds"``            ``(batch, feature, seq)``    channels-first — the Gated DeltaNet
                                                   ``conv1d`` output
+``"bs"``             ``(batch, seq)``             no feature axis at all — ``input_ids``,
+                                                  one integer token id per position
 ===================  ==========================  ====================================
 
 A tap declares its layout on :class:`~causalab.neural.pytorch_hooks.sites.ResolvedSite`
@@ -43,7 +45,14 @@ from typing import Any, Literal, get_args
 import torch
 
 #: The layouts a tap may declare. ``"bsd"`` is the executor's contract.
-Layout = Literal["bsd", "flat_td", "bds"]
+#:
+#: ``"bs"`` is the degenerate case and is deliberately *here* rather than
+#: special-cased in the executor: a tensor with no feature axis still has a
+#: native shape that differs from the contract, which is exactly what this
+#: module exists to reconcile. It is not the typed feature-shape descriptor that
+#: ``attention_probs`` needs (whose feature axis *is* a position axis) — there is
+#: no feature-axis ambiguity to describe, only an absent axis to add.
+Layout = Literal["bsd", "flat_td", "bds", "bs"]
 
 #: Every valid layout string, for validation and error messages.
 LAYOUTS: tuple[str, ...] = get_args(Layout)
@@ -121,6 +130,15 @@ def to_contract(
                 f"shape {tuple(tensor.shape)}"
             )
         return tensor.transpose(1, 2)
+    if layout == "bs":
+        if tensor.dim() != 2:
+            raise LayoutError(
+                f"layout 'bs' expects a 2-D (batch, seq) tensor, got shape "
+                f"{tuple(tensor.shape)}"
+            )
+        # unsqueeze, not reshape: a view, so the aliasing the write path relies
+        # on survives (even though the only 'bs' tap today is read-only)
+        return tensor.unsqueeze(-1)
     raise LayoutError(f"unknown tap layout {layout!r}; expected one of {LAYOUTS}")
 
 
@@ -149,6 +167,13 @@ def from_contract(
                 f"{tuple(tensor.shape)}"
             )
         return tensor.transpose(1, 2)
+    if layout == "bs":
+        if tensor.dim() != 3 or tensor.shape[-1] != 1:
+            raise LayoutError(
+                f"layout 'bs' expects a 3-D contract tensor of width 1 to drop "
+                f"back to (batch, seq), got shape {tuple(tensor.shape)}"
+            )
+        return tensor.squeeze(-1)
     raise LayoutError(f"unknown tap layout {layout!r}; expected one of {LAYOUTS}")
 
 

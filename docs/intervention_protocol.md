@@ -168,17 +168,36 @@ the model said the row's value for `x`.
 |---|---|
 | `component` | one of the vocabulary below |
 | `layer` | depth index (where the component has one) |
-| `head` / `expert` / `stream` | optional sub-axes: attention head, MoE expert, residual-stream index |
+| `head` / `expert` / `stream` | optional sub-axes: attention head, MoE expert, **mixer stream** |
 
-Component vocabulary (per-backend `SiteResolver` maps each to a tap):
+Component vocabulary (per-backend `SiteResolver` maps each to a tap), in
+execution order:
 
-`embeddings` · `block_input` · `block_output` · `attention_output` ·
-`attention_value` · `attention_probs` · `mlp_input` · `mlp_output` ·
-`mlp_activation` · `router_logits` · `expert_output` · `ln_final` · `lm_head`
+`input_ids` · `embeddings` · `block_input` · `attention_input_norm` ·
+`attention_output` · `attention_value` · `attention_probs` · `block_mid` ·
+`mlp_input_norm` · `mlp_input` · `mlp_output` · `mlp_activation` ·
+`router_logits` · `expert_output` · `block_output` · `ln_final` · `lm_head`
 
 - **`sites` is the complete inventory**: every site a read or write references
   must be declared here, including `lm_head` (`{"component": "lm_head"}`).
   There are no implicit site names.
+- **The three norm taps** name the two RMSNorms every block carries:
+  `attention_input_norm` is `input_layernorm`'s **output** (what the mixer
+  consumes), `block_mid` is `post_attention_layernorm`'s **input** (the residual
+  stream after the mixer is added), and `mlp_input_norm` is that same module's
+  **output**. So a block satisfies
+  `block_mid = block_input + attention_output` and
+  `block_output = block_mid + mlp_output`.
+- **`input_ids` is the model's token input, not an activation.** It is
+  layer-less, **read-only**, and *not a feature space*: it carries integer ids
+  on a position axis, so no featurizer may attach to it and it has no width.
+  Read `embeddings` for the vector the ids look up.
+- **`stream` names a mixer stream, and it is a per-layer fact.** A hybrid tower
+  carries a different mixer at different depths (Qwen3.6's text tower alternates
+  Gated DeltaNet with gated full attention), so a site whose declared `stream`
+  contradicts the layer it names is refused at load. `attention_probs` requires
+  a full-attention layer: a linear-attention block computes no attention matrix,
+  so the refusal there is about the architecture and is permanent.
 - Sites are pure data — no behavior, no model handles.
 
 ### 2.5 `featurizers`
