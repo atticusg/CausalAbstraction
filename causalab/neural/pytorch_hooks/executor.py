@@ -48,7 +48,11 @@ from causalab.neural.pytorch_hooks.mechanisms import (
     is_additive,
     operand_names,
 )
-from causalab.neural.pytorch_hooks.sites import ResolvedSite, resolve_site
+from causalab.neural.pytorch_hooks.sites import (
+    READ_ONLY_COMPONENTS,
+    ResolvedSite,
+    resolve_site,
+)
 from causalab.neural.pytorch_hooks.layout import (
     Layout,
     from_contract,
@@ -713,6 +717,14 @@ class PointExecutor:
         for ename in write_names:
             write = self.doc.writes[ename]
             site = resolve_site(self.bundle, self.doc.sites[str(write.site)])
+            if site.component in READ_ONLY_COMPONENTS:
+                raise ProtocolError(
+                    "P4",
+                    f"write {ename!r} targets {site.component!r}, which a write "
+                    "cannot affect: "
+                    f"{READ_ONLY_COMPONENTS[site.component]}. Refusing rather "
+                    "than applying a write that would silently do nothing.",
+                )
             key = _tap_key(site)
             by_address.setdefault(key, []).append((ename, write, site))
             addresses[key] = site
