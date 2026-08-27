@@ -467,6 +467,19 @@ everything that leaves the run. Three saveable kinds, two entry shapes:
   the provenance unit. The planner content-dedups sub-values shared across
   points — shared harvests and forwards fall out automatically (identical
   reads intern to one read).
+- **The planner derives the sharing; the backend claims it.** A forward
+  group's `digest` is the identity of everything determining its activations,
+  and **taps are deliberately not in it** — reading layer 3 or layer 23 of the
+  same un-intervened forward is the same forward. So a 32-layer scan's
+  counterfactual harvest is *one* group carrying 32 taps:
+  `interned_groups(plans)` counts what a campaign owes (65) against the
+  `sum(num_forwards)` a per-point loop pays (128). Spending that is execution's
+  job, not the plan's — run each distinct digest **once**, capturing the
+  **union** of the taps every point asked of it, and let each point gather and
+  featurize its own value out of that one capture. The reference backend does
+  this and reports what it ran as `RunResult.forwards`. The trade is memory: a
+  shared pass holds every tapped address at once where a per-point loop held
+  one. A backend that interns nothing is still correct, only slower.
 
 ## 4. Execution semantics
 
@@ -483,7 +496,11 @@ everything that leaves the run. Three saveable kinds, two entry shapes:
 - **Elision**: a model whose reads are all satisfied may stop its forward
   after the deepest tap; a full-depth pass is never owed. A group that
   decodes is the exception — every step needs the head, so nothing is
-  elided.
+  elided. When several points **share** the group (sec. 3), the deepest tap is
+  the deepest of the union: the one pass has to serve all of them, so read
+  `stop_after` off the interned group, never off the point that ran first.
+  Interning still wins against elision — 32 passes elided at layers 0..31 cost
+  ~16x the single full-depth pass that replaces them.
 - **Decoding groups.** A group whose reads address the continuation
   (sec. 2.3) runs one prefill plus `max_new_tokens` greedy steps: `n` tokens
   need `n` steps, because the last generated token must be consumed by a
@@ -578,6 +595,7 @@ A backend implements these services:
 | `SiteResolver` | site record → tap in its execution engine (component vocabulary, sec. 2.4) |
 | position resolution | Pos spec + `PositionFrame` (pad side, packing, sequence shard map) → indices; supports flat, per-row, and ragged windows |
 | planner | model graph → forward groups; fusion/batching/staging; elision |
+| cross-point interning | run each distinct group `digest` once, capturing the union of the taps every point asked of it; each point gathers and featurizes its own value from that capture, keeping its own per-entry provenance (sec. 3). Optional but expected — report what ran as `RunResult.forwards` |
 | mechanisms | the closed `do` set, class order per address; refuse `pytorch_fn` if non-local |
 | featurizers | kinds table with declared dtypes; error-term contract |
 | metrics | lower kinds to native ops; derive minimal logit materialization (`logits_to_keep`, vocab-parallel CE) from `save` + metric needs |

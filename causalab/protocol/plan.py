@@ -18,7 +18,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from causalab.protocol.schema import (
     METRIC_DOMAINS,
@@ -34,6 +34,7 @@ __all__ = [
     "PointPlan",
     "Tap",
     "generated_budget",
+    "interned_groups",
     "plan_point",
     "closure_digest",
 ]
@@ -105,7 +106,12 @@ class ForwardGroup:
         """The deepest tap's depth — a backend may end the forward there
         (§4 elision). ``None`` when the group has no taps, and also when it
         decodes: every decode step needs the head, so there is nothing to
-        elide."""
+        elide.
+
+        Read this off the *interned* group, not a single point's, whenever
+        several points share the forward: the shared pass has to reach every
+        tap any of them asked for, so the depth it may stop at is the deepest
+        of the union. :func:`interned_groups` builds exactly that group."""
         if self.decode_depth:
             return None
         return max((tap.depth for tap in self.taps), default=None)
@@ -141,6 +147,54 @@ def plan_point(
     for im_name, im in doc.intervened_models.items():
         groups.append(_build_group(doc, im_name, str(im.input), data_identity))
     return PointPlan(groups=tuple(groups))
+
+
+def interned_groups(plans: Iterable[PointPlan]) -> tuple[ForwardGroup, ...]:
+    """The campaign's forward groups once §3's content-dedup is applied:
+    groups sharing a ``digest`` merge into **one**, whose taps are the union
+    of theirs.
+
+    ``sum(p.num_forwards for p in plans)`` is what a per-point loop pays;
+    ``len(interned_groups(plans))`` is what the campaign actually owes. For a
+    32-layer × 2-position interchange scan that is 65 rather than 128 — the
+    64 patched forwards are genuinely distinct, but the counterfactual
+    harvest depends on nothing swept, so its 64 instances become one forward
+    carrying 32 taps (the position axis moves the gather, not the pass).
+    Taps are absent from the digest precisely so this falls out
+    of value identity (reading layer 3 or layer 23 of the same un-intervened
+    forward is the same forward), which is also why the merged group must
+    carry the union: the one pass it earns has to serve every point.
+
+    A merged group's ``decode_depth`` is the deepest any sharer needs, since
+    a decode changes what the group produces rather than what its prefill
+    computes. Its ``model``/``input`` come from the first sharer — equal
+    digests mean equal model *closures*, so two intervened models that differ
+    only in name merge, and either name describes the pass.
+
+    Callers build each :class:`PointPlan` with its own ``data_identity``, so
+    points reading different data never merge here.
+    """
+    merged: dict[str, ForwardGroup] = {}
+    for plan in plans:
+        for group in plan.groups:
+            first = merged.get(group.digest)
+            if first is None:
+                merged[group.digest] = group
+                continue
+            taps = list(first.taps)
+            taps.extend(tap for tap in group.taps if tap not in taps)
+            seen = {item.read for item in first.materialize}
+            materialize = list(first.materialize)
+            materialize.extend(
+                item for item in group.materialize if item.read not in seen
+            )
+            merged[group.digest] = dataclasses.replace(
+                first,
+                taps=tuple(taps),
+                decode_depth=max(first.decode_depth, group.decode_depth),
+                materialize=tuple(materialize),
+            )
+    return tuple(merged.values())
 
 
 def _build_group(

@@ -16,10 +16,14 @@ import dataclasses
 import functools
 import json
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 
-from causalab.neural.pytorch_hooks.executor import PointExecutor
+from causalab.neural.pytorch_hooks.executor import (
+    ForwardCache,
+    Interning,
+    PointExecutor,
+)
 from causalab.neural.pytorch_hooks.loading import TensorBundle, load_model
 from causalab.neural.pytorch_hooks.metrics import (
     compute_metric,
@@ -33,14 +37,29 @@ from causalab.neural.pytorch_hooks.outputs import (
 )
 from causalab.protocol.backend import Backend, ExecutionRequest, RunResult
 from causalab.protocol.errors import ProtocolError
+from causalab.protocol.plan import PointPlan, generated_budget, plan_point
 from causalab.protocol.schema import (
     METRIC_DOMAINS,
     WHOLE_WINDOW_METRIC_KINDS,
     Document,
+    SiteSpec,
     parse_document,
 )
 
-__all__ = ["PytorchHooksBackend"]
+__all__ = ["PytorchHooksBackend", "campaign_plans"]
+
+
+def campaign_plans(docs: Sequence[Document]) -> tuple[PointPlan, ...]:
+    """The per-point plans this backend executes a campaign from.
+
+    Public because the interning claim is checkable arithmetic:
+    :func:`~causalab.protocol.plan.interned_groups` over these plans is how
+    many forward groups a run *owes*, and
+    :attr:`~causalab.protocol.backend.RunResult.forwards` is what it paid. One
+    derivation, so the number a caller verifies against is the number
+    execution keyed on.
+    """
+    return tuple(plan_point(doc, data_identity=_data_identity(doc)) for doc in docs)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -68,13 +87,20 @@ class PytorchHooksBackend(Backend):
     # ------------------------------------------------------------------ #
 
     def execute(self, request: ExecutionRequest) -> RunResult:
+        # The whole campaign is planned before anything runs, because §3's
+        # interning is a property of the point *set*: a forward group can only
+        # be shared once you know which other points share it, and the union
+        # of taps it must capture only exists across all of them.
+        docs = tuple(parse_document(point_raw) for point_raw in request.points)
+        plans = campaign_plans(docs)
+        cache = ForwardCache(wanted=_tap_union(docs, plans))
+
         tensor_files: dict[str, TensorFile] = {}
         metric_files: dict[str, MetricTable] = {}
         summaries: list[Mapping[str, Any]] = []
-        for point_raw, coords, digest in zip(
-            request.points, request.coords, request.digests
+        for doc, plan, coords, digest in zip(
+            docs, plans, request.coords, request.digests
         ):
-            doc = parse_document(point_raw)
             summary = self._execute_point(
                 doc,
                 request,
@@ -82,13 +108,19 @@ class PytorchHooksBackend(Backend):
                 point_digest=digest,
                 tensor_files=tensor_files,
                 metric_files=metric_files,
+                interning=Interning(
+                    digests={
+                        (group.model, group.input): group.digest
+                        for group in plan.groups
+                    },
+                    cache=cache,
+                ),
             )
             summaries.append(summary)
-        first_doc = parse_document(request.points[0])
         identity_base = {
             "produced_by": request.document_digest,
-            "model_key": str(first_doc.model.key),
-            "model_revision": str(first_doc.model.revision),
+            "model_key": str(docs[0].model.key),
+            "model_revision": str(docs[0].model.revision),
             "backend": self.name,
             "commit": code_commit(Path(__file__).resolve().parents[3]),
         }
@@ -98,7 +130,11 @@ class PytorchHooksBackend(Backend):
             metric_files,
             identity_base=identity_base,
         )
-        return RunResult(files=files, summaries=tuple(summaries))
+        return RunResult(
+            files=files,
+            summaries=tuple(summaries),
+            forwards=len(cache.executed),
+        )
 
     # ------------------------------------------------------------------ #
 
@@ -109,6 +145,7 @@ class PytorchHooksBackend(Backend):
         *,
         grad_enabled: bool = False,
         coords: Mapping[str, Any] | None = None,
+        interning: Interning | None = None,
     ) -> PointExecutor:
         bundle = load_model(
             str(doc.model.key),
@@ -125,6 +162,7 @@ class PytorchHooksBackend(Backend):
             load_tensors=functools.partial(_load_tensors, request),
             grad_enabled=grad_enabled,
             coords=coords,
+            interning=interning,
         )
 
     def _execute_point(
@@ -136,8 +174,9 @@ class PytorchHooksBackend(Backend):
         point_digest: str,
         tensor_files: dict[str, TensorFile],
         metric_files: dict[str, MetricTable],
+        interning: Interning | None = None,
     ) -> Mapping[str, Any]:
-        executor = self._executor(doc, request, coords=coords)
+        executor = self._executor(doc, request, coords=coords, interning=interning)
         trained_stages: dict[str, Any] = {}
         if doc.train is not None:
             from causalab.neural.pytorch_hooks.train import run_training
@@ -257,6 +296,54 @@ class PytorchHooksBackend(Backend):
                 name: _summary_stat(values) for name, values in metric_values.items()
             },
         }
+
+
+def _data_identity(doc: Document) -> dict[str, str]:
+    """Input role → the identity of the rows that role will be encoded from.
+
+    Folded into every forward-group digest so two points reading *different*
+    data on the same role never intern together. ``(dataset, field)`` is
+    exactly what determines a role's batch — :func:`_resolve_roles` resolves
+    rows by dataset name and selects one field, and the executor tokenizes
+    nothing else — so this is neither coarser nor finer than the thing being
+    shared. The role names mirror ``_resolve_roles`` (``counterfactual[0]``
+    for a tuple-valued role) so the keys line up with the plan's ``input``.
+    """
+    identity: dict[str, str] = {}
+    for role, value in doc.data.items():
+        entries = value if isinstance(value, tuple) else (value,)
+        for j, role_spec in enumerate(entries):
+            role_name = role if not isinstance(value, tuple) else f"{role}[{j}]"
+            identity[role_name] = f"{role_spec.dataset}#{role_spec.field}"
+    return identity
+
+
+def _tap_union(
+    docs: Sequence[Document], plans: Sequence[PointPlan]
+) -> dict[str, tuple[SiteSpec, ...]]:
+    """Forward-group digest → every site the campaign taps in that group.
+
+    The union *is* the interning. Taps are deliberately absent from a group's
+    digest, so the single pass a shared digest earns has to capture every
+    address any point will ask of it — for a 32-layer scan that is one
+    counterfactual forward with 32 taps instead of 32 forwards with one each.
+
+    Continuation reads are excluded: those are served by the decode's
+    per-step accumulation, not by the prefill capture this store holds, so a
+    decoding group contributes only its prompt-frame taps (and can therefore
+    still hand its prefill to a non-decoding point that shares the digest).
+    """
+    union: dict[str, dict[str, SiteSpec]] = {}
+    for doc, plan in zip(docs, plans):
+        for group in plan.groups:
+            wanted = union.setdefault(group.digest, {})
+            for tap in group.taps:
+                read = doc.reads[tap.read]
+                if generated_budget(doc, read.pos) is not None:
+                    continue
+                spec = doc.sites[tap.site]
+                wanted[json.dumps(_site_identity(doc, tap.site), sort_keys=True)] = spec
+    return {digest: tuple(specs.values()) for digest, specs in union.items()}
 
 
 def _summary_stat(values: list[Any]) -> Any:
