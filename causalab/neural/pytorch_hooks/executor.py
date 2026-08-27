@@ -589,15 +589,19 @@ class PointExecutor:
     def _read_stack(
         self, read: ReadSpec | WriteSpec, site: ResolvedSite
     ) -> FeaturizerStack:
-        width = (
-            (site.feature_slice.stop - site.feature_slice.start)
-            if site.feature_slice is not None
-            else component_width(
-                self.bundle.info,
-                site.component,
-                head=None,
-            )
-        )
+        # Lazily: `build_stack` ignores the width entirely when no featurizer is
+        # referenced (it returns an Identity stack), and some components have no
+        # width to give — `input_ids` carries integer ids on a position axis and
+        # `expert_idx` a routing table, so both refuse rather than invent one
+        # (§5.4). Asking for the width up front made an unfeaturized read of
+        # those impossible, which is not what the refusal is for: it exists to
+        # reject a *featurizer*, not a read.
+        if read.featurizer is None:
+            width = 0
+        elif site.feature_slice is not None:
+            width = site.feature_slice.stop - site.feature_slice.start
+        else:
+            width = component_width(self.bundle.info, site.component, head=None)
         return build_stack(
             read.featurizer,
             dict(self.doc.featurizers),
