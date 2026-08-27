@@ -43,6 +43,7 @@ from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import SiteSpec
 
 from causalab.neural.pytorch_hooks.loading import ModelBundle
+from causalab.neural.pytorch_hooks.layout import Layout
 
 __all__ = ["ResolvedSite", "resolve_site"]
 
@@ -50,13 +51,28 @@ __all__ = ["ResolvedSite", "resolve_site"]
 @dataclasses.dataclass(frozen=True)
 class ResolvedSite:
     """One tapped location: the module, which side of it carries the
-    activation, and an optional feature-axis slice (per-head views)."""
+    activation, an optional feature-axis slice (per-head views), and how the
+    module's own tensor shape relates to the executor's ``(batch, position,
+    feature)`` contract.
+
+    ``layout`` and ``tuple_index`` both default to the historical behaviour, so
+    a tap that does not mention them is unchanged: contract-shaped, and element
+    0 of a tuple payload. See :mod:`causalab.neural.pytorch_hooks.layout` for
+    what the non-default values mean and which architectures need them.
+    """
 
     module: Any
     kind: str  # "in" | "out"
     feature_slice: slice | None = None
     layer: int = 0
     component: str = "block_output"
+    #: The module's native tensor layout; converted to/from the contract at the
+    #: hook boundary rather than special-cased per component.
+    layout: Layout = "bsd"
+    #: Which element of a tuple payload the tap means. None keeps the historical
+    #: rule (element 0 of a tuple, else the payload itself); an explicit index
+    #: is required for e.g. a router returning (logits, scores, indices).
+    tuple_index: int | None = None
 
     @property
     def depth(self) -> tuple[int, int]:

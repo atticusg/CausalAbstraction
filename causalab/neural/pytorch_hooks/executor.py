@@ -49,6 +49,13 @@ from causalab.neural.pytorch_hooks.mechanisms import (
     operand_names,
 )
 from causalab.neural.pytorch_hooks.sites import ResolvedSite, resolve_site
+from causalab.neural.pytorch_hooks.layout import (
+    Layout,
+    from_contract,
+    rebuild_payload,
+    tap_tensor,
+    to_contract,
+)
 from causalab.protocol.bundles import entry_selection, selector_slot
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.plan import generated_budget
@@ -100,7 +107,19 @@ class RaggedValue:
 
 
 def _hidden_of(out: Any) -> torch.Tensor:
+    """The historical tuple rule. Kept for callers with no tap to consult."""
     return out[0] if isinstance(out, tuple) else out
+
+
+def _tap_key(site: "ResolvedSite") -> tuple[int, str, str, int | None]:
+    """Identity of a tap for capture-sink sharing.
+
+    Two sites may share a module and side yet mean different tensors — a
+    different tuple element, or the same tensor in a different layout — so the
+    layout and tuple index are part of the identity. Keying on the module alone
+    would let one tap read another's tensor.
+    """
+    return (id(site.module), site.kind, site.layout, site.tuple_index)
 
 
 class PointExecutor:
@@ -346,14 +365,31 @@ class PointExecutor:
         }
 
         with contextlib.ExitStack() as hooks:
-            for module, kind, fn in write_hooks:
-                hooks.enter_context(_installed(module, kind, fn))
+            for module, kind, w_layout, w_tuple_index, fn in write_hooks:
+                hooks.enter_context(
+                    _installed(
+                        module,
+                        kind,
+                        fn,
+                        layout=w_layout,
+                        tuple_index=w_tuple_index,
+                        batch_size=batch.input_ids.shape[0],
+                    )
+                )
             for site in capture_sites.values():
-                key = (id(site.module), site.kind)
+                key = _tap_key(site)
                 if key not in capture:
                     capture[key] = torch.empty(0)  # placeholder; filled by hook
                     hooks.enter_context(
-                        _capturing(site.module, site.kind, capture, key)
+                        _capturing(
+                            site.module,
+                            site.kind,
+                            capture,
+                            key,
+                            layout=site.layout,
+                            tuple_index=site.tuple_index,
+                            batch_size=batch.input_ids.shape[0],
+                        )
                     )
             with torch.enable_grad() if self.grad_enabled else torch.no_grad():
                 prefill = self.bundle.model(
@@ -365,7 +401,7 @@ class PointExecutor:
 
         for rname, read in taps:
             site = capture_sites[rname]
-            raw = capture[(id(site.module), site.kind)]
+            raw = capture[_tap_key(site)]
             self._read_values[rname] = self._finalize_read(
                 rname, read, site, raw, batch, input_role
             )
@@ -423,11 +459,18 @@ class PointExecutor:
         cache = prefill.past_key_values
         with contextlib.ExitStack() as hooks:
             for site in gen_capture_sites.values():
-                key = (id(site.module), site.kind)
+                key = _tap_key(site)
                 if key not in steps:
                     steps[key] = []
                     hooks.enter_context(
-                        _accumulating(site.module, site.kind, steps[key])
+                        _accumulating(
+                            site.module,
+                            site.kind,
+                            steps[key],
+                            layout=site.layout,
+                            tuple_index=site.tuple_index,
+                            batch_size=batch.input_ids.shape[0],
+                        )
                     )
             for _ in range(depth):
                 mask = torch.cat([mask, torch.ones_like(nxt)], dim=1)
@@ -464,7 +507,7 @@ class PointExecutor:
         for rname, read in gen_taps:
             site = gen_sites[rname]
             capture_site = gen_capture_sites[rname]
-            stacked = torch.cat(steps[(id(capture_site.module), capture_site.kind)], 1)
+            stacked = torch.cat(steps[_tap_key(capture_site)], 1)
             dataset_rows = self.role_rows[input_role]
             field = self.role_fields[input_role]
             per_row = [
@@ -652,26 +695,35 @@ class PointExecutor:
 
     def _build_write_hooks(
         self, write_names: tuple[str, ...], input_role: str, batch: EncodedBatch
-    ) -> list[tuple[Any, str, Callable[[torch.Tensor], None]]]:
-        """One in-place hook per written-to (module, kind), applying every write
-        at that address in class order."""
-        by_address: dict[
-            tuple[int, str], list[tuple[str, WriteSpec, ResolvedSite]]
-        ] = {}
-        modules: dict[int, Any] = {}
+    ) -> list[tuple[Any, str, Layout, int | None, Callable[[torch.Tensor], None]]]:
+        """One in-place hook per written-to tap, applying every write at that
+        address in class order.
+
+        Addresses are keyed by :func:`_tap_key`, so two components that share a
+        module but mean different tensors (a different tuple element, or a
+        different layout) get their own hook rather than one overwriting the
+        other's view.
+        """
+        by_address: dict[Any, list[tuple[str, WriteSpec, ResolvedSite]]] = {}
+        addresses: dict[Any, ResolvedSite] = {}
         for ename in write_names:
             write = self.doc.writes[ename]
             site = resolve_site(self.bundle, self.doc.sites[str(write.site)])
-            key = (id(site.module), site.kind)
+            key = _tap_key(site)
             by_address.setdefault(key, []).append((ename, write, site))
-            modules[id(site.module)] = site.module
+            addresses[key] = site
 
-        hooks: list[tuple[Any, str, Callable[[torch.Tensor], None]]] = []
-        for (module_id, kind), entries in by_address.items():
+        hooks: list[
+            tuple[Any, str, Layout, int | None, Callable[[torch.Tensor], None]]
+        ] = []
+        for key, entries in by_address.items():
+            site = addresses[key]
             hooks.append(
                 (
-                    modules[module_id],
-                    kind,
+                    site.module,
+                    site.kind,
+                    site.layout,
+                    site.tuple_index,
                     self._address_writer(entries, input_role, batch),
                 )
             )
@@ -762,22 +814,41 @@ class PointExecutor:
 
 @contextlib.contextmanager
 def _installed(
-    module: Any, kind: str, write: Callable[[torch.Tensor], None]
+    module: Any,
+    kind: str,
+    write: Callable[[torch.Tensor], None],
+    *,
+    layout: Layout = "bsd",
+    tuple_index: int | None = None,
+    batch_size: int = 1,
 ) -> Iterator[None]:
+    """Install an in-place write hook, converting to the executor's contract.
+
+    ``write`` always sees a ``(batch, position, feature)`` tensor and mutates it
+    in place; the model always gets its native shape back. For the default
+    ``"bsd"`` layout both conversions are identity, so the path is unchanged.
+    """
     if kind == "out":
 
         def out_hook(_m: Any, _i: Any, out: Any) -> Any:
-            hidden = _hidden_of(out).clone()
-            write(hidden)
-            return (hidden, *out[1:]) if isinstance(out, tuple) else hidden
+            native = tap_tensor(out, tuple_index).clone()
+            contract = to_contract(native, layout, batch_size=batch_size)
+            write(contract)
+            return rebuild_payload(
+                out, tuple_index, from_contract(contract, layout, batch_size=batch_size)
+            )
 
         handle = module.register_forward_hook(out_hook)
     else:
 
         def pre_hook(_m: Any, args: tuple[Any, ...]) -> tuple[Any, ...]:
-            x = args[0].clone()
-            write(x)
-            return (x, *args[1:])
+            native = args[0].clone()
+            contract = to_contract(native, layout, batch_size=batch_size)
+            write(contract)
+            return (
+                from_contract(contract, layout, batch_size=batch_size),
+                *args[1:],
+            )
 
         handle = module.register_forward_pre_hook(pre_hook)
     try:
@@ -790,19 +861,26 @@ def _installed(
 def _capturing(
     module: Any,
     kind: str,
-    sink: dict[tuple[int, str], torch.Tensor],
-    key: tuple[int, str],
+    sink: dict[Any, torch.Tensor],
+    key: Any,
+    *,
+    layout: Layout = "bsd",
+    tuple_index: int | None = None,
+    batch_size: int = 1,
 ) -> Iterator[None]:
+    """Capture a tap's tensor, in the executor's contract shape."""
     if kind == "out":
 
         def out_hook(_m: Any, _i: Any, out: Any) -> None:
-            sink[key] = _hidden_of(out)
+            sink[key] = to_contract(
+                tap_tensor(out, tuple_index), layout, batch_size=batch_size
+            )
 
         handle = module.register_forward_hook(out_hook)
     else:
 
         def pre_hook(_m: Any, args: tuple[Any, ...]) -> None:
-            sink[key] = args[0]
+            sink[key] = to_contract(args[0], layout, batch_size=batch_size)
 
         handle = module.register_forward_pre_hook(pre_hook)
     try:
@@ -812,7 +890,15 @@ def _capturing(
 
 
 @contextlib.contextmanager
-def _accumulating(module: Any, kind: str, sink: list[torch.Tensor]) -> Iterator[None]:
+def _accumulating(
+    module: Any,
+    kind: str,
+    sink: list[torch.Tensor],
+    *,
+    layout: Layout = "bsd",
+    tuple_index: int | None = None,
+    batch_size: int = 1,
+) -> Iterator[None]:
     """Like :func:`_capturing`, but append instead of overwrite.
 
     A decode calls the same modules once per step, so the single-tensor sink
@@ -823,13 +909,15 @@ def _accumulating(module: Any, kind: str, sink: list[torch.Tensor]) -> Iterator[
     if kind == "out":
 
         def out_hook(_m: Any, _i: Any, out: Any) -> None:
-            sink.append(_hidden_of(out))
+            sink.append(
+                to_contract(tap_tensor(out, tuple_index), layout, batch_size=batch_size)
+            )
 
         handle = module.register_forward_hook(out_hook)
     else:
 
         def pre_hook(_m: Any, args: tuple[Any, ...]) -> None:
-            sink.append(args[0])
+            sink.append(to_contract(args[0], layout, batch_size=batch_size))
 
         handle = module.register_forward_pre_hook(pre_hook)
     try:
