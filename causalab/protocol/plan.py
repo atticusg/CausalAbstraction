@@ -20,7 +20,12 @@ import hashlib
 import json
 from typing import Any, Mapping
 
-from causalab.protocol.schema import Document, PositionSpec, concrete_int
+from causalab.protocol.schema import (
+    METRIC_DOMAINS,
+    Document,
+    PositionSpec,
+    concrete_int,
+)
 
 __all__ = [
     "COMPONENT_RANK",
@@ -205,14 +210,16 @@ def generated_budget(doc: Document, pos: Any) -> int | None:
 def _needs_distribution(doc: Document, read: str) -> bool:
     """Whether anything downstream of ``read`` consumes a full distribution.
 
-    Saving the read is the obvious case. So is any metric over it: every v1
-    metric kind reduces logits. When metric kinds declare a domain, an
-    ids-only kind stops counting here — and a text-only probe then obliges
-    no vocabulary projection at all."""
+    Saving the read is the obvious case. So is any metric in the
+    ``distribution`` domain (§2.10). An ``ids`` kind does **not** count: it
+    consumes the tokens the decode produced, so a text-only probe obliges no
+    vocabulary projection anywhere — which is the whole point of stating the
+    requirement rather than always paying it."""
     if any(entry.value == read for entry in doc.save):
         return True
     for metric in doc.metrics.values():
-        if str(metric.of) == read:
+        domain = METRIC_DOMAINS.get(str(metric.kind), "distribution")
+        if str(metric.of) == read and domain == "distribution":
             return True
         target = metric.fields.get("target")
         if isinstance(target, str) and target == read:

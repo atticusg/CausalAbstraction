@@ -137,6 +137,10 @@ class PointExecutor:
         self._groups_run: set[tuple[str, str]] = set()
         self._batches: dict[str, EncodedBatch] = {}
         self._continuations: dict[tuple[str, str], Continuation] = {}
+        #: per generate read, the decode steps each row addresses — the
+        #: same list the gather used, kept because metrics need to know
+        #: *which* steps a value covers (and that a row covered none)
+        self._read_steps: dict[str, list[list[int]]] = {}
 
     # ------------------------------------------------------------------ #
     # public surface
@@ -161,6 +165,48 @@ class PointExecutor:
                 "metrics reduce one aligned position per example",
             )
         return value
+
+    def is_generated(self, name: str) -> bool:
+        """Whether this read addresses the continuation frame (§2.3)."""
+        return generated_budget(self.doc, self.doc.reads[name].pos) is not None
+
+    def windowed_value(self, name: str) -> list[torch.Tensor]:
+        """One read's value split per example: ``(positions_i, …)`` each.
+
+        The metric surface for a continuation read. Unlike
+        :meth:`dense_value` it welcomes ragged widths, because in the
+        continuation frame they are the answer rather than a
+        misalignment — a row that stopped early, or never said the value a
+        ``variable`` anchor looks for, contributes an **empty** tensor.
+        """
+        value = self.read_value(name)
+        if isinstance(value, RaggedValue):
+            widths = list(value.widths)
+            return list(torch.split(value.flat, widths)) if widths else []
+        if value.dim() == 2:  # one position per row, already squeezed
+            return [value[i].unsqueeze(0) for i in range(value.shape[0])]
+        return [value[i] for i in range(value.shape[0])]
+
+    def addressed_steps(self, name: str) -> list[list[int]]:
+        """Per example, the decode steps one generate read covers."""
+        if name not in self._read_steps:
+            self.read_value(name)  # materialize the group that fills it
+        return self._read_steps[name]
+
+    def generated_ids(self, name: str) -> list[list[int]]:
+        """Per example, the token ids at a generate read's addressed steps.
+
+        The ``ids`` metric domain (§2.10): these come from the decode
+        itself, so a metric that only needs them obliges no vocabulary
+        projection anywhere.
+        """
+        read = self.doc.reads[name]
+        steps = self.addressed_steps(name)
+        continuation = self._continuations[(str(read.model), str(read.input))]
+        return [
+            [int(continuation.token_ids[row, step]) for step in row_steps]
+            for row, row_steps in enumerate(steps)
+        ]
 
     def run_all(self) -> None:
         """Run every group the document implies (all reads materialize)."""
@@ -230,6 +276,7 @@ class PointExecutor:
         self._read_values.clear()
         self._groups_run.clear()
         self._continuations.clear()
+        self._read_steps.clear()
 
     # ------------------------------------------------------------------ #
     # group execution
@@ -418,10 +465,19 @@ class PointExecutor:
             site = gen_sites[rname]
             capture_site = gen_capture_sites[rname]
             stacked = torch.cat(steps[(id(capture_site.module), capture_site.kind)], 1)
+            dataset_rows = self.role_rows[input_role]
+            field = self.role_fields[input_role]
             per_row = [
-                resolve_steps(self._spec(read.pos), continuation, row)
+                resolve_steps(
+                    self._spec(read.pos),
+                    continuation,
+                    row,
+                    dataset_row=dataset_rows[row],
+                    field=field,
+                )
                 for row in range(rows)
             ]
+            self._read_steps[rname] = per_row
             project = None
             if capture_site is not site:  # ln_final kept, lm_head owed
                 head = (

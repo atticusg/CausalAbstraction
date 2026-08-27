@@ -289,3 +289,20 @@ def test_prompt_frame_positions_carry_no_generated():
     not defaulted, so existing canonical forms are untouched."""
     pos = parse_document(base_doc()).reads["v_cf"].pos
     assert isinstance(pos, PositionSpec) and pos.generated is None
+
+
+def test_decode_metric_takes_no_value_fields():
+    raw = base_doc()
+    raw["metrics"]["ld"] = {"kind": "decode", "of": "logits"}
+    metric = parse_document(in_order(raw)).metrics["ld"]
+    assert str(metric.kind) == "decode"
+    assert dict(metric.fields) == {}
+
+
+def test_decode_metric_rejects_a_stray_field():
+    """The kind reduces the tokens a decode produced; there is nothing to
+    parametrize, so an extra key is a typo, not an option."""
+    raw = base_doc()
+    raw["metrics"]["ld"] = {"kind": "decode", "of": "logits", "k": 1}
+    with pytest.raises(ParseError):
+        parse_document(in_order(raw))

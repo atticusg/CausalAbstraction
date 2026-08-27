@@ -132,16 +132,83 @@ class MetricTable:
         self, name: str, values: list[Any], coords: Mapping[str, Any], point_digest: str
     ) -> None:
         for example, value in enumerate(values):
-            row: dict[str, Any] = {"example": example, "metric": name}
-            if isinstance(value, dict):
-                import json
+            self.rows.append(self._row(name, example, value, coords, point_digest))
 
-                row["value"] = json.dumps(value, sort_keys=True)
-            else:
-                row["value"] = value
-            row.update({axis: _plain(coord) for axis, coord in coords.items()})
-            row["produced_by"] = point_digest
-            self.rows.append(row)
+    def add_windowed(
+        self,
+        name: str,
+        values: list[list[Any]],
+        coords: Mapping[str, Any],
+        point_digest: str,
+        *,
+        steps: list[list[int]] | None,
+        matched: list[bool],
+    ) -> None:
+        """Rows for a metric over a read that addresses several positions.
+
+        One row per (example, position), carrying the ``step`` it scored and
+        whether the example addressed anything at all. An example that
+        addressed **nothing** — a row that stopped generating, or never said
+        the value a ``variable`` anchor looks for — still gets exactly one
+        row, with a null value and ``matched=false``: "the model never said
+        it" has to be distinguishable from "it said it and scored 0", and a
+        missing row would make the two look identical after a group-by.
+
+        ``steps`` is ``None`` for a kind that reduces the whole window to
+        one value (``decode``): there is no single step such a value belongs
+        to, so the column stays null rather than lying about one.
+        """
+        for example, row_values in enumerate(values):
+            if not row_values:
+                self.rows.append(
+                    self._row(
+                        name,
+                        example,
+                        None,
+                        coords,
+                        point_digest,
+                        step=None,
+                        matched=matched[example],
+                    )
+                )
+                continue
+            for offset, value in enumerate(row_values):
+                self.rows.append(
+                    self._row(
+                        name,
+                        example,
+                        value,
+                        coords,
+                        point_digest,
+                        step=steps[example][offset] if steps is not None else None,
+                        matched=matched[example],
+                    )
+                )
+
+    def _row(
+        self,
+        name: str,
+        example: int,
+        value: Any,
+        coords: Mapping[str, Any],
+        point_digest: str,
+        *,
+        step: int | None = None,
+        matched: bool | None = None,
+    ) -> dict[str, Any]:
+        row: dict[str, Any] = {"example": example, "metric": name}
+        if isinstance(value, dict):
+            import json
+
+            row["value"] = json.dumps(value, sort_keys=True)
+        else:
+            row["value"] = value
+        if matched is not None:
+            row["step"] = step
+            row["matched"] = matched
+        row.update({axis: _plain(coord) for axis, coord in coords.items()})
+        row["produced_by"] = point_digest
+        return row
 
 
 def _plain(value: Any) -> Any:

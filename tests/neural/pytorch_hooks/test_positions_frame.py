@@ -230,3 +230,110 @@ def test_a_generated_position_without_a_decode_refuses():
     spec = PositionSpec(generated={"max_new_tokens": 4}, index=-1)
     with pytest.raises(ProtocolError, match="does not exist until"):
         resolve_position(spec, batch, 0)  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------- #
+# the `variable` anchor inside the continuation (§2.3)
+# --------------------------------------------------------------------------- #
+
+
+def _said(text: str, pieces: list[str]) -> Continuation:
+    """A one-row decode whose tokens are ``pieces`` in order, with the char
+    spans incremental detokenization would have produced."""
+    offsets: list[tuple[int, int]] = []
+    cursor = 0
+    for piece in pieces:
+        offsets.append((cursor, cursor + len(piece)))
+        cursor += len(piece)
+    assert "".join(pieces) == text
+    return Continuation(
+        token_ids=torch.arange(len(pieces)).reshape(1, len(pieces)),
+        widths=(len(pieces),),
+        texts=(text,),
+        offsets=(tuple(offsets),),
+    )
+
+
+def _variable_spec() -> PositionSpec:
+    return PositionSpec(generated={"max_new_tokens": 8}, variable="answer")
+
+
+def test_variable_covers_the_tokens_that_said_it():
+    cont = _said(" the answer is Thursday", [" the", " answer", " is", " Thursday"])
+    steps = resolve_steps(
+        _variable_spec(),
+        cont,
+        0,
+        dataset_row={"answer": "Thursday"},
+        field="input",
+    )
+    assert steps == [3]
+
+
+def test_variable_the_model_never_said_yields_no_positions():
+    """Zero occurrences is the experiment's answer, not an error: the row
+    contributes nothing and the run continues."""
+    cont = _said(" the answer is Friday", [" the", " answer", " is", " Friday"])
+    steps = resolve_steps(
+        _variable_spec(),
+        cont,
+        0,
+        dataset_row={"answer": "Thursday"},
+        field="input",
+    )
+    assert steps == []
+
+
+def test_variable_takes_the_first_occurrence():
+    """The prompt side demands exactly one occurrence; a generation may
+    repeat itself as a matter of course, so repetition must not crash."""
+    cont = _said(" Thursday, Thursday", [" Thursday", ",", " Thursday"])
+    steps = resolve_steps(
+        _variable_spec(),
+        cont,
+        0,
+        dataset_row={"answer": "Thursday"},
+        field="input",
+    )
+    assert steps == [0]
+
+
+def test_variable_spanning_a_merge_covers_every_token_it_touches():
+    """A sentencepiece-style split is why the spans are built as the tokens
+    arrive: the match starts inside one piece and ends inside another, and
+    both pieces produced it."""
+    cont = _said(" Thursday", [" Th", "urs", "day"])
+    steps = resolve_steps(
+        _variable_spec(),
+        cont,
+        0,
+        dataset_row={"answer": "hursda"},
+        field="input",
+    )
+    assert steps == [0, 1, 2]
+
+
+def test_variable_does_not_reach_past_a_rows_width():
+    """A row that stopped early cannot have said anything in the steps after
+    its EOS, even though the batch decoded them."""
+    cont = _said(" a Thursday", [" a", " Thursday"])
+    narrowed = Continuation(
+        token_ids=cont.token_ids,
+        widths=(1,),
+        texts=cont.texts,
+        offsets=cont.offsets,
+    )
+    steps = resolve_steps(
+        _variable_spec(),
+        narrowed,
+        0,
+        dataset_row={"answer": "Thursday"},
+        field="input",
+    )
+    assert steps == []
+
+
+def test_variable_without_its_row_refuses():
+    cont = _said(" Thursday", [" Thursday"])
+    with pytest.raises(ProtocolError, match="needs its dataset row"):
+        resolve_steps(_variable_spec(), cont, 0)
