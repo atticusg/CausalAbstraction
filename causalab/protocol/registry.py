@@ -93,7 +93,11 @@ def model_info_from_hf_config(key: str, config: Any) -> ModelInfo:
     num_heads = int(getattr(text, "num_attention_heads"))
     hidden = int(getattr(text, "hidden_size"))
     head_dim = int(getattr(text, "head_dim", None) or hidden // num_heads)
-    dtype = str(getattr(text, "torch_dtype", None) or "float32")
+    # transformers 5 renamed this to ``dtype``; ``torch_dtype`` still resolves but
+    # warns on every access, and is scheduled for removal.
+    dtype = str(
+        getattr(text, "dtype", None) or getattr(text, "torch_dtype", None) or "float32"
+    )
     return ModelInfo(
         key=key,
         hidden_size=hidden,
