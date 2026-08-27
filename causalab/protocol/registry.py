@@ -106,7 +106,15 @@ def model_info_from_hf_config(key: str, config: Any) -> ModelInfo:
         native_dtype={"bfloat16": "bf16", "float16": "fp16"}.get(
             dtype.removeprefix("torch."), "fp32"
         ),
-        num_experts=getattr(text, "num_local_experts", None),
+        # Two spellings in the wild, and neither is universal: mixtral and
+        # qwen3_moe carry both, while qwen2_moe and qwen3_5_moe carry only
+        # ``num_experts``. Reading ``num_local_experts`` alone silently left
+        # num_experts=None on those, which makes component_width refuse
+        # router_logits on a model that plainly has a router.
+        num_experts=(
+            getattr(text, "num_experts", None)
+            or getattr(text, "num_local_experts", None)
+        ),
     )
 
 
