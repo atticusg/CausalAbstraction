@@ -1,4 +1,4 @@
-"""``causalab:fit_pca`` against a hand-computed oracle.
+"""``causalab.analysis.fit_pca`` against a hand-computed oracle.
 
 Ported from ``fit_pca@1``'s registry-era test; the numerics assertions are
 unchanged, which is the point — the op moved from a versioned registry entry to
@@ -18,9 +18,9 @@ import pytest
 import torch
 
 from causalab.protocol.tables import read_table
-from causalab.steps.builtin import fit_pca
-from causalab.steps.io import StepError, read_tensor
-from tests.steps._run import run_step
+from causalab.analysis import fit_pca
+from causalab.io.step_io import StepError, read_tensor
+from tests.step_scripts import run_step
 
 pytestmark = pytest.mark.numerical_unit
 
@@ -95,7 +95,7 @@ def test_a_one_dimensional_input_is_refused(tmp_path):
 def test_a_tensor_path_input_is_read(tmp_path):
     """The runner hands over a path when the document used no selector, so the
     script must accept either."""
-    from causalab.steps.io import write_tensor
+    from causalab.io.step_io import write_tensor
 
     bundle = tmp_path / "acts.safetensors"
     write_tensor(bundle, CROSS, slot="acts")

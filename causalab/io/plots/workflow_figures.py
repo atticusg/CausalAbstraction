@@ -1,37 +1,36 @@
-"""``causalab:plot`` — heatmap and lines over a metric table.
+"""Figures over a metric table, as a workflow step script.
 
 ```json
 "scan_heatmap": {
-  "type": "script", "script": "causalab:plot",
+  "type": "script",
+  "script": {"module": "causalab.io.plots.workflow_figures"},
   "inputs": {"table": {"step": "locate", "file": "iia.json"},
-             "plot": "heatmap", "x": "sites.target.layer", "y": "positions.tap",
-             "figure": "scan_iia.png"},
-  "outputs": {"plotted": {"file": "scan_iia.json"}}
+             "plot": "heatmap", "x": "sites.target.layer", "y": "positions.tap"},
+  "outputs": {"figure": "scan_iia.png", "plotted": {"file": "scan_iia.json"}}
 }
 ```
 
-Two kinds cover the pipeline: scan grids and metric-vs-axis curves. In v1 that
-was a closed spec enum; here it is just what this script does, so a third kind
-is a user script rather than a spec change — which is the point of the step
-type.
+Two kinds cover the pipeline: scan grids (``heatmap``) and metric-vs-axis curves
+(``lines``). In v1 that was a closed spec enum; here it is just what this script
+does, so a third kind is another script rather than a spec change.
 
-Rows are aggregated exactly as ``causalab:select`` does — group by the producing
-document's sweep axes (from ``_step.json``), mean over examples — so a figure
-and the values chosen from the same table always agree.
+**Output format.** ``figure`` is the rendered image — ``.png`` by default and
+preferred, ``.pdf`` when a vector figure is actually wanted
+(:mod:`causalab.io.plots.figure_format`). ``.html`` is a legal output *format*
+but not for this script: it is matplotlib, so an interactive figure needs a
+plotly-based script instead. ``plotted`` is optional and holds the
+**exact rows that were drawn**: a figure carries no record, so declaring the
+numbers beside it is what makes the picture checkable and lets a later step
+reference what it showed.
 
-**A figure must cover every axis of what it renders.** An uncovered axis would
-silently collapse into duplicate cells, averaging over a dimension the reader
+Rows are aggregated exactly as :mod:`causalab.workflow.scripts.select` does —
+both call :func:`causalab.io.step_record.aggregate` — so a figure and a value
+chosen from the same table can never disagree about what a row is.
+
+**A figure must cover every axis of what it renders.** An uncovered axis
+silently collapses into duplicate cells, averaging over a dimension the reader
 cannot see. v1 refused that at load; here it is refused at the step, which is
 the honest place now that the axes are read from published data.
-
-**What this step declares is the aggregated table, not the image.** A ``.png``
-is neither JSON nor safetensors, and the two-format rule (§2.5) admits no third
-— so the *declared* output is the exact rows that were plotted, which is better
-provenance than the picture anyway: a reader can recompute the figure, and a
-later step can reference the numbers. The image is written beside it and is
-published by sitting in the step directory (§0, everything declared is
-published — and a step directory is the publication). Its name comes from the
-``figure`` input.
 """
 
 from __future__ import annotations
@@ -39,8 +38,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
-from causalab.steps.builtin._sidecar import aggregate, axes_for
-from causalab.steps.io import StepError, frame, write_frame
+from causalab.io.plots.figure_format import normalize_figure_format
+from causalab.io.step_io import StepError, frame, write_frame
+from causalab.io.step_record import aggregate, axes_for
 
 __all__ = ["main"]
 
@@ -65,6 +65,23 @@ def main(inputs: Mapping[str, Any], outputs: Mapping[str, Path]) -> None:
     series = inputs.get("series")
     if kind == "heatmap" and not isinstance(y, str):
         raise StepError("a heatmap needs 'y'")
+    if "figure" not in outputs:
+        raise StepError(
+            "declare a 'figure' output (.png preferred, .pdf for vector) — the "
+            "image is what this step renders"
+        )
+    target = Path(outputs["figure"])
+    # validates the suffix and pins the png-over-pdf preference in one place
+    fmt = normalize_figure_format(target.suffix)
+    if fmt == "html":
+        # `.html` is a legal *document* output (§2.5) — it just needs an
+        # interactive renderer. This one is matplotlib, so say so rather than
+        # letting savefig raise about supported formats.
+        raise StepError(
+            "this renderer is matplotlib and writes .png or .pdf; .html needs "
+            "an interactive script (see causalab.io.plots.distance_plots for "
+            "the plotly idiom)"
+        )
 
     df = frame(table_path)
     if value_column not in df.columns:
@@ -118,15 +135,9 @@ def main(inputs: Mapping[str, Any], outputs: Mapping[str, Path]) -> None:
         ax.set_ylabel(value_column)
     ax.set_title(f"{table_path.name} — {value_column}")
 
-    # the declared output is the data; the image lands beside it (docstring)
-    plotted = Path(next(iter(outputs.values())))
-    figure_name = str(inputs.get("figure", "figure.png"))
-    if "/" in figure_name or figure_name.startswith("."):
-        raise StepError(
-            f"'figure' is a bare filename inside the step directory, got "
-            f"{figure_name!r}"
-        )
-    plotted.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(plotted.parent / figure_name)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(target)
     plt.close(figure)
-    write_frame(table, plotted)
+
+    if "plotted" in outputs:
+        write_frame(table, Path(outputs["plotted"]))

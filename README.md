@@ -63,7 +63,7 @@ causalab/
 │   ├── pytorch_hooks/  # the reference backend: sites, positions, mechanisms,
 │   │                   #   featurizers, metrics, train loop, stamping
 │   └── token_positions.py
-├── steps/           # the Python a script step runs: IO helpers + the shipped `causalab:*` scripts
+├── analysis/        # numerical analysis a script step runs (fits, statistics, operands)
 ├── workflow/        # the workflow runner: run-tree overlay, script invocation, manifest
 ├── causal/          # causal model primitives
 ├── tasks/           # task definitions (causal models + counterfactual generators)

@@ -16,7 +16,7 @@ import pytest
 
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.tables import read_table
-from causalab.protocol.workflow import load_workflow
+from causalab.workflow.document import load_workflow
 from causalab.workflow.runner import run_workflow
 
 pytestmark = pytest.mark.smoke
@@ -39,7 +39,7 @@ def _document(script_dir: Path, *, deps: list[str]) -> dict:
         "steps": {
             "count": {
                 "type": "script",
-                "script": "scripts/count.py",
+                "script": {"path": "scripts/count.py"},
                 "inputs": {"table": {"path": "causalab/configs/methods/das.json"}},
                 "outputs": {"out": {"file": "count.json", "columns": {"n": "int64"}}},
                 "runtime": {"isolate": True, "deps": deps},
@@ -79,7 +79,7 @@ def test_a_tensor_input_cannot_cross_the_boundary(wf_dir, tmp_path, env):
     bundles from paths, inside the script."""
     import torch
 
-    from causalab.steps.io import write_tensor
+    from causalab.io.step_io import write_tensor
 
     write_tensor(wf_dir / "acts.safetensors", torch.zeros(2, 2), slot="acts")
     document = _document(wf_dir, deps=["packaging"])

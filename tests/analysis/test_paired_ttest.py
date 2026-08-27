@@ -1,4 +1,4 @@
-"""``causalab:paired_ttest`` against a hand-computed oracle.
+"""``causalab.analysis.paired_ttest`` against a hand-computed oracle.
 
 Ported from ``paired_ttest@1``; assertions unchanged. Differences 0.5, 1.0, 0.5,
 1.0 → mean 0.75, sample sd sqrt(0.25/3) = 0.288675, so
@@ -12,9 +12,9 @@ from pathlib import Path
 import pytest
 
 from causalab.protocol.tables import read_table
-from causalab.steps.builtin import paired_ttest
-from causalab.steps.io import StepError
-from tests.steps._run import put_table, run_step
+from causalab.analysis import paired_ttest
+from causalab.io.step_io import StepError
+from tests.step_scripts import put_table, run_step
 
 pytestmark = pytest.mark.numerical_unit
 

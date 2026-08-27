@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from causalab.protocol.workflow import (
+from causalab.workflow.document import (
     WorkflowError,
     is_workflow,
     load_workflow,
@@ -44,10 +44,13 @@ def tiny_workflow(tmp_path: Path) -> dict[str, Any]:
         "version": "1",
         "output_dir": "run",
         "steps": {
-            "locate": {"type": "protocol", "document": "methods/locate.json"},
+            "locate": {
+                "type": "intervention_protocol",
+                "document": "methods/locate.json",
+            },
             "best": {
                 "type": "script",
-                "script": "causalab:select",
+                "script": {"module": "causalab.workflow.scripts.select"},
                 "inputs": {
                     "table": {"step": "locate", "file": "iia.json"},
                     "choose": "max",
@@ -73,10 +76,13 @@ def script_workflow(
         "version": "1",
         "output_dir": "run",
         "steps": {
-            "locate": {"type": "protocol", "document": "methods/locate.json"},
+            "locate": {
+                "type": "intervention_protocol",
+                "document": "methods/locate.json",
+            },
             "reduce": {
                 "type": "script",
-                "script": "scripts/reduce.py",
+                "script": {"path": "scripts/reduce.py"},
                 "inputs": {"table": {"step": "locate", "file": "iia.json"}},
                 "outputs": {
                     "out": {
@@ -141,7 +147,7 @@ def test_rule_1_script_step_needs_script_inputs_outputs():
     for missing in ("script", "inputs", "outputs"):
         step = {
             "type": "script",
-            "script": "causalab:select",
+            "script": {"module": "causalab.workflow.scripts.select"},
             "inputs": {},
             "outputs": {"v": "v.json"},
         }
@@ -159,7 +165,7 @@ def test_rule_1_script_step_needs_script_inputs_outputs():
 def test_rule_2_section_order_enforced():
     raw = {
         "version": "1",
-        "steps": {"a": {"type": "protocol", "document": "x.json"}},
+        "steps": {"a": {"type": "intervention_protocol", "document": "x.json"}},
         "output_dir": "run",
     }
     with pytest.raises(WorkflowError) as err:
@@ -172,7 +178,7 @@ def test_rule_2_output_dir_is_one_segment(bad):
     raw = {
         "version": "1",
         "output_dir": bad,
-        "steps": {"a": {"type": "protocol", "document": "x.json"}},
+        "steps": {"a": {"type": "intervention_protocol", "document": "x.json"}},
     }
     with pytest.raises(WorkflowError) as err:
         parse_workflow(raw)
@@ -182,7 +188,10 @@ def test_rule_2_output_dir_is_one_segment(bad):
 def test_rule_2_output_dir_required():
     with pytest.raises(WorkflowError) as err:
         parse_workflow(
-            {"version": "1", "steps": {"a": {"type": "protocol", "document": "x"}}}
+            {
+                "version": "1",
+                "steps": {"a": {"type": "intervention_protocol", "document": "x"}},
+            }
         )
     assert err.value.rule == 1
 
@@ -196,7 +205,7 @@ def test_rule_3_step_names_filesystem_safe():
     raw = {
         "version": "1",
         "output_dir": "run",
-        "steps": {"a/b": {"type": "protocol", "document": "x.json"}},
+        "steps": {"a/b": {"type": "intervention_protocol", "document": "x.json"}},
     }
     with pytest.raises(WorkflowError) as err:
         parse_workflow(raw)
@@ -209,7 +218,9 @@ def test_rule_3_reserved_step_names():
         raw = {
             "version": "1",
             "output_dir": "run",
-            "steps": {reserved: {"type": "protocol", "document": "x.json"}},
+            "steps": {
+                reserved: {"type": "intervention_protocol", "document": "x.json"}
+            },
         }
         with pytest.raises(WorkflowError) as err:
             parse_workflow(raw)
@@ -312,7 +323,7 @@ def test_rule_4_key_must_be_declared_by_the_producer(env, tmp_path):
     raw = tiny_workflow(tmp_path)
     raw["steps"]["consume"] = {
         "type": "script",
-        "script": "causalab:select",
+        "script": {"module": "causalab.workflow.scripts.select"},
         "inputs": {"layer": {"step": "best", "file": "values.json", "key": "ghost"}},
         "outputs": {"values": "out.json"},
     }
@@ -324,7 +335,7 @@ def test_rule_4_key_of_a_protocol_step_is_refused(env, tmp_path):
     raw = tiny_workflow(tmp_path)
     raw["steps"]["consume"] = {
         "type": "script",
-        "script": "causalab:select",
+        "script": {"module": "causalab.workflow.scripts.select"},
         "inputs": {"layer": {"step": "locate", "file": "iia.json", "key": "x"}},
         "outputs": {"values": "out.json"},
     }
@@ -355,7 +366,7 @@ def test_independent_steps_share_a_level(env, tmp_path):
     raw = tiny_workflow(tmp_path)
     raw["steps"]["other"] = {
         "type": "script",
-        "script": "causalab:select",
+        "script": {"module": "causalab.workflow.scripts.select"},
         "inputs": {
             "table": {"step": "locate", "file": "iia.json"},
             "emit": {"worst_layer": "sites.target.layer"},
@@ -373,11 +384,40 @@ def test_independent_steps_share_a_level(env, tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def test_rule_6_unknown_builtin_suggests(env, tmp_path):
+def test_rule_6_script_is_a_locator(env, tmp_path):
+    """v1's `causalab:<name>` namespace is gone: a script names a module or a
+    path, so the document says which code runs instead of a registry deciding."""
     raw = tiny_workflow(tmp_path)
-    raw["steps"]["best"]["script"] = "causalab:selct"
+    raw["steps"]["best"]["script"] = "causalab:select"
     err = expect_rule(6, raw, env, tmp_path)
-    assert "select" in str(err)
+    assert "locator" in str(err)
+
+
+def test_rule_6_unknown_module(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["script"] = {"module": "causalab.analysis.no_such_thing"}
+    expect_rule(6, raw, env, tmp_path)
+
+
+def test_rule_6_module_must_be_a_dotted_identifier(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["script"] = {"module": "not/a/module.py"}
+    expect_rule(6, raw, env, tmp_path)
+
+
+def test_rule_6_exactly_one_locator(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["script"] = {
+        "module": "causalab.workflow.scripts.select",
+        "path": "scripts/x.py",
+    }
+    expect_rule(6, raw, env, tmp_path)
+
+
+def test_a_module_script_resolves_without_importing(env, tmp_path):
+    """`find_spec` gives the file; nothing executes at load (§4.2)."""
+    loaded = load_workflow(tiny_workflow(tmp_path), env, workflow_dir=tmp_path)
+    assert len(loaded.step_digests["best"]) == 64
 
 
 def test_rule_6_missing_user_script(env, tmp_path):
@@ -435,10 +475,10 @@ def test_rule_7_outputs_non_empty(env, tmp_path):
     expect_rule(7, raw, env, tmp_path)
 
 
-@pytest.mark.parametrize("bad", ["out.csv", "out.parquet", "out.png", "out"])
-def test_rule_7_only_two_formats(env, tmp_path, bad):
-    """JSON and safetensors, and nothing else — a third format is refused, not
-    merely unknown."""
+@pytest.mark.parametrize("bad", ["out.csv", "out.parquet", "out.txt", "out"])
+def test_rule_7_closed_output_formats(env, tmp_path, bad):
+    """Two record formats plus three visualization ones (§2.5). Anything else is
+    refused, not merely unknown."""
     raw = tiny_workflow(tmp_path)
     raw["steps"]["best"]["outputs"] = {"values": bad}
     expect_rule(7, raw, env, tmp_path)
@@ -475,6 +515,25 @@ def test_rule_7_unknown_column_dtype(env, tmp_path):
     }
     err = expect_rule(7, raw, env, tmp_path)
     assert "float64" in str(err)
+
+
+@pytest.mark.parametrize("figure", ["fig.png", "fig.pdf", "fig.html"])
+def test_rule_7_visualization_formats_are_legal(env, tmp_path, figure):
+    """A figure carries no record, so it is a legal output that declares no
+    shape — png is the preferred default, pdf and html the deliberate ones."""
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["outputs"] = {"figure": figure}
+    loaded = load_workflow(raw, env, workflow_dir=tmp_path)
+    assert loaded.document.steps["best"].outputs["figure"].file == figure
+
+
+@pytest.mark.parametrize("figure", ["fig.png", "fig.pdf", "fig.html"])
+def test_rule_7_a_figure_declares_no_shape(env, tmp_path, figure):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["outputs"] = {
+        "figure": {"file": figure, "columns": {"a": "int64"}}
+    }
+    expect_rule(7, raw, env, tmp_path)
 
 
 def test_rule_7_safetensors_declares_no_columns(env, tmp_path):

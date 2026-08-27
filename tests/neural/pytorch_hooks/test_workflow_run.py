@@ -1,6 +1,6 @@
 """The weekdays pipeline shape end to end on tiny-random, through the real CLI.
 
-locate scan → `causalab:select` the best cell → DAS fit at it (via in-run
+locate scan → `causalab.workflow.scripts.select` the best cell → DAS fit at it (via in-run
 artifact refs) → apply the fitted rotation (via a run-tree file_path,
 ArtifactIdentity checked) → heatmap and lines plots. This is the anchor for the
 v2 rewrite: the *pipeline* is the same one v1 ran, so if the numbers and the
@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 from safetensors.torch import load_file
 
-from causalab.protocol.cli import main
+from causalab.cli import main
 from tests.neural.pytorch_hooks.conftest import TINY_LLAMA
 from tests.protocol._env import FIXTURES, write_rot_fixture
 from tests.tables import frame as table_frame
@@ -44,7 +44,7 @@ def _tiny_workflow() -> dict:
         "output_dir": OUTPUT_DIR,
         "steps": {
             "locate": {
-                "type": "protocol",
+                "type": "intervention_protocol",
                 "document": f"{METHODS}/weekdays_locate_scan.json",
                 "set": {
                     **tiny,
@@ -54,7 +54,7 @@ def _tiny_workflow() -> dict:
             },
             "best": {
                 "type": "script",
-                "script": "causalab:select",
+                "script": {"module": "causalab.workflow.scripts.select"},
                 "inputs": {
                     "table": {"step": "locate", "file": "iia.json"},
                     "choose": "max",
@@ -71,7 +71,7 @@ def _tiny_workflow() -> dict:
                 },
             },
             "fit": {
-                "type": "protocol",
+                "type": "intervention_protocol",
                 "document": f"{METHODS}/weekdays_das_sweep.json",
                 "set": {
                     **tiny,
@@ -84,7 +84,7 @@ def _tiny_workflow() -> dict:
                 },
             },
             "apply": {
-                "type": "protocol",
+                "type": "intervention_protocol",
                 "document": f"{METHODS}/weekdays_das_apply.json",
                 "set": {
                     **tiny,
@@ -95,27 +95,31 @@ def _tiny_workflow() -> dict:
             },
             "scan_heatmap": {
                 "type": "script",
-                "script": "causalab:plot",
+                "script": {"module": "causalab.io.plots.workflow_figures"},
                 "inputs": {
                     "table": {"step": "locate", "file": "iia.json"},
                     "plot": "heatmap",
                     "x": "sites.target.layer",
                     "y": "positions.tap",
-                    "figure": "scan_iia.png",
                 },
-                "outputs": {"plotted": {"file": "scan_iia.json"}},
+                "outputs": {
+                    "figure": "scan_iia.png",
+                    "plotted": {"file": "scan_iia.json"},
+                },
             },
             "iia_lines": {
                 "type": "script",
-                "script": "causalab:plot",
+                "script": {"module": "causalab.io.plots.workflow_figures"},
                 "inputs": {
                     "table": {"step": "locate", "file": "logit_diff.json"},
                     "plot": "lines",
                     "x": "sites.target.layer",
                     "series": "positions.tap",
-                    "figure": "ld_by_layer.png",
                 },
-                "outputs": {"plotted": {"file": "ld_by_layer.json"}},
+                "outputs": {
+                    "figure": "ld_by_layer.png",
+                    "plotted": {"file": "ld_by_layer.json"},
+                },
             },
         },
     }
@@ -286,7 +290,7 @@ def test_explain_reports_the_derived_schedule(pipeline_run, capsys):
     out = capsys.readouterr().out
     assert code == 0
     assert "schedule" in out
-    assert "script causalab:select" in out
+    assert "script causalab.workflow.scripts.select" in out
 
 
 @pytest.mark.smoke
@@ -316,7 +320,7 @@ def test_resume_reuses_a_step_and_a_script_edit_busts_it(
         "output_dir": "resume_probe",
         "steps": {
             "locate": {
-                "type": "protocol",
+                "type": "intervention_protocol",
                 "document": f"{METHODS}/weekdays_locate_scan.json",
                 "set": {
                     "model.key": TINY_LLAMA,
@@ -326,7 +330,7 @@ def test_resume_reuses_a_step_and_a_script_edit_busts_it(
             },
             "count": {
                 "type": "script",
-                "script": "scripts/count.py",
+                "script": {"path": "scripts/count.py"},
                 "inputs": {"table": {"step": "locate", "file": "iia.json"}},
                 "outputs": {
                     "out": {

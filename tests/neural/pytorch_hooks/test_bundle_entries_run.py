@@ -23,7 +23,7 @@ import pytest
 import torch
 from safetensors.torch import load_file
 
-from causalab.protocol.cli import main
+from causalab.cli import main
 from causalab.protocol.resolve import read_safetensors_metadata
 
 from tests.neural.pytorch_hooks.conftest import TINY_LLAMA
@@ -77,7 +77,7 @@ def _swept_pipeline() -> dict:
         "output_dir": "swept",
         "steps": {
             "fit": {
-                "type": "protocol",
+                "type": "intervention_protocol",
                 "document": f"{METHODS}/weekdays_das_sweep.json",
                 "set": {
                     **TINY,
@@ -91,7 +91,7 @@ def _swept_pipeline() -> dict:
             },
             "best_fit": {
                 "type": "script",
-                "script": "causalab:select",
+                "script": {"module": "causalab.workflow.scripts.select"},
                 "inputs": {
                     "table": {"step": "fit", "file": "iia.json"},
                     "choose": "max",
@@ -108,7 +108,7 @@ def _swept_pipeline() -> dict:
                 },
             },
             "apply": {
-                "type": "protocol",
+                "type": "intervention_protocol",
                 "document": f"{METHODS}/weekdays_das_apply.json",
                 "set": {
                     **TINY,
@@ -293,9 +293,15 @@ def ablation_run(tmp_path_factory: pytest.TempPathFactory) -> Path:
         "description": "harvest a corpus mean, then mean-ablate with it",
         "output_dir": "ablate",
         "steps": {
-            "harvest": {"type": "protocol", "document": "../docs/harvest.json"},
-            "rows": {"type": "protocol", "document": "../docs/rows.json"},
-            "ablate": {"type": "protocol", "document": "../docs/ablate.json"},
+            "harvest": {
+                "type": "intervention_protocol",
+                "document": "../docs/harvest.json",
+            },
+            "rows": {"type": "intervention_protocol", "document": "../docs/rows.json"},
+            "ablate": {
+                "type": "intervention_protocol",
+                "document": "../docs/ablate.json",
+            },
         },
     }
     return _run_workflow(base, document)

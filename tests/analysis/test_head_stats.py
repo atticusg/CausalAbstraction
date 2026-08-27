@@ -1,4 +1,4 @@
-"""``causalab:head_stats`` against a hand-computed oracle.
+"""``causalab.analysis.head_stats`` against a hand-computed oracle.
 
 Ported from ``head_stats@1``; assertions unchanged.
 """
@@ -10,9 +10,9 @@ from pathlib import Path
 import pytest
 
 from causalab.protocol.tables import read_table
-from causalab.steps.builtin import head_stats
-from causalab.steps.io import StepError
-from tests.steps._run import put_table, run_step
+from causalab.analysis import head_stats
+from causalab.io.step_io import StepError
+from tests.step_scripts import put_table, run_step
 
 pytestmark = pytest.mark.numerical_unit
 

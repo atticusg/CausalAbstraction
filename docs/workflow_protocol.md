@@ -24,8 +24,10 @@ below); it never touches a neural network itself.
 - **Everything declared is published.** A step's declared outputs land in its
   own directory and stay there. There is no `save` section to keep in step with
   the steps, and no sink rule — a terminal plot or report step is legitimate.
-- **Two formats, ever.** JSON for anything structured and readable, safetensors
-  for dense numerics. Nothing else, at any layer (§2.5).
+- **Two record formats, ever.** JSON for anything structured and readable,
+  safetensors for dense numerics. Visualization formats (`.png`, `.pdf`,
+  `.html`) are legal outputs but carry no record — a figure is a rendering, not
+  an artifact (§2.5).
 - **Format**: strict JSON (unknown keys = error); YAML accepted at the authoring
   surface. **v2 scope**: a finite acyclic step graph — no loops, no
   conditionals, no nested workflows, one workflow per run.
@@ -68,7 +70,7 @@ not what (§7).
 ### 2.1 `steps` — common fields
 
 Every step is an object with a `type` from the closed set
-`protocol · script`, plus:
+`intervention_protocol · script`, plus:
 
 | field | meaning |
 |---|---|
@@ -79,10 +81,10 @@ Every step is an object with a `type` from the closed set
 Data dependencies are **derived, never authored**: a step depends on every step
 whose outputs it references (§3). `after` adds ordering without data flow.
 
-### 2.2 `protocol` steps — run one intervention protocol
+### 2.2 `intervention_protocol` steps — run one intervention protocol
 
 ```json
-"locate": {"type": "protocol", "document": "protocols/locate_scan.json"}
+"locate": {"type": "intervention_protocol", "document": "protocols/locate_scan.json"}
 ```
 
 | field | meaning |
@@ -125,7 +127,7 @@ meaningful at all (§6).
 
 | field | meaning |
 |---|---|
-| `script` | ✓ — a path relative to the workflow file (contained, no parent escapes), or a shipped built-in named `causalab:<name>` |
+| `script` | ✓ — a **locator**: `{"module": "causalab.analysis.fit_pca"}` or `{"path": "scripts/probe.py"}` (§2.4) |
 | `inputs` | ✓ — `{name: value}` in the §3 grammar; each reference **is** a derived dependency edge |
 | `outputs` | ✓ — `{slot: file}` under the step dir, non-empty |
 | `runtime` | – dependency isolation (§4.1) |
@@ -136,8 +138,9 @@ record. It replaces v1's `transform` (a closed, versioned op registry),
 `select` and `plot` step types: those were three vocabularies for "run some
 Python over the previous step's output", and the registry's admission-by-pull-
 request rule meant a one-off corpus-mean harvest could not be written at all.
-`select` and `plot` survive as **shipped scripts** (`causalab:select`,
-`causalab:plot`), so the common reductions stay one-line to author.
+The reductions v1 had as step types survive as **shipped scripts**, each filed
+by subject rather than in one namespace: `causalab.workflow.scripts.select`,
+`causalab.io.plots.workflow_figures`, and `causalab.analysis.*` (§2.4).
 
 **Script steps are for deterministic Python analysis.** LLM and judge-style
 work stays outside causalab — the protocol layer's determinism is what makes it
@@ -186,27 +189,45 @@ v1 derived these representatives from a `select` step's `emit` table plus the
 producing document's sweep axes. With `select` a script, the document has to
 say it, and saying it is cheap.
 
-### 2.4 `file` vs `path` — the rule
+### 2.4 Addressing a script, and `file` vs `path`
 
-Both words appear in a document and they are not interchangeable:
+`script` is a **locator**, the same shape an `inputs` reference uses (§3):
+
+| form | resolves to |
+|---|---|
+| `{"module": "causalab.analysis.fit_pca"}` | an importable module, found via `importlib.util.find_spec` — which resolves a dotted name to a file **without executing it** |
+| `{"path": "scripts/probe.py"}` | a file beside the workflow document, contained, no parent escapes |
+
+The shipped scripts are filed **by subject**, not in one flat namespace:
+
+| module | what it is |
+|---|---|
+| `causalab.analysis.fit_pca` · `harvest_difference` · `head_stats` · `paired_ttest` | numerical analysis — fits, statistics, and the operands an intervention consumes |
+| `causalab.io.plots.workflow_figures` | rendering, beside the rest of `io/plots/` |
+| `causalab.workflow.scripts.select` | the one script whose purpose *is* wiring steps together |
+
+v1 spelled a shipped script `causalab:<name>`. That needed a registry — exactly
+what this layer removes — and it hid *which* code ran behind a lookup. A module
+path says it, and a script can then live where it belongs by subject instead of
+where a resolver happens to search.
+
+**`file` vs `path`.** Both words appear in a document and they are not
+interchangeable:
 
 - **`file`** is always *a name within some step's output directory*, declared by
   that step — `{"step": "harvest", "file": "acts.safetensors"}` on the way in,
   and a key of `outputs` on the way out. It is a filename, never a location;
   the runner owns where the step's directory lives. A `file` is checkable
   against a declaration.
-- **`path`** is a location on disk the workflow does not own — absolute, or
+- **`path`** is a location on disk that the workflow does not own — absolute, or
   relative to the repo root. A `path` is checkable only against the filesystem.
 
-### 2.5 Two formats
+### 2.5 Formats: two that carry the record, three that visualize it
 
-**JSON** for everything structured and readable — metric tables, scalar values,
-manifests, stats. **safetensors** for dense numerical weights and tensor
-artifacts. Every declared output ends in `.json` or `.safetensors`, and nothing
-else.
-
-A metric table is a **native JSON array of row objects**
-(`causalab/protocol/tables.py`):
+**Record formats — two, and nothing else.** **JSON** for everything structured
+and readable (metric tables, values objects, manifests, stats), **safetensors**
+for dense numerical weights and tensor artifacts. A metric table is a **native
+JSON array of row objects** (`causalab/protocol/tables.py`):
 
 ```json
 [
@@ -219,11 +240,27 @@ Labels repeat on every row. That is the deliberate trade — a file `jq` and a
 human can both read, at the cost of size. There is no envelope and no embedded
 column header: inventing a format inside a format would defeat the point of
 having only two. One file per metric, so a document saving three metrics writes
-three tables.
+three tables. Non-finite floats are written as `null`: bare `NaN`/`Infinity`
+tokens are not JSON, and a metric that computed nothing is exactly the "no
+value" a null means.
 
-Non-finite floats are written as `null`: bare `NaN`/`Infinity` tokens are not
-JSON, and a metric that computed nothing is exactly the "no value" a null
-means.
+**Visualization formats — `.png`, `.pdf`, `.html`.** These are legal declared
+outputs but carry **no record**: a figure is a *rendering* of an artifact rather
+than an artifact itself. So a visualization output may declare no
+`columns`/`keys`, and the runner neither checks its shape nor stamps it with an
+ArtifactIdentity — existence is the whole contract.
+
+- **`.png` is the default and is preferred over `.pdf`** unless a document asks
+  for pdf explicitly. It is what a reviewer can open inline, in a PR, or in a
+  notebook without a viewer. `.pdf` is for print or when a vector figure is
+  genuinely needed; `.html` for interactive figures.
+- The preference is implemented in one place —
+  `causalab.io.plots.figure_format.normalize_figure_format(value, default="png")`
+  — so every renderer inherits it rather than restating it.
+- A step that renders should usually declare the **numbers as well**: the
+  shipped `workflow_figures` script takes an optional `plotted` table output
+  holding the exact rows it drew, which is what makes a figure checkable and
+  lets a later step reference what it showed.
 
 ## 3. Cross-step wiring — the reference grammar
 
@@ -367,12 +404,14 @@ validity stays with the IM loader, run in full.
    and is what a step-dependent inner document validates against (§2.3).
 5. The derived step graph (`inputs` + inner-document artifact refs + `after`) is
    acyclic.
-6. `script` resolves — a contained relative path or a `causalab:` built-in —
-   parses, and declares `main`. It is never imported (§4.2).
+6. `script` names exactly one of `module` or `path`; it resolves — a dotted
+   importable module, or a contained relative path — parses, and declares
+   `main`. It is never imported (§4.2).
 7. `outputs` is non-empty; each output's file is contained inside the step's own
    directory (relative, no parent escapes) and unique within the step; every
-   output ends in `.json` or `.safetensors`; `columns` and `keys` are allowed only on a
-   `.json` output, and are mutually exclusive.
+   output ends in `.json`, `.safetensors`, `.png`, `.pdf` or `.html` (§2.5);
+   `columns` and `keys` are allowed only on a `.json` output, and are
+   mutually exclusive.
 8. A protocol step's `set` paths must exist in the target document (an override
    that would create structure is a typo), and the document must load as a valid
    intervention protocol with `set` applied.
@@ -478,9 +517,9 @@ the test split, and plot — as one workflow over the golden-corpus documents
   "description": "weekdays-8b: locate -> DAS k x seed fits at the best cell -> apply on test; scan heatmap + IIA-vs-k curves.",
   "output_dir": "weekdays_8b",
   "steps": {
-    "locate": {"type": "protocol", "document": "../methods/weekdays_locate_scan.json"},
+    "locate": {"type": "intervention_protocol", "document": "../methods/weekdays_locate_scan.json"},
     "best": {
-      "type": "script", "script": "causalab:select",
+      "type": "script", "script": {"module": "causalab.workflow.scripts.select"},
       "inputs": {
         "table": {"step": "locate", "file": "iia.json"},
         "choose": "max",
@@ -488,11 +527,11 @@ the test split, and plot — as one workflow over the golden-corpus documents
       },
       "outputs": {"values": "values.json"}
     },
-    "fit": {"type": "protocol", "document": "../methods/weekdays_das_sweep.json",
+    "fit": {"type": "intervention_protocol", "document": "../methods/weekdays_das_sweep.json",
              "set": {"positions.best": {"artifact": "best", "key": "best_pos"},
                      "sites.target.layer": {"artifact": "best", "key": "best_layer"}}},
     "best_fit": {
-      "type": "script", "script": "causalab:select",
+      "type": "script", "script": {"module": "causalab.workflow.scripts.select"},
       "inputs": {
         "table": {"step": "fit", "file": "iia.json"},
         "choose": "max",
@@ -500,14 +539,14 @@ the test split, and plot — as one workflow over the golden-corpus documents
       },
       "outputs": {"values": "values.json"}
     },
-    "apply": {"type": "protocol", "document": "../methods/weekdays_das_apply.json",
+    "apply": {"type": "intervention_protocol", "document": "../methods/weekdays_das_apply.json",
                "set": {"featurizers.rot.file_path": "fit/rot.safetensors",
                        "featurizers.rot.k": {"artifact": "best_fit", "key": "best_k"},
                        "featurizers.rot.entry": {
                          "k": {"artifact": "best_fit", "key": "best_k"},
                          "seed": {"artifact": "best_fit", "key": "best_seed"}}}},
     "scan_heatmap": {
-      "type": "script", "script": "causalab:plot",
+      "type": "script", "script": {"module": "causalab.io.plots.workflow_figures"},
       "inputs": {
         "table": {"step": "locate", "file": "iia.json"},
         "plot": "heatmap", "x": "sites.target.layer", "y": "positions.tap"

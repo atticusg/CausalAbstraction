@@ -22,7 +22,7 @@ from typing import Any
 
 import pandas as pd
 
-from causalab.protocol.cli import main
+from causalab.cli import main
 
 from tests.golden._env import FIXTURES, GOLDEN_PROTOCOLS
 

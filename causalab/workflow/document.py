@@ -67,7 +67,6 @@ from causalab.protocol.sweep import (
 from causalab.protocol.tables import TABLE_SUFFIX
 
 __all__ = [
-    "BUILTIN_PREFIX",
     "COLUMN_DTYPES",
     "DeferredArtifacts",
     "LoadedWorkflow",
@@ -84,17 +83,22 @@ __all__ = [
     "parse_workflow",
 ]
 
-STEP_TYPES: tuple[str, ...] = ("protocol", "script")
-
-#: Prefix marking a causalab-shipped step script instead of a repo path.
-BUILTIN_PREFIX = "causalab:"
+STEP_TYPES: tuple[str, ...] = ("intervention_protocol", "script")
 
 #: Column dtypes a table output may declare. Deliberately narrow: the types
 #: that survive a JSON round-trip and a strict re-parse by a consuming step.
 COLUMN_DTYPES: tuple[str, ...] = ("int64", "float64", "bool", "string")
 
-#: The two formats, and nothing else (§2.5).
-OUTPUT_SUFFIXES: tuple[str, ...] = (TABLE_SUFFIX, ".safetensors")
+#: The two *record* formats: structured data and dense numerics (§2.5).
+RECORD_SUFFIXES: tuple[str, ...] = (TABLE_SUFFIX, ".safetensors")
+
+#: Visualization formats. These carry no record — a figure is a rendering of an
+#: artifact rather than one itself — so they are legal outputs but may declare
+#: no `columns`/`keys`. `png` is preferred over `pdf` unless a document asks for
+#: pdf explicitly (``causalab.io.plots.figure_format``).
+VISUALIZATION_SUFFIXES: tuple[str, ...] = (".png", ".pdf", ".html")
+
+OUTPUT_SUFFIXES: tuple[str, ...] = RECORD_SUFFIXES + VISUALIZATION_SUFFIXES
 
 _STEP_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 _SEGMENT = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -184,9 +188,11 @@ class ProtocolStep:
 @dataclasses.dataclass(frozen=True)
 class ScriptStep:
     type: str
-    script: str
     inputs: Mapping[str, Any]
     outputs: Mapping[str, OutputDecl]
+    #: exactly one of these is set — the script locator (§2.3)
+    module: str | None = None
+    path: str | None = None
     #: sha256 of the script's bytes — in the digest, so ``--resume`` is correct
     script_sha256: str = ""
     runtime: Mapping[str, Any] | None = None
@@ -195,8 +201,9 @@ class ScriptStep:
     description: str | None = None
 
     @property
-    def is_builtin(self) -> bool:
-        return self.script.startswith(BUILTIN_PREFIX)
+    def script(self) -> str:
+        """What the document said, for an error message or a manifest."""
+        return self.module if self.module is not None else str(self.path)
 
 
 Step = ProtocolStep | ScriptStep
@@ -365,6 +372,33 @@ def _parse_reference(value: Mapping[str, Any], path: str) -> Reference | None:
     return ref
 
 
+def _parse_script_locator(raw: Any, path: str) -> tuple[str | None, str | None]:
+    """``script`` as a locator: ``{"module": …}`` or ``{"path": …}`` (§2.3)."""
+    if not isinstance(raw, Mapping):
+        raise WorkflowError(
+            6,
+            '\'script\' is a locator: {"module": "causalab.analysis.fit_pca"} '
+            'or {"path": "scripts/probe.py"}',
+            path=path,
+        )
+    _check_keys(raw, ("module", "path"), path)
+    present = [key for key in ("module", "path") if key in raw]
+    if len(present) != 1:
+        raise WorkflowError(
+            6,
+            "'script' names exactly one of 'module' or 'path'",
+            path=path,
+        )
+    if "module" in raw:
+        module = _str_field(raw, "module", path)
+        if not all(part.isidentifier() for part in module.split(".")):
+            raise WorkflowError(
+                6, f"script module {module!r} is not a dotted identifier", path=path
+            )
+        return module, None
+    return None, _str_field(raw, "path", path)
+
+
 def _parse_output(slot: str, raw: Any, path: str) -> OutputDecl:
     if isinstance(raw, str):
         decl = OutputDecl(file=raw)
@@ -421,7 +455,8 @@ def _parse_output(slot: str, raw: Any, path: str) -> OutputDecl:
     ):
         raise WorkflowError(
             7,
-            f"output {slot!r} declares columns/keys but is not {TABLE_SUFFIX}",
+            f"output {slot!r} declares columns/keys but is not {TABLE_SUFFIX} — "
+            "a shape promise only means something for a structured file",
             path=path,
         )
     return decl
@@ -472,7 +507,7 @@ def _parse_step(name: str, raw: Any, path: str) -> Step:
     description = raw.get("description")
     if description is not None and not isinstance(description, str):
         raise WorkflowError(1, "'description' is free text", path=path)
-    if kind == "protocol":
+    if kind == "intervention_protocol":
         _check_keys(
             raw,
             ("type", "document", "set", "max_points", "after", "description"),
@@ -490,7 +525,7 @@ def _parse_step(name: str, raw: Any, path: str) -> Step:
         ):
             raise WorkflowError(1, "'max_points' is a positive integer", path=path)
         return ProtocolStep(
-            type="protocol",
+            type="intervention_protocol",
             document=_str_field(raw, "document", path),
             set=dict(overrides),
             max_points=max_points,
@@ -513,6 +548,7 @@ def _parse_step(name: str, raw: Any, path: str) -> Step:
         path,
     )
     _need(raw, ("script", "inputs", "outputs"), path)
+    module, script_path = _parse_script_locator(raw["script"], f"{path}.script")
     inputs = raw["inputs"]
     if not isinstance(inputs, Mapping):
         raise WorkflowError(1, "'inputs' maps names to values", path=path)
@@ -543,7 +579,8 @@ def _parse_step(name: str, raw: Any, path: str) -> Step:
     }
     return ScriptStep(
         type="script",
-        script=_str_field(raw, "script", path),
+        module=module,
+        path=script_path,
         inputs=parsed_inputs,
         outputs=parsed_outputs,
         runtime=_parse_runtime(raw.get("runtime"), f"{path}.runtime"),
@@ -615,44 +652,44 @@ def parse_workflow(raw: Mapping[str, Any]) -> WorkflowDocument:
 # --------------------------------------------------------------------------- #
 
 
-def builtin_path(name: str) -> Path:
-    """Where a ``causalab:<name>`` step script lives."""
-    from causalab import steps as steps_pkg
-
-    return Path(steps_pkg.__file__).parent / "builtin" / f"{name}.py"
-
-
-def builtin_names() -> tuple[str, ...]:
-    """Every shipped step script, for a did-you-mean."""
-    directory = builtin_path("_").parent
-    if not directory.is_dir():
-        return ()
-    return tuple(
-        sorted(p.stem for p in directory.glob("*.py") if not p.stem.startswith("_"))
-    )
-
-
 def resolve_script(step: ScriptStep, workflow_dir: Path, path: str) -> Path:
-    """The file a step's ``script`` names, checked but not imported (rule 6)."""
-    if step.is_builtin:
-        name = step.script[len(BUILTIN_PREFIX) :]
-        if not name or not _SEGMENT.match(name) or "." in name:
+    """The file a step's ``script`` locator names — found, never imported (rule 6).
+
+    Two locators, the same shape an ``inputs`` reference uses (§3):
+
+    * ``{"module": "causalab.analysis.fit_pca"}`` — an importable module, found
+      with :func:`importlib.util.find_spec`, which resolves a dotted name to a
+      file **without executing it**. That is what lets a shipped script live
+      wherever it belongs by subject (``causalab.analysis``,
+      ``causalab.io.plots``, ``causalab.workflow.scripts``) instead of in one
+      flat namespace with a search order.
+    * ``{"path": "scripts/probe.py"}`` — a file beside the workflow document,
+      contained, no parent escapes.
+
+    v1 spelled a shipped script ``causalab:<name>``. That needed a registry —
+    exactly the thing this layer removes — and it hid *which* code ran behind a
+    lookup. A module path says it."""
+    import importlib.util
+
+    if step.module is not None:
+        try:
+            spec = importlib.util.find_spec(step.module)
+        except (ImportError, ValueError) as err:
+            # a missing PARENT package raises rather than returning None
             raise WorkflowError(
-                6, f"built-in script name {name!r} is not an identifier", path=path
-            )
-        target = builtin_path(name)
-        if not target.is_file():
+                6, f"script module {step.module!r} not found: {err}", path=path
+            ) from err
+        if spec is None or not spec.origin or not spec.origin.endswith(".py"):
             raise WorkflowError(
                 6,
-                f"unknown built-in script {step.script!r}"
-                f"{suggest(name, builtin_names())}",
+                f"script module {step.module!r} does not resolve to a Python file",
                 path=path,
             )
-        return target
-    _contained(step.script, 6, path)
-    target = (workflow_dir / step.script).resolve()
+        return Path(spec.origin)
+    _contained(str(step.path), 6, path)
+    target = (workflow_dir / str(step.path)).resolve()
     if not target.is_file():
-        raise WorkflowError(6, f"script {step.script!r} not found", path=path)
+        raise WorkflowError(6, f"script {step.path!r} not found", path=path)
     return target
 
 
@@ -1275,7 +1312,11 @@ def _canonicalize(
                 entry["max_points"] = step.max_points
             entry["document_digest"] = inner_digests[name]
         else:
-            entry["script"] = step.script
+            entry["script"] = (
+                {"module": step.module}
+                if step.module is not None
+                else {"path": step.path}
+            )
             entry["script_sha256"] = step.script_sha256
             entry["inputs"] = {
                 key: (

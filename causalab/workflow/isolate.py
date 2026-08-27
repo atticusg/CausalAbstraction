@@ -6,7 +6,7 @@ script by path, and calls ``main(inputs, outputs)`` with paths rebuilt as
 stamping, so this file is deliberately thin: everything it could get wrong is
 something the runner would have to re-check anyway.
 
-Invoked as ``uv run --with <deps> python -m causalab.steps._shim``.
+Invoked as ``uv run --with <deps> python -m causalab.workflow.isolate``.
 """
 
 from __future__ import annotations

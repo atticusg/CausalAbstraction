@@ -1,8 +1,8 @@
-"""``causalab:harvest_difference`` — a steering direction from two harvests.
+"""``causalab.analysis.harvest_difference`` — a steering direction from two harvests.
 
 ```json
 "direction": {
-  "type": "script", "script": "causalab:harvest_difference",
+  "type": "script", "script": {"module": "causalab.analysis.harvest_difference"},
   "inputs": {"positive": {"step": "harvest_pos", "file": "acts.safetensors"},
              "negative": {"step": "harvest_neg", "file": "acts.safetensors"},
              "normalize": true},
@@ -33,7 +33,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
-from causalab.steps.io import StepError, write_table, write_tensor
+from causalab.io.step_io import StepError, write_table, write_tensor
 
 __all__ = ["main"]
 
@@ -54,7 +54,7 @@ def _rows(tensor: Any, slot: str) -> Any:
 def main(inputs: Mapping[str, Any], outputs: Mapping[str, Path]) -> None:
     import torch
 
-    from causalab.steps.io import read_tensor
+    from causalab.io.step_io import read_tensor
 
     def resolve(slot: str) -> Any:
         value = inputs[slot]
