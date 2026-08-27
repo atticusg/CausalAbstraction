@@ -39,7 +39,7 @@ def tiny_workflow(tmp_path: Path) -> dict[str, Any]:
             "best": {
                 "type": "select",
                 "from": "locate",
-                "table": "iia.parquet",
+                "table": "iia.json",
                 "choose": "max",
                 "emit": {"best_layer": "sites.target.layer"},
             },
@@ -131,9 +131,7 @@ def test_rule_4_missing_document(env, tmp_path):
 
 def test_rule_4_save_value_must_be_an_output(env, tmp_path):
     raw = tiny_workflow(tmp_path)
-    raw["save"] = [
-        {"step": "locate", "value": "ghost.parquet", "file_path": "g.parquet"}
-    ]
+    raw["save"] = [{"step": "locate", "value": "ghost.json", "file_path": "g.json"}]
     expect_rule(4, raw, env, tmp_path)
 
 
@@ -148,7 +146,7 @@ def test_rule_6_dead_step(env, tmp_path):
     raw["steps"]["spare"] = {
         "type": "select",
         "from": "locate",
-        "table": "iia.parquet",
+        "table": "iia.json",
         "choose": "max",
         "emit": {"x": "sites.target.layer"},
     }
@@ -162,7 +160,7 @@ def test_rule_6_after_is_not_a_sink(env, tmp_path):
     raw["steps"]["spare"] = {
         "type": "select",
         "from": "locate",
-        "table": "iia.parquet",
+        "table": "iia.json",
         "choose": "max",
         "emit": {"x": "sites.target.layer"},
     }
@@ -177,8 +175,10 @@ def test_rule_7_emit_column_must_be_an_axis(env, tmp_path):
 
 
 def test_rule_8_table_extension(env, tmp_path):
+    """A ranked table is JSON. A third format is not merely unknown here — JSON
+    and safetensors are the only two the stack has (IM spec §2.12)."""
     raw = tiny_workflow(tmp_path)
-    raw["steps"]["best"]["table"] = "iia.json"
+    raw["steps"]["best"]["table"] = "iia.csv"
     expect_rule(8, raw, env, tmp_path)
 
 
@@ -290,9 +290,9 @@ def test_inner_save_paths_are_outputs_not_loads(env, tmp_path):
     ]
     (tmp_path / "methods/locate.json").write_text(json.dumps(doc))
     raw["save"].append(
-        {"step": "locate", "value": "locate/iia.parquet", "file_path": "iia.parquet"}
+        {"step": "locate", "value": "locate/iia.json", "file_path": "iia.json"}
     )
-    raw["steps"]["best"]["table"] = "locate/iia.parquet"
+    raw["steps"]["best"]["table"] = "locate/iia.json"
     loaded = load_workflow(raw, env, workflow_dir=tmp_path)
     assert loaded.inner_digest_kind["locate"] == "campaign"
     assert loaded.dependencies["locate"] == ()
@@ -306,7 +306,7 @@ def test_rule_10_artifact_ref_must_name_a_select_step(env, tmp_path):
         "set": {"sites.target.layer": {"artifact": "locate", "key": "anything"}},
     }
     raw["save"].append(
-        {"step": "fit", "value": "iia.parquet", "file_path": "fit_iia.parquet"}
+        {"step": "fit", "value": "iia.json", "file_path": "fit_iia.json"}
     )
     expect_rule(10, raw, env, tmp_path)
 
@@ -323,7 +323,7 @@ def test_rule_10_run_tree_file_path_must_be_saved(env, tmp_path):
         "set": {"featurizers.rot.file_path": "locate/GHOST.safetensors"},
     }
     raw["save"].append(
-        {"step": "apply", "value": "iia.parquet", "file_path": "apply_iia.parquet"}
+        {"step": "apply", "value": "iia.json", "file_path": "apply_iia.json"}
     )
     expect_rule(10, raw, env, tmp_path)
 
@@ -345,7 +345,7 @@ def test_rule_8_plot_path_contained(env, tmp_path):
         "type": "plot",
         "plot": "lines",
         "from": "locate",
-        "table": "iia.parquet",
+        "table": "iia.json",
         "x": "sites.target.layer",
         "series": "positions.tap",
         "file_path": "../../escape.png",
@@ -362,7 +362,7 @@ def test_rule_1_plot_kind_strictness():
     base = {
         "type": "plot",
         "from": "a",
-        "table": "t.parquet",
+        "table": "t.json",
         "x": "x",
         "file_path": "f.png",
     }
@@ -405,7 +405,7 @@ def test_rule_7_heatmap_must_cover_every_axis(env, tmp_path):
         "type": "plot",
         "plot": "lines",
         "from": "locate",
-        "table": "iia.parquet",
+        "table": "iia.json",
         "x": "sites.target.layer",  # positions.tap left uncovered
         "file_path": "f.png",
     }
@@ -430,7 +430,7 @@ def test_deferred_doc_with_external_featurizer_loads(env, tmp_path):
         "set": {"sites.target.layer": {"artifact": "best", "key": "best_layer"}},
     }
     raw["save"].append(
-        {"step": "apply", "value": "iia.parquet", "file_path": "apply_iia.parquet"}
+        {"step": "apply", "value": "iia.json", "file_path": "apply_iia.json"}
     )
     loaded = load_workflow(raw, env, workflow_dir=tmp_path)
     assert loaded.inner_digest_kind["apply"] == "authored"
@@ -461,14 +461,14 @@ def transform_workflow(tmp_path: Path) -> dict[str, Any]:
                 "params": {"k": 2},
                 "outputs": {
                     "weight": "weight.safetensors",
-                    "spectrum": "spectrum.parquet",
+                    "spectrum": "spectrum.json",
                 },
             },
             "scree": {
                 "type": "plot",
                 "plot": "lines",
                 "from": "fit",
-                "table": "spectrum.parquet",
+                "table": "spectrum.json",
                 "x": "pc",
                 "value": "explained_variance_ratio",
                 "file_path": "scree.png",
@@ -505,7 +505,7 @@ class TestTransformParse:
 
     def test_rule_1_an_undeclared_output_slot(self, env, tmp_path):
         raw = transform_workflow(tmp_path)
-        raw["steps"]["fit"]["outputs"]["loadings"] = "loadings.parquet"
+        raw["steps"]["fit"]["outputs"]["loadings"] = "loadings.json"
         err = expect_rule(1, raw, env, tmp_path)
         assert "no output slot 'loadings'" in str(err)
 
@@ -536,11 +536,11 @@ class TestTransformParse:
         assert "unknown parameter 'kk'" in str(err)
 
     def test_rule_8_an_output_slot_keeps_its_file_kind(self, env, tmp_path):
-        """A tensor slot cannot be written as a .parquet — the record says
+        """A tensor slot cannot be written as a .json — the record says
         which format the slot is, so a typo is a load error, not a surprise
         at read time."""
         raw = transform_workflow(tmp_path)
-        raw["steps"]["fit"]["outputs"]["weight"] = "weight.parquet"
+        raw["steps"]["fit"]["outputs"]["weight"] = "weight.json"
         expect_rule(8, raw, env, tmp_path)
 
     def test_rule_4_an_input_naming_an_unknown_step(self, env, tmp_path):
@@ -578,7 +578,7 @@ class TestTransformAsAProducer:
         raw["steps"]["top"] = {
             "type": "select",
             "from": "fit",
-            "table": "spectrum.parquet",
+            "table": "spectrum.json",
             "choose": "max",
             "value": "explained_variance_ratio",
             "emit": {"best_pc": "pc"},
@@ -592,7 +592,7 @@ class TestTransformAsAProducer:
     def test_rule_4_a_tensor_slot_cannot_be_ranked(self, env, tmp_path):
         raw = transform_workflow(tmp_path)
         raw["steps"]["scree"]["table"] = "weight.safetensors"
-        expect_rule(8, raw, env, tmp_path)  # .parquet is required first
+        expect_rule(8, raw, env, tmp_path)  # .json is required first
 
     def test_a_protocol_step_may_load_a_transform_tensor(self, env, tmp_path):
         """Rule 10's run-tree half: the fitted-artifact direction #37 needs."""
@@ -694,7 +694,7 @@ class TestTransformCanonicalForm:
         assert entry["params"] == {"k": 2}
         assert entry["outputs"] == {
             "weight": "weight.safetensors",
-            "spectrum": "spectrum.parquet",
+            "spectrum": "spectrum.json",
         }
         assert entry["inputs"] == {
             "acts": {"step": "harvest", "value": "acts_L8_ans.safetensors"}

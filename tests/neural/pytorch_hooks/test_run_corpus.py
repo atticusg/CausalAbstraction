@@ -22,7 +22,6 @@ import json
 import shutil
 from pathlib import Path
 
-import pandas as pd
 import pytest
 from safetensors.torch import load_file
 
@@ -31,6 +30,7 @@ from causalab.protocol.cli import main
 from tests.protocol._env import CORPUS_DIR, FIXTURES
 from tests.neural.pytorch_hooks._drive import base_data_section  # noqa: F401  (tier anchor)
 from tests.neural.pytorch_hooks.conftest import TINY_LLAMA
+from tests.tables import frame as table_frame
 
 pytestmark = pytest.mark.smoke
 
@@ -82,10 +82,10 @@ def test_01_harvest_runs(roots, tmp_path):
 def test_02_interchange_runs_and_scores(roots, tmp_path):
     code = _run("02_interchange_im.json", roots, tmp_path, "sites.target.layer=1")
     assert code == 0
-    iia = pd.read_parquet(tmp_path / "iia.parquet")
+    iia = table_frame(tmp_path / "iia.json")
     assert len(iia) == 4  # one row per example
     assert set(iia["value"]).issubset({0.0, 1.0})  # match is an indicator
-    ld = pd.read_parquet(tmp_path / "logit_diff.parquet")
+    ld = table_frame(tmp_path / "logit_diff.json")
     assert len(ld) == 4 and ld["value"].dtype.kind == "f"
 
 
@@ -101,7 +101,7 @@ def test_03_path_patching_runs(roots, tmp_path):
         "sites.a11.layer=1",
     )
     assert code == 0
-    ld = pd.read_parquet(tmp_path / "logit_diff.parquet")
+    ld = table_frame(tmp_path / "logit_diff.json")
     assert len(ld) == 3
 
 
@@ -117,10 +117,10 @@ def test_06_hydra_effect_runs(roots, tmp_path):
     )
     assert code == 0
     for rel in (
-        "te_clean.parquet",
-        "te_abl.parquet",
-        "de14_clean.parquet",
-        "de20_abl.parquet",
+        "te_clean.json",
+        "te_abl.json",
+        "de14_clean.json",
+        "de20_abl.json",
     ):
         assert (tmp_path / rel).is_file()
 
@@ -161,7 +161,7 @@ def test_fit_then_apply_roundtrip(roots, tmp_path):
         "featurizers.rot.file_path=artifacts/tiny/rot_k4.safetensors",
     )
     assert code == 0
-    iia = pd.read_parquet(apply_out / "iia.parquet")
+    iia = table_frame(apply_out / "iia.json")
     assert len(iia) == 2  # the weekdays/test split
 
     # a doctored declaration must refuse against the stamp (§2.5)
@@ -264,7 +264,7 @@ def test_11_probe_generate_runs_and_scores(roots, tmp_path):
     generated token with an ordinary metric."""
     code = _run("11_probe_generate_im.json", roots, tmp_path, "sites.target.layer=1")
     assert code == 0
-    probe = pd.read_parquet(tmp_path / "probe.parquet")
+    probe = table_frame(tmp_path / "probe.json")
     assert len(probe) == 4  # one row per example
     for value in probe["value"]:
         top = json.loads(value)

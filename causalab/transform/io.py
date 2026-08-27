@@ -3,7 +3,7 @@
 The runner owns this seam, not the ops: an op is a pure
 ``(inputs, params) -> {slot: value}`` function, so paths, file formats and
 provenance stamping all live here. Both formats are the ones the rest of the
-stack already uses — ``.parquet`` for tables, a ``.safetensors`` bundle with an
+stack already uses — JSON for tables, a ``.safetensors`` bundle with an
 ``entries`` table and an ArtifactIdentity for tensors — because a transform op
 is **not** a new tensor-passing channel; it reuses the one #29 built.
 
@@ -66,12 +66,17 @@ _DTYPE_NAMES = {
 
 
 def read_table(path: Path) -> Any:
-    """One ``.parquet`` table as a DataFrame."""
+    """One JSON metric table as a DataFrame.
+
+    The file is an array of row objects (``protocol.tables``); pandas is only
+    the in-memory shape an op body wants, never the storage format."""
     import pandas as pd
+
+    from causalab.protocol.tables import read_table as read_rows
 
     if not path.is_file():
         raise TransformError(f"input table {str(path)!r} does not exist")
-    return pd.read_parquet(path)
+    return pd.DataFrame(read_rows(path))
 
 
 def write_table(frame: Any, path: Path, decl: Table, *, what: str) -> None:
@@ -101,8 +106,9 @@ def write_table(frame: Any, path: Path, decl: Table, *, what: str) -> None:
     ordered = frame[list(columns)]
     for name, dtype in columns.items():
         ordered = ordered.astype({name: "string" if dtype == "string" else dtype})
-    path.parent.mkdir(parents=True, exist_ok=True)
-    ordered.to_parquet(path, index=False)
+    from causalab.protocol.tables import write_table as write_rows
+
+    write_rows(path, ordered.to_dict(orient="records"))
 
 
 # --------------------------------------------------------------------------- #

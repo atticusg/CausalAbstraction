@@ -13,6 +13,7 @@ import pytest
 
 from causalab.protocol.resolve import FileArtifacts
 from causalab.workflow.runner import OverlayArtifacts, _aggregated, _run_select_step
+from tests.tables import write_frame
 
 pytestmark = pytest.mark.unit
 
@@ -85,12 +86,12 @@ class TestSelect:
             }
         )
         (out / "fit").mkdir(parents=True)
-        frame.to_parquet(out / "fit" / "iia.parquet")
+        write_frame(frame, out / "fit" / "iia.json")
 
     def _step(self, choose: str) -> SimpleNamespace:
         return SimpleNamespace(
             from_="fit",
-            table="iia.parquet",
+            table="iia.json",
             choose=choose,
             value="value",
             emit={"best_k": "featurizers.rot.k", "best_seed": "train.seed"},
@@ -126,7 +127,7 @@ class TestSelect:
         table = _aggregated(
             tmp_path,
             "fit",
-            "iia.parquet",
+            "iia.json",
             "value",
             {"fit": _axes("featurizers.rot.k", "train.seed")},
         )
@@ -137,7 +138,7 @@ class TestSelect:
     def test_unswept_producer_single_group(self, tmp_path: Path):
         frame = pd.DataFrame({"value": [0.2, 0.4], "example": [0, 1]})
         (tmp_path / "apply").mkdir()
-        frame.to_parquet(tmp_path / "apply" / "iia.parquet")
-        table = _aggregated(tmp_path, "apply", "iia.parquet", "value", {"apply": ()})
+        write_frame(frame, tmp_path / "apply" / "iia.json")
+        table = _aggregated(tmp_path, "apply", "iia.json", "value", {"apply": ()})
         assert len(table) == 1
         assert table["value"].iloc[0] == pytest.approx(0.3)

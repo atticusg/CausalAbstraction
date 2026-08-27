@@ -4,7 +4,7 @@
   "steps": {
     "locate": {"type": "protocol", "document": "../methods/weekdays_locate_scan.json"},
     "best": {
-      "type": "select", "from": "locate", "table": "iia.parquet",
+      "type": "select", "from": "locate", "table": "iia.json",
       "choose": "max",
       "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}
     },
@@ -16,7 +16,7 @@
       }
     },
     "best_fit": {
-      "type": "select", "from": "fit", "table": "iia.parquet",
+      "type": "select", "from": "fit", "table": "iia.json",
       "choose": "max",
       "emit": {"best_k": "featurizers.rot.k", "best_seed": "train.seed"}
     },
@@ -32,12 +32,12 @@
       }
     },
     "scan_heatmap": {
-      "type": "plot", "plot": "heatmap", "from": "locate", "table": "iia.parquet",
+      "type": "plot", "plot": "heatmap", "from": "locate", "table": "iia.json",
       "x": "sites.target.layer", "y": "positions.tap", "value": "value",
       "file_path": "scan_iia.png"
     },
     "iia_by_k": {
-      "type": "plot", "plot": "lines", "from": "fit", "table": "iia.parquet",
+      "type": "plot", "plot": "lines", "from": "fit", "table": "iia.json",
       "x": "featurizers.rot.k", "series": "train.seed", "value": "value",
       "file_path": "iia_by_k.png"
     }
@@ -45,8 +45,8 @@
   "save": [
     {"step": "best", "value": "values.json", "file_path": "best_cell.json"},
     {"step": "best_fit", "value": "values.json", "file_path": "best_fit.json"},
-    {"step": "fit", "value": "iia.parquet", "file_path": "fit_iia.parquet"},
-    {"step": "apply", "value": "iia.parquet", "file_path": "apply_iia.parquet"},
+    {"step": "fit", "value": "iia.json", "file_path": "fit_iia.json"},
+    {"step": "apply", "value": "iia.json", "file_path": "apply_iia.json"},
     {"step": "scan_heatmap", "value": "scan_iia.png", "file_path": "scan_iia.png"},
     {"step": "iia_by_k", "value": "iia_by_k.png", "file_path": "iia_by_k.png"}
   ]

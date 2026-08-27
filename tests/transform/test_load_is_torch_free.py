@@ -53,14 +53,14 @@ def _workflow() -> dict:
                 "params": {"k": 2},
                 "outputs": {
                     "weight": "weight.safetensors",
-                    "spectrum": "spectrum.parquet",
+                    "spectrum": "spectrum.json",
                 },
             },
             "scree": {
                 "type": "plot",
                 "plot": "lines",
                 "from": "fit",
-                "table": "spectrum.parquet",
+                "table": "spectrum.json",
                 "x": "pc",
                 "value": "explained_variance_ratio",
                 "file_path": "scree.png",

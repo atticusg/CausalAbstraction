@@ -717,10 +717,10 @@ def load_workflow(
                 )
             deps[name].add(step.from_)
             data_deps[name].add(step.from_)
-            if not step.table.endswith(".parquet"):
+            if not step.table.endswith(".json"):
                 raise WorkflowError(
                     8,
-                    f"'table' names a .parquet output, got {step.table!r}",
+                    f"'table' names a .json output, got {step.table!r}",
                     path=f"steps.{name}",
                 )
         if isinstance(step, PlotStep) and not step.file_path.endswith((".png", ".pdf")):

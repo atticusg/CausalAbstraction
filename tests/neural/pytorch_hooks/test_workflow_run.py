@@ -16,7 +16,6 @@ import json
 import shutil
 from pathlib import Path
 
-import pandas as pd
 import pytest
 from safetensors.torch import load_file
 
@@ -24,6 +23,7 @@ from causalab.protocol.cli import main
 
 from tests.neural.pytorch_hooks.conftest import TINY_LLAMA
 from tests.protocol._env import FIXTURES, write_rot_fixture
+from tests.tables import frame as table_frame
 
 pytestmark = pytest.mark.smoke
 
@@ -51,7 +51,7 @@ def _tiny_workflow() -> dict:
             "best": {
                 "type": "select",
                 "from": "locate",
-                "table": "iia.parquet",
+                "table": "iia.json",
                 "choose": "max",
                 "emit": {
                     "best_layer": "sites.target.layer",
@@ -85,7 +85,7 @@ def _tiny_workflow() -> dict:
                 "type": "plot",
                 "plot": "heatmap",
                 "from": "locate",
-                "table": "iia.parquet",
+                "table": "iia.json",
                 "x": "sites.target.layer",
                 "y": "positions.tap",
                 "value": "value",
@@ -95,7 +95,7 @@ def _tiny_workflow() -> dict:
                 "type": "plot",
                 "plot": "lines",
                 "from": "locate",
-                "table": "logit_diff.parquet",
+                "table": "logit_diff.json",
                 "x": "sites.target.layer",
                 "series": "positions.tap",
                 "value": "value",
@@ -104,8 +104,8 @@ def _tiny_workflow() -> dict:
         },
         "save": [
             {"step": "best", "value": "values.json", "file_path": "best_cell.json"},
-            {"step": "fit", "value": "iia.parquet", "file_path": "fit_iia.parquet"},
-            {"step": "apply", "value": "iia.parquet", "file_path": "apply_iia.parquet"},
+            {"step": "fit", "value": "iia.json", "file_path": "fit_iia.json"},
+            {"step": "apply", "value": "iia.json", "file_path": "apply_iia.json"},
             {
                 "step": "scan_heatmap",
                 "value": "scan_iia.png",
@@ -149,10 +149,10 @@ def pipeline_run(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
 
 def test_run_tree_holds_every_step(pipeline_run):
     out, _ = pipeline_run
-    assert (out / "locate/iia.parquet").is_file()
+    assert (out / "locate/iia.json").is_file()
     assert (out / "best/values.json").is_file()
     assert (out / "fit/rot.safetensors").is_file()
-    assert (out / "apply/iia.parquet").is_file()
+    assert (out / "apply/iia.json").is_file()
     assert (out / "scan_heatmap/scan_iia.png").stat().st_size > 0
     assert (out / "iia_lines/ld_by_layer.png").stat().st_size > 0
 
@@ -162,7 +162,7 @@ def test_select_chose_the_argmax_cell(pipeline_run):
     chosen = json.loads((out / "best/values.json").read_text())
     assert chosen["best_layer"] in (0, 1)
     assert chosen["best_pos"] in ({"index": -1}, {"index": -2})
-    frame = pd.read_parquet(out / "locate/iia.parquet")
+    frame = table_frame(out / "locate/iia.json")
     grouped = frame.groupby(["sites.target.layer", "positions.tap"])["value"].mean()
     best_key = grouped.idxmax()
     assert chosen["best_layer"] == best_key[0]
@@ -188,14 +188,14 @@ def test_fit_consumed_the_selected_cell_and_stamped_it(pipeline_run):
 
 def test_apply_scored_the_test_split_through_the_fitted_rotation(pipeline_run):
     out, _ = pipeline_run
-    iia = pd.read_parquet(out / "apply/iia.parquet")
+    iia = table_frame(out / "apply/iia.json")
     assert len(iia) == 2  # the weekdays/test fixture rows
     assert iia["value"].dtype.kind == "f"
 
 
 def test_locate_table_carries_coordinate_columns(pipeline_run):
     out, _ = pipeline_run
-    frame = pd.read_parquet(out / "locate/iia.parquet")
+    frame = table_frame(out / "locate/iia.json")
     assert {"sites.target.layer", "positions.tap", "value", "produced_by"} <= set(
         frame.columns
     )
@@ -206,8 +206,8 @@ def test_save_manifest_published_and_stamped(pipeline_run):
     out, wf_dir = pipeline_run
     for published in (
         "best_cell.json",
-        "fit_iia.parquet",
-        "apply_iia.parquet",
+        "fit_iia.json",
+        "apply_iia.json",
         "scan_iia.png",
         "ld_by_layer.png",
     ):

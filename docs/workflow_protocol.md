@@ -86,7 +86,7 @@ notebook.
 
 ```json
 "best": {
-  "type": "select", "from": "locate", "table": "iia.parquet",
+  "type": "select", "from": "locate", "table": "iia.json",
   "choose": "max", "value": "value",
   "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}
 }
@@ -95,7 +95,7 @@ notebook.
 | field | meaning |
 |---|---|
 | `from` | ✓ — the producing step |
-| `table` | ✓ — a `.parquet` metric table among that step's outputs |
+| `table` | ✓ — a `.json` metric table among that step's outputs |
 | `choose` | ✓ — `max` \| `min` |
 | `value` | – the column ranked (default `value`) |
 | `emit` | ✓ — `{artifact key: column}`; the emitted values come from the chosen row |
@@ -131,7 +131,7 @@ a document.
   "type": "transform", "op": "fit_pca@1",
   "inputs": {"acts": {"step": "harvest", "value": "acts.safetensors"}},
   "params": {"k": 8},
-  "outputs": {"weight": "basis.safetensors", "spectrum": "spectrum.parquet"}
+  "outputs": {"weight": "basis.safetensors", "spectrum": "spectrum.json"}
 }
 ```
 
@@ -178,7 +178,7 @@ a document.
 
 ```json
 "scan": {"type": "plot", "plot": "heatmap", "from": "locate",
-          "table": "iia.parquet", "x": "sites.target.layer",
+          "table": "iia.json", "x": "sites.target.layer",
           "y": "positions.tap", "value": "value", "file_path": "scan_iia.png"}
 ```
 
@@ -202,7 +202,7 @@ Mandatory, non-empty, the last section — the complete manifest of what
 leaves the workflow run, in the IM spec's binding-restated style:
 
 ```json
-{"step": "apply", "value": "iia.parquet", "file_path": "apply_iia.parquet"}
+{"step": "apply", "value": "iia.json", "file_path": "apply_iia.json"}
 ```
 
 | field | meaning |
@@ -288,9 +288,9 @@ One mechanism, inherited from the IM spec: **artifact references**.
    Over a **transform** producer the same rule reads against the op's
    *declared* columns (§2.4) instead of sweep axes, with no implicit
    `value`; axis coverage is vacuous, since there are no axes.
-8. `select.table`/`plot.table` name `.parquet` outputs; plot `file_path`
+8. `select.table`/`plot.table` name `.json` outputs; plot `file_path`
    ends in `.png`/`.pdf`; a transform `outputs` path matches its slot's
-   kind (`.parquet` for a table, `.safetensors` for a tensor) and stays
+   kind (`.json` for a table, `.safetensors` for a tensor) and stays
    inside the step dir.
 9. A protocol step's `set` paths must exist in the target document (an
    override that would create structure is a typo).
@@ -372,7 +372,7 @@ split), as one workflow over the golden-corpus documents 07/08/09:
   "steps": {
     "locate": {"type": "protocol", "document": "../methods/weekdays_locate_scan.json"},
     "best": {
-      "type": "select", "from": "locate", "table": "iia.parquet",
+      "type": "select", "from": "locate", "table": "iia.json",
       "choose": "max",
       "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}
     },
@@ -380,7 +380,7 @@ split), as one workflow over the golden-corpus documents 07/08/09:
              "set": {"positions.best": {"artifact": "best", "key": "best_pos"},
                      "sites.target.layer": {"artifact": "best", "key": "best_layer"}}},
     "best_fit": {
-      "type": "select", "from": "fit", "table": "iia.parquet",
+      "type": "select", "from": "fit", "table": "iia.json",
       "choose": "max",
       "emit": {"best_k": "featurizers.rot.k", "best_seed": "train.seed"}
     },
@@ -391,19 +391,19 @@ split), as one workflow over the golden-corpus documents 07/08/09:
                          "k": {"artifact": "best_fit", "key": "best_k"},
                          "seed": {"artifact": "best_fit", "key": "best_seed"}}}},
     "scan_heatmap": {"type": "plot", "plot": "heatmap", "from": "locate",
-                      "table": "iia.parquet", "x": "sites.target.layer",
+                      "table": "iia.json", "x": "sites.target.layer",
                       "y": "positions.tap", "value": "value",
                       "file_path": "scan_iia.png"},
     "iia_by_k": {"type": "plot", "plot": "lines", "from": "fit",
-                  "table": "iia.parquet", "x": "featurizers.rot.k",
+                  "table": "iia.json", "x": "featurizers.rot.k",
                   "series": "train.seed", "value": "value",
                   "file_path": "iia_by_k.png"}
   },
   "save": [
     {"step": "best", "value": "values.json", "file_path": "best_cell.json"},
     {"step": "best_fit", "value": "values.json", "file_path": "best_fit.json"},
-    {"step": "fit", "value": "iia.parquet", "file_path": "fit_iia.parquet"},
-    {"step": "apply", "value": "iia.parquet", "file_path": "apply_iia.parquet"},
+    {"step": "fit", "value": "iia.json", "file_path": "fit_iia.json"},
+    {"step": "apply", "value": "iia.json", "file_path": "apply_iia.json"},
     {"step": "scan_heatmap", "value": "scan_iia.png", "file_path": "scan_iia.png"},
     {"step": "iia_by_k", "value": "iia_by_k.png", "file_path": "iia_by_k.png"}
   ]
