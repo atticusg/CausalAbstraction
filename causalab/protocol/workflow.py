@@ -1,34 +1,47 @@
-"""The workflow-protocol document model (docs/workflow_protocol.md).
+"""The workflow-protocol document model (docs/workflow_protocol.md, v2).
 
-Backend-free, like the rest of this package: parsing, the workflow
-load-error checklist, the derived dependency graph and schedule, and the
-canonical form + digest. Executing a loaded workflow is
-:mod:`causalab.workflow.runner`'s job.
+Backend-free, like the rest of this package: parsing, the workflow load-error
+checklist, the derived dependency graph and schedule, and the canonical form +
+digest. Executing a loaded workflow is :mod:`causalab.workflow.runner`'s job.
 
-Two load-time subtleties the spec commits to:
+**Two step types, one wiring mechanism.** ``protocol`` stays declarative
+because that is where the load-time bite lives — inner-document validation,
+sweep expansion, capability routing, shard dispatch. ``script`` is inputs → one
+Python script → declared outputs, wide enough that a pipeline never has to
+leave the record. Everything either one consumes is spelled as a *locator plus
+an optional selector* (§3), so the dependency graph falls out of one place
+instead of three.
 
-* **Step-dependent inner documents validate against representative
-  values.** A protocol step whose document references another step's
-  outputs (`{"artifact": "best", …}`, or a `file_path` under a step's run
-  tree) cannot resolve those values before the run. At workflow load the
-  refs substitute a *representative* from the emitting select step's
-  domain — the producing document's axis values are known at load, so any
-  one of them type-checks the consumer honestly — and run-tree
-  ``file_path`` loads defer their existence/identity checks to run time
-  (the deferring store advertises :meth:`DeferredArtifacts.defers`).
-* **Digests split by dependency** (spec §7): a step with no in-run
+Three load-time subtleties the spec commits to:
+
+* **Step-dependent inner documents validate against declared
+  representatives.** A protocol step whose document references another step's
+  outputs (``{"artifact": "best", …}``, or a ``file_path`` under a step's run
+  tree) cannot resolve those values before the run. The producing script step
+  declares them — ``outputs.<slot>.keys`` maps each emitted name to a
+  representative *value* (§2.3) — and the loader substitutes those, so the
+  consumer type-checks honestly. Run-tree ``file_path`` loads defer their
+  existence/identity checks to run time (the deferring store advertises
+  :meth:`DeferredArtifacts.defers`).
+* **A script is hashed, never imported.** ``validate``/``digest`` must not pull
+  torch in through a user script, so load-time checking is the file existing,
+  ``ast.parse`` succeeding, a module-level ``def main`` being present, and the
+  bytes being hashed. Hashing needs no import, which is what lets the hash sit
+  in the digest and keep ``--resume`` correct (§7).
+* **Digests split by dependency** (§7): a protocol step with no in-run
   references stamps its document's full campaign digest; a step-dependent
-  document stamps the digest of its overridden authored form, and the
-  fully resolved digests land in the run manifest.
+  document stamps the digest of its overridden authored form, and the fully
+  resolved digests land in the run manifest.
 """
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import hashlib
 import re
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from causalab.protocol.bundles import (
     entry_key,
@@ -51,29 +64,47 @@ from causalab.protocol.sweep import (
     coordinate_label,
     short_coords,
 )
+from causalab.protocol.tables import TABLE_SUFFIX
 
 __all__ = [
+    "BUILTIN_PREFIX",
+    "COLUMN_DTYPES",
     "DeferredArtifacts",
     "LoadedWorkflow",
-    "PLOT_KINDS",
+    "OutputDecl",
+    "ProtocolStep",
+    "Reference",
     "STEP_TYPES",
-    "TransformInput",
-    "TransformStep",
-    "WorkflowError",
+    "ScriptStep",
+    "Step",
     "WorkflowDocument",
+    "WorkflowError",
     "is_workflow",
     "load_workflow",
     "parse_workflow",
 ]
 
-STEP_TYPES: tuple[str, ...] = ("protocol", "transform", "select", "plot")
-PLOT_KINDS: tuple[str, ...] = ("heatmap", "lines")
-CHOOSE_KINDS: tuple[str, ...] = ("max", "min")
+STEP_TYPES: tuple[str, ...] = ("protocol", "script")
+
+#: Prefix marking a causalab-shipped step script instead of a repo path.
+BUILTIN_PREFIX = "causalab:"
+
+#: Column dtypes a table output may declare. Deliberately narrow: the types
+#: that survive a JSON round-trip and a strict re-parse by a consuming step.
+COLUMN_DTYPES: tuple[str, ...] = ("int64", "float64", "bool", "string")
+
+#: The two formats, and nothing else (§2.5).
+OUTPUT_SUFFIXES: tuple[str, ...] = (TABLE_SUFFIX, ".safetensors")
 
 _STEP_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
+_SEGMENT = re.compile(r"^[A-Za-z0-9_.-]+$")
 
-#: Top-level sections in mandatory order (§1).
-SECTION_ORDER: tuple[str, ...] = ("version", "description", "steps", "save")
+#: Top-level sections in mandatory order (§1). No `save`: everything a step
+#: declares is published where it lands (§0).
+SECTION_ORDER: tuple[str, ...] = ("version", "description", "output_dir", "steps")
+
+#: The highest checklist rule number (§5).
+MAX_RULE = 11
 
 
 class WorkflowError(ProtocolError):
@@ -81,7 +112,7 @@ class WorkflowError(ProtocolError):
     (docs/workflow_protocol.md §5); code ``W<rule>``."""
 
     def __init__(self, rule: int, message: str, *, path: str | None = None) -> None:
-        if not 1 <= rule <= 10:
+        if not 1 <= rule <= MAX_RULE:
             raise AssertionError(f"workflow checklist rule out of range: {rule}")
         self.rule = rule
         super().__init__(f"W{rule}", message, path=path)
@@ -90,6 +121,54 @@ class WorkflowError(ProtocolError):
 # --------------------------------------------------------------------------- #
 # object model
 # --------------------------------------------------------------------------- #
+
+
+@dataclasses.dataclass(frozen=True)
+class Reference:
+    """One resolved-at-run-time input: a locator plus an optional selector (§3).
+
+    Exactly one locator is set. ``step``+``file`` names a file in the run tree;
+    ``path`` names a file on disk (absolute if it starts with ``/``, otherwise
+    relative to the repo root). ``key`` selects a scalar out of a JSON values
+    object; ``entry`` selects one tensor of a safetensors bundle. At most one
+    selector, and each requires the matching format."""
+
+    step: str | None = None
+    file: str | None = None
+    path: str | None = None
+    key: str | None = None
+    entry: Mapping[str, Any] | None = None
+    #: which named tensor of a multi-slot bundle, when ``entry`` alone is ambiguous
+    slot: str | None = None
+
+    @property
+    def target(self) -> str:
+        """What this reference names, for an error message."""
+        return f"{self.step}/{self.file}" if self.step is not None else str(self.path)
+
+    @property
+    def suffix(self) -> str:
+        name = self.file if self.step is not None else self.path
+        return Path(str(name)).suffix
+
+
+@dataclasses.dataclass(frozen=True)
+class OutputDecl:
+    """One declared output: a filename, plus at most one shape promise.
+
+    ``columns`` says "an array of row objects" and maps column name to a
+    :data:`COLUMN_DTYPES` entry. ``keys`` says "one object mapping these names
+    to values" and maps each name to a **representative value** — not a type,
+    because a step-dependent inner document validates against it and a position
+    spec has to type-check as a position spec (§2.3)."""
+
+    file: str
+    columns: Mapping[str, str] | None = None
+    keys: Mapping[str, Any] | None = None
+
+    @property
+    def suffix(self) -> str:
+        return Path(self.file).suffix
 
 
 @dataclasses.dataclass(frozen=True)
@@ -103,83 +182,39 @@ class ProtocolStep:
 
 
 @dataclasses.dataclass(frozen=True)
-class TransformInput:
-    """One slot of a transform step's ``inputs``: an earlier step's output.
-
-    ``slot``/``entry`` address one entry inside a swept producer's tensor
-    bundle (IM spec §2.5). They are *authored only* — a transform step has no sweep
-    coordinates of its own, so the implicit coordinate matching a protocol
-    step gets does not apply here."""
-
-    step: str
-    value: str
-    slot: str | None = None
-    entry: Mapping[str, Any] | None = None
-
-
-@dataclasses.dataclass(frozen=True)
-class TransformStep:
+class ScriptStep:
     type: str
-    op: str
-    inputs: Mapping[str, TransformInput]
-    outputs: Mapping[str, str]
-    #: materialized at parse against the op's schema, so the defaults are in
-    #: the canonical form and therefore in the digest (§7)
-    params: Mapping[str, Any] = dataclasses.field(default_factory=dict)
+    script: str
+    inputs: Mapping[str, Any]
+    outputs: Mapping[str, OutputDecl]
+    #: sha256 of the script's bytes — in the digest, so ``--resume`` is correct
+    script_sha256: str = ""
+    runtime: Mapping[str, Any] | None = None
+    is_deterministic: bool = True
     after: tuple[str, ...] = ()
     description: str | None = None
 
-
-@dataclasses.dataclass(frozen=True)
-class SelectStep:
-    type: str
-    from_: str
-    table: str
-    choose: str
-    emit: Mapping[str, str]
-    value: str = "value"
-    after: tuple[str, ...] = ()
-    description: str | None = None
+    @property
+    def is_builtin(self) -> bool:
+        return self.script.startswith(BUILTIN_PREFIX)
 
 
-@dataclasses.dataclass(frozen=True)
-class PlotStep:
-    type: str
-    plot: str
-    from_: str
-    table: str
-    x: str
-    file_path: str
-    y: str | None = None
-    series: str | None = None
-    value: str = "value"
-    after: tuple[str, ...] = ()
-    description: str | None = None
-
-
-Step = ProtocolStep | TransformStep | SelectStep | PlotStep
-
-
-@dataclasses.dataclass(frozen=True)
-class WorkflowSaveEntry:
-    step: str
-    value: str
-    file_path: str
+Step = ProtocolStep | ScriptStep
 
 
 @dataclasses.dataclass(frozen=True)
 class WorkflowDocument:
     version: str
+    output_dir: str
     steps: Mapping[str, Step]
-    save: tuple[WorkflowSaveEntry, ...]
     description: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
 class LoadedWorkflow:
     """One loaded workflow: the parsed document, the derived schedule, the
-    inner protocol loads (or authored-form info for step-dependent ones),
-    the canonical form, and the digest."""
+    inner protocol loads (or authored-form info for step-dependent ones), the
+    canonical form, and the digest."""
 
     document: WorkflowDocument
     workflow_dir: Path
@@ -191,9 +226,20 @@ class LoadedWorkflow:
     inner_digests: Mapping[str, str]
     canonical: Mapping[str, Any]
     digest: str
-    #: ``{transform step: digest of its canonical entry}`` — the provenance
-    #: unit a tensor that step writes is stamped with (§2.4)
-    transform_digests: Mapping[str, str] = dataclasses.field(default_factory=dict)
+    #: ``{step: digest of its canonical entry}`` — the provenance unit a tensor
+    #: a script step writes is stamped with (§7)
+    step_digests: Mapping[str, str] = dataclasses.field(default_factory=dict)
+    #: absolute `path` references, which load cannot existence-check (rule 4)
+    unchecked_paths: tuple[str, ...] = ()
+
+    @property
+    def nondeterministic(self) -> tuple[str, ...]:
+        """Steps that declared themselves not replayable (§7)."""
+        return tuple(
+            name
+            for name, step in self.document.steps.items()
+            if isinstance(step, ScriptStep) and not step.is_deterministic
+        )
 
 
 def is_workflow(raw: Mapping[str, Any]) -> bool:
@@ -202,7 +248,7 @@ def is_workflow(raw: Mapping[str, Any]) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# parsing (rules 1–3, shapes)
+# parsing
 # --------------------------------------------------------------------------- #
 
 
@@ -217,377 +263,441 @@ def _check_keys(obj: Mapping[str, Any], allowed: Sequence[str], path: str) -> No
 def _need(obj: Mapping[str, Any], fields: Sequence[str], path: str) -> None:
     for field in fields:
         if field not in obj:
-            raise WorkflowError(1, f"missing required field {field!r}", path=path)
+            raise WorkflowError(1, f"missing required key {field!r}", path=path)
 
 
 def _str_field(obj: Mapping[str, Any], field: str, path: str) -> str:
     value = obj[field]
-    if not isinstance(value, str):
-        raise WorkflowError(1, f"{field!r} must be a string", path=path)
+    if not isinstance(value, str) or not value:
+        raise WorkflowError(
+            1, f"{field!r} is a non-empty string, got {value!r}", path=path
+        )
     return value
 
 
 def _after(obj: Mapping[str, Any], path: str) -> tuple[str, ...]:
-    value = obj.get("after", [])
-    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+    raw = obj.get("after", ())
+    if isinstance(raw, str) or not isinstance(raw, (list, tuple)):
         raise WorkflowError(1, "'after' is a list of step names", path=path)
-    return tuple(value)
+    return tuple(str(name) for name in raw)
+
+
+def _bool_field(obj: Mapping[str, Any], field: str, default: bool, path: str) -> bool:
+    if field not in obj:
+        return default
+    value = obj[field]
+    if not isinstance(value, bool):
+        raise WorkflowError(11, f"{field!r} is a boolean, got {value!r}", path=path)
+    return value
+
+
+def _contained(value: str, rule: int, path: str) -> None:
+    """A relative path that cannot escape its directory (rules 2, 6, 7)."""
+    if not isinstance(value, str) or not value:
+        raise WorkflowError(rule, f"expected a path, got {value!r}", path=path)
+    candidate = Path(value)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise WorkflowError(
+            rule,
+            f"{value!r} must be relative and stay inside its directory",
+            path=path,
+        )
+
+
+def _parse_reference(value: Mapping[str, Any], path: str) -> Reference | None:
+    """One ``inputs`` value as a reference, or ``None`` if it is a literal.
+
+    References are recognized **only at the top level** of an inputs entry, so
+    a nested object is always a literal and the loader never guesses (§3)."""
+    locators = [key for key in ("step", "path") if key in value]
+    if not locators:
+        return None
+    if len(locators) > 1:
+        raise WorkflowError(
+            1,
+            "a reference has one locator: 'step'+'file', or 'path'",
+            path=path,
+        )
+    allowed = ("step", "file", "path", "key", "entry", "slot")
+    _check_keys(value, allowed, path)
+    if "step" in value:
+        _need(value, ("file",), path)
+        ref = Reference(
+            step=_str_field(value, "step", path),
+            file=_str_field(value, "file", path),
+        )
+        _contained(str(ref.file), 4, path)
+    else:
+        ref = Reference(path=_str_field(value, "path", path))
+    selectors = [key for key in ("key", "entry") if key in value]
+    if len(selectors) > 1:
+        raise WorkflowError(
+            4,
+            "a reference carries at most one selector: 'key' (JSON) or "
+            "'entry' (safetensors)",
+            path=path,
+        )
+    if "key" in value:
+        ref = dataclasses.replace(ref, key=_str_field(value, "key", path))
+    if "entry" in value:
+        entry = value["entry"]
+        if not isinstance(entry, Mapping):
+            raise WorkflowError(1, "'entry' maps coordinate names to values", path=path)
+        ref = dataclasses.replace(ref, entry=dict(entry))
+    if "slot" in value:
+        ref = dataclasses.replace(ref, slot=_str_field(value, "slot", path))
+    # rule 4: a selector must match its locator's format, decidable from the
+    # filename alone — which is exactly what having only two formats buys
+    if ref.key is not None and ref.suffix != TABLE_SUFFIX:
+        raise WorkflowError(
+            4,
+            f"'key' reads a {TABLE_SUFFIX} file; {ref.target!r} is "
+            f"{ref.suffix or 'extensionless'}",
+            path=path,
+        )
+    if (ref.entry is not None or ref.slot is not None) and ref.suffix != ".safetensors":
+        raise WorkflowError(
+            4,
+            f"'entry'/'slot' reads a .safetensors bundle; {ref.target!r} is "
+            f"{ref.suffix or 'extensionless'}",
+            path=path,
+        )
+    return ref
+
+
+def _parse_output(slot: str, raw: Any, path: str) -> OutputDecl:
+    if isinstance(raw, str):
+        decl = OutputDecl(file=raw)
+    elif isinstance(raw, Mapping):
+        _check_keys(raw, ("file", "columns", "keys"), path)
+        _need(raw, ("file",), path)
+        columns = raw.get("columns")
+        keys = raw.get("keys")
+        if columns is not None and keys is not None:
+            raise WorkflowError(
+                7,
+                "'columns' and 'keys' are mutually exclusive: the first says "
+                "an array of row objects, the second one values object",
+                path=path,
+            )
+        if columns is not None:
+            if not isinstance(columns, Mapping) or not columns:
+                raise WorkflowError(
+                    7, "'columns' maps column names to dtypes", path=path
+                )
+            for column, dtype in columns.items():
+                if dtype not in COLUMN_DTYPES:
+                    raise WorkflowError(
+                        7,
+                        f"column {column!r} has unknown dtype {dtype!r}"
+                        f"{suggest(str(dtype), COLUMN_DTYPES)}",
+                        path=path,
+                    )
+        if keys is not None and (not isinstance(keys, Mapping) or not keys):
+            raise WorkflowError(
+                7,
+                "'keys' maps emitted names to a representative value each",
+                path=path,
+            )
+        decl = OutputDecl(
+            file=_str_field(raw, "file", path),
+            columns=dict(columns) if columns is not None else None,
+            keys=dict(keys) if keys is not None else None,
+        )
+    else:
+        raise WorkflowError(
+            1, f"output {slot!r} is a filename or an object with 'file'", path=path
+        )
+    _contained(decl.file, 7, path)
+    if decl.suffix not in OUTPUT_SUFFIXES:
+        raise WorkflowError(
+            7,
+            f"output {slot!r} is {decl.file!r} — every output ends in "
+            f"{' or '.join(OUTPUT_SUFFIXES)} (§2.5)",
+            path=path,
+        )
+    if decl.suffix != TABLE_SUFFIX and (
+        decl.columns is not None or decl.keys is not None
+    ):
+        raise WorkflowError(
+            7,
+            f"output {slot!r} declares columns/keys but is not {TABLE_SUFFIX}",
+            path=path,
+        )
+    return decl
+
+
+def _parse_runtime(raw: Any, path: str) -> Mapping[str, Any] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise WorkflowError(10, "'runtime' is an object", path=path)
+    _check_keys(raw, ("isolate", "deps", "env"), path)
+    isolate = raw.get("isolate", False)
+    if not isinstance(isolate, bool):
+        raise WorkflowError(10, "'runtime.isolate' is a boolean", path=path)
+    deps = raw.get("deps", ())
+    if isinstance(deps, str) or not isinstance(deps, (list, tuple)):
+        raise WorkflowError(10, "'runtime.deps' is a list of requirements", path=path)
+    env = raw.get("env", ())
+    if isinstance(env, str) or not isinstance(env, (list, tuple)):
+        raise WorkflowError(
+            10, "'runtime.env' is a list of variable NAMES, never values", path=path
+        )
+    if isolate and not deps:
+        raise WorkflowError(
+            10,
+            "an isolated step declares its 'deps' — otherwise isolation buys "
+            "nothing and the subprocess would import a different environment "
+            "than the document says",
+            path=path,
+        )
+    out: dict[str, Any] = {"isolate": isolate, "deps": [str(d) for d in deps]}
+    if env:
+        out["env"] = [str(name) for name in env]
+    return out
 
 
 def _parse_step(name: str, raw: Any, path: str) -> Step:
     if not isinstance(raw, Mapping):
-        raise WorkflowError(1, "a step is an object", path=path)
-    step_type = raw.get("type")
-    if step_type not in STEP_TYPES:
+        raise WorkflowError(1, f"step {name!r} is an object", path=path)
+    _need(raw, ("type",), path)
+    kind = raw["type"]
+    if kind not in STEP_TYPES:
         raise WorkflowError(
             1,
-            f"unknown step type {step_type!r}{suggest(str(step_type), STEP_TYPES)}",
-            path=f"{path}.type",
+            f"unknown step type {kind!r}{suggest(str(kind), STEP_TYPES)}",
+            path=path,
         )
     description = raw.get("description")
     if description is not None and not isinstance(description, str):
-        raise WorkflowError(1, "a step description is free text", path=path)
-    common = ("type", "after", "description")
-    if step_type == "protocol":
-        _check_keys(raw, (*common, "document", "set", "max_points"), path)
+        raise WorkflowError(1, "'description' is free text", path=path)
+    if kind == "protocol":
+        _check_keys(
+            raw,
+            ("type", "document", "set", "max_points", "after", "description"),
+            path,
+        )
         _need(raw, ("document",), path)
         overrides = raw.get("set", {})
-        if not isinstance(overrides, Mapping) or not all(
-            isinstance(k, str) for k in overrides
-        ):
+        if not isinstance(overrides, Mapping):
             raise WorkflowError(1, "'set' maps dotted paths to values", path=path)
         max_points = raw.get("max_points")
         if max_points is not None and (
-            not isinstance(max_points, int) or isinstance(max_points, bool)
+            not isinstance(max_points, int)
+            or isinstance(max_points, bool)
+            or max_points < 1
         ):
-            raise WorkflowError(1, "'max_points' is an integer", path=path)
+            raise WorkflowError(1, "'max_points' is a positive integer", path=path)
         return ProtocolStep(
             type="protocol",
             document=_str_field(raw, "document", path),
             set=dict(overrides),
             max_points=max_points,
             after=_after(raw, path),
-            description=raw.get("description"),
+            description=description,
         )
-    if step_type == "select":
-        _check_keys(raw, (*common, "from", "table", "choose", "value", "emit"), path)
-        _need(raw, ("from", "table", "choose", "emit"), path)
-        choose = raw["choose"]
-        if choose not in CHOOSE_KINDS:
-            raise WorkflowError(
-                1,
-                f"unknown choose {choose!r}{suggest(str(choose), CHOOSE_KINDS)}",
-                path=f"{path}.choose",
-            )
-        emit = raw["emit"]
-        if (
-            not isinstance(emit, Mapping)
-            or not emit
-            or not all(
-                isinstance(k, str) and isinstance(v, str) for k, v in emit.items()
-            )
-        ):
-            raise WorkflowError(
-                1, "'emit' is a non-empty {key: column} mapping", path=f"{path}.emit"
-            )
-        return SelectStep(
-            type="select",
-            from_=_str_field(raw, "from", path),
-            table=_str_field(raw, "table", path),
-            choose=str(choose),
-            emit=dict(emit),
-            value=str(raw.get("value", "value")),
-            after=_after(raw, path),
-            description=raw.get("description"),
-        )
-    if step_type == "transform":
-        return _parse_transform_step(raw, path, common)
-    # every branch above returns, so this is the plot parser — spelled out
-    # rather than left as a fall-through, so a fifth step type added to
-    # STEP_TYPES without a branch fails loudly instead of parsing as a
-    # malformed plot
-    assert step_type == "plot", step_type
+
     _check_keys(
         raw,
-        (*common, "plot", "from", "table", "x", "y", "series", "value", "file_path"),
+        (
+            "type",
+            "script",
+            "inputs",
+            "outputs",
+            "runtime",
+            "is_deterministic",
+            "after",
+            "description",
+        ),
         path,
     )
-    _need(raw, ("plot", "from", "table", "x", "file_path"), path)
-    plot = raw["plot"]
-    if plot not in PLOT_KINDS:
+    _need(raw, ("script", "inputs", "outputs"), path)
+    inputs = raw["inputs"]
+    if not isinstance(inputs, Mapping):
+        raise WorkflowError(1, "'inputs' maps names to values", path=path)
+    outputs = raw["outputs"]
+    if not isinstance(outputs, Mapping) or not outputs:
         raise WorkflowError(
-            1,
-            f"unknown plot {plot!r}{suggest(str(plot), PLOT_KINDS)}",
-            path=f"{path}.plot",
+            7, "'outputs' is a non-empty map of slot to file", path=path
         )
-    if plot == "heatmap" and "y" not in raw:
-        raise WorkflowError(1, "a heatmap needs 'y'", path=path)
-    if plot == "heatmap" and "series" in raw:
-        raise WorkflowError(1, "'series' belongs to lines plots", path=path)
-    if plot == "lines" and "y" in raw:
+    parsed_outputs = {
+        slot: _parse_output(slot, decl, f"{path}.outputs.{slot}")
+        for slot, decl in outputs.items()
+    }
+    files = [decl.file for decl in parsed_outputs.values()]
+    duplicate = next((f for f in files if files.count(f) > 1), None)
+    if duplicate is not None:
         raise WorkflowError(
-            1, "'y' belongs to heatmaps ('series' splits lines)", path=path
-        )
-    _check_contained_path(str(raw["file_path"]), 8, path)
-    return PlotStep(
-        type="plot",
-        plot=str(plot),
-        from_=_str_field(raw, "from", path),
-        table=_str_field(raw, "table", path),
-        x=_str_field(raw, "x", path),
-        y=str(raw["y"]) if "y" in raw else None,
-        series=str(raw["series"]) if "series" in raw else None,
-        value=str(raw.get("value", "value")),
-        file_path=_str_field(raw, "file_path", path),
-        after=_after(raw, path),
-        description=raw.get("description"),
-    )
-
-
-def _parse_transform_step(
-    raw: Mapping[str, Any], path: str, common: Sequence[str]
-) -> TransformStep:
-    """A ``transform`` step, checked against its op's record (§2.4).
-
-    The registry is imported *inside* this function on purpose. This package
-    is the backend-free document layer, so it keeps no module-level edge to a
-    package that executes numerics — the discipline ``cli.py`` follows for the
-    reference backend. The registry itself is torch-free, so ``validate`` and
-    ``digest`` still cost nothing but stdlib.
-    """
-    from causalab.transform.registry import lookup
-    from causalab.transform.schema import Table, TransformError, validate_params
-
-    _check_keys(raw, (*common, "op", "inputs", "params", "outputs"), path)
-    _need(raw, ("op", "inputs", "outputs"), path)
-    try:
-        op = lookup(raw["op"])
-    except TransformError as err:
-        raise WorkflowError(1, err.message, path=f"{path}.op") from err
-
-    inputs_raw = raw["inputs"]
-    if not isinstance(inputs_raw, Mapping):
-        raise WorkflowError(
-            1,
-            "'inputs' maps each of the op's input slots to an earlier step's output",
-            path=f"{path}.inputs",
-        )
-    for slot in inputs_raw:
-        if slot not in op.inputs:
-            raise WorkflowError(
-                1,
-                f"op {op.id} has no input slot {str(slot)!r}"
-                f"{suggest(str(slot), tuple(op.inputs))}",
-                path=f"{path}.inputs",
-            )
-    absent = [slot for slot in op.inputs if slot not in inputs_raw]
-    if absent:
-        raise WorkflowError(
-            1, f"op {op.id} needs input slot(s) {absent}", path=f"{path}.inputs"
-        )
-    inputs: dict[str, TransformInput] = {}
-    for slot, in_decl in op.inputs.items():
-        ref = inputs_raw[slot]
-        ref_path = f"{path}.inputs.{slot}"
-        if not isinstance(ref, Mapping):
-            raise WorkflowError(
-                1, "an input names {'step': …, 'value': …}", path=ref_path
-            )
-        _check_keys(ref, ("step", "value", "slot", "entry"), ref_path)
-        _need(ref, ("step", "value"), ref_path)
-        entry = ref.get("entry")
-        if entry is not None and (
-            not isinstance(entry, Mapping) or not all(isinstance(k, str) for k in entry)
-        ):
-            raise WorkflowError(
-                1,
-                "'entry' selects one bundle entry by coordinate (IM spec §2.5)",
-                path=ref_path,
-            )
-        bundle_slot = ref.get("slot")
-        if bundle_slot is not None and not isinstance(bundle_slot, str):
-            raise WorkflowError(
-                1, "'slot' is the producer's name for the tensor", path=ref_path
-            )
-        if isinstance(in_decl, Table) and (
-            bundle_slot is not None or entry is not None
-        ):
-            raise WorkflowError(
-                1,
-                f"input slot {slot!r} is a table — 'slot'/'entry' address a "
-                "tensor bundle",
-                path=ref_path,
-            )
-        value = _str_field(ref, "value", ref_path)
-        if not value.endswith(in_decl.suffix):
-            raise WorkflowError(
-                8,
-                f"input slot {slot!r} reads a {in_decl.suffix} output, got {value!r}",
-                path=ref_path,
-            )
-        inputs[slot] = TransformInput(
-            step=_str_field(ref, "step", ref_path),
-            value=value,
-            slot=bundle_slot,
-            entry=dict(entry) if entry is not None else None,
-        )
-
-    outputs_raw = raw["outputs"]
-    if not isinstance(outputs_raw, Mapping):
-        raise WorkflowError(
-            1,
-            "'outputs' maps each of the op's output slots to a file path",
+            7,
+            f"two outputs both write {duplicate!r} — one file, one slot",
             path=f"{path}.outputs",
         )
-    for slot in outputs_raw:
-        if slot not in op.outputs:
-            raise WorkflowError(
-                1,
-                f"op {op.id} declares no output slot {str(slot)!r}"
-                f"{suggest(str(slot), tuple(op.outputs))}",
-                path=f"{path}.outputs",
-            )
-    absent = [slot for slot in op.outputs if slot not in outputs_raw]
-    if absent:
-        raise WorkflowError(
-            1,
-            f"op {op.id} writes output slot(s) {absent} — every declared slot "
-            "needs a file path, so the record says what the step produces",
-            path=f"{path}.outputs",
+    parsed_inputs = {
+        key: (
+            _parse_reference(value, f"{path}.inputs.{key}") or value
+            if isinstance(value, Mapping)
+            else value
         )
-    outputs: dict[str, str] = {}
-    claimed: dict[str, str] = {}
-    for slot, out_decl in op.outputs.items():
-        out_path = f"{path}.outputs.{slot}"
-        file_path = _str_field(outputs_raw, slot, out_path)
-        if not file_path.endswith(out_decl.suffix):
-            raise WorkflowError(
-                8,
-                f"output slot {slot!r} writes a {out_decl.suffix} file, got "
-                f"{file_path!r}",
-                path=out_path,
-            )
-        _check_contained_path(file_path, 8, out_path)
-        if file_path in claimed:
-            raise WorkflowError(
-                3,
-                f"output slots {claimed[file_path]!r} and {slot!r} both write "
-                f"{file_path!r}",
-                path=out_path,
-            )
-        claimed[file_path] = slot
-        outputs[slot] = file_path
-
-    try:
-        params = validate_params(op.params, raw.get("params"), path=f"{path}.params")
-    except TransformError as err:
-        raise WorkflowError(1, err.message, path=err.path) from err
-    return TransformStep(
-        type="transform",
-        op=op.id,
-        inputs=inputs,
-        outputs=outputs,
-        params=params,
+        for key, value in inputs.items()
+    }
+    return ScriptStep(
+        type="script",
+        script=_str_field(raw, "script", path),
+        inputs=parsed_inputs,
+        outputs=parsed_outputs,
+        runtime=_parse_runtime(raw.get("runtime"), f"{path}.runtime"),
+        is_deterministic=_bool_field(raw, "is_deterministic", True, path),
         after=_after(raw, path),
-        description=raw.get("description"),
+        description=description,
     )
-
-
-def _check_contained_path(value: str, rule: int, path: str) -> None:
-    """A workflow-owned file path stays inside its root: relative, no
-    parent escapes (§2.5 "within the step's output dir", §2.6 "under the
-    workflow's output root")."""
-    parts = Path(value).parts
-    if Path(value).is_absolute() or ".." in parts:
-        raise WorkflowError(
-            rule, f"file_path {value!r} escapes its output root", path=path
-        )
 
 
 def parse_workflow(raw: Mapping[str, Any]) -> WorkflowDocument:
-    """Strict-parse one workflow document (rules 1–3)."""
-    for key in raw:
-        if key not in SECTION_ORDER:
-            raise WorkflowError(
-                1,
-                f"unknown section {key!r}{suggest(key, SECTION_ORDER)}",
-                path=str(key),
-            )
-    ranks = {name: i for i, name in enumerate(SECTION_ORDER)}
-    order = [ranks[k] for k in raw]
-    if order != sorted(order) or (list(raw) and list(raw)[-1] != "save"):
-        raise WorkflowError(2, f"sections out of order: {list(raw)} (save last)")
-    for section in ("version", "steps", "save"):
-        if section not in raw:
-            raise WorkflowError(1, f"missing required section {section!r}")
-    if raw["version"] != "1":
-        raise WorkflowError(1, f"unsupported version {raw['version']!r}")
+    """Parse and structurally validate one workflow document (rules 1-3)."""
+    if not isinstance(raw, Mapping):
+        raise WorkflowError(1, "a workflow document is an object")
+    _check_keys(raw, SECTION_ORDER, "")
+    _need(raw, ("version", "output_dir", "steps"), "")
+
+    present = [key for key in raw if key in SECTION_ORDER]
+    expected = [key for key in SECTION_ORDER if key in raw]
+    if present != expected:
+        raise WorkflowError(
+            2,
+            f"sections must appear in the order {expected}, got {present}",
+        )
+    version = _str_field(raw, "version", "")
+    if version != "1":
+        raise WorkflowError(1, f"unsupported version {version!r} (expected '1')")
+
+    output_dir = _str_field(raw, "output_dir", "")
+    if not _SEGMENT.match(output_dir) or output_dir in {".", ".."}:
+        raise WorkflowError(
+            2,
+            f"'output_dir' is one filesystem-safe path segment, got "
+            f"{output_dir!r} — the CLI supplies the root it sits under (§1.1)",
+        )
+
     steps_raw = raw["steps"]
     if not isinstance(steps_raw, Mapping) or not steps_raw:
-        raise WorkflowError(1, "'steps' is a non-empty step table")
+        raise WorkflowError(1, "'steps' is a non-empty object", path="steps")
     steps: dict[str, Step] = {}
     for name, step_raw in steps_raw.items():
-        if not isinstance(name, str) or not _STEP_NAME.match(name):
+        if not _STEP_NAME.match(str(name)):
             raise WorkflowError(
                 3,
-                f"step name {name!r} is not filesystem-safe ([A-Za-z0-9_-]+) — "
-                "step names become run-tree directories (§1)",
+                f"step name {name!r} is not filesystem-safe ([A-Za-z0-9_-]+)",
+                path="steps",
             )
-        steps[name] = _parse_step(name, step_raw, f"steps.{name}")
-    save_raw = raw["save"]
-    if not isinstance(save_raw, list) or not save_raw:
-        raise WorkflowError(2, "'save' is a non-empty list (and the last section)")
-    save: list[WorkflowSaveEntry] = []
-    seen_paths: set[str] = set()
-    for i, entry_raw in enumerate(save_raw):
-        path = f"save[{i}]"
-        if not isinstance(entry_raw, Mapping):
-            raise WorkflowError(1, "a save entry is an object", path=path)
-        _check_keys(entry_raw, ("step", "value", "file_path"), path)
-        _need(entry_raw, ("step", "value", "file_path"), path)
-        entry = WorkflowSaveEntry(
-            step=_str_field(entry_raw, "step", path),
-            value=_str_field(entry_raw, "value", path),
-            file_path=_str_field(entry_raw, "file_path", path),
-        )
-        if entry.file_path in seen_paths:
-            raise WorkflowError(
-                3, f"two save entries write {entry.file_path!r}", path=path
-            )
-        _check_contained_path(entry.file_path, 3, path)
-        if (
-            entry.file_path.split("/", 1)[0] in steps
-            or entry.file_path == "workflow.json"
-        ):
+        if name == "workflow.json" or name.startswith("_"):
             raise WorkflowError(
                 3,
-                f"save file_path {entry.file_path!r} collides with a step "
-                "directory or the reserved run manifest (workflow.json)",
-                path=path,
+                f"step name {name!r} is reserved — step directories sit beside "
+                "the run manifest",
+                path="steps",
             )
-        seen_paths.add(entry.file_path)
-        save.append(entry)
+        steps[str(name)] = _parse_step(str(name), step_raw, f"steps.{name}")
+
     description = raw.get("description")
     if description is not None and not isinstance(description, str):
-        raise WorkflowError(1, "description is free text", path="description")
+        raise WorkflowError(1, "'description' is free text")
     return WorkflowDocument(
-        version="1", steps=steps, save=tuple(save), description=description
+        version=version,
+        output_dir=output_dir,
+        steps=steps,
+        description=description,
     )
 
 
 # --------------------------------------------------------------------------- #
-# the deferring artifact store (§3 + the module docstring)
+# script resolution — hashed, never imported (§4.2)
+# --------------------------------------------------------------------------- #
+
+
+def builtin_path(name: str) -> Path:
+    """Where a ``causalab:<name>`` step script lives."""
+    from causalab import steps as steps_pkg
+
+    return Path(steps_pkg.__file__).parent / "builtin" / f"{name}.py"
+
+
+def builtin_names() -> tuple[str, ...]:
+    """Every shipped step script, for a did-you-mean."""
+    directory = builtin_path("_").parent
+    if not directory.is_dir():
+        return ()
+    return tuple(
+        sorted(p.stem for p in directory.glob("*.py") if not p.stem.startswith("_"))
+    )
+
+
+def resolve_script(step: ScriptStep, workflow_dir: Path, path: str) -> Path:
+    """The file a step's ``script`` names, checked but not imported (rule 6)."""
+    if step.is_builtin:
+        name = step.script[len(BUILTIN_PREFIX) :]
+        if not name or not _SEGMENT.match(name) or "." in name:
+            raise WorkflowError(
+                6, f"built-in script name {name!r} is not an identifier", path=path
+            )
+        target = builtin_path(name)
+        if not target.is_file():
+            raise WorkflowError(
+                6,
+                f"unknown built-in script {step.script!r}"
+                f"{suggest(name, builtin_names())}",
+                path=path,
+            )
+        return target
+    _contained(step.script, 6, path)
+    target = (workflow_dir / step.script).resolve()
+    if not target.is_file():
+        raise WorkflowError(6, f"script {step.script!r} not found", path=path)
+    return target
+
+
+def check_script(target: Path, step: ScriptStep, path: str) -> str:
+    """Rule 6: the script parses and declares ``main``. Returns its sha256.
+
+    Deliberately shallow, and deliberately not an import: ``validate`` and
+    ``digest`` must stay runnable without torch, and importing a user script
+    would pull in whatever it links against (§4.2). Hashing needs no import,
+    which is what lets the hash reach the digest."""
+    source = target.read_bytes()
+    try:
+        tree = ast.parse(source, filename=str(target))
+    except SyntaxError as err:
+        raise WorkflowError(
+            6, f"script {step.script!r} does not parse: {err}", path=path
+        ) from err
+    has_main = any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "main"
+        for node in tree.body
+    )
+    if not has_main:
+        raise WorkflowError(
+            6,
+            f"script {step.script!r} declares no module-level 'main' — the "
+            "runner calls main(inputs, outputs) (§4)",
+            path=path,
+        )
+    return hashlib.sha256(source).hexdigest()
+
+
+# --------------------------------------------------------------------------- #
+# load-time artifact store for step-dependent inner documents
 # --------------------------------------------------------------------------- #
 
 
 @dataclasses.dataclass(frozen=True)
 class DeferredArtifacts:
     """Wraps an outer store for workflow-load-time inner validation:
-    step-refs answer with representative values, and every ``file_path``
-    check defers to run time — a representative-substituted document may
-    carry representative values in exactly the fields an ArtifactIdentity
-    is checked against (the site record), so a load-time identity
-    comparison would be against the wrong document."""
+    step-refs answer with declared representatives, and every ``file_path``
+    check defers to run time — a representative-substituted document may carry
+    representative values in exactly the fields an ArtifactIdentity is checked
+    against (the site record), so a load-time identity comparison would be
+    against the wrong document."""
 
     outer: ArtifactStore
     step_names: frozenset[str]
@@ -603,11 +713,12 @@ class DeferredArtifacts:
     def read_value(self, artifact: str, key: str) -> Any:
         if self._head(artifact) in self.step_names:
             try:
-                return self.representatives[(artifact, key)]
+                return self.representatives[(self._head(artifact), key)]
             except KeyError as err:
                 raise KeyError(
-                    f"step {artifact!r} emits no key {key!r} — the emit table is "
-                    "the contract (workflow §2.3)"
+                    f"step {artifact!r} declares no emitted key {key!r} — a "
+                    "step whose values another document reads declares them "
+                    "in outputs.<slot>.keys (workflow §2.3)"
                 ) from err
         return self.outer.read_value(artifact, key)
 
@@ -645,11 +756,11 @@ def _walk_step_refs(node: Any, step_names: frozenset[str]) -> set[tuple[str, str
 def _walk_run_tree_paths(node: Any, step_names: frozenset[str]) -> set[str]:
     """Every ``file_path`` the inner document LOADS from a step's run tree.
 
-    The IM spec has exactly two file_path *load* sites — featurizer specs
-    and params entries (§2.5, §2.6); an inner document's ``save`` section
-    also carries ``file_path`` keys, but those are outputs, never loads —
-    walking them would fabricate dependency edges (and even self-cycles)
-    out of a step's own products."""
+    The IM spec has exactly two file_path *load* sites — featurizer specs and
+    params entries (§2.5, §2.6); an inner document's ``save`` section also
+    carries ``file_path`` keys, but those are outputs, never loads — walking
+    them would fabricate dependency edges (and even self-cycles) out of a
+    step's own products."""
     paths: set[str] = set()
     if not isinstance(node, Mapping):
         return paths
@@ -668,6 +779,13 @@ def _walk_run_tree_paths(node: Any, step_names: frozenset[str]) -> set[str]:
 
 def _authored_digest(raw: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical_bytes(raw)).hexdigest()
+
+
+def _repo_root() -> Path:
+    """The root a relative ``path`` reference resolves against (§3)."""
+    import causalab
+
+    return Path(causalab.__file__).resolve().parent.parent
 
 
 def load_workflow(
@@ -690,12 +808,29 @@ def load_workflow(
     steps = document.steps
     step_names = frozenset(steps)
 
-    # ---- rule 4 (references) + derived dependency edges (§3) -------------- #
+    # ---- rule 6: scripts resolve, parse, declare main, and hash ------------ #
+    script_hashes: dict[str, str] = {}
+    for name, step in steps.items():
+        if isinstance(step, ScriptStep):
+            target = resolve_script(step, workflow_dir, f"steps.{name}.script")
+            script_hashes[name] = check_script(target, step, f"steps.{name}.script")
+    steps = {
+        name: (
+            dataclasses.replace(step, script_sha256=script_hashes[name])
+            if isinstance(step, ScriptStep)
+            else step
+        )
+        for name, step in steps.items()
+    }
+    document = dataclasses.replace(document, steps=steps)
+
+    # ---- rule 4 (references) + derived dependency edges (§3) --------------- #
     overridden_raw: dict[str, dict[str, Any]] = {}
     deps: dict[str, set[str]] = {name: set() for name in steps}
-    data_deps: dict[str, set[str]] = {name: set() for name in steps}
     step_refs: dict[str, set[tuple[str, str]]] = {}
     run_tree_loads: dict[str, set[str]] = {name: set() for name in steps}
+    unchecked_paths: list[str] = []
+
     for name, step in steps.items():
         for other in step.after:
             if other not in steps:
@@ -703,81 +838,66 @@ def load_workflow(
                     4, f"'after' names unknown step {other!r}", path=f"steps.{name}"
                 )
             deps[name].add(other)
-        if isinstance(step, (SelectStep, PlotStep)):
-            if step.from_ not in steps:
-                raise WorkflowError(
-                    4, f"'from' names unknown step {step.from_!r}", path=f"steps.{name}"
-                )
-            if not isinstance(steps[step.from_], (ProtocolStep, TransformStep)):
-                raise WorkflowError(
-                    4,
-                    f"'from' must name a protocol or transform step; "
-                    f"{step.from_!r} is a {steps[step.from_].type} step",
-                    path=f"steps.{name}",
-                )
-            deps[name].add(step.from_)
-            data_deps[name].add(step.from_)
-            if not step.table.endswith(".json"):
-                raise WorkflowError(
-                    8,
-                    f"'table' names a .json output, got {step.table!r}",
-                    path=f"steps.{name}",
-                )
-        if isinstance(step, PlotStep) and not step.file_path.endswith((".png", ".pdf")):
-            raise WorkflowError(
-                8,
-                f"a plot file_path ends in .png/.pdf, got {step.file_path!r}",
-                path=f"steps.{name}",
-            )
-        if isinstance(step, TransformStep):
-            # a transform step's `inputs` ARE its dependency edges (§3) — the
-            # same rule artifact refs and run-tree loads follow, spelled once
-            # per slot instead of discovered by walking a nested document
-            for slot, ref in step.inputs.items():
-                if ref.step not in steps:
+
+        if isinstance(step, ScriptStep):
+            for slot, value in step.inputs.items():
+                if not isinstance(value, Reference):
+                    continue
+                where = f"steps.{name}.inputs.{slot}"
+                if value.step is not None:
+                    if value.step not in steps:
+                        raise WorkflowError(
+                            4,
+                            f"input {slot!r} names unknown step {value.step!r}"
+                            f"{suggest(value.step, sorted(steps))}",
+                            path=where,
+                        )
+                    deps[name].add(value.step)
+                    continue
+                target = str(value.path)
+                if target.startswith("/"):
+                    # rule 4: an absolute path is NOT existence-checked —
+                    # validation and execution routinely run on different
+                    # hosts, so checking here would fail a path that is
+                    # perfectly good where the run happens
+                    unchecked_paths.append(f"{name}.{slot}: {target}")
+                    continue
+                if not (_repo_root() / target).is_file():
                     raise WorkflowError(
                         4,
-                        f"input {slot!r} names unknown step {ref.step!r}",
-                        path=f"steps.{name}.inputs.{slot}",
+                        f"input {slot!r} names {target!r}, which does not exist "
+                        "under the repo root (an absolute path would defer to "
+                        "run time; a repo-relative one must be here now)",
+                        path=where,
                     )
-                deps[name].add(ref.step)
-                data_deps[name].add(ref.step)
-        if isinstance(step, ProtocolStep):
-            doc_path = (workflow_dir / step.document).resolve()
-            if not doc_path.is_file():
-                raise WorkflowError(
-                    4, f"document {step.document!r} not found", path=f"steps.{name}"
-                )
-            try:
-                inner_raw = apply_overrides(dict(load_text(doc_path)), step.set)
-            except ParseError as err:
-                raise WorkflowError(
-                    9,
-                    f"'set' override failed on {step.document!r}: {err}",
-                    path=f"steps.{name}",
-                ) from err
-            overridden_raw[name] = inner_raw
-            refs = _walk_step_refs(inner_raw, step_names)
-            step_refs[name] = refs
-            run_tree_loads[name] = _walk_run_tree_paths(inner_raw, step_names)
-            for artifact, _key in refs:
-                producer = artifact.split("/", 1)[0]
-                deps[name].add(producer)
-                data_deps[name].add(producer)
-                # rule 10, ref half: a step-artifact ref reads a values
-                # table, which only select steps emit
-                if not isinstance(steps[producer], SelectStep):
-                    raise WorkflowError(
-                        10,
-                        f"artifact ref {artifact!r} names a "
-                        f"{steps[producer].type} step — only select steps emit "
-                        "values tables (§2.3)",
-                        path=f"steps.{name}",
-                    )
-            for run_path in run_tree_loads[name]:
-                producer = run_path.split("/", 1)[0]
-                deps[name].add(producer)
-                data_deps[name].add(producer)
+            continue
+
+        doc_path = (workflow_dir / step.document).resolve()
+        if not doc_path.is_file():
+            raise WorkflowError(
+                4, f"document {step.document!r} not found", path=f"steps.{name}"
+            )
+        try:
+            inner_raw = apply_overrides(dict(load_text(doc_path)), step.set)
+        except ParseError as err:
+            raise WorkflowError(
+                8,
+                f"'set' override failed on {step.document!r}: {err}",
+                path=f"steps.{name}",
+            ) from err
+        overridden_raw[name] = inner_raw
+        refs = _walk_step_refs(inner_raw, step_names)
+        step_refs[name] = refs
+        run_tree_loads[name] = _walk_run_tree_paths(inner_raw, step_names)
+        for artifact, key in refs:
+            producer = artifact.split("/", 1)[0]
+            deps[name].add(producer)
+            # rule 4: a values reference must name a step that declares the
+            # key. With `select` a script, the declaration is the contract —
+            # and it is what the representative substitution below reads.
+            _check_declares_key(steps[producer], producer, key, path=f"steps.{name}")
+        for run_path in run_tree_loads[name]:
+            deps[name].add(run_path.split("/", 1)[0])
 
     # ---- rule 5: acyclicity + the schedule --------------------------------- #
     order: list[str] = []
@@ -807,61 +927,24 @@ def load_workflow(
         tuple(n for n in order if depth[n] == level) for level in range(n_levels)
     )
 
-    # ---- inner loads (rule 4 tail) + representative substitution ----------- #
+    # ---- representatives, then the inner loads (rule 4 tail, rule 8) ------- #
+    representatives: dict[tuple[str, str], Any] = {}
+    for name, step in steps.items():
+        if not isinstance(step, ScriptStep):
+            continue
+        for decl in step.outputs.values():
+            for key, value in (decl.keys or {}).items():
+                representatives[(name, key)] = value
+
     inner: dict[str, LoadedProtocol] = {}
     inner_digests: dict[str, str] = {}
     inner_digest_kind: dict[str, str] = {}
-    representatives: dict[tuple[str, str], Any] = {}
-
-    def compute_representatives(select_name: str, select: SelectStep) -> None:
-        producer_step = steps[select.from_]
-        if isinstance(producer_step, TransformStep):
-            # a transform table's columns are declared, not swept, so the
-            # stand-in is a type-appropriate zero. Representatives only exist
-            # to type-check a consuming document at load; the real values
-            # arrive at run time (module docstring).
-            declared = _transform_table_columns(
-                producer_step, select.table, path=f"steps.{select_name}.table"
-            )
-            for key, column in select.emit.items():
-                if column not in declared:
-                    raise WorkflowError(
-                        7,
-                        f"emit column {column!r} is not a column of "
-                        f"{select.from_!r}'s {select.table!r} "
-                        f"({sorted(declared)})",
-                        path=f"steps.{select_name}.emit",
-                    )
-                representatives[(select_name, key)] = _COLUMN_ZERO[declared[column]]
-            return
-        producer = inner.get(select.from_)
-        if producer is None:
-            return  # the producer failed earlier; its error already raised
-        axis_ids = {axis.id: axis for axis in producer.expansion.axes}
-        for key, column in select.emit.items():
-            if column in axis_ids:
-                representatives[(select_name, key)] = axis_ids[column].values[0]
-            elif column == select.value or column == "value":
-                representatives[(select_name, key)] = 0.0
-            else:
-                raise WorkflowError(
-                    7,
-                    f"emit column {column!r} is neither a sweep axis of "
-                    f"{select.from_!r}'s document nor its value column",
-                    path=f"steps.{select_name}.emit",
-                )
 
     for name in order:
         step = steps[name]
-        if isinstance(step, SelectStep):
-            compute_representatives(name, step)
-            continue
         if not isinstance(step, ProtocolStep):
             continue
-        refs = step_refs[name]
-        deferred = bool(refs) or any(
-            True for _ in _walk_run_tree_paths(overridden_raw[name], step_names)
-        )
+        deferred = bool(step_refs[name]) or bool(run_tree_loads[name])
         load_env = env
         if deferred:
             load_env = ResolutionEnv(
@@ -883,7 +966,7 @@ def load_workflow(
             )
         except ProtocolError as err:
             raise WorkflowError(
-                4,
+                8,
                 f"document {step.document!r} does not load: {err}",
                 path=f"steps.{name}",
             ) from err
@@ -895,115 +978,55 @@ def load_workflow(
             inner_digests[name] = loaded.document_digest
             inner_digest_kind[name] = "campaign"
 
-    # ---- rules 7 + 8: select/plot columns against the producer's axes ------ #
-    def check_columns(
-        name: str, from_: str, table: str, columns: Sequence[str]
-    ) -> None:
-        producing = steps[from_]
-        if isinstance(producing, TransformStep):
-            # a transform producer has no sweep axes; what it *does* have is a
-            # declared column list per table output, so rule 7 keeps its
-            # load-time bite against that instead (§2.4). Note there is no
-            # implicit 'value' column here: a transform table is whatever its
-            # op declares, so a select must name the column it ranks.
-            declared = _transform_table_columns(
-                producing, table, path=f"steps.{name}.table"
-            )
-            for column in columns:
-                if column not in declared:
-                    raise WorkflowError(
-                        7,
-                        f"column {column!r} is not a column of {from_!r}'s "
-                        f"{table!r} ({sorted(declared)}) — a transform op "
-                        "declares the columns of every table it writes (§2.4)",
-                        path=f"steps.{name}",
-                    )
-            return
-        producer = inner[from_]
-        outputs = {entry.file_path for entry in producer.document.save}
-        if table not in outputs:
-            raise WorkflowError(
-                4,
-                f"{from_!r} saves no {table!r} (has {sorted(outputs)})",
-                path=f"steps.{name}.table",
-            )
-        axis_ids = {axis.id for axis in producer.expansion.axes}
-        for column in columns:
-            if column not in axis_ids and column != "value":
-                raise WorkflowError(
-                    7,
-                    f"column {column!r} is neither a sweep axis of {from_!r}'s "
-                    f"document ({sorted(axis_ids)}) nor 'value'",
-                    path=f"steps.{name}",
-                )
-
-    for name, step in steps.items():
-        if isinstance(step, SelectStep):
-            check_columns(
-                name, step.from_, step.table, [*step.emit.values(), step.value]
-            )
-        elif isinstance(step, PlotStep):
-            columns = [step.x, step.value] + [
-                c for c in (step.y, step.series) if c is not None
-            ]
-            check_columns(name, step.from_, step.table, columns)
-            if isinstance(steps[step.from_], TransformStep):
-                continue  # a transform producer has no axes to leave uncovered
-            # a figure must account for every axis of what it renders — an
-            # uncovered axis would collapse into duplicate cells (§2.5)
-            axis_ids = {axis.id for axis in inner[step.from_].expansion.axes}
-            covered = (
-                {step.x}
-                | ({step.y} if step.y else set())
-                | ({step.series} if step.series else set())
-            )
-            uncovered = axis_ids - covered
-            if uncovered:
-                raise WorkflowError(
-                    7,
-                    f"plot {name!r} leaves the axes {sorted(uncovered)} of "
-                    f"{step.from_!r}'s document uncovered — every axis must be "
-                    "x, y, or series",
-                    path=f"steps.{name}",
-                )
-
-    # ---- rule 4 tail: save entries name real outputs ------------------------ #
+    # ---- rule 4: every `file` names an output its producer really writes --- #
     def outputs_of(name: str) -> set[str]:
         step = steps[name]
         if isinstance(step, ProtocolStep):
             return {entry.file_path for entry in inner[name].document.save}
-        if isinstance(step, TransformStep):
-            return set(step.outputs.values())
-        if isinstance(step, SelectStep):
-            return {"values.json"}
-        return {step.file_path}
+        return {decl.file for decl in step.outputs.values()}
 
+    for name, step in steps.items():
+        if not isinstance(step, ScriptStep):
+            continue
+        for slot, value in step.inputs.items():
+            if not isinstance(value, Reference) or value.step is None:
+                continue
+            produced = outputs_of(value.step)
+            if value.file not in produced:
+                raise WorkflowError(
+                    4,
+                    f"input {slot!r} reads {value.target}, but "
+                    f"{value.step!r} writes no {value.file!r} "
+                    f"(has {sorted(produced)})",
+                    path=f"steps.{name}.inputs.{slot}",
+                )
+            if value.key is not None:
+                _check_declares_key(
+                    steps[value.step],
+                    value.step,
+                    value.key,
+                    path=f"steps.{name}.inputs.{slot}",
+                    file=value.file,
+                )
+            if value.entry is not None or value.slot is not None:
+                _check_script_entry(
+                    name, slot, value, steps=steps, inner=inner, outputs_of=outputs_of
+                )
+
+    # ---- rule 9: run-tree loads inside protocol documents ------------------ #
     for name, paths in run_tree_loads.items():
         for run_path in sorted(paths):
             producer, _, rest = run_path.partition("/")
-            producer_step = steps[producer]
-            if isinstance(producer_step, ProtocolStep):
-                produced = {e.file_path for e in inner[producer].document.save}
-            elif isinstance(producer_step, TransformStep):
-                # rule 10, run-tree half: a protocol step may load a tensor a
-                # transform step wrote — the fitted-artifact direction the
-                # manifold pipelines need. The bundle is stamped with an
-                # ArtifactIdentity at write time, so the loading document's
-                # IM spec §2.5 identity check is a real check, not a waived one.
-                produced = set(producer_step.outputs.values())
-            elif isinstance(producer_step, SelectStep):
-                produced = {"values.json"}
-            else:
-                produced = {producer_step.file_path}  # a plot's figure
+            produced = outputs_of(producer)
             if rest not in produced:
                 raise WorkflowError(
-                    10,
-                    f"{name!r} loads {run_path!r}, but {producer!r} saves no "
+                    4,
+                    f"{name!r} loads {run_path!r}, but {producer!r} writes no "
                     f"{rest!r} (has {sorted(produced)}) — a run-tree file_path "
-                    "must name a file the step actually saves (§5.10)",
+                    "must name a file the step actually saves",
                     path=f"steps.{name}",
                 )
-            if isinstance(producer_step, ProtocolStep):
+            if isinstance(steps[producer], ProtocolStep):
                 _check_entry_selection(
                     consumer=inner[name],
                     producer=inner[producer],
@@ -1012,50 +1035,17 @@ def load_workflow(
                     step=name,
                 )
 
-    # ---- rules 4 + 10 for transform inputs (§2.4, §3) ----------------------- #
-    for name, step in steps.items():
-        if isinstance(step, TransformStep):
-            _check_transform_inputs(
-                name, step, steps=steps, inner=inner, outputs_of=outputs_of
-            )
-
-    for i, entry in enumerate(document.save):
-        if entry.step not in steps:
-            raise WorkflowError(
-                4, f"save entry names unknown step {entry.step!r}", path=f"save[{i}]"
-            )
-        if entry.value not in outputs_of(entry.step):
-            raise WorkflowError(
-                4,
-                f"{entry.step!r} produces no {entry.value!r} "
-                f"(has {sorted(outputs_of(entry.step))})",
-                path=f"save[{i}]",
-            )
-
-    # ---- rule 6: sinks ------------------------------------------------------ #
-    consumed: set[str] = {entry.step for entry in document.save}
-    for name in steps:
-        consumed |= data_deps[name]  # `after` orders, it never consumes
-    for name in steps:
-        if name not in consumed:
-            raise WorkflowError(
-                6,
-                f"step {name!r} is dead: no later step consumes it and no save "
-                "entry publishes it (§0)",
-                path=f"steps.{name}",
-            )
-
-    # ---- canonical form + digest (§7) --------------------------------------- #
-    canonical = _canonicalize(document, inner_digests, inner_digest_kind)
+    # ---- canonical form + digest (§7) ------------------------------------- #
+    canonical = _canonicalize(document, inner_digests)
     digest = hashlib.sha256(canonical_bytes(canonical)).hexdigest()
-    # a transform step's provenance unit: the digest of its own canonical
-    # entry, which is a pure function of op@version + inputs + params +
-    # outputs. It is what a tensor it writes is stamped `produced_by`, the
-    # analogue of a protocol point's digest.
-    transform_digests = {
+    # a script step's provenance unit: the digest of its own canonical entry,
+    # which is a pure function of script hash + inputs + outputs + runtime. It
+    # is what a tensor it writes is stamped `produced_by` — the analogue of a
+    # protocol point's digest.
+    step_digests = {
         name: hashlib.sha256(canonical_bytes(canonical["steps"][name])).hexdigest()
         for name, step in steps.items()
-        if isinstance(step, TransformStep)
+        if isinstance(step, ScriptStep)
     }
 
     return LoadedWorkflow(
@@ -1069,54 +1059,59 @@ def load_workflow(
         inner_digests=inner_digests,
         canonical=canonical,
         digest=digest,
-        transform_digests=transform_digests,
+        step_digests=step_digests,
+        unchecked_paths=tuple(sorted(unchecked_paths)),
     )
 
 
-#: Load-time stand-in per declared column dtype, for the representative a
-#: select step over a transform-produced table substitutes into a consuming
-#: document. Only the *type* is load-bearing — the real value arrives at run
-#: time (module docstring).
-_COLUMN_ZERO: Mapping[str, Any] = {
-    "int64": 0,
-    "float64": 0.0,
-    "bool": False,
-    "string": "",
-}
+def _check_declares_key(
+    producer: Step,
+    producer_name: str,
+    key: str,
+    *,
+    path: str,
+    file: str | None = None,
+) -> None:
+    """Rule 4: a ``key`` reference names a step that declares it.
 
-
-def _transform_table_columns(
-    step: TransformStep, table: str, *, path: str
-) -> dict[str, str]:
-    """The declared columns of the table a transform step writes as ``table``."""
-    from causalab.transform.registry import lookup
-    from causalab.transform.schema import Table
-
-    op = lookup(step.op)
-    for slot, file_path in step.outputs.items():
-        if file_path != table:
+    v1 could only ask this of a `select` step, whose `emit` table the loader
+    read. v2 asks it of *any* step, because outputs are declared — which is why
+    the check is stronger than the rule it replaces."""
+    if not isinstance(producer, ScriptStep):
+        raise WorkflowError(
+            4,
+            f"values reference reads a key of {producer_name!r}, which is a "
+            "protocol step — a protocol document's outputs are tables and "
+            "tensors, not a values object",
+            path=path,
+        )
+    declared: dict[str, Any] = {}
+    for decl in producer.outputs.values():
+        if file is not None and decl.file != file:
             continue
-        decl = op.outputs[slot]
-        if not isinstance(decl, Table):
-            raise WorkflowError(
-                4,
-                f"{table!r} is {op.id}'s {slot!r} slot, a tensor bundle — only "
-                "tables are ranked and plotted (§2.3, §2.5)",
-                path=path,
-            )
-        return dict(decl.columns or {})
-    raise WorkflowError(
-        4,
-        f"the step writes no {table!r} (has {sorted(step.outputs.values())})",
-        path=path,
-    )
+        declared.update(decl.keys or {})
+    if key not in declared:
+        where = f"{producer_name}/{file}" if file else producer_name
+        raise WorkflowError(
+            4,
+            f"{where} declares no emitted key {key!r} "
+            f"({sorted(declared) or 'no keys declared'}) — a step whose values "
+            "another step reads declares them in outputs.<slot>.keys (§2.3)"
+            f"{suggest(key, sorted(declared))}",
+            path=path,
+        )
+
+
+# --------------------------------------------------------------------------- #
+# bundle-entry checking (rule 9)
+# --------------------------------------------------------------------------- #
 
 
 def _bundle_entries(
     producer: LoadedProtocol, file_path: str
 ) -> dict[str, dict[str, Any]] | None:
-    """The tensor keys a producing document will write into ``file_path``,
-    with their coordinates — derivable at load because sweeps expand
+    """The tensor keys a producing document will write into ``file_path``, with
+    their coordinates — derivable at load because sweeps expand
     deterministically (§3), which is what lets a wrong selection fail here
     instead of after the producing step has run."""
     entries: dict[str, dict[str, Any]] = {}
@@ -1125,9 +1120,6 @@ def _bundle_entries(
             continue
         if save_entry.value in producer.document.metrics:
             return None  # a metric table, not a tensor bundle
-        # a saved read is keyed by the read's name; a fitted featurizer by
-        # its kind's slots — either way the coordinates are labelled against
-        # the *declared* entity, which is the name a selector can write
         if save_entry.value in producer.document.reads:
             slots: tuple[str, ...] = (save_entry.value,)
         else:
@@ -1150,64 +1142,44 @@ def _sole_bundle_slot(entries: Mapping[str, Mapping[str, Any]]) -> str | None:
     return slots.pop() if len(slots) == 1 else None
 
 
-def _check_transform_inputs(
+def _check_script_entry(
     name: str,
-    step: TransformStep,
+    slot: str,
+    ref: Reference,
     *,
     steps: Mapping[str, Step],
     inner: Mapping[str, LoadedProtocol],
-    outputs_of: Callable[[str], set[str]],
+    outputs_of: Any,
 ) -> None:
-    """Every transform input names an output its producer really writes, and
-    selects an entry that producer will really hold (§5.4, §5.10).
-
-    The entry half is checkable for the same reason it is for a protocol
-    consumer: a producing document's sweep expands deterministically at load,
-    so a mis-aimed tensor handoff fails before the producing step spends its
-    compute rather than after."""
-    from causalab.transform.registry import lookup
-    from causalab.transform.schema import Tensor
-
-    op = lookup(step.op)
-    for slot, ref in step.inputs.items():
-        produced = outputs_of(ref.step)
-        if ref.value not in produced:
-            raise WorkflowError(
-                4,
-                f"input {slot!r} reads {ref.step}/{ref.value}, but "
-                f"{ref.step!r} produces no {ref.value!r} (has {sorted(produced)})",
-                path=f"steps.{name}.inputs.{slot}",
-            )
-        producer = steps[ref.step]
-        if not isinstance(op.inputs[slot], Tensor) or not isinstance(
-            producer, ProtocolStep
-        ):
-            continue
-        entries = _bundle_entries(inner[ref.step], ref.value)
-        if entries is None:
-            continue
-        bundle_slot = ref.slot or _sole_bundle_slot(entries)
-        if bundle_slot is None:
-            held = sorted({str(e.get("slot")) for e in entries.values()})
-            raise WorkflowError(
-                10,
-                f"input {slot!r} reads a bundle holding several slots ({held}) "
-                "— name one with 'slot'",
-                path=f"steps.{name}.inputs.{slot}",
-            )
-        try:
-            select_entry(
-                entries.keys(),
-                bundle_slot,
-                ref.entry,
-                what=f"step {name!r}: input {slot!r} reads {ref.step}/{ref.value}",
-                coords_by_key=entries,
-                implicit=False,
-            )
-        except ValidationError as err:
-            raise WorkflowError(
-                10, str(err), path=f"steps.{name}.inputs.{slot}"
-            ) from err
+    """Rule 9 for a script input: the entry it selects is one the producer will
+    write. Checkable only against a *protocol* producer, whose expansion is
+    deterministic at load; against a script producer it is a run-time check."""
+    producer = steps[str(ref.step)]
+    if not isinstance(producer, ProtocolStep):
+        return
+    entries = _bundle_entries(inner[str(ref.step)], str(ref.file))
+    if entries is None:
+        return
+    bundle_slot = ref.slot or _sole_bundle_slot(entries)
+    if bundle_slot is None:
+        held = sorted({str(e.get("slot")) for e in entries.values()})
+        raise WorkflowError(
+            9,
+            f"input {slot!r} reads a bundle holding several slots ({held}) — "
+            "name one with 'slot'",
+            path=f"steps.{name}.inputs.{slot}",
+        )
+    try:
+        select_entry(
+            entries.keys(),
+            bundle_slot,
+            ref.entry,
+            what=f"step {name!r}: input {slot!r} reads {ref.target}",
+            coords_by_key=entries,
+            implicit=False,
+        )
+    except ValidationError as err:
+        raise WorkflowError(9, str(err), path=f"steps.{name}.inputs.{slot}") from err
 
 
 def _check_entry_selection(
@@ -1218,8 +1190,8 @@ def _check_entry_selection(
     rest: str,
     step: str,
 ) -> None:
-    """§5.10, second half: the entry a load selects must be one the producer
-    will write, for every point of the consuming document."""
+    """Rule 9, protocol-document half: the entry a load selects must be one the
+    producer will write, for every point of the consuming document."""
     entries = _bundle_entries(producer, rest)
     if entries is None:
         return
@@ -1246,13 +1218,23 @@ def _check_entry_selection(
                     implicit=implicit,
                 )
             except ValidationError as err:
-                raise WorkflowError(10, str(err), path=f"steps.{step}") from err
+                raise WorkflowError(9, str(err), path=f"steps.{step}") from err
 
 
-def _canon_transform_input(ref: TransformInput) -> dict[str, Any]:
-    """One ``inputs`` entry in canonical form: the optional bundle selectors
-    appear only when authored, so a step that needs neither adds no key."""
-    entry: dict[str, Any] = {"step": ref.step, "value": ref.value}
+# --------------------------------------------------------------------------- #
+# canonical form (§7)
+# --------------------------------------------------------------------------- #
+
+
+def _canon_reference(ref: Reference) -> dict[str, Any]:
+    entry: dict[str, Any] = {}
+    if ref.step is not None:
+        entry["step"] = ref.step
+        entry["file"] = ref.file
+    else:
+        entry["path"] = ref.path
+    if ref.key is not None:
+        entry["key"] = ref.key
     if ref.slot is not None:
         entry["slot"] = ref.slot
     if ref.entry:
@@ -1260,18 +1242,31 @@ def _canon_transform_input(ref: TransformInput) -> dict[str, Any]:
     return entry
 
 
+def _canon_output(decl: OutputDecl) -> dict[str, Any]:
+    entry: dict[str, Any] = {"file": decl.file}
+    if decl.columns is not None:
+        entry["columns"] = dict(decl.columns)
+    if decl.keys is not None:
+        entry["keys"] = dict(decl.keys)
+    return entry
+
+
 def _canonicalize(
     document: WorkflowDocument,
     inner_digests: Mapping[str, str],
-    inner_digest_kind: Mapping[str, str],
 ) -> dict[str, Any]:
-    steps_canonical: dict[str, Any] = {}
-    for name, step in document.steps.items():
+    """The canonical form: every default materialized, `after` sorted, each
+    protocol step stamped with its document's digest, and each script step with
+    its script's content hash.
+
+    ``output_dir`` is **absent**: it names where the run lands, not what the run
+    is, so moving a run tree must not change the workflow's identity (§1.1)."""
+    canon_steps: dict[str, Any] = {}
+    for name in sorted(document.steps):
+        step = document.steps[name]
         entry: dict[str, Any] = {"type": step.type}
         if step.description is not None:
             entry["description"] = step.description
-        if step.after:
-            entry["after"] = sorted(step.after)
         if isinstance(step, ProtocolStep):
             entry["document"] = step.document
             if step.set:
@@ -1279,54 +1274,27 @@ def _canonicalize(
             if step.max_points is not None:
                 entry["max_points"] = step.max_points
             entry["document_digest"] = inner_digests[name]
-            entry["digest_kind"] = inner_digest_kind[name]
-        elif isinstance(step, TransformStep):
-            entry.update(
-                {
-                    # name@version: the version IS the numerics contract, so a
-                    # behavioural change ships as a new op and old documents
-                    # keep digesting as written. The op's *implementation*
-                    # never enters the form, the rule that keeps backends out
-                    # of protocol digests.
-                    "op": step.op,
-                    "inputs": {
-                        slot: _canon_transform_input(ref)
-                        for slot, ref in step.inputs.items()
-                    },
-                    "params": dict(step.params),  # defaults already materialized
-                    "outputs": dict(step.outputs),
-                }
-            )
-        elif isinstance(step, SelectStep):
-            entry.update(
-                {
-                    "from": step.from_,
-                    "table": step.table,
-                    "choose": step.choose,
-                    "value": step.value,
-                    "aggregate": "mean",  # v1's one aggregation, materialized
-                    "emit": dict(step.emit),
-                }
-            )
         else:
-            entry.update(
-                {
-                    "plot": step.plot,
-                    "from": step.from_,
-                    "table": step.table,
-                    "x": step.x,
-                    "value": step.value,
-                    "file_path": step.file_path,
-                }
-            )
-            if step.y is not None:
-                entry["y"] = step.y
-            if step.series is not None:
-                entry["series"] = step.series
-        steps_canonical[name] = entry
-    out: dict[str, Any] = {"version": document.version}
+            entry["script"] = step.script
+            entry["script_sha256"] = step.script_sha256
+            entry["inputs"] = {
+                key: (
+                    _canon_reference(value) if isinstance(value, Reference) else value
+                )
+                for key, value in sorted(step.inputs.items())
+            }
+            entry["outputs"] = {
+                slot: _canon_output(decl) for slot, decl in sorted(step.outputs.items())
+            }
+            if step.runtime is not None:
+                entry["runtime"] = dict(step.runtime)
+            entry["is_deterministic"] = step.is_deterministic
+        if step.after:
+            entry["after"] = sorted(step.after)
+        canon_steps[name] = entry
+
+    canonical: dict[str, Any] = {"version": document.version}
     if document.description is not None:
-        out["description"] = document.description
-    out["steps"] = steps_canonical
-    out["save"] = [dataclasses.asdict(entry) for entry in document.save]
-    return out
+        canonical["description"] = document.description
+    canonical["steps"] = canon_steps
+    return canonical

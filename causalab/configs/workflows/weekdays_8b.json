@@ -1,27 +1,53 @@
 {
   "version": "1",
-  "description": "weekdays-8b: locate the best layer x position cell by interchange scan, fit DAS rotations (k x seed) at it, pick the best fit, apply it on the test split; scan heatmap and IIA-vs-k curves. The workflow-protocol worked example (docs/workflow_protocol.md sec. 10). The fit step is a 3 x 3 sweep, so its bundle holds nine rotations - 'best_fit' names the winning (k, seed) and 'apply' selects that entry.",
+  "description": "weekdays-8b: locate a layer x position cell -> DAS k x seed fits at it -> apply the best fit on test; scan heatmap + IIA-vs-k curves.",
+  "output_dir": "weekdays_8b",
   "steps": {
-    "locate": {"type": "protocol", "document": "../methods/weekdays_locate_scan.json"},
+    "locate": {
+      "type": "protocol",
+      "document": "../methods/weekdays_locate_scan.json"
+    },
     "best": {
-      "type": "select", "from": "locate", "table": "iia.json",
-      "choose": "max",
-      "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}
+      "type": "script",
+      "script": "causalab:select",
+      "inputs": {
+        "table": {"step": "locate", "file": "iia.json"},
+        "choose": "max",
+        "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}
+      },
+      "outputs": {
+        "values": {
+          "file": "values.json",
+          "keys": {"best_layer": 18, "best_pos": {"index": -1}}
+        }
+      }
     },
     "fit": {
-      "type": "protocol", "document": "../methods/weekdays_das_sweep.json",
+      "type": "protocol",
+      "document": "../methods/weekdays_das_sweep.json",
       "set": {
         "positions.best": {"artifact": "best", "key": "best_pos"},
         "sites.target.layer": {"artifact": "best", "key": "best_layer"}
       }
     },
     "best_fit": {
-      "type": "select", "from": "fit", "table": "iia.json",
-      "choose": "max",
-      "emit": {"best_k": "featurizers.rot.k", "best_seed": "train.seed"}
+      "type": "script",
+      "script": "causalab:select",
+      "inputs": {
+        "table": {"step": "fit", "file": "iia.json"},
+        "choose": "max",
+        "emit": {"best_k": "featurizers.rot.k", "best_seed": "train.seed"}
+      },
+      "outputs": {
+        "values": {
+          "file": "values.json",
+          "keys": {"best_k": 8, "best_seed": 0}
+        }
+      }
     },
     "apply": {
-      "type": "protocol", "document": "../methods/weekdays_das_apply.json",
+      "type": "protocol",
+      "document": "../methods/weekdays_das_apply.json",
       "set": {
         "featurizers.rot.file_path": "fit/rot.safetensors",
         "featurizers.rot.k": {"artifact": "best_fit", "key": "best_k"},
@@ -32,22 +58,28 @@
       }
     },
     "scan_heatmap": {
-      "type": "plot", "plot": "heatmap", "from": "locate", "table": "iia.json",
-      "x": "sites.target.layer", "y": "positions.tap", "value": "value",
-      "file_path": "scan_iia.png"
+      "type": "script",
+      "script": "causalab:plot",
+      "inputs": {
+        "table": {"step": "locate", "file": "iia.json"},
+        "plot": "heatmap",
+        "x": "sites.target.layer",
+        "y": "positions.tap",
+        "figure": "scan_iia.png"
+      },
+      "outputs": {"plotted": {"file": "scan_iia.json"}}
     },
     "iia_by_k": {
-      "type": "plot", "plot": "lines", "from": "fit", "table": "iia.json",
-      "x": "featurizers.rot.k", "series": "train.seed", "value": "value",
-      "file_path": "iia_by_k.png"
+      "type": "script",
+      "script": "causalab:plot",
+      "inputs": {
+        "table": {"step": "fit", "file": "iia.json"},
+        "plot": "lines",
+        "x": "featurizers.rot.k",
+        "series": "train.seed",
+        "figure": "iia_by_k.png"
+      },
+      "outputs": {"plotted": {"file": "iia_by_k.json"}}
     }
-  },
-  "save": [
-    {"step": "best", "value": "values.json", "file_path": "best_cell.json"},
-    {"step": "best_fit", "value": "values.json", "file_path": "best_fit.json"},
-    {"step": "fit", "value": "iia.json", "file_path": "fit_iia.json"},
-    {"step": "apply", "value": "iia.json", "file_path": "apply_iia.json"},
-    {"step": "scan_heatmap", "value": "scan_iia.png", "file_path": "scan_iia.png"},
-    {"step": "iia_by_k", "value": "iia_by_k.png", "file_path": "iia_by_k.png"}
-  ]
+  }
 }

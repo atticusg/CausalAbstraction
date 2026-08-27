@@ -75,7 +75,23 @@ def _build_parser() -> argparse.ArgumentParser:
             )
         if verb == "run":
             p.add_argument(
-                "--out", type=Path, required=True, help="run output directory"
+                "--out",
+                type=Path,
+                required=True,
+                help="run output directory; for a workflow, the ROOT under "
+                "which the document's own output_dir is created (§1.1)",
+            )
+            p.add_argument(
+                "--resume",
+                action="store_true",
+                help="skip a step whose outputs exist with a matching stamped "
+                "digest (workflow documents only)",
+            )
+            p.add_argument(
+                "--reuse-nondeterministic",
+                action="store_true",
+                help="with --resume, also reuse steps declaring "
+                "is_deterministic: false",
             )
             p.add_argument(
                 "--device",
@@ -373,10 +389,31 @@ def _workflow_main(args: argparse.Namespace, env: ResolutionEnv) -> int:
                     f"{kind} digest {loaded.inner_digests[name][:16]}…"
                 )
             else:
-                print(f"  {name}: {step.type}")
-        print("save")
-        for entry in loaded.document.save:
-            print(f"  {entry.step}/{entry.value} -> {entry.file_path}")
+                marks = []
+                if not step.is_deterministic:
+                    marks.append("non-deterministic")
+                if step.runtime and step.runtime.get("isolate"):
+                    marks.append("isolated")
+                suffix = f" [{', '.join(marks)}]" if marks else ""
+                print(
+                    f"  {name}: script {step.script} -> "
+                    f"{', '.join(sorted(d.file for d in step.outputs.values()))}"
+                    f"{suffix}"
+                )
+        if loaded.nondeterministic:
+            # §7: explain names the steps that make a run unreplayable, so the
+            # gap is visible before anyone trusts a rerun
+            print(
+                "not replayable: "
+                + ", ".join(loaded.nondeterministic)
+                + " (is_deterministic: false)"
+            )
+        if loaded.unchecked_paths:
+            # rule 4: an absolute path is not existence-checked at load,
+            # because validation and execution routinely run on different hosts
+            print("unchecked absolute paths (verified at run time):")
+            for item in loaded.unchecked_paths:
+                print(f"  {item}")
         return 0
     # run
     import importlib
@@ -397,8 +434,11 @@ def _workflow_main(args: argparse.Namespace, env: ResolutionEnv) -> int:
         env,
         args.out,
         [hooks.PytorchHooksBackend(device=args.device, dtype=args.dtype)],
+        resume=getattr(args, "resume", False),
+        reuse_nondeterministic=getattr(args, "reuse_nondeterministic", False),
     )
-    for file_path, disk_path in sorted(result.published.items()):
-        print(f"published {file_path} -> {disk_path}")
-    print(f"manifest {args.out / 'workflow.json'}")
+    for name, entry in sorted(result.manifest["steps"].items()):
+        files = ", ".join(entry.get("files", ()))
+        print(f"{entry.get('status', 'completed')} {name}: {files}")
+    print(f"manifest {result.run_root / 'workflow.json'}")
     return 0

@@ -1,7 +1,7 @@
 """Metric tables on disk: native JSON, an array of row objects.
 
 JSON and safetensors are the only two formats in the stack (IM spec §2.12,
-workflow spec §2.7). A metric table is the structured, readable half of that
+workflow spec §2.5). A metric table is the structured, readable half of that
 pair, so it is a plain JSON array — nothing wrapping it, no envelope, no
 column header:
 
