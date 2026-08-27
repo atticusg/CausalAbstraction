@@ -19,7 +19,9 @@ dependencies = [
     "jupyterlab",
     "ipycytoscape",
     "seaborn",
-    "transformers",
+    # 5.16 is the first release carrying models/qwen3_5_moe (Qwen3.6-35B-A3B's
+    # text tower); the hookpoint vocabulary work targets that architecture.
+    "transformers>=5.16",
     "safetensors",
     "tensorboard",
     "dash",
