@@ -114,6 +114,17 @@ the model said the row's value for `x`.
   generated nothing contributes no positions. Unlike the prompt frame — where an
   out-of-range index is an authoring error and refused — how far a row generates
   is a *result*, and refusing on it would make a document fail on data.
+- **`variable` in the continuation** — "the tokens where the model said the
+  row's value for `x`" — differs from its prompt-side twin in two ways, both
+  because the continuation is a *result* rather than an input. It takes the
+  **first** occurrence instead of demanding exactly one, since a generation may
+  repeat itself as a matter of course; and **zero** occurrences yield zero
+  positions rather than refusing, because whether the model says the thing is
+  usually the experiment. A metric over such a read reports the miss as a null
+  value with `matched: false` (sec. 2.10), so it is data, not an exception.
+  Character spans come from the decode's own incremental detokenization, so a
+  match that starts inside a merged piece still lands on every token that
+  produced it.
 - **Reads only.** A write may not carry `generated` (rule 16): the continuation
   exists because the prefill already ran, and an intervention reaches it through
   the first token's logits and through what the prefill left in the KV cache —
@@ -314,6 +325,35 @@ Closed vocabulary; `of` names a read; other value fields name dataset columns.
 | `class_probs` | `of, groups` | summed probability per group |
 | `top_k` | `of, k` | top-k tokens + probs |
 | `match` | `of, expected` (+ optional `mode`) | match indicator |
+| `decode` | `of` | the addressed tokens as text |
+
+**Domains.** Every kind consumes one of two things from its read, and which
+one is a property of the kind:
+
+| domain | kinds | consumes |
+|---|---|---|
+| `distribution` | everything above except `decode` | the vocabulary projection at the addressed positions |
+| `ids` | `decode` | only the tokens the decode produced |
+
+An `ids` kind therefore obliges **no** vocabulary projection anywhere (§8's
+materialization requirement) — a text probe is cheap by construction, not by a
+backend's cleverness. It also only means something where tokens were
+*produced*: `decode` binds to a read whose position carries `generated` (§2.3),
+and a `decode` over a prompt-frame read is a load error.
+
+**Metrics over several positions.** A read may address more than one position —
+every generated token of a row, a window of them, the tokens where the model
+said something (§2.3). A metric over such a read reduces **per position**, and
+its table says which:
+
+- one row per (example, position), carrying the `step` it scored and a
+  `matched` flag; `decode` is the exception that reduces the whole window to
+  one string, and its `step` is null because no single step owns it;
+- an example that addressed **nothing** — it stopped generating, or never said
+  what a `variable` anchor looked for — still gets exactly one row, with a null
+  value and `matched: false`. "The model never said it" must not be
+  indistinguishable from "it said it and scored 0";
+- prompt-frame metrics are unchanged: one row per example, no `step` column.
 
 - A metric binds to exactly one read → one (model, input). Same metric in two
   models = two reads + two metrics.
@@ -584,8 +624,11 @@ it is the vocabulary: at batch 32 and 16 steps, every step's distribution over a
 128k vocabulary is ~260 MB in fp32, one step is ~16 MB, a site's activations
 ~8 MB, the token ids ~2 KB. The planner therefore derives, per group, the decode
 depth and — per continuation read — whether anything downstream consumes a
-distribution (it is saved, or a metric over it reduces one). A backend **must
-not** build one where the answer is no.
+distribution: the read is saved, or a metric in the `distribution` domain
+reduces it (sec. 2.10). An `ids`-domain metric does **not** count, which is the
+point of the domain: a text probe — `decode` over a continuation read, nothing
+saved — obliges no vocabulary projection at all, and a backend **must not**
+build one where the answer is no.
 
 *How* it complies is its own business: keeping only the addressed steps,
 projecting a narrower slice (`logits_to_keep` takes an index tensor), replaying

@@ -38,13 +38,14 @@ from typing import Any, Mapping, Sequence
 import torch
 
 from causalab.protocol.errors import ProtocolError
-from causalab.protocol.schema import MetricSpec
+from causalab.protocol.schema import WHOLE_WINDOW_METRIC_KINDS, MetricSpec
 
 __all__ = [
     "column_first_token_id",
     "column_token_id",
     "column_token_ids",
     "compute_metric",
+    "compute_windowed_metric",
 ]
 
 
@@ -312,4 +313,73 @@ def compute_metric(
             {name: float(probs[i, ids].sum()) for name, ids in group_ids.items()}
             for i in range(logits.shape[0])
         ]
+    if kind == "decode":
+        raise ProtocolError(
+            "P2",
+            "'decode' reduces the tokens a decode produced, so it binds to a "
+            "read in the continuation frame (§2.3) — validation refuses it "
+            "anywhere else",
+        )
     raise ProtocolError("P4", f"unknown metric kind {kind!r}")
+
+
+def compute_windowed_metric(
+    metric: MetricSpec,
+    windows: Sequence[torch.Tensor],
+    rows: Sequence[Mapping[str, Any]],
+    tokenizer: Any,
+    *,
+    target_windows: Sequence[torch.Tensor] | None = None,
+    generated_ids: Sequence[Sequence[int]] | None = None,
+) -> list[list[Any]]:
+    """One metric over a read that addresses **several** positions per row.
+
+    ``windows[i]`` is example ``i``'s value at the positions it addresses,
+    ``(positions_i, vocab)`` — empty when the row addressed none, which in
+    the continuation frame is a result (§2.3), not a misalignment. Returns
+    the same shape: one list of values per example.
+
+    Every ``distribution`` kind reduces **per position**, and does so
+    through :func:`compute_metric` on the flattened positions — one
+    implementation of the kinds, not two. ``ids`` kinds never look at
+    ``windows`` at all: they consume ``generated_ids``, which is why a text
+    probe obliges no vocabulary projection (§8).
+    """
+    kind = str(metric.kind)
+    if kind in WHOLE_WINDOW_METRIC_KINDS:
+        if generated_ids is None:
+            raise ProtocolError(
+                "P2", f"metric kind {kind!r} needs the decode's token ids"
+            )
+        if kind == "decode":
+            return [
+                [tokenizer.decode(list(ids))] if len(ids) else []
+                for ids in generated_ids
+            ]
+        raise ProtocolError("P4", f"unhandled whole-window metric kind {kind!r}")
+
+    counts = [int(window.shape[0]) for window in windows]
+    if not any(counts):
+        return [[] for _ in windows]
+    flat = torch.cat([w for w in windows if w.shape[0]], dim=0)
+    flat_rows = [rows[i] for i, count in enumerate(counts) for _ in range(count)]
+    flat_target = None
+    if target_windows is not None:
+        target_counts = [int(w.shape[0]) for w in target_windows]
+        if target_counts != counts:
+            raise ProtocolError(
+                "P2",
+                f"kl compares reads addressing different position counts "
+                f"({counts} vs {target_counts}) — a comparison needs a "
+                "position-for-position pairing",
+            )
+        flat_target = torch.cat([w for w in target_windows if w.shape[0]], dim=0)
+    values = compute_metric(
+        metric, flat, flat_rows, tokenizer, target_value=flat_target
+    )
+    out: list[list[Any]] = []
+    cursor = 0
+    for count in counts:
+        out.append(values[cursor : cursor + count])
+        cursor += count
+    return out
