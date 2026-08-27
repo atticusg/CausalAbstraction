@@ -453,7 +453,7 @@ def test_rule_12_loaded_featurizer_trained():
         "batch": {"pairs": 2},
     }
     doc["save"].append(
-        {"value": "ce", "model": "patched", "input": "base", "file_path": "ce.parquet"}
+        {"value": "ce", "model": "patched", "input": "base", "file_path": "ce.json"}
     )
     doc["save"].append({"value": "rot", "site": "tgt", "file_path": "rot.safetensors"})
     expect_rule(12, doc)
@@ -575,7 +575,7 @@ def test_unknown_match_mode_is_a_closed_enum_error():
             "value": "m",
             "model": "patched",
             "input": "base",
-            "file_path": "m.parquet",
+            "file_path": "m.json",
         }
     )
     with pytest.raises(ParseError) as err:

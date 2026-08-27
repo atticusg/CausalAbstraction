@@ -52,7 +52,7 @@ def base_doc() -> dict[str, Any]:
                 "value": "ld",
                 "model": "patched",
                 "input": "base",
-                "file_path": "ld.parquet",
+                "file_path": "ld.json",
             }
         ],
     }

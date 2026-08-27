@@ -693,7 +693,9 @@ def _check_save_binding(doc: Document, entry: SaveEntry, path: str) -> None:
             "(§2.12)",
             path=path,
         )
-    expected_ext = ".parquet" if is_metric else ".safetensors"
+    # JSON and safetensors are the only two formats (§2.12): a metric table is
+    # structured and readable, a read is dense numerics
+    expected_ext = ".json" if is_metric else ".safetensors"
     if not entry.file_path.endswith(expected_ext):
         raise ValidationError(
             10,

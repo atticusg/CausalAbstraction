@@ -30,7 +30,7 @@
     "iia": {"kind": "match", "of": "logits", "expected": "label_forms", "mode": "first_token"}
   },
   "save": [
-    {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.parquet"},
+    {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.json"},
     {"value": "logits", "model": "patched", "input": "base", "file_path": "logits.safetensors"},
     {"value": "logits_clean", "model": "original", "input": "base", "file_path": "logits_clean.safetensors"},
     {"value": "subject_acts", "model": "original", "input": "base", "file_path": "subject_acts.safetensors"}

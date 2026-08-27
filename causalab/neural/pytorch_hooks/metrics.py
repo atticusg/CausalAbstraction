@@ -2,7 +2,7 @@
 
 Every kind is gather-then-reduce over the read's logits and dataset
 columns. Per-example results come back as plain floats (or small
-structures for ``top_k``), ready for a parquet table.
+structures for ``top_k``), ready for a JSON metric table.
 
 Token resolution defaults to the repo's space-prefixed-first rule
 (``token_form: "auto"``): a column value resolves to the single token of

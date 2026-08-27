@@ -1,6 +1,10 @@
-"""The workflow-protocol document model (docs/workflow_protocol.md §5):
-parse rules, the derived schedule, digest semantics, and the shipped
-weekdays-8b worked example."""
+"""The workflow-protocol document model (docs/workflow_protocol.md v2 §5):
+parse rules, the reference grammar, the derived schedule, digest semantics, and
+the shipped weekdays-8b worked example.
+
+One test per checklist rule, asserted **by rule number** — so a renumbering of
+the spec has to be a deliberate edit here rather than a silent drift.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from causalab.protocol.workflow import (
+from causalab.workflow.document import (
     WorkflowError,
     is_workflow,
     load_workflow,
@@ -24,27 +28,70 @@ REPO = Path(__file__).resolve().parents[2]
 WEEKDAYS_WF = REPO / "causalab/configs/workflows/weekdays_8b.json"
 
 
-def tiny_workflow(tmp_path: Path) -> dict[str, Any]:
-    """A minimal two-step workflow over a copied method preset."""
+def _copy_locate(tmp_path: Path) -> None:
     methods = tmp_path / "methods"
     methods.mkdir(exist_ok=True)
     shutil.copyfile(
         REPO / "causalab/configs/methods/weekdays_locate_scan.json",
         methods / "locate.json",
     )
+
+
+def tiny_workflow(tmp_path: Path) -> dict[str, Any]:
+    """A minimal protocol → script workflow over a copied method preset."""
+    _copy_locate(tmp_path)
     return {
         "version": "1",
+        "output_dir": "run",
         "steps": {
-            "locate": {"type": "protocol", "document": "methods/locate.json"},
+            "locate": {
+                "type": "intervention_protocol",
+                "document": "methods/locate.json",
+            },
             "best": {
-                "type": "select",
-                "from": "locate",
-                "table": "iia.parquet",
-                "choose": "max",
-                "emit": {"best_layer": "sites.target.layer"},
+                "type": "script",
+                "script": {"module": "causalab.workflow.scripts.select"},
+                "inputs": {
+                    "table": {"step": "locate", "file": "iia.json"},
+                    "choose": "max",
+                    "emit": {"best_layer": "sites.target.layer"},
+                },
+                "outputs": {
+                    "values": {"file": "values.json", "keys": {"best_layer": 18}}
+                },
             },
         },
-        "save": [{"step": "best", "value": "values.json", "file_path": "best.json"}],
+    }
+
+
+def script_workflow(
+    tmp_path: Path, body: str = "def main(inputs, outputs):\n    pass\n"
+) -> dict[str, Any]:
+    """A workflow over a user script in the workflow directory."""
+    _copy_locate(tmp_path)
+    scripts = tmp_path / "scripts"
+    scripts.mkdir(exist_ok=True)
+    (scripts / "reduce.py").write_text(body)
+    return {
+        "version": "1",
+        "output_dir": "run",
+        "steps": {
+            "locate": {
+                "type": "intervention_protocol",
+                "document": "methods/locate.json",
+            },
+            "reduce": {
+                "type": "script",
+                "script": {"path": "scripts/reduce.py"},
+                "inputs": {"table": {"step": "locate", "file": "iia.json"}},
+                "outputs": {
+                    "out": {
+                        "file": "out.json",
+                        "columns": {"layer": "int64", "value": "float64"},
+                    }
+                },
+            },
+        },
     }
 
 
@@ -56,689 +103,608 @@ def expect_rule(rule: int, raw: dict[str, Any], env, tmp_path: Path) -> Workflow
 
 
 # --------------------------------------------------------------------------- #
-# parse rules
+# rule 1 — strict keys, closed enums
 # --------------------------------------------------------------------------- #
 
 
 def test_is_workflow_dispatches_on_steps():
-    assert is_workflow({"version": "1", "steps": {}, "save": []})
+    assert is_workflow({"version": "1", "output_dir": "r", "steps": {}})
     assert not is_workflow({"version": "1", "model": {}, "save": []})
 
 
-def test_rule_1_unknown_step_type():
+def test_rule_1_unknown_step_type_suggests():
     raw = {
         "version": "1",
+        "output_dir": "run",
         "steps": {"a": {"type": "protocols", "document": "x.json"}},
-        "save": [{"step": "a", "value": "x", "file_path": "x"}],
     }
     with pytest.raises(WorkflowError) as err:
         parse_workflow(raw)
     assert err.value.rule == 1 and "protocol" in str(err.value)
 
 
-def test_rule_2_save_must_be_last():
+def test_rule_1_transform_select_plot_are_gone():
+    """v1's three Python-flavoured step types collapsed into `script`."""
+    for retired in ("transform", "select", "plot"):
+        raw = {
+            "version": "1",
+            "output_dir": "run",
+            "steps": {"a": {"type": retired}},
+        }
+        with pytest.raises(WorkflowError) as err:
+            parse_workflow(raw)
+        assert err.value.rule == 1
+
+
+def test_rule_1_unknown_top_level_key():
+    raw = {"version": "1", "output_dir": "run", "steps": {}, "save": []}
+    with pytest.raises(WorkflowError) as err:
+        parse_workflow(raw)
+    assert err.value.rule == 1 and "save" in str(err.value)
+
+
+def test_rule_1_script_step_needs_script_inputs_outputs():
+    for missing in ("script", "inputs", "outputs"):
+        step = {
+            "type": "script",
+            "script": {"module": "causalab.workflow.scripts.select"},
+            "inputs": {},
+            "outputs": {"v": "v.json"},
+        }
+        del step[missing]
+        with pytest.raises(WorkflowError) as err:
+            parse_workflow({"version": "1", "output_dir": "run", "steps": {"a": step}})
+        assert err.value.rule in (1, 7)
+
+
+# --------------------------------------------------------------------------- #
+# rule 2 — section order and output_dir
+# --------------------------------------------------------------------------- #
+
+
+def test_rule_2_section_order_enforced():
     raw = {
         "version": "1",
-        "save": [{"step": "a", "value": "x", "file_path": "x"}],
-        "steps": {"a": {"type": "protocol", "document": "x.json"}},
+        "steps": {"a": {"type": "intervention_protocol", "document": "x.json"}},
+        "output_dir": "run",
     }
     with pytest.raises(WorkflowError) as err:
         parse_workflow(raw)
     assert err.value.rule == 2
 
 
+@pytest.mark.parametrize("bad", ["a/b", "/abs", "..", ".", "nested/dir"])
+def test_rule_2_output_dir_is_one_segment(bad):
+    raw = {
+        "version": "1",
+        "output_dir": bad,
+        "steps": {"a": {"type": "intervention_protocol", "document": "x.json"}},
+    }
+    with pytest.raises(WorkflowError) as err:
+        parse_workflow(raw)
+    assert err.value.rule == 2
+
+
+def test_rule_2_output_dir_required():
+    with pytest.raises(WorkflowError) as err:
+        parse_workflow(
+            {
+                "version": "1",
+                "steps": {"a": {"type": "intervention_protocol", "document": "x"}},
+            }
+        )
+    assert err.value.rule == 1
+
+
+# --------------------------------------------------------------------------- #
+# rule 3 — step names
+# --------------------------------------------------------------------------- #
+
+
 def test_rule_3_step_names_filesystem_safe():
     raw = {
         "version": "1",
-        "steps": {"a/b": {"type": "protocol", "document": "x.json"}},
-        "save": [{"step": "a/b", "value": "x", "file_path": "x"}],
+        "output_dir": "run",
+        "steps": {"a/b": {"type": "intervention_protocol", "document": "x.json"}},
     }
     with pytest.raises(WorkflowError) as err:
         parse_workflow(raw)
     assert err.value.rule == 3
 
 
-def test_rule_3_duplicate_save_paths():
-    raw = {
-        "version": "1",
-        "steps": {"a": {"type": "protocol", "document": "x.json"}},
-        "save": [
-            {"step": "a", "value": "x", "file_path": "same"},
-            {"step": "a", "value": "y", "file_path": "same"},
-        ],
+def test_rule_3_reserved_step_names():
+    """A step directory sits beside the run manifest and the sidecars."""
+    for reserved in ("workflow.json", "_step"):
+        raw = {
+            "version": "1",
+            "output_dir": "run",
+            "steps": {
+                reserved: {"type": "intervention_protocol", "document": "x.json"}
+            },
+        }
+        with pytest.raises(WorkflowError) as err:
+            parse_workflow(raw)
+        assert err.value.rule == 3
+
+
+# --------------------------------------------------------------------------- #
+# rule 4 — the reference grammar
+# --------------------------------------------------------------------------- #
+
+
+def test_rule_4_unknown_step_in_input(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["inputs"]["table"]["step"] = "ghost"
+    expect_rule(4, raw, env, tmp_path)
+
+
+def test_rule_4_input_names_a_file_the_producer_does_not_write(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["inputs"]["table"]["file"] = "ghost.json"
+    expect_rule(4, raw, env, tmp_path)
+
+
+def test_rule_4_after_names_unknown_step(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["after"] = ["ghost"]
+    expect_rule(4, raw, env, tmp_path)
+
+
+def test_rule_4_two_locators_refused(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["inputs"]["table"] = {
+        "step": "locate",
+        "file": "iia.json",
+        "path": "x.json",
     }
-    with pytest.raises(WorkflowError) as err:
-        parse_workflow(raw)
-    assert err.value.rule == 3
+    expect_rule(1, raw, env, tmp_path)
+
+
+def test_rule_4_two_selectors_refused(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["inputs"]["table"] = {
+        "step": "locate",
+        "file": "acts.safetensors",
+        "key": "x",
+        "entry": {"k": 1},
+    }
+    expect_rule(4, raw, env, tmp_path)
+
+
+def test_rule_4_key_selector_needs_a_json_locator(env, tmp_path):
+    """A selector must match its locator's format — decidable from the
+    filename alone, which is what having only two formats buys."""
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["inputs"]["table"] = {
+        "step": "locate",
+        "file": "rot.safetensors",
+        "key": "best_layer",
+    }
+    expect_rule(4, raw, env, tmp_path)
+
+
+def test_rule_4_entry_selector_needs_a_safetensors_locator(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["inputs"]["table"] = {
+        "step": "locate",
+        "file": "iia.json",
+        "entry": {"k": 1},
+    }
+    expect_rule(4, raw, env, tmp_path)
+
+
+def test_rule_4_repo_relative_path_must_exist(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["inputs"]["pins"] = {"path": "configs/definitely_absent.json"}
+    expect_rule(4, raw, env, tmp_path)
+
+
+def test_rule_4_repo_relative_path_that_exists_loads(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["inputs"]["pins"] = {
+        "path": "causalab/configs/methods/interchange.json"
+    }
+    loaded = load_workflow(raw, env, workflow_dir=tmp_path)
+    assert "best" in loaded.order
+
+
+def test_rule_4_absolute_path_is_not_existence_checked(env, tmp_path):
+    """Validation and execution routinely run on different hosts, so an
+    absolute path naming another machine's data must not fail a load."""
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["inputs"]["pins"] = {"path": "/mnt/nowhere/fit.json"}
+    loaded = load_workflow(raw, env, workflow_dir=tmp_path)
+    assert loaded.unchecked_paths == ("best.pins: /mnt/nowhere/fit.json",)
+
+
+def test_rule_4_key_must_be_declared_by_the_producer(env, tmp_path):
+    """The strengthened half of v1's rule 10: outputs are declared, so this is
+    checkable against *any* step rather than only a `select` step."""
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["consume"] = {
+        "type": "script",
+        "script": {"module": "causalab.workflow.scripts.select"},
+        "inputs": {"layer": {"step": "best", "file": "values.json", "key": "ghost"}},
+        "outputs": {"values": "out.json"},
+    }
+    err = expect_rule(4, raw, env, tmp_path)
+    assert "best_layer" in str(err)
+
+
+def test_rule_4_key_of_a_protocol_step_is_refused(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["consume"] = {
+        "type": "script",
+        "script": {"module": "causalab.workflow.scripts.select"},
+        "inputs": {"layer": {"step": "locate", "file": "iia.json", "key": "x"}},
+        "outputs": {"values": "out.json"},
+    }
+    expect_rule(4, raw, env, tmp_path)
 
 
 # --------------------------------------------------------------------------- #
-# load rules
+# rule 5 — acyclicity and the schedule
 # --------------------------------------------------------------------------- #
 
 
-def test_rule_4_from_names_unknown_step(env, tmp_path):
-    raw = tiny_workflow(tmp_path)
-    raw["steps"]["best"]["from"] = "ghost"
-    expect_rule(4, raw, env, tmp_path)
-
-
-def test_rule_4_missing_document(env, tmp_path):
-    raw = tiny_workflow(tmp_path)
-    raw["steps"]["locate"]["document"] = "methods/nowhere.json"
-    expect_rule(4, raw, env, tmp_path)
-
-
-def test_rule_4_save_value_must_be_an_output(env, tmp_path):
-    raw = tiny_workflow(tmp_path)
-    raw["save"] = [
-        {"step": "locate", "value": "ghost.parquet", "file_path": "g.parquet"}
-    ]
-    expect_rule(4, raw, env, tmp_path)
-
-
-def test_rule_5_cycles_refuse(env, tmp_path):
+def test_rule_5_cycle_via_after(env, tmp_path):
     raw = tiny_workflow(tmp_path)
     raw["steps"]["locate"]["after"] = ["best"]
-    expect_rule(5, raw, env, tmp_path)
+    err = expect_rule(5, raw, env, tmp_path)
+    assert "cycle" in str(err)
 
 
-def test_rule_6_dead_step(env, tmp_path):
+def test_schedule_levels_are_derived(env, tmp_path):
     raw = tiny_workflow(tmp_path)
-    raw["steps"]["spare"] = {
-        "type": "select",
-        "from": "locate",
-        "table": "iia.parquet",
-        "choose": "max",
-        "emit": {"x": "sites.target.layer"},
+    loaded = load_workflow(raw, env, workflow_dir=tmp_path)
+    assert loaded.levels == (("locate",), ("best",))
+    assert loaded.dependencies["best"] == ("locate",)
+
+
+def test_independent_steps_share_a_level(env, tmp_path):
+    """Parallelism nobody authored: two consumers of one producer."""
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["other"] = {
+        "type": "script",
+        "script": {"module": "causalab.workflow.scripts.select"},
+        "inputs": {
+            "table": {"step": "locate", "file": "iia.json"},
+            "emit": {"worst_layer": "sites.target.layer"},
+            "choose": "min",
+        },
+        "outputs": {"values": {"file": "values.json", "keys": {"worst_layer": 0}}},
+    }
+    loaded = load_workflow(raw, env, workflow_dir=tmp_path)
+    assert loaded.levels[0] == ("locate",)
+    assert set(loaded.levels[1]) == {"best", "other"}
+
+
+# --------------------------------------------------------------------------- #
+# rule 6 — script resolution, hashed and never imported
+# --------------------------------------------------------------------------- #
+
+
+def test_rule_6_script_is_a_locator(env, tmp_path):
+    """v1's `causalab:<name>` namespace is gone: a script names a module or a
+    path, so the document says which code runs instead of a registry deciding."""
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["script"] = "causalab:select"
+    err = expect_rule(6, raw, env, tmp_path)
+    assert "locator" in str(err)
+
+
+def test_rule_6_unknown_module(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["script"] = {"module": "causalab.analysis.no_such_thing"}
+    expect_rule(6, raw, env, tmp_path)
+
+
+def test_rule_6_module_must_be_a_dotted_identifier(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["script"] = {"module": "not/a/module.py"}
+    expect_rule(6, raw, env, tmp_path)
+
+
+def test_rule_6_exactly_one_locator(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["script"] = {
+        "module": "causalab.workflow.scripts.select",
+        "path": "scripts/x.py",
     }
     expect_rule(6, raw, env, tmp_path)
 
 
-def test_rule_6_after_is_not_a_sink(env, tmp_path):
-    """`after` orders without consuming — a step only anyone `after`s is
-    still dead."""
-    raw = tiny_workflow(tmp_path)
-    raw["steps"]["spare"] = {
-        "type": "select",
-        "from": "locate",
-        "table": "iia.parquet",
-        "choose": "max",
-        "emit": {"x": "sites.target.layer"},
-    }
-    raw["steps"]["best"]["after"] = ["spare"]
+def test_a_module_script_resolves_without_importing(env, tmp_path):
+    """`find_spec` gives the file; nothing executes at load (§4.2)."""
+    loaded = load_workflow(tiny_workflow(tmp_path), env, workflow_dir=tmp_path)
+    assert len(loaded.step_digests["best"]) == 64
+
+
+def test_rule_6_missing_user_script(env, tmp_path):
+    raw = script_workflow(tmp_path)
+    raw["steps"]["reduce"]["script"] = "scripts/absent.py"
     expect_rule(6, raw, env, tmp_path)
 
 
-def test_rule_7_emit_column_must_be_an_axis(env, tmp_path):
+def test_rule_6_script_must_not_escape_the_workflow_dir(env, tmp_path):
+    raw = script_workflow(tmp_path)
+    raw["steps"]["reduce"]["script"] = "../outside.py"
+    expect_rule(6, raw, env, tmp_path)
+
+
+def test_rule_6_script_must_parse(env, tmp_path):
+    raw = script_workflow(tmp_path, body="def main(:\n")
+    err = expect_rule(6, raw, env, tmp_path)
+    assert "does not parse" in str(err)
+
+
+def test_rule_6_script_must_declare_main(env, tmp_path):
+    raw = script_workflow(tmp_path, body="def other(inputs, outputs):\n    pass\n")
+    err = expect_rule(6, raw, env, tmp_path)
+    assert "main" in str(err)
+
+
+def test_script_hash_is_in_the_digest(env, tmp_path):
+    """Why the hash is in the digest at all: `--resume` is otherwise wrong."""
+    raw = script_workflow(tmp_path)
+    first = load_workflow(raw, env, workflow_dir=tmp_path)
+    (tmp_path / "scripts" / "reduce.py").write_text(
+        "def main(inputs, outputs):\n    return 1\n"
+    )
+    second = load_workflow(raw, env, workflow_dir=tmp_path)
+    assert first.digest != second.digest
+    assert first.step_digests["reduce"] != second.step_digests["reduce"]
+
+
+def test_a_nested_function_named_main_is_not_enough(env, tmp_path):
+    raw = script_workflow(
+        tmp_path,
+        body="def wrapper():\n    def main(inputs, outputs):\n        pass\n",
+    )
+    expect_rule(6, raw, env, tmp_path)
+
+
+# --------------------------------------------------------------------------- #
+# rule 7 — outputs
+# --------------------------------------------------------------------------- #
+
+
+def test_rule_7_outputs_non_empty(env, tmp_path):
     raw = tiny_workflow(tmp_path)
-    raw["steps"]["best"]["emit"] = {"best_layer": "sites.target.head"}
+    raw["steps"]["best"]["outputs"] = {}
     expect_rule(7, raw, env, tmp_path)
 
 
-def test_rule_8_table_extension(env, tmp_path):
+@pytest.mark.parametrize("bad", ["out.csv", "out.parquet", "out.txt", "out"])
+def test_rule_7_closed_output_formats(env, tmp_path, bad):
+    """Two record formats plus three visualization ones (§2.5). Anything else is
+    refused, not merely unknown."""
     raw = tiny_workflow(tmp_path)
-    raw["steps"]["best"]["table"] = "iia.json"
+    raw["steps"]["best"]["outputs"] = {"values": bad}
+    expect_rule(7, raw, env, tmp_path)
+
+
+def test_rule_7_output_must_stay_in_the_step_dir(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["outputs"] = {"values": "../escape.json"}
+    expect_rule(7, raw, env, tmp_path)
+
+
+def test_rule_7_two_slots_one_file(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["outputs"] = {"a": "same.json", "b": "same.json"}
+    expect_rule(7, raw, env, tmp_path)
+
+
+def test_rule_7_columns_and_keys_are_exclusive(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["outputs"] = {
+        "values": {
+            "file": "values.json",
+            "columns": {"a": "int64"},
+            "keys": {"best_layer": 1},
+        }
+    }
+    expect_rule(7, raw, env, tmp_path)
+
+
+def test_rule_7_unknown_column_dtype(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["outputs"] = {
+        "values": {"file": "values.json", "columns": {"a": "float32"}}
+    }
+    err = expect_rule(7, raw, env, tmp_path)
+    assert "float64" in str(err)
+
+
+@pytest.mark.parametrize("figure", ["fig.png", "fig.pdf", "fig.html"])
+def test_rule_7_visualization_formats_are_legal(env, tmp_path, figure):
+    """A figure carries no record, so it is a legal output that declares no
+    shape — png is the preferred default, pdf and html the deliberate ones."""
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["outputs"] = {"figure": figure}
+    loaded = load_workflow(raw, env, workflow_dir=tmp_path)
+    assert loaded.document.steps["best"].outputs["figure"].file == figure
+
+
+@pytest.mark.parametrize("figure", ["fig.png", "fig.pdf", "fig.html"])
+def test_rule_7_a_figure_declares_no_shape(env, tmp_path, figure):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["outputs"] = {
+        "figure": {"file": figure, "columns": {"a": "int64"}}
+    }
+    expect_rule(7, raw, env, tmp_path)
+
+
+def test_rule_7_safetensors_declares_no_columns(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["outputs"] = {
+        "values": {"file": "w.safetensors", "columns": {"a": "int64"}}
+    }
+    expect_rule(7, raw, env, tmp_path)
+
+
+# --------------------------------------------------------------------------- #
+# rule 8 — protocol steps and their `set`
+# --------------------------------------------------------------------------- #
+
+
+def test_rule_8_set_override_must_target_existing_path(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["locate"]["set"] = {"sites.ghost.layer": 3}
     expect_rule(8, raw, env, tmp_path)
 
 
-def test_rule_9_set_override_must_target_existing_path(env, tmp_path):
+def test_rule_8_missing_document(env, tmp_path):
     raw = tiny_workflow(tmp_path)
-    raw["steps"]["locate"]["set"] = {"sites.ghost.layer": 3}
-    expect_rule(9, raw, env, tmp_path)
+    raw["steps"]["locate"]["document"] = "methods/absent.json"
+    expect_rule(4, raw, env, tmp_path)
 
 
-def test_inner_load_errors_surface_as_rule_4(env, tmp_path):
+def test_rule_8_inner_load_errors_surface(env, tmp_path):
     raw = tiny_workflow(tmp_path)
-    raw["steps"]["locate"]["set"] = {"reads.v_cf.site": "nowhere"}
-    err = expect_rule(4, raw, env, tmp_path)
+    raw["steps"]["locate"]["set"] = {"model.key": "not-a-registered-model"}
+    err = expect_rule(8, raw, env, tmp_path)
     assert "does not load" in str(err)
 
 
 # --------------------------------------------------------------------------- #
-# schedule + digests on the shipped worked example
+# rule 10 / 11 — runtime and is_deterministic
 # --------------------------------------------------------------------------- #
 
 
-class TestWeekdaysWorkflow:
-    def test_loads_with_the_spec_schedule(self, env):
-        loaded = load_workflow(WEEKDAYS_WF, env)
-        assert loaded.order == (
-            "locate",
-            "best",
-            "fit",
-            "best_fit",
-            "apply",
-            "scan_heatmap",
-            "iia_by_k",
-        )
-        assert loaded.levels == (
-            ("locate",),
-            ("best", "scan_heatmap"),
-            ("fit",),
-            ("best_fit", "iia_by_k"),
-            ("apply",),
-        )
-
-    def test_digest_kinds_split_by_dependency(self, env):
-        loaded = load_workflow(WEEKDAYS_WF, env)
-        assert loaded.inner_digest_kind == {
-            "locate": "campaign",
-            "fit": "authored",
-            "apply": "authored",
-        }
-        # the independent step's stamp IS the standalone campaign digest
-        assert loaded.inner_digests["locate"] == loaded.inner["locate"].document_digest
-
-    def test_deterministic(self, env):
-        first = load_workflow(WEEKDAYS_WF, env)
-        second = load_workflow(WEEKDAYS_WF, env)
-        assert first.digest == second.digest
-        assert first.canonical == second.canonical
-
-    def test_digest_tracks_the_inner_document(self, env, tmp_path):
-        """Editing a referenced method file changes the workflow digest —
-        the §7 content-addressing claim."""
-        workflow_dir = tmp_path / "workflows"
-        shutil.copytree(WEEKDAYS_WF.parent.parent, tmp_path, dirs_exist_ok=True)
-        target = tmp_path / "methods/weekdays_locate_scan.json"
-        original = load_workflow(workflow_dir / "weekdays_8b.json", env)
-        doc = json.loads(target.read_text())
-        doc["description"] = "same campaign, different words"
-        target.write_text(json.dumps(doc))
-        edited = load_workflow(workflow_dir / "weekdays_8b.json", env)
-        assert edited.digest != original.digest
-
-
-class TestCanonicalForm:
-    def test_defaults_materialized(self, env):
-        loaded = load_workflow(WEEKDAYS_WF, env)
-        best = loaded.canonical["steps"]["best"]
-        assert best["aggregate"] == "mean"
-        assert best["value"] == "value"
-
-    def test_protocol_steps_stamp_document_digests(self, env):
-        loaded = load_workflow(WEEKDAYS_WF, env)
-        for name in ("locate", "fit", "apply"):
-            entry = loaded.canonical["steps"][name]
-            assert len(entry["document_digest"]) == 64
-            assert entry["digest_kind"] in ("campaign", "authored")
-
-
-# --------------------------------------------------------------------------- #
-# regressions from the adversarial review of the workflow layer
-# --------------------------------------------------------------------------- #
-
-
-def test_redundant_after_on_a_data_edge_still_counts_as_consumption(env, tmp_path):
-    """`after` naming the step's own data producer is redundant but legal —
-    it must not erase the consumption edge (the W6 wrong-reject)."""
+def test_rule_10_isolated_step_declares_deps(env, tmp_path):
     raw = tiny_workflow(tmp_path)
-    raw["steps"]["best"]["after"] = ["locate"]
+    raw["steps"]["best"]["runtime"] = {"isolate": True}
+    expect_rule(10, raw, env, tmp_path)
+
+
+def test_rule_10_runtime_env_is_a_list_of_names(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["runtime"] = {"isolate": True, "deps": ["x"], "env": "TOKEN"}
+    expect_rule(10, raw, env, tmp_path)
+
+
+def test_runtime_is_in_the_digest(env, tmp_path):
+    """A different dependency set is a different computation, so `--resume`
+    must not skip across a change to it."""
+    raw = tiny_workflow(tmp_path)
+    plain = load_workflow(raw, env, workflow_dir=tmp_path).digest
+    raw["steps"]["best"]["runtime"] = {"isolate": True, "deps": ["umap-learn"]}
+    isolated = load_workflow(raw, env, workflow_dir=tmp_path).digest
+    assert plain != isolated
+
+
+def test_rule_11_is_deterministic_is_a_boolean(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["is_deterministic"] = "no"
+    expect_rule(11, raw, env, tmp_path)
+
+
+def test_nondeterministic_steps_are_reported(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["is_deterministic"] = False
     loaded = load_workflow(raw, env, workflow_dir=tmp_path)
-    assert loaded.order == ("locate", "best")
+    assert loaded.nondeterministic == ("best",)
 
 
-def test_inner_save_paths_are_outputs_not_loads(env, tmp_path):
-    """An inner document whose SAVE paths sit under a step name must not
-    fabricate dependency edges — no self-cycle, no schedule inversion, and
-    the digest kind stays campaign."""
+def test_is_deterministic_is_in_the_digest(env, tmp_path):
     raw = tiny_workflow(tmp_path)
-    doc = json.loads((tmp_path / "methods/locate.json").read_text())
-    doc["save"] = [
-        {**entry, "file_path": f"locate/{entry['file_path']}"} for entry in doc["save"]
+    a = load_workflow(raw, env, workflow_dir=tmp_path).digest
+    raw["steps"]["best"]["is_deterministic"] = False
+    b = load_workflow(raw, env, workflow_dir=tmp_path).digest
+    assert a != b
+
+
+# --------------------------------------------------------------------------- #
+# gone in v2: the sink rule and the save section
+# --------------------------------------------------------------------------- #
+
+
+def test_a_terminal_step_no_one_consumes_is_legal(env, tmp_path):
+    """v1's sink rule refused this; everything declared is now published, so a
+    terminal plot or report step needs no blessing."""
+    raw = tiny_workflow(tmp_path)
+    loaded = load_workflow(raw, env, workflow_dir=tmp_path)
+    assert "best" in loaded.order  # nothing consumes `best`, and that is fine
+
+
+def test_save_section_is_rejected(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["save"] = [{"step": "best", "value": "values.json", "file_path": "b.json"}]
+    with pytest.raises(WorkflowError) as err:
+        parse_workflow(raw)
+    assert err.value.rule == 1
+
+
+# --------------------------------------------------------------------------- #
+# canonical form and digests (§7)
+# --------------------------------------------------------------------------- #
+
+
+def test_output_dir_is_excluded_from_the_digest(env, tmp_path):
+    """It names where the run lands, not what the run is."""
+    raw = tiny_workflow(tmp_path)
+    first = load_workflow(raw, env, workflow_dir=tmp_path)
+    raw["output_dir"] = "somewhere_else"
+    second = load_workflow(raw, env, workflow_dir=tmp_path)
+    assert first.digest == second.digest
+
+
+def test_inner_document_edits_move_the_workflow_digest(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    before = load_workflow(raw, env, workflow_dir=tmp_path).digest
+    doc = tmp_path / "methods/locate.json"
+    inner = json.loads(doc.read_text())
+    inner["description"] = "edited"
+    doc.write_text(json.dumps(inner))
+    after = load_workflow(raw, env, workflow_dir=tmp_path).digest
+    assert before != after
+
+
+def test_canonical_form_carries_no_output_dir(env, tmp_path):
+    loaded = load_workflow(tiny_workflow(tmp_path), env, workflow_dir=tmp_path)
+    assert "output_dir" not in loaded.canonical
+    assert loaded.canonical["steps"]["best"]["script_sha256"]
+
+
+def test_inputs_are_sorted_in_the_canonical_form(env, tmp_path):
+    raw = tiny_workflow(tmp_path)
+    raw["steps"]["best"]["inputs"] = {
+        "zzz": 1,
+        "table": {"step": "locate", "file": "iia.json"},
+        "emit": {"best_layer": "sites.target.layer"},
+        "aaa": 2,
+    }
+    loaded = load_workflow(raw, env, workflow_dir=tmp_path)
+    keys = list(loaded.canonical["steps"]["best"]["inputs"])
+    assert keys == sorted(keys)
+
+
+# --------------------------------------------------------------------------- #
+# the shipped worked example (§10)
+# --------------------------------------------------------------------------- #
+
+
+def test_weekdays_example_loads_with_the_spec_schedule(env):
+    loaded = load_workflow(WEEKDAYS_WF, env)
+    assert [sorted(level) for level in loaded.levels] == [
+        ["locate"],
+        ["best", "scan_heatmap"],
+        ["fit"],
+        ["best_fit", "iia_by_k"],
+        ["apply"],
     ]
-    (tmp_path / "methods/locate.json").write_text(json.dumps(doc))
-    raw["save"].append(
-        {"step": "locate", "value": "locate/iia.parquet", "file_path": "iia.parquet"}
-    )
-    raw["steps"]["best"]["table"] = "locate/iia.parquet"
-    loaded = load_workflow(raw, env, workflow_dir=tmp_path)
-    assert loaded.inner_digest_kind["locate"] == "campaign"
-    assert loaded.dependencies["locate"] == ()
-
-
-def test_rule_10_artifact_ref_must_name_a_select_step(env, tmp_path):
-    raw = tiny_workflow(tmp_path)
-    raw["steps"]["fit"] = {
-        "type": "protocol",
-        "document": "methods/locate.json",
-        "set": {"sites.target.layer": {"artifact": "locate", "key": "anything"}},
+    assert loaded.inner_digest_kind == {
+        "locate": "campaign",
+        "fit": "authored",
+        "apply": "authored",
     }
-    raw["save"].append(
-        {"step": "fit", "value": "iia.parquet", "file_path": "fit_iia.parquet"}
-    )
-    expect_rule(10, raw, env, tmp_path)
+    assert len(loaded.inner["locate"].expansion.points) == 64
+    assert len(loaded.inner["fit"].expansion.points) == 9
 
 
-def test_rule_10_run_tree_file_path_must_be_saved(env, tmp_path):
-    raw = tiny_workflow(tmp_path)
-    apply_doc = json.loads(
-        (REPO / "causalab/configs/methods/weekdays_das_apply.json").read_text()
-    )
-    (tmp_path / "methods/apply.json").write_text(json.dumps(apply_doc))
-    raw["steps"]["apply"] = {
-        "type": "protocol",
-        "document": "methods/apply.json",
-        "set": {"featurizers.rot.file_path": "locate/GHOST.safetensors"},
-    }
-    raw["save"].append(
-        {"step": "apply", "value": "iia.parquet", "file_path": "apply_iia.parquet"}
-    )
-    expect_rule(10, raw, env, tmp_path)
-
-
-@pytest.mark.parametrize(
-    "file_path", ["../escape.json", "/tmp/abs.json", "locate", "workflow.json"]
-)
-def test_rule_3_save_paths_contained_and_unreserved(env, tmp_path, file_path):
-    raw = tiny_workflow(tmp_path)
-    raw["save"] = [{"step": "best", "value": "values.json", "file_path": file_path}]
-    with pytest.raises(WorkflowError) as err:
-        load_workflow(raw, env, workflow_dir=tmp_path)
-    assert err.value.rule == 3
-
-
-def test_rule_8_plot_path_contained(env, tmp_path):
-    raw = tiny_workflow(tmp_path)
-    raw["steps"]["fig"] = {
-        "type": "plot",
-        "plot": "lines",
-        "from": "locate",
-        "table": "iia.parquet",
-        "x": "sites.target.layer",
-        "series": "positions.tap",
-        "file_path": "../../escape.png",
-    }
-    raw["save"].append(
-        {"step": "fig", "value": "../../escape.png", "file_path": "f.png"}
-    )
-    with pytest.raises(WorkflowError) as err:
-        load_workflow(raw, env, workflow_dir=tmp_path)
-    assert err.value.rule == 8
-
-
-def test_rule_1_plot_kind_strictness():
-    base = {
-        "type": "plot",
-        "from": "a",
-        "table": "t.parquet",
-        "x": "x",
-        "file_path": "f.png",
-    }
-    lines_with_y = {
-        "version": "1",
-        "steps": {
-            "a": {"type": "protocol", "document": "d.json"},
-            "p": {**base, "plot": "lines", "y": "y"},
-        },
-        "save": [{"step": "p", "value": "f.png", "file_path": "f.png"}],
-    }
-    with pytest.raises(WorkflowError) as err:
-        parse_workflow(lines_with_y)
-    assert err.value.rule == 1
-    heatmap_with_series = {
-        "version": "1",
-        "steps": {
-            "a": {"type": "protocol", "document": "d.json"},
-            "p": {**base, "plot": "heatmap", "y": "y", "series": "s"},
-        },
-        "save": [{"step": "p", "value": "f.png", "file_path": "f.png"}],
-    }
-    with pytest.raises(WorkflowError) as err:
-        parse_workflow(heatmap_with_series)
-    assert err.value.rule == 1
-
-
-def test_rule_7_value_column_checked(env, tmp_path):
-    raw = tiny_workflow(tmp_path)
-    raw["steps"]["best"]["value"] = "GHOST_COLUMN"
-    expect_rule(7, raw, env, tmp_path)
-
-
-def test_rule_7_heatmap_must_cover_every_axis(env, tmp_path):
-    """The locate document has two axes; a heatmap on one of them would
-    collapse the other into duplicate cells — refused at load, not at the
-    end of an expensive producer run."""
-    raw = tiny_workflow(tmp_path)
-    raw["steps"]["fig"] = {
-        "type": "plot",
-        "plot": "lines",
-        "from": "locate",
-        "table": "iia.parquet",
-        "x": "sites.target.layer",  # positions.tap left uncovered
-        "file_path": "f.png",
-    }
-    raw["save"].append({"step": "fig", "value": "f.png", "file_path": "f.png"})
-    expect_rule(7, raw, env, tmp_path)
-
-
-def test_deferred_doc_with_external_featurizer_loads(env, tmp_path):
-    """A step-dependent document that ALSO loads an external fitted bundle
-    must not have that bundle's ArtifactIdentity checked against the
-    representative-substituted document at load — the check runs with real
-    values at run time (the fixture is stamped layer 18; the representative
-    layer is 0)."""
-    raw = tiny_workflow(tmp_path)
-    apply_doc = json.loads(
-        (REPO / "causalab/configs/methods/weekdays_das_apply.json").read_text()
-    )
-    (tmp_path / "methods/apply.json").write_text(json.dumps(apply_doc))
-    raw["steps"]["apply"] = {
-        "type": "protocol",
-        "document": "methods/apply.json",
-        "set": {"sites.target.layer": {"artifact": "best", "key": "best_layer"}},
-    }
-    raw["save"].append(
-        {"step": "apply", "value": "iia.parquet", "file_path": "apply_iia.parquet"}
-    )
-    loaded = load_workflow(raw, env, workflow_dir=tmp_path)
-    assert loaded.inner_digest_kind["apply"] == "authored"
-
-
-# --------------------------------------------------------------------------- #
-# transform steps (§2.4)
-# --------------------------------------------------------------------------- #
-
-
-def transform_workflow(tmp_path: Path) -> dict[str, Any]:
-    """A minimal harvest → fit_pca → plot workflow."""
-    methods = tmp_path / "methods"
-    methods.mkdir(exist_ok=True)
-    shutil.copyfile(
-        REPO / "causalab/configs/methods/harvest.json", methods / "harvest.json"
-    )
-    return {
-        "version": "1",
-        "steps": {
-            "harvest": {"type": "protocol", "document": "methods/harvest.json"},
-            "fit": {
-                "type": "transform",
-                "op": "fit_pca@1",
-                "inputs": {
-                    "acts": {"step": "harvest", "value": "acts_L8_ans.safetensors"}
-                },
-                "params": {"k": 2},
-                "outputs": {
-                    "weight": "weight.safetensors",
-                    "spectrum": "spectrum.parquet",
-                },
-            },
-            "scree": {
-                "type": "plot",
-                "plot": "lines",
-                "from": "fit",
-                "table": "spectrum.parquet",
-                "x": "pc",
-                "value": "explained_variance_ratio",
-                "file_path": "scree.png",
-            },
-        },
-        "save": [{"step": "scree", "value": "scree.png", "file_path": "scree.png"}],
-    }
-
-
-class TestTransformParse:
-    def test_it_loads_and_schedules_after_its_input(self, env, tmp_path):
-        """`inputs` ARE the dependency edges — nobody authored this order."""
-        loaded = load_workflow(transform_workflow(tmp_path), env, workflow_dir=tmp_path)
-        assert loaded.order == ("harvest", "fit", "scree")
-        assert loaded.dependencies["fit"] == ("harvest",)
-
-    def test_rule_1_unknown_op_suggests(self, env, tmp_path):
-        raw = transform_workflow(tmp_path)
-        raw["steps"]["fit"]["op"] = "fit_pcaa@1"
-        err = expect_rule(1, raw, env, tmp_path)
-        assert "fit_pca" in str(err)
-
-    def test_rule_1_unknown_version_of_a_known_op(self, env, tmp_path):
-        raw = transform_workflow(tmp_path)
-        raw["steps"]["fit"]["op"] = "fit_pca@9"
-        err = expect_rule(1, raw, env, tmp_path)
-        assert "has no version 9" in str(err)
-
-    def test_rule_1_a_missing_output_slot(self, env, tmp_path):
-        raw = transform_workflow(tmp_path)
-        del raw["steps"]["fit"]["outputs"]["spectrum"]
-        err = expect_rule(1, raw, env, tmp_path)
-        assert "spectrum" in str(err)
-
-    def test_rule_1_an_undeclared_output_slot(self, env, tmp_path):
-        raw = transform_workflow(tmp_path)
-        raw["steps"]["fit"]["outputs"]["loadings"] = "loadings.parquet"
-        err = expect_rule(1, raw, env, tmp_path)
-        assert "no output slot 'loadings'" in str(err)
-
-    def test_rule_1_an_undeclared_input_slot(self, env, tmp_path):
-        raw = transform_workflow(tmp_path)
-        raw["steps"]["fit"]["inputs"]["extra"] = {
-            "step": "harvest",
-            "value": "x.safetensors",
-        }
-        expect_rule(1, raw, env, tmp_path)
-
-    def test_rule_1_a_bad_param_type(self, env, tmp_path):
-        raw = transform_workflow(tmp_path)
-        raw["steps"]["fit"]["params"]["k"] = "2"
-        err = expect_rule(1, raw, env, tmp_path)
-        assert "integer" in str(err)
-
-    def test_rule_1_a_missing_required_param(self, env, tmp_path):
-        raw = transform_workflow(tmp_path)
-        raw["steps"]["fit"]["params"] = {}
-        err = expect_rule(1, raw, env, tmp_path)
-        assert "missing required parameter 'k'" in str(err)
-
-    def test_rule_1_an_unknown_param_suggests(self, env, tmp_path):
-        raw = transform_workflow(tmp_path)
-        raw["steps"]["fit"]["params"]["kk"] = 2
-        err = expect_rule(1, raw, env, tmp_path)
-        assert "unknown parameter 'kk'" in str(err)
-
-    def test_rule_8_an_output_slot_keeps_its_file_kind(self, env, tmp_path):
-        """A tensor slot cannot be written as a .parquet — the record says
-        which format the slot is, so a typo is a load error, not a surprise
-        at read time."""
-        raw = transform_workflow(tmp_path)
-        raw["steps"]["fit"]["outputs"]["weight"] = "weight.parquet"
-        expect_rule(8, raw, env, tmp_path)
-
-    def test_rule_4_an_input_naming_an_unknown_step(self, env, tmp_path):
-        raw = transform_workflow(tmp_path)
-        raw["steps"]["fit"]["inputs"]["acts"]["step"] = "nowhere"
-        expect_rule(4, raw, env, tmp_path)
-
-    def test_rule_4_an_input_the_producer_does_not_save(self, env, tmp_path):
-        raw = transform_workflow(tmp_path)
-        raw["steps"]["fit"]["inputs"]["acts"]["value"] = "acts_L99.safetensors"
-        err = expect_rule(4, raw, env, tmp_path)
-        assert "produces no 'acts_L99.safetensors'" in str(err)
-
-
-class TestTransformAsAProducer:
-    def test_rule_7_columns_are_checked_against_the_declaration(self, env, tmp_path):
-        """A transform producer has no sweep axes; its op's declared columns
-        are what rule 7 checks instead."""
-        raw = transform_workflow(tmp_path)
-        raw["steps"]["scree"]["x"] = "component"
-        err = expect_rule(7, raw, env, tmp_path)
-        assert "explained_variance_ratio" in str(err)  # what it does have
-
-    def test_rule_7_there_is_no_implicit_value_column(self, env, tmp_path):
-        """`value` defaults to 'value' for a protocol producer's metric table;
-        a transform table is only what its op declares, so the default must be
-        refused rather than silently failing at run time."""
-        raw = transform_workflow(tmp_path)
-        del raw["steps"]["scree"]["value"]
-        err = expect_rule(7, raw, env, tmp_path)
-        assert "'value'" in str(err)
-
-    def test_a_select_step_may_rank_a_transform_table(self, env, tmp_path):
-        raw = transform_workflow(tmp_path)
-        raw["steps"]["top"] = {
-            "type": "select",
-            "from": "fit",
-            "table": "spectrum.parquet",
-            "choose": "max",
-            "value": "explained_variance_ratio",
-            "emit": {"best_pc": "pc"},
-        }
-        raw["save"].append(
-            {"step": "top", "value": "values.json", "file_path": "top.json"}
-        )
-        loaded = load_workflow(raw, env, workflow_dir=tmp_path)
-        assert loaded.dependencies["top"] == ("fit",)
-
-    def test_rule_4_a_tensor_slot_cannot_be_ranked(self, env, tmp_path):
-        raw = transform_workflow(tmp_path)
-        raw["steps"]["scree"]["table"] = "weight.safetensors"
-        expect_rule(8, raw, env, tmp_path)  # .parquet is required first
-
-    def test_a_protocol_step_may_load_a_transform_tensor(self, env, tmp_path):
-        """Rule 10's run-tree half: the fitted-artifact direction #37 needs."""
-        raw = transform_workflow(tmp_path)
-        project = {
-            "version": "1",
-            "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
-            "data": {"base": {"dataset": "weekdays/train", "field": "input"}},
-            "positions": {"tap": {"index": -1}},
-            "sites": {"L0": {"component": "block_output", "layer": 0}},
-            "featurizers": {
-                "basis": {"kind": "pca", "k": 2, "file_path": "fit/weight.safetensors"}
-            },
-            "reads": {
-                "coords": {
-                    "site": "L0",
-                    "pos": "tap",
-                    "model": "original",
-                    "input": "base",
-                    "featurizer": "basis",
-                }
-            },
-            "save": [
-                {
-                    "value": "coords",
-                    "model": "original",
-                    "input": "base",
-                    "file_path": "coords.safetensors",
-                }
-            ],
-        }
-        (tmp_path / "methods/project.json").write_text(json.dumps(project))
-        raw["steps"]["project"] = {
-            "type": "protocol",
-            "document": "methods/project.json",
-        }
-        raw["save"].append(
-            {
-                "step": "project",
-                "value": "coords.safetensors",
-                "file_path": "coords.safetensors",
-            }
-        )
-        loaded = load_workflow(raw, env, workflow_dir=tmp_path)
-        assert "fit" in loaded.dependencies["project"]
-
-    def test_rule_10_a_protocol_step_cannot_load_what_a_transform_never_writes(
-        self, env, tmp_path
-    ):
-        raw = transform_workflow(tmp_path)
-        project = {
-            "version": "1",
-            "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
-            "data": {"base": {"dataset": "weekdays/train", "field": "input"}},
-            "positions": {"tap": {"index": -1}},
-            "sites": {"L0": {"component": "block_output", "layer": 0}},
-            "featurizers": {
-                "basis": {"kind": "pca", "k": 2, "file_path": "fit/basis.safetensors"}
-            },
-            "reads": {
-                "coords": {
-                    "site": "L0",
-                    "pos": "tap",
-                    "model": "original",
-                    "input": "base",
-                    "featurizer": "basis",
-                }
-            },
-            "save": [
-                {
-                    "value": "coords",
-                    "model": "original",
-                    "input": "base",
-                    "file_path": "coords.safetensors",
-                }
-            ],
-        }
-        (tmp_path / "methods/project.json").write_text(json.dumps(project))
-        raw["steps"]["project"] = {
-            "type": "protocol",
-            "document": "methods/project.json",
-        }
-        raw["save"].append(
-            {
-                "step": "project",
-                "value": "coords.safetensors",
-                "file_path": "coords.safetensors",
-            }
-        )
-        err = expect_rule(10, raw, env, tmp_path)
-        assert "saves no 'basis.safetensors'" in str(err)
-
-
-class TestTransformCanonicalForm:
-    def test_the_op_version_and_params_enter_the_form(self, env, tmp_path):
-        loaded = load_workflow(transform_workflow(tmp_path), env, workflow_dir=tmp_path)
-        entry = loaded.canonical["steps"]["fit"]
-        assert entry["op"] == "fit_pca@1"
-        assert entry["params"] == {"k": 2}
-        assert entry["outputs"] == {
-            "weight": "weight.safetensors",
-            "spectrum": "spectrum.parquet",
-        }
-        assert entry["inputs"] == {
-            "acts": {"step": "harvest", "value": "acts_L8_ans.safetensors"}
-        }
-
-    def test_optional_selectors_add_no_key_when_unauthored(self, env, tmp_path):
-        loaded = load_workflow(transform_workflow(tmp_path), env, workflow_dir=tmp_path)
-        acts = loaded.canonical["steps"]["fit"]["inputs"]["acts"]
-        assert "slot" not in acts and "entry" not in acts
-
-    def test_a_param_change_moves_the_digest(self, env, tmp_path):
-        original = load_workflow(
-            transform_workflow(tmp_path), env, workflow_dir=tmp_path
-        )
-        raw = transform_workflow(tmp_path)
-        raw["steps"]["fit"]["params"]["k"] = 3
-        edited = load_workflow(raw, env, workflow_dir=tmp_path)
-        assert edited.digest != original.digest
-
-    def test_each_transform_step_gets_a_provenance_digest(self, env, tmp_path):
-        loaded = load_workflow(transform_workflow(tmp_path), env, workflow_dir=tmp_path)
-        assert len(loaded.transform_digests["fit"]) == 64
-        assert set(loaded.transform_digests) == {"fit"}
-
-
-# --------------------------------------------------------------------------- #
-# shipped-workflow digest pins
-# --------------------------------------------------------------------------- #
-
-WORKFLOW_DIR = REPO / "causalab/configs/workflows"
-WORKFLOW_PINS = Path(__file__).parent / "workflow_digests.json"
-
-
-class TestShippedWorkflowDigests:
-    """`workflow_digests.json`, regenerated by update_workflow_digests.py.
-
-    A diff is a loader migration (§7), never a silent re-pin — and it is what
-    makes "a new step type changed no existing document" a check rather than
-    a claim."""
-
-    def test_every_shipped_workflow_is_pinned(self):
-        pins = json.loads(WORKFLOW_PINS.read_text())
-        assert sorted(pins) == sorted(p.name for p in WORKFLOW_DIR.glob("*.json"))
-
-    def test_digests_match_their_pins(self, env):
-        for name, digest in json.loads(WORKFLOW_PINS.read_text()).items():
-            assert load_workflow(WORKFLOW_DIR / name, env).digest == digest, name
+def test_weekdays_example_digest_is_pinned(env):
+    pins = json.loads((Path(__file__).parent / "workflow_digests.json").read_text())
+    loaded = load_workflow(WEEKDAYS_WF, env)
+    assert loaded.digest == pins["weekdays_8b.json"]

@@ -139,7 +139,7 @@ def _train_doc():
         "batch": {"pairs": 2},
     }
     doc["save"].append(
-        {"value": "ce", "model": "patched", "input": "base", "file_path": "ce.parquet"}
+        {"value": "ce", "model": "patched", "input": "base", "file_path": "ce.json"}
     )
     doc["save"].append({"value": "rot", "site": "tgt", "file_path": "rot.safetensors"})
     return doc
@@ -206,7 +206,7 @@ def test_rule_10_saving_a_write_is_not_saveable_not_undeclared():
             "value": "patch",
             "model": "patched",
             "input": "base",
-            "file_path": "p.parquet",
+            "file_path": "p.json",
         }
     )
     err = expect_rule(10, doc)
@@ -221,7 +221,7 @@ def test_rule_10_duplicate_file_path():
             "value": "logits",
             "model": "patched",
             "input": "base",
-            "file_path": "ld.parquet",
+            "file_path": "ld.json",
         }
     )
     expect_rule(10, doc)
@@ -229,7 +229,7 @@ def test_rule_10_duplicate_file_path():
 
 def test_rule_10_wrong_extension():
     doc = base_doc()
-    doc["save"][0]["file_path"] = "ld.safetensors"  # a metric must be .parquet
+    doc["save"][0]["file_path"] = "ld.safetensors"  # a metric must be .json
     expect_rule(10, doc)
 
 

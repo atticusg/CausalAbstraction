@@ -34,10 +34,9 @@ dependencies = [
     "openai>=1.50.0",
     "datasets>=2.20.0",
     "python-dotenv>=1.0.0",
-    # the protocol stack: YAML authoring surface + parquet metric tables
-    # (both were transitive before — via hydra-core/omegaconf and datasets)
+    # the protocol stack's YAML authoring surface (transitive before, via
+    # hydra-core/omegaconf). Metric tables are JSON, so no parquet engine.
     "pyyaml>=6.0",
-    "pyarrow>=15.0",
     # transform ops: the t-distribution CDF `paired_ttest@1` needs. Transitive
     # before (via scikit-learn), but an op's dependency belongs in the record
     # of what this package requires, not in another library's install tree.
@@ -71,8 +70,8 @@ exclude_lines = [
 ]
 
 [project.scripts]
-# The protocol CLI (docs/intervention_protocol.md §9): run / validate / explain / digest
-causalab = "causalab.protocol.cli:main"
+# One entry point over both document types; it dispatches on the `steps` section
+causalab = "causalab.cli:main"
 
 [tool.uv.build-backend]
 module-name = ["causalab"]

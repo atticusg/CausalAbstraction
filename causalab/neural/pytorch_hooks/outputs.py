@@ -2,7 +2,8 @@
 
 Tensors (reads, featurizer bundles) land in ``.safetensors`` with the
 point's ``ArtifactIdentity`` in the header; per-example metric tables land
-in ``.parquet``. In swept documents the authored ``file_path`` is
+in ``.json`` as an array of row objects (IM spec §2.12 — JSON and safetensors
+are the only two formats). In swept documents the authored ``file_path`` is
 unchanged: axis coordinates become columns of the metric tables and key
 suffixes on tensor entries (``rot[k=8,seed=0]``).
 
@@ -27,6 +28,7 @@ from causalab.protocol.bundles import RAGGED_SUFFIX, entry_key
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.resolve import build_artifact_identity
 from causalab.protocol.sweep import coordinate_label, short_coords
+from causalab.protocol.tables import write_table
 
 __all__ = ["MetricTable", "TensorFile", "write_outputs"]
 
@@ -252,10 +254,8 @@ def write_outputs(
         save_file(tensors.entries, str(target), metadata=metadata)
         written[rel] = target
     for rel, table in metric_files.items():
-        import pandas as pd
-
         target = output_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(table.rows).to_parquet(target, index=False)
+        write_table(target, table.rows)
         written[rel] = target
     return written
