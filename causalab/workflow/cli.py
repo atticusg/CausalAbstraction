@@ -56,7 +56,9 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
                 continue
             register_model_key(inner_raw)
 
-    loaded = load_workflow(args.document.resolve(), env, overrides=dict(args.parsed_set))
+    loaded = load_workflow(
+        args.document.resolve(), env, overrides=dict(args.parsed_set)
+    )
     if args.verb == "validate":
         if getattr(args, "data", False):
             for name in loaded.order:
