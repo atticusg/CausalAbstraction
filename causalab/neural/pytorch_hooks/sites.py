@@ -43,6 +43,7 @@ from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import SiteSpec
 
 from causalab.neural.pytorch_hooks.loading import ModelBundle
+from causalab.neural.pytorch_hooks.attention_probs import ATTENTION_PROBS_LAYOUT
 from causalab.neural.pytorch_hooks.layout import Layout
 
 __all__ = [
@@ -360,11 +361,23 @@ def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
     # after PR4 lands attention_probs; the second is a roadmap statement.
     _check_stream(bundle, component, spec, layer)
 
-    if component in ("attention_probs", "expert_output"):
+    if component == "attention_probs":
+        # element 1 of the mixer's (attn_output, attn_weights). Reading is an
+        # ordinary tap; WRITING is not — see the attention_probs module, which
+        # owns that half. `native` because this shape is (batch, heads, query,
+        # key) and honestly undescribed (follow-up F1), not because it is
+        # contract-shaped.
+        return ResolvedSite(
+            module=_attn(bundle, layer),
+            kind="out",
+            layer=layer,
+            component=component,
+            layout=ATTENTION_PROBS_LAYOUT,
+            tuple_index=1,
+        )
+    if component == "expert_output":
         raise NotImplementedError(
             f"the pytorch_hooks backend has no tap for {component!r} yet — "
-            "attention_probs needs an attention-internal surface (this backend "
-            "declares no writable_attention_probs capability), and "
             "expert_output names the per-expert loop interior, which needs the "
             "ragged value shape (follow-up F2). The rest of the MoE surface — "
             "the router, the combined routed output and the shared expert — "

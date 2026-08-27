@@ -21,6 +21,10 @@ layout               native shape                where it shows up
                                                   ``conv1d`` output
 ``"bs"``             ``(batch, seq)``             no feature axis at all — ``input_ids``,
                                                   one integer token id per position
+``"native"``         *(undescribed)*              the ABSENCE of a description —
+                                                  ``attention_probs``, whose feature
+                                                  axis is a position axis. Identity
+                                                  in both directions; see below
 ===================  ==========================  ====================================
 
 A tap declares its layout on :class:`~causalab.neural.pytorch_hooks.sites.ResolvedSite`
@@ -46,13 +50,22 @@ import torch
 
 #: The layouts a tap may declare. ``"bsd"`` is the executor's contract.
 #:
+#: ``"native"`` is not a layout in the sense the others are: it claims *nothing*
+#: about the tensor's axes and converts by doing nothing. It exists so that a tap
+#: whose shape this module cannot honestly describe — ``attention_probs``, which
+#: is (batch, heads, query, key) and whose feature axis IS a position axis —
+#: cannot be mistaken for the contract by defaulting to ``"bsd"``, where both
+#: conversions are also the identity but the *claim* would be false. There is no
+#: conversion case here for the typed feature-shape descriptor (follow-up F1) to
+#: unpick; F1 replaces the marker.
+#:
 #: ``"bs"`` is the degenerate case and is deliberately *here* rather than
 #: special-cased in the executor: a tensor with no feature axis still has a
 #: native shape that differs from the contract, which is exactly what this
 #: module exists to reconcile. It is not the typed feature-shape descriptor that
 #: ``attention_probs`` needs (whose feature axis *is* a position axis) — there is
 #: no feature-axis ambiguity to describe, only an absent axis to add.
-Layout = Literal["bsd", "flat_td", "bds", "bs"]
+Layout = Literal["bsd", "flat_td", "bds", "bs", "native"]
 
 #: Every valid layout string, for validation and error messages.
 LAYOUTS: tuple[str, ...] = get_args(Layout)
@@ -139,6 +152,8 @@ def to_contract(
         # unsqueeze, not reshape: a view, so the aliasing the write path relies
         # on survives (even though the only 'bs' tap today is read-only)
         return tensor.unsqueeze(-1)
+    if layout == "native":
+        return tensor  # undescribed on purpose — nothing to convert
     raise LayoutError(f"unknown tap layout {layout!r}; expected one of {LAYOUTS}")
 
 
@@ -174,6 +189,8 @@ def from_contract(
                 f"back to (batch, seq), got shape {tuple(tensor.shape)}"
             )
         return tensor.squeeze(-1)
+    if layout == "native":
+        return tensor
     raise LayoutError(f"unknown tap layout {layout!r}; expected one of {LAYOUTS}")
 
 

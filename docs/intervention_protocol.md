@@ -217,6 +217,14 @@ execution order:
   computed from them — so a write there could not reach anything. Write
   `router_scores` to reweight the chosen experts, or `expert_idx` to change
   which experts fire.
+- **`attention_probs` is the whole attention pattern**, `(batch, heads, query,
+  key)`, and round 1 exposes it whole: `pos: "all"`. Both of its trailing axes
+  are positions — its *feature* axis IS a position axis — so addressing one
+  query row, attaching a featurizer, or slicing `dims` is **refused** rather
+  than approximated; each needs a typed feature-shape descriptor, which is
+  follow-up work. A write replaces the whole pattern, which is what an
+  interchange on attention means, and both inputs must have the same number of
+  positions.
 - **`stream` names a mixer stream, and it is a per-layer fact.** A hybrid tower
   carries a different mixer at different depths (Qwen3.6's text tower alternates
   Gated DeltaNet with gated full attention), so a site whose declared `stream`
