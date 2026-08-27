@@ -23,7 +23,7 @@ and ragged widths on a *saved* read (nothing to stack into a tensor file).
 from __future__ import annotations
 
 import contextlib
-from typing import Any, Callable, Iterator, Mapping
+from typing import Any, Callable, Iterable, Iterator, Mapping
 
 import torch
 
@@ -61,7 +61,13 @@ from causalab.protocol.schema import (
     WriteSpec,
 )
 
-__all__ = ["PointExecutor", "RaggedValue", "document_seed"]
+__all__ = [
+    "ForwardCache",
+    "Interning",
+    "PointExecutor",
+    "RaggedValue",
+    "document_seed",
+]
 
 
 import dataclasses
@@ -99,6 +105,56 @@ class RaggedValue:
         return RaggedValue(flat=self.flat.detach().cpu(), widths=self.widths)
 
 
+@dataclasses.dataclass(frozen=True)
+class ForwardCache:
+    """The campaign-wide store that makes §3's interning real at run time.
+
+    The planner already says which forward groups a swept document shares: a
+    group's ``digest`` is the content identity of everything that determines
+    its activations, and taps are deliberately **not** part of it, because
+    reading layer 3 or layer 23 of the same un-intervened forward is the same
+    forward. A per-point loop ignores that and re-runs the shared group once
+    per point; this is where the plan's guarantee gets claimed.
+
+    ``wanted`` is the union of tap sites the **whole campaign** asks of each
+    digest, so the first point to reach a group captures every address a later
+    point will want. ``captured`` holds those activations *raw* — before the
+    positional gather and before any featurizer — which is why points tapping
+    one address through different featurizers, dims or positions still share
+    a single forward.
+
+    The trade is compute for memory: a 32-layer harvest shared by 32 points
+    holds 32 captures at once where the per-point loop held one. That is
+    inherent in making one pass serve the union, and it is still a large net
+    win — 32 separate passes cost ~16x one full pass even when each is elided
+    at its own tap.
+    """
+
+    #: group digest -> every site the campaign taps in that group's forward
+    wanted: Mapping[str, tuple[SiteSpec, ...]] = dataclasses.field(default_factory=dict)
+    #: (group digest, module id, io side) -> the raw activation one forward left
+    captured: dict[tuple[str, int, str], torch.Tensor] = dataclasses.field(
+        default_factory=dict
+    )
+    #: one entry per forward group actually run, in order — the number
+    #: :attr:`~causalab.protocol.backend.RunResult.forwards` reports
+    executed: list[str] = dataclasses.field(default_factory=list)
+
+
+@dataclasses.dataclass(frozen=True)
+class Interning:
+    """One point's handle on a shared :class:`ForwardCache`.
+
+    ``digests`` maps this point's ``(model, input)`` groups to the plan
+    digests they key into; the cache itself belongs to the whole campaign.
+    An executor built without one runs every group itself, which is what the
+    training minibatches and the unit tests want — their row slices are not
+    the campaign's, so they must never read or write the shared store."""
+
+    digests: Mapping[tuple[str, str], str]
+    cache: ForwardCache
+
+
 def _hidden_of(out: Any) -> torch.Tensor:
     return out[0] if isinstance(out, tuple) else out
 
@@ -117,6 +173,7 @@ class PointExecutor:
         stage_cache: dict[str, Stage] | None = None,
         grad_enabled: bool = False,
         coords: Mapping[str, Any] | None = None,
+        interning: Interning | None = None,
     ) -> None:
         self.doc = doc
         self.bundle = bundle
@@ -127,6 +184,10 @@ class PointExecutor:
             stage_cache if stage_cache is not None else {}
         )
         self.grad_enabled = grad_enabled
+        #: the campaign's shared forward groups, or ``None`` to run every
+        #: group this point declares (§3 interning is opt-in per executor
+        #: because only the backend knows the points share one row set)
+        self.interning = interning
         # the seed every freshly built featurizer initialises from; the stage
         # cache is keyed by name alone, so it belongs to this one point
         self.seed = document_seed(doc)
@@ -295,17 +356,6 @@ class PointExecutor:
     def _run_group(self, model: str, input_role: str) -> None:
         if (model, input_role) in self._groups_run:
             return
-        # operands first — the acyclic model graph is the schedule skeleton
-        write_names: tuple[str, ...] = ()
-        if model != "original":
-            im = self.doc.intervened_models[model]
-            write_names = tuple(im.writes) if isinstance(im.writes, tuple) else ()
-            for ename in write_names:
-                for operand in operand_names(self.doc.writes[ename].do.payload):
-                    if operand in self.doc.reads:
-                        self.read_value(operand)
-
-        batch = self._batch(input_role)
         all_taps = [
             (rname, read)
             for rname, read in self.doc.reads.items()
@@ -322,36 +372,140 @@ class PointExecutor:
                 gen_taps.append((rname, read))
                 depth = max(depth, budget)
 
-        write_hooks = self._build_write_hooks(write_names, input_role, batch)
-        capture: dict[tuple[int, str], torch.Tensor] = {}
         capture_sites = {
             (rname): resolve_site(self.bundle, self.doc.sites[str(read.site)])
             for rname, read in taps
         }
-        # A continuation read at lm_head is served from kept ln_final
-        # activations (d_model, not vocab) and projected at its addressed
-        # steps — the same value, without ever building the whole vocabulary
-        # for every step. Any other site is captured as itself.
-        gen_sites = {
-            rname: resolve_site(self.bundle, self.doc.sites[str(read.site)])
-            for rname, read in gen_taps
-        }
-        gen_capture_sites = {
-            rname: (
-                resolve_site(self.bundle, SiteSpec(component="ln_final"))
-                if site.component == "lm_head"
-                else site
+        # Cross-point interning (§3): a group another point already ran under
+        # this digest is served from the shared captures rather than run a
+        # second, identical time. Two exemptions, both principled rather than
+        # cautious: a **decoding** group's value is the continuation it
+        # produced, not activations a later point can replay from a cache (§4
+        # exempts it from elision for the same reason); and a **grad-enabled**
+        # group's reads have to stay attached to the graph the training step
+        # differentiates, which a detached capture from another pass is not.
+        digest = (
+            self._group_digest(model, input_role)
+            if not depth and not self.grad_enabled
+            else None
+        )
+        capture = self._interned(digest, capture_sites.values())
+        prefill: Any = None
+        if capture is None:
+            capture, prefill = self._forward_group(
+                model,
+                input_role,
+                digest=digest,
+                capture_sites=capture_sites,
+                depth=depth,
             )
-            for rname, site in gen_sites.items()
-        }
 
+        batch = self._batch(input_role)
+        for rname, read in taps:
+            site = capture_sites[rname]
+            raw = capture[(id(site.module), site.kind)]
+            self._read_values[rname] = self._finalize_read(
+                rname, read, site, raw, batch, input_role
+            )
+
+        if depth:
+            # A continuation read at lm_head is served from kept ln_final
+            # activations (d_model, not vocab) and projected at its addressed
+            # steps — the same value, without ever building the whole
+            # vocabulary for every step. Any other site is captured as itself.
+            gen_sites = {
+                rname: resolve_site(self.bundle, self.doc.sites[str(read.site)])
+                for rname, read in gen_taps
+            }
+            self._decode(
+                model,
+                input_role,
+                batch=batch,
+                prefill=prefill,
+                depth=depth,
+                gen_taps=gen_taps,
+                gen_sites=gen_sites,
+                gen_capture_sites={
+                    rname: (
+                        resolve_site(self.bundle, SiteSpec(component="ln_final"))
+                        if site.component == "lm_head"
+                        else site
+                    )
+                    for rname, site in gen_sites.items()
+                },
+            )
+        self._groups_run.add((model, input_role))
+
+    def _group_digest(self, model: str, input_role: str) -> str | None:
+        """This group's plan digest, or ``None`` when the executor was built
+        without a shared cache to key into."""
+        if self.interning is None:
+            return None
+        return self.interning.digests.get((model, input_role))
+
+    def _interned(
+        self, digest: str | None, sites: Iterable[ResolvedSite]
+    ) -> dict[tuple[int, str], torch.Tensor] | None:
+        """This group's raw captures if an earlier point already produced
+        **every** address it taps under the same digest, else ``None``.
+
+        All-or-nothing on purpose: a partial hit would still have to run the
+        forward for the addresses it missed, and the pass it runs captures the
+        campaign's whole union anyway."""
+        if digest is None or self.interning is None:
+            return None
+        store = self.interning.cache.captured
+        keys = {(id(site.module), site.kind) for site in sites}
+        if not keys or any((digest, *key) not in store for key in keys):
+            return None
+        return {key: store[(digest, *key)] for key in keys}
+
+    def _forward_group(
+        self,
+        model: str,
+        input_role: str,
+        *,
+        digest: str | None,
+        capture_sites: Mapping[str, ResolvedSite],
+        depth: int,
+    ) -> tuple[dict[tuple[int, str], torch.Tensor], Any]:
+        """Run one group's forward; return its raw captures and the prefill
+        output a decode continues from.
+
+        What it captures is this point's taps **unioned with every other
+        address the campaign asks of the same digest**: that union is what
+        lets the single pass a shared digest earns serve every point, and it
+        is why an eliding backend has to stop at the deepest tap of the union
+        rather than of the point that happened to run first.
+        """
+        # operands first — the acyclic model graph is the schedule skeleton
+        write_names: tuple[str, ...] = ()
+        if model != "original":
+            im = self.doc.intervened_models[model]
+            write_names = tuple(im.writes) if isinstance(im.writes, tuple) else ()
+            for ename in write_names:
+                for operand in operand_names(self.doc.writes[ename].do.payload):
+                    if operand in self.doc.reads:
+                        self.read_value(operand)
+
+        batch = self._batch(input_role)
+        write_hooks = self._build_write_hooks(write_names, input_role, batch)
+        wanted = list(capture_sites.values())
+        if digest is not None and self.interning is not None:
+            wanted += [
+                resolve_site(self.bundle, spec)
+                for spec in self.interning.cache.wanted.get(digest, ())
+            ]
+
+        capture: dict[tuple[int, str], torch.Tensor] = {}
+        installed: set[tuple[int, str]] = set()
         with contextlib.ExitStack() as hooks:
             for module, kind, fn in write_hooks:
                 hooks.enter_context(_installed(module, kind, fn))
-            for site in capture_sites.values():
+            for site in wanted:
                 key = (id(site.module), site.kind)
-                if key not in capture:
-                    capture[key] = torch.empty(0)  # placeholder; filled by hook
+                if key not in installed:
+                    installed.add(key)
                     hooks.enter_context(
                         _capturing(site.module, site.kind, capture, key)
                     )
@@ -363,25 +517,15 @@ class PointExecutor:
                     use_cache=depth > 0,
                 )
 
-        for rname, read in taps:
-            site = capture_sites[rname]
-            raw = capture[(id(site.module), site.kind)]
-            self._read_values[rname] = self._finalize_read(
-                rname, read, site, raw, batch, input_role
-            )
-
-        if depth:
-            self._decode(
-                model,
-                input_role,
-                batch=batch,
-                prefill=prefill,
-                depth=depth,
-                gen_taps=gen_taps,
-                gen_sites=gen_sites,
-                gen_capture_sites=gen_capture_sites,
-            )
-        self._groups_run.add((model, input_role))
+        if self.interning is not None:
+            self.interning.cache.executed.append(digest or f"{model}/{input_role}")
+            if digest is not None:
+                # only what a hook actually filled: publishing an address whose
+                # module never ran would hand a later point an empty capture
+                # instead of letting it run the forward
+                for (module_id, kind), value in capture.items():
+                    self.interning.cache.captured[(digest, module_id, kind)] = value
+        return capture, prefill
 
     # ------------------------------------------------------------------ #
     # generation
