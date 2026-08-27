@@ -175,8 +175,11 @@ execution order:
 
 `input_ids` · `embeddings` · `block_input` · `attention_input_norm` ·
 `attention_output` · `attention_value` · `attention_probs` · `block_mid` ·
-`mlp_input_norm` · `mlp_input` · `mlp_output` · `mlp_activation` ·
-`router_logits` · `expert_output` · `block_output` · `ln_final` · `lm_head`
+`mlp_input_norm` · `mlp_input` · `router_logits` · `router_scores` ·
+`expert_idx` · `expert_output` · `routed_output` · `mlp_activation` ·
+`shared_expert_gate_proj` · `shared_expert_up_proj` ·
+`shared_expert_activation` · `shared_expert_output` · `shared_expert_gate` ·
+`mlp_output` · `block_output` · `ln_final` · `lm_head`
 
 - **`sites` is the complete inventory**: every site a read or write references
   must be declared here, including `lm_head` (`{"component": "lm_head"}`).
@@ -192,6 +195,28 @@ execution order:
   layer-less, **read-only**, and *not a feature space*: it carries integer ids
   on a position axis, so no featurizer may attach to it and it has no width.
   Read `embeddings` for the vector the ids look up.
+- **The MoE surface** splits three ways. The **router** exposes
+  `router_logits` (all experts), `router_scores` (the renormalized top-k) and
+  `expert_idx` (which experts, integer ids on the same top-k axis);
+  `router_probs` is *derived* — `softmax(router_logits)` — and is not a
+  component. `routed_output` is the combined expert output, and the **shared
+  expert** exposes its SwiGLU interior plus `shared_expert_gate`, the scalar
+  that mixes it in. `expert_output` names the *per-expert* interior and is not
+  addressable yet: it needs a ragged value shape.
+- **`expert_idx` is a routing table, not a feature space** — the same rule as
+  `input_ids`: integer ids, no featurizer, no width. And `router_scores` has a
+  width but its axis is a per-token **ranking**, not a basis: column *k* is the
+  *k*-th ranked expert, a different expert for different tokens. A subspace fit
+  across positions there is not meaningful.
+- **`expert` is refused on every round-1 MoE component.** None of these tensors
+  is indexed by expert: the router's axes are all-experts or top-k, and the
+  shared expert is not one of the routed experts.
+- **Two components are read-only, and a write to either is refused** rather than
+  silently discarded. `input_ids` is the model's input. `router_logits` is
+  discarded by the MoE block itself, which routes on the scores and indices it
+  computed from them — so a write there could not reach anything. Write
+  `router_scores` to reweight the chosen experts, or `expert_idx` to change
+  which experts fire.
 - **`stream` names a mixer stream, and it is a per-layer fact.** A hybrid tower
   carries a different mixer at different depths (Qwen3.6's text tower alternates
   Gated DeltaNet with gated full attention), so a site whose declared `stream`

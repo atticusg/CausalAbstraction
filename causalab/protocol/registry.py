@@ -25,6 +25,21 @@ component          feature width
                    ``num_kv_heads * head_dim`` (KV-head space under GQA)
 ``lm_head``        ``vocab_size``
 ``router_logits``  ``num_experts``
+``router_scores``  ``num_experts_per_tok`` (top-k). ⚠️ Dimensionally well
+                   defined, but the axis is a per-token **ranking**, not a
+                   basis: column *k* is the *k*-th ranked expert, a different
+                   expert for different tokens. A `subspace` fit across
+                   positions is therefore not meaningful even though it is
+                   accepted here. See the plan note's follow-up list.
+``routed_output``, ``shared_expert_output``
+                   ``hidden_size`` — both branches write the residual stream
+``shared_expert_gate_proj``, ``shared_expert_up_proj``,
+``shared_expert_activation``
+                   ``shared_expert_intermediate_size``
+``shared_expert_gate``
+                   1 — one mixing scalar per token
+``expert_idx``     no static width — a routing table of integer expert ids on a
+                   top-k axis (§5.4): no featurizer, no gradient
 ``attention_probs``
                    no static width — sequence-shaped; featurizers are
                    refused on it
@@ -63,6 +78,14 @@ class ModelInfo:
     vocab_size: int
     native_dtype: str = "fp32"
     num_experts: int | None = None
+    #: top-k: how many of ``num_experts`` each token is routed to. The width of
+    #: ``router_scores``, whose axis is that top-k list.
+    num_experts_per_tok: int | None = None
+    #: The shared expert's inner width. Deliberately separate from
+    #: ``intermediate_size``: a MoE checkpoint can carry three different inner
+    #: widths (dense ``intermediate_size``, ``moe_intermediate_size`` per routed
+    #: expert, and this one), and reading the wrong one is silent.
+    shared_expert_intermediate_size: int | None = None
 
 
 _REGISTRY: dict[str, ModelInfo] = {}
@@ -123,6 +146,16 @@ def model_info_from_hf_config(key: str, config: Any) -> ModelInfo:
             getattr(text, "num_experts", None)
             or getattr(text, "num_local_experts", None)
         ),
+        num_experts_per_tok=getattr(text, "num_experts_per_tok", None),
+        # ⚠️ Three spellings, and on `tiny-random/qwen3.5-moe` all three are 32,
+        # so the fixture CANNOT tell a wrong choice from a right one. Ordered
+        # most-specific first and never silently defaulted to the dense
+        # `intermediate_size`, because that is the one that would be wrong on a
+        # real checkpoint while still producing a plausible number.
+        shared_expert_intermediate_size=(
+            getattr(text, "shared_expert_intermediate_size", None)
+            or getattr(text, "moe_intermediate_size", None)
+        ),
     )
 
 
@@ -142,6 +175,10 @@ def component_width(info: ModelInfo, component: str, *, head: int | None = None)
         "attention_input_norm",
         "block_mid",
         "mlp_input_norm",
+        # both MoE branches write into the residual stream, so both are
+        # hidden-wide even though their interiors are not
+        "routed_output",
+        "shared_expert_output",
     ):
         return info.hidden_size
     if component == "mlp_activation":
@@ -158,6 +195,37 @@ def component_width(info: ModelInfo, component: str, *, head: int | None = None)
                 4, f"model {info.key!r} declares no experts; router_logits has no width"
             )
         return info.num_experts
+    if component == "router_scores":
+        if info.num_experts_per_tok is None:
+            raise ValidationError(
+                4,
+                f"model {info.key!r} declares no num_experts_per_tok; "
+                "router_scores has no width",
+            )
+        return info.num_experts_per_tok
+    if component in (
+        "shared_expert_gate_proj",
+        "shared_expert_up_proj",
+        "shared_expert_activation",
+    ):
+        if info.shared_expert_intermediate_size is None:
+            raise ValidationError(
+                4,
+                f"model {info.key!r} declares no shared-expert inner width; "
+                f"{component} has no width",
+            )
+        return info.shared_expert_intermediate_size
+    if component == "shared_expert_gate":
+        # one scalar per token: how much of the shared expert to mix in
+        return 1
+    if component == "expert_idx":
+        raise ValidationError(
+            4,
+            "component 'expert_idx' is a routing table, not a feature space "
+            "(§5.4): it carries integer expert ids on a top-k axis, so there is "
+            "no width for a featurizer to match and no gradient to train "
+            "through. Read or write it directly to inspect or edit routing.",
+        )
     if component == "input_ids":
         raise ValidationError(
             4,
