@@ -1,8 +1,17 @@
-"""Metric lowering (spec §2.10): the closed kinds over one lm_head read.
+"""Metric lowering (spec §2.10): the closed kinds over one read.
 
-Every kind is gather-then-reduce over the read's logits and dataset
+Every kind is gather-then-reduce over the read's value and dataset
 columns. Per-example results come back as plain floats (or small
 structures for ``top_k``), ready for a JSON metric table.
+
+All but one kind name vocabulary entries, so validation binds them to an
+``lm_head`` read and the value they reduce is a logit vector. ``top_k`` is
+the exception: it ranks the entries of whatever axis its read has — a
+vocabulary, a 4k-wide residual stream, a 100k-latent SAE code — and reduces
+**where the rows are gathered**, which is the point of it (saving the whole
+tensor just to argsort it later is the thing to avoid). Its mandatory ``by``
+field says how to rank, and ``vocab_axis`` tells the reduction whether the
+indices it found are token ids worth decoding.
 
 Token resolution defaults to the repo's space-prefixed-first rule
 (``token_form: "auto"``): a column value resolves to the single token of
@@ -46,7 +55,11 @@ from typing import Any, Mapping, Sequence
 import torch
 
 from causalab.protocol.errors import ProtocolError
-from causalab.protocol.schema import WHOLE_WINDOW_METRIC_KINDS, MetricSpec
+from causalab.protocol.schema import (
+    VOCAB_TOP_K_RANKING,
+    WHOLE_WINDOW_METRIC_KINDS,
+    MetricSpec,
+)
 
 __all__ = [
     "column_first_token_id",
@@ -206,8 +219,12 @@ def column_first_token_id(
     )
 
 
-def _last_pos_logits(value: torch.Tensor) -> torch.Tensor:
-    """A read at one position arrives as (batch, 1, vocab); squeeze it."""
+def _last_pos_rows(value: torch.Tensor) -> torch.Tensor:
+    """A read at one position arrives as (batch, 1, width); squeeze it.
+
+    ``width`` is the vocabulary for an ``lm_head`` read and the site's own
+    width otherwise — only ``top_k`` reduces the latter (every other kind is
+    bound to a vocabulary projection by validation)."""
     if value.dim() == 3:
         if value.shape[1] != 1:
             raise ProtocolError(
@@ -219,6 +236,69 @@ def _last_pos_logits(value: torch.Tensor) -> torch.Tensor:
     return value
 
 
+def _top_k(
+    metric: MetricSpec,
+    dense: torch.Tensor,
+    tokenizer: Any,
+    *,
+    vocab_axis: bool,
+) -> list[dict[str, Any]]:
+    """``top_k`` over one read's rows — the reduction that happens **where the
+    rows are gathered**, so a 100k-latent SAE code never reaches disk.
+
+    ``by`` (mandatory, §2.10) is the ranking rule, and it is the author's call
+    because only the author knows what the axis is: a vocabulary projection
+    has no meaningful negative entries, a residual stream and a signed feature
+    code do.
+
+    The emitted columns have **fixed identities**, so a column never means one
+    thing in one document and another in the next; a column is absent rather
+    than reinterpreted:
+
+    ==========  =====================================  ====================
+    column      meaning                                emitted when
+    ==========  =====================================  ====================
+    ``indices`` index along the read's last axis       always
+    ``tokens``  that index decoded as a token string   the read taps lm_head
+    ``values``  the **raw** read value at that index   always
+    ``probs``   softmax probability over the vocab     ``by == "prob"``
+    ==========  =====================================  ====================
+
+    ``values`` is always the raw value — a logit under ``by: "prob"``, not the
+    probability — so a downstream reader never has to know the ranking rule to
+    know what it is holding. The normalized number lives in its own column.
+    """
+    k = metric.fields["k"]
+    assert isinstance(k, int)  # parse guarantees the shape
+    by = str(metric.fields["by"])
+    width = int(dense.shape[-1])
+    if k < 1 or k > width:
+        raise ProtocolError(
+            "P2",
+            f"top_k asks for k={k} of a read {width} wide — k must be in [1, width]",
+        )
+    if by == VOCAB_TOP_K_RANKING:
+        # validation binds `prob` to an lm_head read (§2.10): a softmax across
+        # neurons or latents normalizes over an axis that is not an event space
+        scores = torch.softmax(dense, dim=-1)
+    elif by == "abs_value":
+        scores = dense.abs()
+    else:
+        scores = dense
+    top = scores.topk(k, dim=-1)
+    out: list[dict[str, Any]] = []
+    for i in range(dense.shape[0]):
+        indices = [int(j) for j in top.indices[i]]
+        entry: dict[str, Any] = {"indices": indices}
+        if vocab_axis:
+            entry["tokens"] = [tokenizer.decode([j]) for j in indices]
+        entry["values"] = [float(dense[i, j]) for j in indices]
+        if by == VOCAB_TOP_K_RANKING:
+            entry["probs"] = [float(p) for p in top.values[i]]
+        out.append(entry)
+    return out
+
+
 def compute_metric(
     metric: MetricSpec,
     of_value: torch.Tensor,
@@ -226,9 +306,22 @@ def compute_metric(
     tokenizer: Any,
     *,
     target_value: torch.Tensor | None = None,
+    vocab_axis: bool = True,
 ) -> list[Any]:
-    """One metric over one read's value, per example."""
-    logits = _last_pos_logits(of_value).float()
+    """One metric over one read's value, per example.
+
+    ``vocab_axis`` says whether the read's last axis is the vocabulary — i.e.
+    whether it taps ``lm_head`` (:func:`~causalab.protocol.schema
+    .metric_reads_vocabulary`). Every kind but ``top_k`` is bound to a
+    vocabulary projection by validation, so the default is ``True``; ``top_k``
+    is the one kind that also runs over a residual stream, an MLP activation
+    or a featurizer's latents, and it needs to know because a token id is
+    worth decoding and a neuron index is not."""
+    # `dense` is the read's value at the addressed position, (batch, width).
+    # Every kind but `top_k` is bound to an lm_head read, so for those it is
+    # the vocabulary projection and reads as `logits` below.
+    dense = _last_pos_rows(of_value).float()
+    logits = dense
     kind = str(metric.kind)
     # §2.10: how this metric's string answers become token ids. `auto` is the
     # space-prefixed-first default every pre-token_form document gets.
@@ -289,7 +382,7 @@ def compute_metric(
         if target_value is None:
             raise ProtocolError("P2", "kl needs its target read's value")
         p = torch.log_softmax(logits, dim=-1)
-        q = torch.log_softmax(_last_pos_logits(target_value).float(), dim=-1)
+        q = torch.log_softmax(_last_pos_rows(target_value).float(), dim=-1)
         kl = (p.exp() * (p - q)).sum(dim=-1)
         return [float(v) for v in kl]
     if kind == "match":
@@ -306,17 +399,7 @@ def compute_metric(
             for i, forms in enumerate(form_groups("expected"))
         ]
     if kind == "top_k":
-        k = metric.fields["k"]
-        assert isinstance(k, int)  # parse guarantees the shape
-        probs = torch.softmax(logits, dim=-1)
-        top = probs.topk(k, dim=-1)
-        return [
-            {
-                "tokens": [tokenizer.decode([int(t)]) for t in top.indices[i]],
-                "probs": [float(p) for p in top.values[i]],
-            }
-            for i in range(logits.shape[0])
-        ]
+        return _top_k(metric, dense, tokenizer, vocab_axis=vocab_axis)
     if kind == "class_probs":
         groups = metric.fields["groups"]
         if not isinstance(groups, Mapping):
@@ -350,6 +433,7 @@ def compute_windowed_metric(
     *,
     target_windows: Sequence[torch.Tensor] | None = None,
     generated_ids: Sequence[Sequence[int]] | None = None,
+    vocab_axis: bool = True,
 ) -> list[list[Any]]:
     """One metric over a read that addresses **several** positions per row.
 
@@ -394,7 +478,12 @@ def compute_windowed_metric(
             )
         flat_target = torch.cat([w for w in target_windows if w.shape[0]], dim=0)
     values = compute_metric(
-        metric, flat, flat_rows, tokenizer, target_value=flat_target
+        metric,
+        flat,
+        flat_rows,
+        tokenizer,
+        target_value=flat_target,
+        vocab_axis=vocab_axis,
     )
     out: list[list[Any]] = []
     cursor = 0

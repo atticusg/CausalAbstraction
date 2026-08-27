@@ -90,7 +90,9 @@ def test_top_k_scores_every_generated_step(llama_bundle):
     off-by-one, seen from the metric side)."""
     executor = _run(
         llama_bundle,
-        _doc({"kind": "top_k", "of": "cont", "k": 1}, anchor={"all": True}),
+        _doc(
+            {"kind": "top_k", "of": "cont", "k": 1, "by": "prob"}, anchor={"all": True}
+        ),
     )
     values = _score(executor)
     (continuation,) = executor._continuations.values()
@@ -177,7 +179,9 @@ def test_a_variable_the_model_never_said_is_null_and_unmatched(llama_bundle):
 def test_rows_name_the_step_they_scored(llama_bundle):
     executor = _run(
         llama_bundle,
-        _doc({"kind": "top_k", "of": "cont", "k": 1}, anchor={"all": True}),
+        _doc(
+            {"kind": "top_k", "of": "cont", "k": 1, "by": "prob"}, anchor={"all": True}
+        ),
     )
     steps = executor.addressed_steps("cont")
     table = MetricTable()
@@ -197,7 +201,9 @@ def test_rows_name_the_step_they_scored(llama_bundle):
 def test_a_prompt_frame_read_keeps_its_single_row_shape(llama_bundle):
     """The windowed path is for the continuation; a prompt-frame metric must
     not grow a step column just because this landed."""
-    raw = _doc({"kind": "top_k", "of": "cont", "k": 1}, anchor={"all": True})
+    raw = _doc(
+        {"kind": "top_k", "of": "cont", "k": 1, "by": "prob"}, anchor={"all": True}
+    )
     raw["positions"] = {"window": {"index": -1}}
     raw["reads"]["cont"]["pos"] = "window"
     executor = _run(llama_bundle, raw)
@@ -212,7 +218,9 @@ def test_kl_across_different_widths_refuses(llama_bundle):
     that stopped at different places have none."""
     executor = _run(
         llama_bundle,
-        _doc({"kind": "top_k", "of": "cont", "k": 1}, anchor={"all": True}),
+        _doc(
+            {"kind": "top_k", "of": "cont", "k": 1, "by": "prob"}, anchor={"all": True}
+        ),
     )
     metric = parse_document(
         {
