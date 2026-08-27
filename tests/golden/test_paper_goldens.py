@@ -198,7 +198,9 @@ def test_rome_mlp_window_aie_peak(tmp_path):
     aie: dict[int, list[pd.Series]] = {}
     for width in (2, 3, 4, 5):
         for center in centers:
-            layers = [l for l in range(center - 4, center + 6) if 0 <= l < 48]
+            layers = [
+                layer for layer in range(center - 4, center + 6) if 0 <= layer < 48
+            ]
             doc = {
                 "version": "1",
                 "description": f"generated: ROME MLP window restore, center {center}, width-{width} shard",
@@ -213,8 +215,8 @@ def test_rome_mlp_window_aie_peak(tmp_path):
                     "emb": {"component": "embeddings"},
                     "lm_head": {"component": "lm_head"},
                     **{
-                        f"mlp{l}": {"component": "mlp_output", "layer": l}
-                        for l in layers
+                        f"mlp{layer}": {"component": "mlp_output", "layer": layer}
+                        for layer in layers
                     },
                 },
                 "reads": {
@@ -231,13 +233,13 @@ def test_rome_mlp_window_aie_peak(tmp_path):
                         "input": "base",
                     },
                     **{
-                        f"v{l}": {
-                            "site": f"mlp{l}",
+                        f"v{layer}": {
+                            "site": f"mlp{layer}",
                             "pos": "last_subject",
                             "model": "original",
                             "input": "base",
                         }
-                        for l in layers
+                        for layer in layers
                     },
                 },
                 "writes": {
@@ -253,19 +255,19 @@ def test_rome_mlp_window_aie_peak(tmp_path):
                         },
                     },
                     **{
-                        f"rest{l}": {
-                            "site": f"mlp{l}",
+                        f"rest{layer}": {
+                            "site": f"mlp{layer}",
                             "pos": "last_subject",
-                            "do": {"swap": f"v{l}"},
+                            "do": {"swap": f"v{layer}"},
                         }
-                        for l in layers
+                        for layer in layers
                     },
                 },
                 "intervened_models": {
                     "corrupted": {"input": "base", "writes": ["noise"]},
                     "restored": {
                         "input": "base",
-                        "writes": ["noise"] + [f"rest{l}" for l in layers],
+                        "writes": ["noise"] + [f"rest{layer}" for layer in layers],
                     },
                 },
                 "metrics": {
