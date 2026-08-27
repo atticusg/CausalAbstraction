@@ -29,6 +29,7 @@ from causalab.protocol.plan import COMPONENT_RANK
 from causalab.protocol.registry import component_width
 from causalab.protocol.schema import COMPONENTS, LAYERLESS_COMPONENTS, SiteSpec
 
+from ._drive import base_data_section, executor_for
 from .conftest import TINY_LLAMA, TINY_QWEN35_MOE
 
 pytestmark = pytest.mark.smoke
@@ -404,3 +405,82 @@ def test_the_llama_residual_algebra_holds_too(llama_bundle):
     torch.testing.assert_close(
         got["mlp_input_norm"], block.post_attention_layernorm(got["block_mid"])
     )
+
+
+# --------------------------------------------------------------------------- #
+# end to end through the executor — the path raw hooks do not exercise
+# --------------------------------------------------------------------------- #
+
+
+def _read_doc(component: str, layer: int | None = None, featurizer: bool = False):
+    site: dict = {"component": component}
+    if layer is not None:
+        site["layer"] = layer
+    read: dict = {
+        "site": "tap",
+        "pos": {"index": 1},
+        "model": "original",
+        "input": "base",
+    }
+    doc: dict = {
+        "version": "1",
+        "model": {"key": "test", "revision": "main"},
+        "data": base_data_section(with_counterfactual=False),
+        "sites": {"tap": site},
+        "reads": {"r": read},
+        "save": [
+            {
+                "value": "r",
+                "model": "original",
+                "input": "base",
+                "file_path": "a.safetensors",
+            }
+        ],
+    }
+    if featurizer:
+        doc["featurizers"] = {"f": {"kind": "subspace", "k": 1}}
+        read["featurizer"] = "f"
+    return doc
+
+
+@pytest.mark.parametrize(
+    "component", ["attention_input_norm", "block_mid", "mlp_input_norm"]
+)
+def test_a_document_reads_each_new_norm_component(llama_bundle, component: str):
+    """The §6 gate: a real document, parsed and validated, reads the component."""
+    executor = executor_for(_read_doc(component, 0), llama_bundle, base_texts=[TEXT])
+    value = executor.read_value("r")
+    assert value.shape == (1, 1, llama_bundle.info.hidden_size)
+
+
+def test_a_document_reads_input_ids_even_though_it_has_no_width(llama_bundle):
+    """The refusal in ``component_width`` must not make reading impossible.
+
+    A read with no featurizer needs no width — ``build_stack`` returns an
+    Identity stack and ignores it — so the executor asks for the width lazily.
+    Eagerly asking made a plain ``input_ids`` read raise the "not a feature
+    space" error, which is not what that refusal is for: it exists to reject a
+    *featurizer*, not a read.
+    """
+    executor = executor_for(_read_doc("input_ids"), llama_bundle, base_texts=[TEXT])
+    value = executor.read_value("r")
+    assert value.shape == (1, 1, 1)
+    assert not value.dtype.is_floating_point
+
+
+def test_a_featurizer_on_input_ids_still_refuses(llama_bundle):
+    """The other half: §5.4's rule survives the laziness above."""
+    with pytest.raises(ValidationError) as excinfo:
+        executor_for(
+            _read_doc("input_ids", featurizer=True), llama_bundle, base_texts=[TEXT]
+        ).read_value("r")
+    assert "not a feature space" in str(excinfo.value)
+
+
+def test_a_featurizer_on_a_norm_component_is_fine(llama_bundle):
+    """Anti-vacuity for the test above: the refusal is about the component, not
+    about featurizers being broken here."""
+    executor = executor_for(
+        _read_doc("block_mid", 0, featurizer=True), llama_bundle, base_texts=[TEXT]
+    )
+    assert executor.read_value("r").shape == (1, 1, 1)
