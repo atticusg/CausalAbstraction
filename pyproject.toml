@@ -38,12 +38,24 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-# nnterp packaging fix merged upstream (ndif-team/nnterp#49): released wheels
-# (<= 1.3.0) omit nnterp/data/ (package-data globs tests/* but not data/*),
-# which crashes `python -m nnterp run_tests` on import. This pins the upstream
-# merge commit while awaiting a PyPI release that ships the fix; dropping this
-# git source is then a routine dep bump.
-nnterp = { git = "https://github.com/ndif-team/nnterp", rev = "b4a31274692f986e493ac5d20ba20a4ec8640955" }
+# Pinned to our fork, which is upstream b4a3127 plus one unmerged fix. Two
+# reasons stack here, and both are temporary:
+#
+#   1. Packaging (ndif-team/nnterp#49, merged upstream): released wheels
+#      (<= 1.3.0) omit nnterp/data/ — package-data globs tests/* but not
+#      data/* — which crashes `python -m nnterp run_tests` on import. Fixed at
+#      b4a3127, still awaiting a PyPI release that ships it.
+#   2. Text-tower loading (ndif-team/nnterp#52, open): nnsight's LanguageModel
+#      refuses any config registered with AutoModelForImageTextToText, so it
+#      cannot load qwen3_5_moe — the text tower of Qwen3.6-35B-A3B, and the
+#      target of the hookpoint-vocabulary work — even though
+#      AutoModelForCausalLM resolves to it cleanly. Without this, nnterp cannot
+#      load the model at all.
+#
+# 45f386b is b4a3127 + those two commits, so this is a strict superset of the
+# upstream pin. When #52 merges, repoint at ndif-team and drop this note's item
+# 2; when a wheel ships both, drop the git source entirely.
+nnterp = { git = "https://github.com/can-goodfire/nnterp", rev = "45f386b7cf27f104b2585849ed76416d8fad11c8" }
 
 [tool.pytest.ini_options]
 markers = [
