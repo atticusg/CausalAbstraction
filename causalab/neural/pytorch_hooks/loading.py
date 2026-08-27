@@ -65,7 +65,7 @@ def load_model(
     model = AutoModelForCausalLM.from_pretrained(
         key,
         revision=revision,
-        torch_dtype=_DTYPES[dtype],
+        dtype=_DTYPES[dtype],
         attn_implementation="eager",
     )
     torch.nn.Module.to(model, torch.device(device))
