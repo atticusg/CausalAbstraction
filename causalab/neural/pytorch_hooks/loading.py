@@ -49,6 +49,54 @@ class ModelBundle:
             self.model.transformer, "h"
         )
 
+    @property
+    def blocks(self) -> Any:
+        """The decoder-layer ModuleList, whichever tree this family uses."""
+        return (
+            self.model.transformer.h if self.is_gpt2_family else self.model.model.layers
+        )
+
+    def stream_at(self, layer: int) -> str:
+        """Which mixer stream ``layer`` actually carries.
+
+        A hybrid architecture varies this *per layer*: 📐 on
+        ``tiny-random/qwen3.5-moe`` the text tower is
+        ``['linear_attention', 'linear_attention', 'linear_attention',
+        'full_attention']`` — three Gated DeltaNet blocks and one gated full
+        attention. So a boolean family flag cannot answer this, and neither can
+        the config alone: it is read off the module that is really there, which
+        is what a hook has to attach to.
+
+        Returns one of ``"full_attention"`` (a ``self_attn``/``attn`` child) or
+        ``"linear_attention"`` (a ``linear_attn`` child).
+        """
+        block = self.blocks[layer]
+        if hasattr(block, "self_attn") or hasattr(block, "attn"):
+            return "full_attention"
+        if hasattr(block, "linear_attn"):
+            return "linear_attention"
+        raise ProtocolError(
+            "P4",
+            f"layer {layer} of {self.key!r} has no recognised mixer child "
+            f"(children={sorted(name for name, _ in block.named_children())}) — "
+            "extend the stream table in pytorch_hooks/loading.py",
+        )
+
+    def mixer_at(self, layer: int) -> Any:
+        """The attention/mixer module at ``layer``, whichever stream it is."""
+        block = self.blocks[layer]
+        for name in ("attn", "self_attn", "linear_attn"):
+            child = getattr(block, name, None)
+            if child is not None:
+                return child
+        self.stream_at(layer)  # raises with the useful message
+        raise AssertionError("unreachable")
+
+    @property
+    def streams(self) -> tuple[str, ...]:
+        """``stream_at`` for every layer — the whole tower's shape at a glance."""
+        return tuple(self.stream_at(i) for i in range(len(self.blocks)))
+
 
 @functools.lru_cache(maxsize=4)
 def load_model(
