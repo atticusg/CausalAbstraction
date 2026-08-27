@@ -75,7 +75,7 @@ class TestRecords:
     def test_slots_have_the_right_file_suffixes(self, op_id: str) -> None:
         op = lookup(op_id)
         for decl in (*op.inputs.values(), *op.outputs.values()):
-            expected = ".parquet" if isinstance(decl, Table) else ".safetensors"
+            expected = ".json" if isinstance(decl, Table) else ".safetensors"
             assert decl.suffix == expected
 
     @pytest.mark.parametrize("op_id", op_ids())

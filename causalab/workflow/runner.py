@@ -317,7 +317,9 @@ def _aggregated(
     would silently collapse the rows the document was validated against."""
     import pandas as pd
 
-    frame = pd.read_parquet(output_dir / from_step / table)
+    from causalab.protocol.tables import read_table
+
+    frame = pd.DataFrame(read_table(output_dir / from_step / table))
     if value_column not in frame.columns:
         raise ProtocolError("P2", f"{from_step}/{table} has no column {value_column!r}")
     if from_step in as_written:

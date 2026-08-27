@@ -7,11 +7,11 @@ tier's extract_values.
 
 Keys:
 - ``interchange.<metric>.mean`` (and ``.std`` for the continuous metric)
-  from the point document's parquets;
+  from the point document's JSON metric tables;
 - ``interchange.acts_mid.<stat>`` — mean/std/first/last/shape of the
   harvested residual tensor;
 - ``scan.iia.<axis-label>.mean`` — per-layer IIA means from the swept
-  document's single parquet (axis coordinates are row columns).
+  document's single JSON table (axis coordinates are row columns).
 """
 
 from __future__ import annotations
@@ -70,19 +70,25 @@ def _tensor_stats(path: Path, prefix: str, values: dict[str, Any]) -> None:
         values[f"{prefix}.{name}.shape"] = list(tensor.shape)
 
 
+def _frame(path: Path) -> "pd.DataFrame":
+    """One JSON metric table as a DataFrame — tables are JSON on disk
+    (protocol.tables); pandas is only the reduction shape here."""
+    from causalab.protocol.tables import read_table
+
+    return pd.DataFrame(read_table(path))
+
+
 def extract_values(dirs: dict[str, Path]) -> dict[str, Any]:
     values: dict[str, Any] = {}
 
     point = dirs["drift_interchange_im.json"]
     for metric in ("acc", "iia", "ld"):
-        column = pd.read_parquet(point / f"{metric}.parquet")["value"]
+        column = _frame(point / f"{metric}.json")["value"]
         values[f"interchange.{metric}.mean"] = float(column.mean())
-    values["interchange.ld.std"] = float(
-        pd.read_parquet(point / "ld.parquet")["value"].std()
-    )
+    values["interchange.ld.std"] = float(_frame(point / "ld.json")["value"].std())
     _tensor_stats(point / "acts_mid.safetensors", "interchange", values)
 
-    scan = pd.read_parquet(dirs["drift_locate_scan_im.json"] / "iia.parquet")
+    scan = _frame(dirs["drift_locate_scan_im.json"] / "iia.json")
     axes = [c for c in scan.columns if c not in _META_COLUMNS]
     for coords, group in scan.groupby(axes):
         coords = coords if isinstance(coords, tuple) else (coords,)

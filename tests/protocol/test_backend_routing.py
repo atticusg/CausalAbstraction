@@ -58,7 +58,7 @@ def test_requires_full_logits_for_top_k():
     raw = base_doc()
     raw["metrics"]["tk"] = {"kind": "top_k", "of": "logits", "k": 5}
     raw["save"].append(
-        {"value": "tk", "model": "patched", "input": "base", "file_path": "tk.parquet"}
+        {"value": "tk", "model": "patched", "input": "base", "file_path": "tk.json"}
     )
     assert "full_logits" in requires(parse_document(raw))
 

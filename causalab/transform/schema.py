@@ -8,7 +8,7 @@ Keeping it free of numerics is what lets ``causalab validate`` / ``digest`` /
 step runs (docs/CODEBASE.md §1, "``protocol/`` is torch-free").
 
 Two slot kinds, mirroring the two things a workflow step can already produce:
-a :class:`Table` (a ``.parquet`` metric table) and a :class:`Tensor` (a
+a :class:`Table` (a JSON metric table) and a :class:`Tensor` (a
 ``.safetensors`` bundle). An **output** table must declare its columns — that
 declaration is what a downstream ``select``/``plot`` step's column references
 are checked against at load, the same load-time bite rule 7 has for a protocol
@@ -53,7 +53,7 @@ class TransformError(ProtocolError):
 
 
 #: Closed set of column dtypes a table slot may declare. Deliberately narrow:
-#: these are the types that survive a parquet round-trip and a strict re-parse
+#: these are the types that survive a JSON round-trip and a strict re-parse
 #: by a consuming document (``protocol/workflow.py`` `_decode_cell`).
 COLUMN_DTYPES: tuple[str, ...] = ("int64", "float64", "bool", "string")
 
@@ -65,7 +65,7 @@ COLUMN_DTYPES: tuple[str, ...] = ("int64", "float64", "bool", "string")
 
 @dataclasses.dataclass(frozen=True)
 class Table:
-    """A ``.parquet`` table slot.
+    """A JSON table slot.
 
     ``columns`` maps column name to a :data:`COLUMN_DTYPES` entry. It is
     required on an output slot and optional on an input slot — an op that
@@ -76,7 +76,7 @@ class Table:
     description: str | None = None
 
     #: the file extension a document must give this slot (rule 8)
-    suffix: str = ".parquet"
+    suffix: str = ".json"
 
 
 @dataclasses.dataclass(frozen=True)

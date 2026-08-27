@@ -88,19 +88,19 @@
       "value": "ld_pos",
       "model": "patched",
       "input": "base",
-      "file_path": "ld_pos.parquet"
+      "file_path": "ld_pos.json"
     },
     {
       "value": "ld_lex",
       "model": "patched",
       "input": "base",
-      "file_path": "ld_lex.parquet"
+      "file_path": "ld_lex.json"
     },
     {
       "value": "ld_ref",
       "model": "patched",
       "input": "base",
-      "file_path": "ld_ref.parquet"
+      "file_path": "ld_ref.json"
     }
   ]
 }

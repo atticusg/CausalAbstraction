@@ -26,6 +26,7 @@ The normative spec is [`docs/intervention_protocol.md`](intervention_protocol.md
 | `canonical.py` | canonical form + digests (§7) |
 | `sweep.py` | axis expansion, point cap, coordinate labels (§3) |
 | `bundles.py` | addressing one entry inside a saved `.safetensors` bundle: key grammar, coordinate selection (§2.5, §2.6) |
+| `tables.py` | metric tables on disk — native JSON, an array of row objects. Torch-free and pandas-free, so the backend writes through it and step scripts read through it |
 | `plan.py` | model graph → forward groups, content dedup (§4) |
 | `backend.py` | `Backend` ABC, `ExecutionRequest`/`RunResult`, capability routing (§8) |
 | `resolve.py` | `ResolutionEnv`: the `DatasetResolver` contract (digest / columns / rows) with `FileDatasets` (JSON tables), `FileArtifacts`, `ArtifactIdentity` build/check |
@@ -49,7 +50,7 @@ Implements the §8 services with raw pytorch hooks, CPU or a single accelerator 
 | `metrics.py` | metric lowering over one lm_head read; single-token column resolution |
 | `executor.py` | one forward group per (model, input), whole batch at once; edit/read hook wiring |
 | `train.py` | the `train` loop for trainable featurizers |
-| `outputs.py` | parquet metric tables and safetensors tensor files, coordinate-keyed, identity-stamped |
+| `outputs.py` | JSON metric tables and safetensors tensor files, coordinate-keyed, identity-stamped |
 | `backend.py` | `PytorchHooksBackend`: capabilities `{grad, paired_forward, full_logits, pytorch_fn_local}` |
 
 Known limits (tracked in the intervention-protocol epic): one device per run (no `device_map` sharding), one batch per forward group (no microbatching), no `attention_probs`, no chat-template path.
@@ -64,7 +65,7 @@ Executes workflow documents: topological step order from derived references, per
 |---|---|
 | `schema.py` | the slot kinds (`Table` with declared columns, `Tensor`) and the parameter primitives, plus `TransformError` |
 | `registry.py` | the `TransformOp` record, the `@register` decorator, and `lookup("name@version")` with suggestions |
-| `io.py` | reading inputs and writing outputs — parquet tables, `.safetensors` bundles, and the identity a tensor output is stamped with |
+| `io.py` | reading inputs and writing outputs — JSON tables, `.safetensors` bundles, and the identity a tensor output is stamped with |
 | `ops/` | the registered ops, one module each, numerics imported inside the function body |
 
 An op is a pure `(inputs, params) -> {slot: value}` function; the runner owns paths, formats and provenance so an op's unit test needs no filesystem. Adding one means adding a record, a body and an oracle test — a document can never introduce an op, which is what keeps a workflow run a pure function of the document.

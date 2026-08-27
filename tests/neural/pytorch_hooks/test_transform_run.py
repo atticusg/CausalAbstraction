@@ -20,7 +20,6 @@ import json
 import shutil
 from pathlib import Path
 
-import pandas as pd
 import pytest
 from safetensors.torch import load_file
 
@@ -29,6 +28,7 @@ from causalab.protocol.resolve import read_safetensors_metadata
 
 from tests.neural.pytorch_hooks.conftest import TINY_LLAMA
 from tests.protocol._env import FIXTURES
+from tests.tables import frame as table_frame
 
 pytestmark = pytest.mark.smoke
 
@@ -88,13 +88,13 @@ def _workflow(project_doc: Path) -> dict:
                 "params": {"k": 2},
                 "outputs": {
                     "weight": "weight.safetensors",
-                    "spectrum": "spectrum.parquet",
+                    "spectrum": "spectrum.json",
                 },
             },
             "top_pc": {
                 "type": "select",
                 "from": "fit",
-                "table": "spectrum.parquet",
+                "table": "spectrum.json",
                 "choose": "max",
                 "value": "explained_variance_ratio",
                 "emit": {"best_pc": "pc"},
@@ -103,7 +103,7 @@ def _workflow(project_doc: Path) -> dict:
                 "type": "plot",
                 "plot": "lines",
                 "from": "fit",
-                "table": "spectrum.parquet",
+                "table": "spectrum.json",
                 "x": "pc",
                 "value": "explained_variance_ratio",
                 "file_path": "scree.png",
@@ -113,8 +113,8 @@ def _workflow(project_doc: Path) -> dict:
         "save": [
             {
                 "step": "fit",
-                "value": "spectrum.parquet",
-                "file_path": "spectrum.parquet",
+                "value": "spectrum.json",
+                "file_path": "spectrum.json",
             },
             {
                 "step": "fit",
@@ -161,14 +161,14 @@ def transform_run(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 def test_transform_step_writes_its_declared_outputs(transform_run: Path) -> None:
     assert (transform_run / "fit" / "weight.safetensors").is_file()
-    assert (transform_run / "fit" / "spectrum.parquet").is_file()
+    assert (transform_run / "fit" / "spectrum.json").is_file()
     weight = load_file(str(transform_run / "fit" / "weight.safetensors"))["weight"]
     # (d, k): the featurizer convention, so a protocol step can load it as-is
     assert weight.shape == (16, 2)
 
 
 def test_spectrum_table_matches_the_declared_columns(transform_run: Path) -> None:
-    spectrum = pd.read_parquet(transform_run / "fit" / "spectrum.parquet")
+    spectrum = table_frame(transform_run / "fit" / "spectrum.json")
     assert list(spectrum.columns) == [
         "pc",
         "explained_variance",
@@ -214,11 +214,11 @@ def test_manifest_records_the_transform_step(transform_run: Path) -> None:
     assert fit["op"] == "fit_pca@1"
     assert fit["status"] == "completed"
     assert len(fit["digest"]) == 64
-    assert fit["files"] == ["spectrum.parquet", "weight.safetensors"]
+    assert fit["files"] == ["spectrum.json", "weight.safetensors"]
     assert sorted(manifest["published"]) == [
         "basis.safetensors",
         "coords.safetensors",
         "scree.png",
-        "spectrum.parquet",
+        "spectrum.json",
         "top_pc.json",
     ]
