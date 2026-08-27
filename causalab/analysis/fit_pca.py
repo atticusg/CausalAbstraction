@@ -1,8 +1,8 @@
-"""``causalab:fit_pca`` — a principal basis over a saved read.
+"""``causalab.analysis.fit_pca`` — a principal basis over a saved read.
 
 ```json
 "fit": {
-  "type": "script", "script": "causalab:fit_pca",
+  "type": "script", "script": {"module": "causalab.analysis.fit_pca"},
   "inputs": {"acts": {"step": "harvest", "file": "acts.safetensors"}, "k": 8},
   "outputs": {"weight": "basis.safetensors",
               "spectrum": {"file": "spectrum.json",
@@ -29,7 +29,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
-from causalab.steps.io import StepError, write_table, write_tensor
+from causalab.io.step_io import StepError, write_table, write_tensor
 
 __all__ = ["main"]
 
@@ -37,7 +37,7 @@ __all__ = ["main"]
 def main(inputs: Mapping[str, Any], outputs: Mapping[str, Path]) -> None:
     import torch
 
-    from causalab.steps.io import read_tensor
+    from causalab.io.step_io import read_tensor
 
     acts = inputs["acts"]
     if isinstance(acts, (str, Path)):

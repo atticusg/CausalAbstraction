@@ -34,7 +34,7 @@ METHODS = REPO / "causalab/configs/methods"
 
 _PROBE = """
 import json, sys
-from causalab.protocol.cli import main
+from causalab.cli import main
 
 code = main(["validate", sys.argv[1], "--data-root", sys.argv[2],
              "--artifacts-root", sys.argv[3]])
@@ -58,12 +58,12 @@ def _workflow() -> dict:
         "output_dir": "probe",
         "steps": {
             "locate": {
-                "type": "protocol",
+                "type": "intervention_protocol",
                 "document": str(METHODS / "weekdays_locate_scan.json"),
             },
             "reduce": {
                 "type": "script",
-                "script": "scripts/torchy.py",
+                "script": {"path": "scripts/torchy.py"},
                 "inputs": {"table": {"step": "locate", "file": "iia.json"}},
                 "outputs": {"out": "out.json"},
             },

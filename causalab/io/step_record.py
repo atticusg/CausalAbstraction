@@ -1,4 +1,5 @@
-"""Reading a producing step's ``_step.json`` record.
+"""The per-step ``_step.json`` record: its format, its reader, and the shared
+reduction rule that reads it.
 
 The runner writes one per step (workflow spec §4): the files it declared, and
 for a protocol step the **sweep axes** its document expanded to. v1 derived
@@ -10,6 +11,13 @@ scripts rather than step types (§6).
 A script is handed *files*, not step names, so the sidecar is found beside the
 input it was given — which also means a script works identically against a run
 tree and against a hand-made directory in a test.
+
+**Why this lives in ``io/`` rather than ``workflow/``.** It is a file format, and
+both readers of it are outside the workflow package: the shipped ``select``
+script and the ``io.plots`` renderer. Putting it here keeps the dependency one
+way — ``workflow`` → ``io`` — where the reverse would be a cycle, since the
+runner already reads ``io.step_io``. The runner writes the record through
+:func:`write_sidecar`; everything that consumes one reads it through here.
 """
 
 from __future__ import annotations
@@ -18,7 +26,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-__all__ = ["SIDECAR", "axes_for", "read_sidecar"]
+__all__ = [
+    "EXAMPLE_COLUMN",
+    "SIDECAR",
+    "aggregate",
+    "axes_for",
+    "read_sidecar",
+    "write_sidecar",
+]
 
 SIDECAR = "_step.json"
 
@@ -84,3 +99,12 @@ def aggregate(
     if EXAMPLE_COLUMN in df.columns:
         return pd.DataFrame([{value_column: df[value_column].mean()}]), ()
     return df, ()
+
+
+def write_sidecar(step_dir: Path, entry: Any) -> None:
+    """Publish one step's record beside its outputs (workflow spec §4).
+
+    ``axes`` is the load-bearing field: it is how a downstream script groups a
+    swept table by its coordinate columns without the document model having to
+    derive it (§6)."""
+    (Path(step_dir) / SIDECAR).write_text(json.dumps(dict(entry), indent=2) + "\n")

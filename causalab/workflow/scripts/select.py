@@ -1,11 +1,11 @@
-"""``causalab:select`` — reduce a metric table to named values.
+"""``causalab.workflow.scripts.select`` — reduce a metric table to named values.
 
 The stage-1 → stage-2 seam: turn a swept metric table into the scalar(s) the
 next protocol needs (the locate → DAS handoff), as data instead of a notebook.
 
 ```json
 "best": {
-  "type": "script", "script": "causalab:select",
+  "type": "script", "script": {"module": "causalab.workflow.scripts.select"},
   "inputs": {
     "table": {"step": "locate", "file": "iia.json"},
     "choose": "max",
@@ -34,8 +34,8 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from causalab.steps.builtin._sidecar import aggregate
-from causalab.steps.io import StepError, frame, write_values
+from causalab.io.step_record import aggregate
+from causalab.io.step_io import StepError, frame, write_values
 
 __all__ = ["main"]
 

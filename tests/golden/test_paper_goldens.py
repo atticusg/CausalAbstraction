@@ -26,7 +26,7 @@ import pandas as pd
 import pytest
 import torch
 
-from causalab.protocol.cli import main
+from causalab.cli import main
 
 from causalab.protocol.tables import read_table
 from tests.golden._env import FIXTURES, GOLDEN_PROTOCOLS, GOLDENS_FILE

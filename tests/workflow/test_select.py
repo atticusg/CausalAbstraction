@@ -1,4 +1,4 @@
-"""``causalab:select`` — the reductions v1 had as spec rules.
+"""``causalab.workflow.scripts.select`` — the reductions v1 had as spec rules.
 
 These carry over the adversarial-review regressions from the v1 select step:
 integer coordinates survive the aggregation, both choose directions work, the
@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from causalab.steps.builtin import select
-from causalab.steps.io import StepError
-from tests.steps._run import put_sidecar, put_table, run_step
+from causalab.workflow.scripts import select
+from causalab.io.step_io import StepError
+from tests.step_scripts import put_sidecar, put_table, run_step
 
 pytestmark = pytest.mark.unit
 

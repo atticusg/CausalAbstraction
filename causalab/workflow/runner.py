@@ -30,8 +30,9 @@ from causalab.protocol.errors import ProtocolError
 from causalab.protocol.loader import apply_overrides, load, load_text
 from causalab.protocol.resolve import ArtifactStore, ResolutionEnv
 from causalab.protocol.sweep import DEFAULT_POINT_CAP
+from causalab.io.step_record import SIDECAR, write_sidecar
 from causalab.protocol.tables import TABLE_SUFFIX, read_table
-from causalab.protocol.workflow import (
+from causalab.workflow.document import (
     LoadedWorkflow,
     OutputDecl,
     ProtocolStep,
@@ -47,9 +48,6 @@ __all__ = [
     "run_workflow",
 ]
 
-#: The per-step record the runner publishes beside a step's outputs.
-SIDECAR = "_step.json"
-
 #: What identity a script-written tensor is stamped as coming from.
 SCRIPT_BACKEND = "script"
 
@@ -58,7 +56,7 @@ SCRIPT_BACKEND = "script"
 class OverlayArtifacts:
     """The §3 overlay: step outputs in the run tree shadow the external
     artifacts root. Every check is real here — this is the run-time store the
-    load-time :class:`~causalab.protocol.workflow.DeferredArtifacts` defers
+    load-time :class:`~causalab.workflow.document.DeferredArtifacts` defers
     to."""
 
     run_root: Path
@@ -148,7 +146,7 @@ def run_workflow(
         else:
             entry = _run_script_step(name, step, loaded, run_root, step_dir)
         step_manifest[name] = entry
-        _write_sidecar(step_dir, entry)
+        write_sidecar(step_dir, entry)
 
     manifest = {
         "workflow_digest": loaded.digest,
@@ -159,15 +157,6 @@ def run_workflow(
         manifest["nondeterministic"] = list(loaded.nondeterministic)
     (run_root / "workflow.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return WorkflowRunResult(manifest=manifest, run_root=run_root)
-
-
-def _write_sidecar(step_dir: Path, entry: Mapping[str, Any]) -> None:
-    """Publish the per-step record (§4).
-
-    ``axes`` is the load-bearing field: it is how a downstream script groups a
-    swept table by its coordinate columns without the document model having to
-    derive it (§6)."""
-    (step_dir / SIDECAR).write_text(json.dumps(dict(entry), indent=2) + "\n")
 
 
 def _reusable(
@@ -248,7 +237,7 @@ def _run_protocol_step(
     )
     result = backend.execute(request)
     return {
-        "type": "protocol",
+        "type": "intervention_protocol",
         "status": "completed",
         "identity": inner.document_digest,
         "document": step.document,
@@ -275,7 +264,7 @@ def _run_script_step(
     step_dir: Path,
 ) -> dict[str, Any]:
     """Resolve inputs, run the script, verify and stamp its outputs (§4)."""
-    from causalab.steps import io as step_io
+    from causalab.io import step_io
 
     resolved, tensor_identities = _resolve_inputs(name, step, run_root)
     outputs = {slot: step_dir / decl.file for slot, decl in step.outputs.items()}
@@ -300,8 +289,10 @@ def _run_script_step(
             )
         if decl.suffix == TABLE_SUFFIX:
             _verify_json_output(target, decl, what)
-        else:
+        elif decl.suffix == ".safetensors":
             step_io.stamp_tensor(target, identity, what=what)
+        # a visualization output (.png/.pdf/.html) carries no record, so there
+        # is nothing to stamp and no shape to check — existence is the contract
 
     return {
         "type": "script",
@@ -327,8 +318,8 @@ def _resolve_inputs(
     """The §3 grammar, resolved: a locator becomes a path, a selector reads
     through it. Also returns the identity of every tensor input, which is what
     a safetensors output inherits (§4)."""
-    from causalab.protocol.workflow import _repo_root
-    from causalab.steps import io as step_io
+    from causalab.workflow.document import _repo_root
+    from causalab.io import step_io
 
     resolved: dict[str, Any] = {}
     identities: list[Mapping[str, Any]] = []
@@ -380,7 +371,7 @@ def _verify_json_output(target: Path, decl: OutputDecl, what: str) -> None:
     error, but it is against the real file rather than a declaration believed on
     faith — and the declaration is what a consuming step was validated
     against."""
-    from causalab.steps import io as step_io
+    from causalab.io import step_io
 
     if decl.keys is not None:
         written = step_io.read_values(target)
@@ -471,7 +462,7 @@ def _run_isolated(
     command = ["uv", "run"]
     for dep in runtime.get("deps", ()):
         command += ["--with", str(dep)]
-    command += ["python", "-m", "causalab.steps._shim"]
+    command += ["python", "-m", "causalab.workflow.isolate"]
 
     environ = {
         key: os.environ[key]

@@ -1,4 +1,4 @@
-"""``causalab:harvest_difference`` — the step type earning its keep.
+"""``causalab.analysis.harvest_difference`` — the step type earning its keep.
 
 This closes a real stub: "harvest activations on two contrasting corpora and
 subtract the means" is the direction half of every steering experiment, and it
@@ -19,9 +19,9 @@ import pytest
 import torch
 
 from causalab.protocol.tables import read_table
-from causalab.steps.builtin import harvest_difference
-from causalab.steps.io import StepError, read_tensor, write_tensor
-from tests.steps._run import run_step
+from causalab.analysis import harvest_difference
+from causalab.io.step_io import StepError, read_tensor, write_tensor
+from tests.step_scripts import run_step
 
 pytestmark = pytest.mark.numerical_unit
 

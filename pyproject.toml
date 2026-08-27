@@ -68,8 +68,8 @@ exclude_lines = [
 ]
 
 [project.scripts]
-# The protocol CLI (docs/intervention_protocol.md §9): run / validate / explain / digest
-causalab = "causalab.protocol.cli:main"
+# One entry point over both document types; it dispatches on the `steps` section
+causalab = "causalab.cli:main"
 
 [tool.uv.build-backend]
 module-name = ["causalab"]

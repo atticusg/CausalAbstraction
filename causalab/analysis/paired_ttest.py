@@ -1,8 +1,8 @@
-"""``causalab:paired_ttest`` — two-sided paired t-test of two metric tables.
+"""``causalab.analysis.paired_ttest`` — two-sided paired t-test of two metric tables.
 
 ```json
 "compare": {
-  "type": "script", "script": "causalab:paired_ttest",
+  "type": "script", "script": {"module": "causalab.analysis.paired_ttest"},
   "inputs": {"a": {"step": "arm_a", "file": "iia.json"},
              "b": {"step": "arm_b", "file": "iia.json"}},
   "outputs": {"stats": {"file": "ttest.json",
@@ -23,7 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
-from causalab.steps.io import StepError, frame, write_table
+from causalab.io.step_io import StepError, frame, write_table
 
 __all__ = ["main"]
 

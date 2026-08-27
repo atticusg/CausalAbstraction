@@ -4,7 +4,7 @@ Two directions in one pipeline, because they are the two halves of the claim
 that a script step is a first-class step and not an escape from the record:
 
 * **protocol → script → script** — a harvested activation bundle is fitted by
-  ``causalab:fit_pca``; the spectrum table it writes is then ranked and drawn by
+  ``causalab.analysis.fit_pca``; the spectrum table it writes is then ranked and drawn by
   further script steps, with no sweep axes to group by.
 * **protocol → script → protocol** — the fitted basis is loaded back by a later
   protocol step as a ``pca`` featurizer through the ordinary run-tree
@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 from safetensors.torch import load_file
 
-from causalab.protocol.cli import main
+from causalab.cli import main
 from causalab.protocol.resolve import read_safetensors_metadata
 
 from tests.neural.pytorch_hooks.conftest import TINY_LLAMA
@@ -75,13 +75,13 @@ def _workflow(project_doc: Path) -> dict:
         "output_dir": "pca_pipeline",
         "steps": {
             "harvest": {
-                "type": "protocol",
+                "type": "intervention_protocol",
                 "document": f"{METHODS}/harvest.json",
                 "set": {**tiny, "sites.L8.layer": 0, "sites.L24.layer": 1},
             },
             "fit": {
                 "type": "script",
-                "script": "causalab:fit_pca",
+                "script": {"module": "causalab.analysis.fit_pca"},
                 "inputs": {
                     "acts": {
                         "step": "harvest",
@@ -104,7 +104,7 @@ def _workflow(project_doc: Path) -> dict:
             },
             "top_pc": {
                 "type": "script",
-                "script": "causalab:select",
+                "script": {"module": "causalab.workflow.scripts.select"},
                 "inputs": {
                     "table": {"step": "fit", "file": "spectrum.json"},
                     "choose": "max",
@@ -115,17 +115,19 @@ def _workflow(project_doc: Path) -> dict:
             },
             "scree": {
                 "type": "script",
-                "script": "causalab:plot",
+                "script": {"module": "causalab.io.plots.workflow_figures"},
                 "inputs": {
                     "table": {"step": "fit", "file": "spectrum.json"},
                     "plot": "lines",
                     "x": "pc",
                     "value": "explained_variance_ratio",
-                    "figure": "scree.png",
                 },
-                "outputs": {"plotted": {"file": "scree.json"}},
+                "outputs": {
+                    "figure": "scree.png",
+                    "plotted": {"file": "scree.json"},
+                },
             },
-            "project": {"type": "protocol", "document": str(project_doc)},
+            "project": {"type": "intervention_protocol", "document": str(project_doc)},
         },
     }
 
@@ -213,7 +215,7 @@ def test_manifest_records_the_script_step(transform_run: Path) -> None:
     manifest = json.loads((transform_run / "workflow.json").read_text())
     fit = manifest["steps"]["fit"]
     assert fit["type"] == "script"
-    assert fit["script"] == "causalab:fit_pca"
+    assert fit["script"] == "causalab.analysis.fit_pca"
     assert fit["status"] == "completed"
     assert len(fit["digest"]) == 64
     assert len(fit["script_sha256"]) == 64

@@ -1,8 +1,8 @@
-"""``causalab:head_stats`` — mean and spread of a metric over each (layer, head).
+"""``causalab.analysis.head_stats`` — mean and spread of a metric over each (layer, head).
 
 ```json
 "per_head": {
-  "type": "script", "script": "causalab:head_stats",
+  "type": "script", "script": {"module": "causalab.analysis.head_stats"},
   "inputs": {"table": {"step": "scan", "file": "iia.json"}},
   "outputs": {"stats": {"file": "head_stats.json",
                         "columns": {"layer": "int64", "head": "int64",
@@ -19,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
-from causalab.steps.io import StepError, frame, write_frame
+from causalab.io.step_io import StepError, frame, write_frame
 
 __all__ = ["main"]
 

@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from protocol._env import FIXTURES, build_env, write_rot_fixture  # noqa: E402
 
-from causalab.protocol.workflow import load_workflow  # noqa: E402
+from causalab.workflow.document import load_workflow  # noqa: E402
 
 WORKFLOW_DIR = Path(__file__).resolve().parents[2] / "causalab/configs/workflows"
 

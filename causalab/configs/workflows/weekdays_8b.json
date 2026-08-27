@@ -4,12 +4,12 @@
   "output_dir": "weekdays_8b",
   "steps": {
     "locate": {
-      "type": "protocol",
+      "type": "intervention_protocol",
       "document": "../methods/weekdays_locate_scan.json"
     },
     "best": {
       "type": "script",
-      "script": "causalab:select",
+      "script": {"module": "causalab.workflow.scripts.select"},
       "inputs": {
         "table": {"step": "locate", "file": "iia.json"},
         "choose": "max",
@@ -23,7 +23,7 @@
       }
     },
     "fit": {
-      "type": "protocol",
+      "type": "intervention_protocol",
       "document": "../methods/weekdays_das_sweep.json",
       "set": {
         "positions.best": {"artifact": "best", "key": "best_pos"},
@@ -32,7 +32,7 @@
     },
     "best_fit": {
       "type": "script",
-      "script": "causalab:select",
+      "script": {"module": "causalab.workflow.scripts.select"},
       "inputs": {
         "table": {"step": "fit", "file": "iia.json"},
         "choose": "max",
@@ -46,7 +46,7 @@
       }
     },
     "apply": {
-      "type": "protocol",
+      "type": "intervention_protocol",
       "document": "../methods/weekdays_das_apply.json",
       "set": {
         "featurizers.rot.file_path": "fit/rot.safetensors",
@@ -59,27 +59,31 @@
     },
     "scan_heatmap": {
       "type": "script",
-      "script": "causalab:plot",
+      "script": {"module": "causalab.io.plots.workflow_figures"},
       "inputs": {
         "table": {"step": "locate", "file": "iia.json"},
         "plot": "heatmap",
         "x": "sites.target.layer",
-        "y": "positions.tap",
-        "figure": "scan_iia.png"
+        "y": "positions.tap"
       },
-      "outputs": {"plotted": {"file": "scan_iia.json"}}
+      "outputs": {
+        "figure": "scan_iia.png",
+        "plotted": {"file": "scan_iia.json"}
+      }
     },
     "iia_by_k": {
       "type": "script",
-      "script": "causalab:plot",
+      "script": {"module": "causalab.io.plots.workflow_figures"},
       "inputs": {
         "table": {"step": "fit", "file": "iia.json"},
         "plot": "lines",
         "x": "featurizers.rot.k",
-        "series": "train.seed",
-        "figure": "iia_by_k.png"
+        "series": "train.seed"
       },
-      "outputs": {"plotted": {"file": "iia_by_k.json"}}
+      "outputs": {
+        "figure": "iia_by_k.png",
+        "plotted": {"file": "iia_by_k.json"}
+      }
     }
   }
 }

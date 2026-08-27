@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 from safetensors.torch import load_file
 
-from causalab.protocol.cli import main
+from causalab.cli import main
 
 from tests.protocol._env import CORPUS_DIR, FIXTURES
 from tests.neural.pytorch_hooks._drive import base_data_section  # noqa: F401  (tier anchor)

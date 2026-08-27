@@ -8,8 +8,8 @@
 | `tasks/` | task definitions (causal models + counterfactual generators) + `serialize.py`, which writes them out as dataset tables |
 | `protocol/` | the backend-free document layer |
 | `neural/pytorch_hooks/` | the reference execution backend |
-| `steps/` | the Python a workflow `script` step runs: the IO helpers, plus the scripts causalab ships (`causalab:<name>`) |
-| `workflow/` | the workflow runner |
+| `analysis/` | numerical analysis a workflow `script` step runs: fits, statistics, intervention operands |
+| `workflow/` | the workflow document model, runner, and CLI verbs |
 | `io/` | disk I/O + shared plotting primitives |
 | `configs/` | method presets and workflow documents (JSON, not code) |
 
@@ -59,16 +59,33 @@ Known limits (tracked in the intervention-protocol epic): one device per run (no
 
 Executes workflow documents: topological step order from derived references, per-step output dirs under `<out-root>/<output_dir>/`, an artifact overlay so later steps resolve earlier steps' products, protocol and script steps, a `_step.json` record per step and a `workflow.json` run manifest. There is no publication step — the run tree *is* the publication (spec §0). The runner knows only the step graph: device/dtype live in the backends it is handed, and job dispatch is site tooling outside the repo (spec §8, "Execution scale").
 
-**Step scripts (`causalab/steps/`)** are what a `script` step runs (workflow spec §2.3):
+**Step scripts.** A `script` step names its code with a locator —
+`{"module": "causalab.analysis.fit_pca"}` or `{"path": "scripts/probe.py"}` — so
+the shipped ones are filed **by subject** rather than in one namespace:
 
-| module | owns |
+| module | what it holds |
 |---|---|
-| `io.py` | reading inputs and writing outputs — JSON tables and values objects, `.safetensors` bundles with `slot`/`entry` addressing, and the identity a tensor output inherits |
-| `builtin/` | the scripts causalab ships, addressed as `causalab:<name>`: `select`, `plot`, `fit_pca`, `head_stats`, `paired_ttest`, `harvest_difference` |
-| `builtin/_sidecar.py` | reading a producing step's `_step.json` — the shared aggregation rule `select` and `plot` both use, so a figure and the value chosen from one table never disagree |
-| `_shim.py` | the entry point for an isolated (subprocess) step |
+| `causalab/analysis/` | numerical analysis: `fit_pca`, `harvest_difference`, `head_stats`, `paired_ttest`. Fits, statistics, and the operands an intervention consumes. Importable and testable without the workflow layer |
+| `causalab/io/plots/workflow_figures.py` | the heatmap/lines renderer, beside the other 17 plot modules and reusing `figure_format` for the png-over-pdf default |
+| `causalab/workflow/scripts/select.py` | the one script whose purpose *is* wiring: reduce a table to the values a later document's `set` reads |
+| `causalab/io/step_io.py` | what a script uses for IO: JSON tables and values objects, safetensors with `slot`/`entry` addressing, the identity a tensor output inherits |
+| `causalab/io/step_record.py` | the `_step.json` format — its writer (used by the runner), its reader, and the shared aggregation rule `select` and `workflow_figures` both call, so a figure and a chosen value never disagree about what a row is |
+| `causalab/workflow/isolate.py` | the entry point for an isolated (subprocess) step |
 
-A script is one function, `main(inputs, outputs) -> None`, that creates every output it declares. The runner verifies they arrived, checks a declared table's columns, and stamps ArtifactIdentity on safetensors outputs — so a script cannot forget provenance, which is what a later protocol step's identity check depends on. A script is **hashed, never imported** at load: `validate`/`digest` stay torch-free, and the hash in the digest is what makes `--resume` correct.
+A script is one function, `main(inputs, outputs) -> None`, that creates every
+output it declares. The runner verifies they arrived, checks a declared table's
+columns, and stamps ArtifactIdentity on safetensors outputs — so a script cannot
+forget provenance, which is what a later protocol step's identity check depends
+on. A script is **found and hashed, never imported** at load
+(`importlib.util.find_spec` resolves a module to a file without executing it):
+`validate`/`digest` stay torch-free, and the hash in the digest is what makes
+`--resume` correct.
+
+**Why two packages.** `protocol/` is the intervention protocol alone and must
+not import the workflow layer — that is what lets someone use it on its own, and
+`tests/test_architecture_layering.py` enforces it. The dependency runs
+`workflow/` → `io/` → `protocol/`, one way, and `causalab/cli.py` sits above
+both, dispatching on the document's `steps` section.
 
 ## 5. Datasets are build products
 
