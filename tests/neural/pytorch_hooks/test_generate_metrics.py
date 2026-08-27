@@ -58,7 +58,7 @@ def _doc(metric: dict[str, Any], *, anchor: dict[str, Any]) -> dict[str, Any]:
                 "value": "scored",
                 "model": "original",
                 "input": "base",
-                "file_path": "scored.parquet",
+                "file_path": "scored.json",
             }
         ],
     }
@@ -240,7 +240,7 @@ def test_kl_across_different_widths_refuses(llama_bundle):
                     "value": "d",
                     "model": "original",
                     "input": "base",
-                    "file_path": "d.parquet",
+                    "file_path": "d.json",
                 }
             ],
         }

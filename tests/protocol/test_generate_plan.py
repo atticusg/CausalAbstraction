@@ -141,7 +141,7 @@ def _decode_metric(raw: dict[str, Any]) -> dict[str, Any]:
             "value": "said",
             "model": "patched",
             "input": "base",
-            "file_path": "said.parquet",
+            "file_path": "said.json",
         }
     ]
     return in_order(raw)
