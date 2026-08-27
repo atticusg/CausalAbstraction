@@ -27,16 +27,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pandas as pd
 import pytest
 from safetensors.torch import load_file
 
 from causalab.neural.pytorch_hooks.loading import load_model
 from causalab.neural.pytorch_hooks.metrics import column_first_token_id
-from causalab.protocol.cli import main
+from causalab.cli import main
 
 from tests.neural.pytorch_hooks.conftest import TINY_LLAMA
 from tests.protocol._env import CORPUS_DIR, FIXTURES
+from tests.tables import frame as table_frame
 
 pytestmark = pytest.mark.numerical_unit
 
@@ -96,7 +96,7 @@ def test_task_table_interchange_iia_matches_pins(tmp_path, layer):
     assert _run(tmp_path, layer) == 0
     pins = PINS[layer]
 
-    iia = pd.read_parquet(tmp_path / "iia.parquet")
+    iia = table_frame(tmp_path / "iia.json")
     assert list(iia["value"]) == pins["iia"]
 
     patched = load_file(str(tmp_path / "logits.safetensors"))["logits"]

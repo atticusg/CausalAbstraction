@@ -43,8 +43,8 @@
     "seed": {"sweep": [0, 1, 2]}
   },
   "save": [
-    {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.parquet"},
-    {"value": "ce", "model": "patched", "input": "base", "file_path": "ce.parquet"},
+    {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.json"},
+    {"value": "ce", "model": "patched", "input": "base", "file_path": "ce.json"},
     {"value": "rot", "site": "target", "file_path": "rot.safetensors"}
   ]
 }

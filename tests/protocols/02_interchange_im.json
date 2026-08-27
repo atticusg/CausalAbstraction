@@ -25,7 +25,7 @@
     "logit_diff": {"kind": "logit_diff", "of": "logits", "a": "cf_answer", "b": "base_answer"}
   },
   "save": [
-    {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.parquet"},
-    {"value": "logit_diff", "model": "patched", "input": "base", "file_path": "logit_diff.parquet"}
+    {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.json"},
+    {"value": "logit_diff", "model": "patched", "input": "base", "file_path": "logit_diff.json"}
   ]
 }

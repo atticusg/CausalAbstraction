@@ -210,7 +210,7 @@ class PytorchHooksBackend(Backend):
                     )
             elif entry.value in doc.reads:
                 # the site goes on the entry too: a harvested activation is
-                # bound to where it was read, and a consumer (a transform op
+                # bound to where it was read, and a consumer (a script step
                 # fitting a basis on it, then a document loading that basis)
                 # has no other way to prove the two agree
                 read_site = _site_identity(doc, str(doc.reads[entry.value].site))

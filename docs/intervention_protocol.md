@@ -426,8 +426,12 @@ everything that leaves the run. Three saveable kinds, two entry shapes:
 - `model`/`input` (resp. `site`) **restate** the binding resolved from the
   declarations and are **cross-checked** — mismatch is a load error. They are
   drift-protected documentation, never a second source of truth.
-- `file_path` is relative to the run's output directory. Tensors →
-  `.safetensors`; per-example metric tables → `.parquet`. In swept documents
+- `file_path` is relative to the run's output directory. **JSON and
+  safetensors are the only two formats**: dense numerics → `.safetensors`,
+  per-example metric tables → `.json`, an array of row objects. Row labels
+  repeat — that is the deliberate trade for a file `jq` and a human can both
+  read. One file per metric, so a document saving three metrics writes three
+  tables. In swept documents
   the path is unchanged; axis coordinates become columns / keyed entries
   (`weight[k=8,seed=0]`, one record per entry in the header's `entries`
   table — sec. 8).
@@ -705,7 +709,7 @@ Path patching (sender → receiver, off-path frozen; shows cross-model flow):
     "logit_diff": {"kind": "logit_diff", "of": "logits", "a": "answer", "b": "cf_answer"}
   },
   "save": [
-    {"value": "logit_diff", "model": "final", "input": "base", "file_path": "logit_diff.parquet"}
+    {"value": "logit_diff", "model": "final", "input": "base", "file_path": "logit_diff.json"}
   ]
 }
 ```
@@ -753,8 +757,8 @@ featurizer save):
     "seed":       {"sweep": [0, 1, 2]}
   },
   "save": [
-    {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.parquet"},
-    {"value": "ce",  "model": "patched", "input": "base", "file_path": "ce.parquet"},
+    {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.json"},
+    {"value": "ce",  "model": "patched", "input": "base", "file_path": "ce.json"},
     {"value": "rot", "site": "target", "file_path": "rot.safetensors"}
   ]
 }

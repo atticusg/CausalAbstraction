@@ -40,8 +40,8 @@
     "seed": 0
   },
   "save": [
-    {"value": "iia", "model": "masked", "input": "base", "file_path": "iia.parquet"},
-    {"value": "ce", "model": "masked", "input": "base", "file_path": "ce.parquet"},
+    {"value": "iia", "model": "masked", "input": "base", "file_path": "iia.json"},
+    {"value": "ce", "model": "masked", "input": "base", "file_path": "ce.json"},
     {"value": "gate", "site": "target", "file_path": "gate.safetensors"}
   ]
 }

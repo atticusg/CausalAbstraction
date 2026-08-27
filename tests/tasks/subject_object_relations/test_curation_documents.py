@@ -71,7 +71,7 @@ def _baseline_document(refs: list[str]) -> dict:
                 "value": "accuracy",
                 "model": "original",
                 "input": "base",
-                "file_path": "accuracy.parquet",
+                "file_path": "accuracy.json",
             }
         ],
     }
