@@ -19,7 +19,7 @@ from typing import Any, Mapping, Sequence
 from causalab.protocol.errors import ValidationError
 from causalab.protocol.plan import generated_budget
 from causalab.protocol.resolve import ResolutionEnv
-from causalab.protocol.schema import Document
+from causalab.protocol.schema import Document, metric_reads_vocabulary
 
 __all__ = [
     "Backend",
@@ -41,7 +41,12 @@ CAPABILITIES: tuple[str, ...] = (
     "generate",
 )
 
-#: Metric kinds that need the whole vocabulary materialized (§8).
+#: Metric kinds that need the whole vocabulary materialized (§8) — but only
+#: when their read actually taps ``lm_head``. ``class_probs`` always does
+#: (validation binds it to a vocabulary projection); ``top_k`` ranks whatever
+#: axis its read has, and a top-k over a 4k-wide residual stream or a 100k-wide
+#: SAE code obliges no vocabulary projection at all. Charging it ``full_logits``
+#: would route such a document onto a full-vocab backend for nothing.
 _FULL_VOCAB_METRICS = frozenset({"top_k", "class_probs"})
 
 
@@ -82,7 +87,7 @@ def requires(doc: Document) -> frozenset[str]:
             if site.component == "lm_head":
                 needed.add("full_logits")
     for metric in doc.metrics.values():
-        if metric.kind in _FULL_VOCAB_METRICS:
+        if metric.kind in _FULL_VOCAB_METRICS and metric_reads_vocabulary(doc, metric):
             needed.add("full_logits")
     for read in doc.reads.values():
         if generated_budget(doc, read.pos) is not None:

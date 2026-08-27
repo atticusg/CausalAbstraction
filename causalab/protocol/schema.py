@@ -59,6 +59,7 @@ __all__ = [
     "MetricDomain",
     "MetricSpec",
     "ModelRef",
+    "NON_COLUMN_METRIC_FIELDS",
     "OPTIONAL_METRIC_FIELDS",
     "ParamSpec",
     "PositionSpec",
@@ -69,10 +70,13 @@ __all__ = [
     "SiteSpec",
     "TOKEN_COLUMN_METRIC_KINDS",
     "TOKEN_FORMS",
+    "TOP_K_RANKINGS",
+    "VOCAB_TOP_K_RANKING",
     "WHOLE_WINDOW_METRIC_KINDS",
     "TokenForm",
     "concrete_int",
     "concrete_str",
+    "metric_reads_vocabulary",
     "Sweep",
     "TrainSpec",
     "parse_document",
@@ -164,21 +168,29 @@ METRIC_KINDS: tuple[MetricKind, ...] = get_args(MetricKind)
 
 #: Value fields per metric kind beyond ``of`` (§2.10). ``kl.target`` names a
 #: read; every other value field names a dataset column (checked at run time
-#: by ``validate --data``, §2.2) — except ``top_k.k``, an integer.
+#: by ``validate --data``, §2.2) — except the fields in
+#: :data:`NON_COLUMN_METRIC_FIELDS`.
 METRIC_FIELDS: dict[str, tuple[str, ...]] = {
     "logit_diff": ("a", "b"),
     "token_logit": ("token",),
     "cross_entropy": ("target",),
     "kl": ("target",),
     "class_probs": ("groups",),
-    "top_k": ("k",),
+    "top_k": ("k", "by"),
     "match": ("expected",),
     "decode": (),
 }
 
+#: Mandatory value fields that are *not* dataset column names: ``top_k.k`` is
+#: an integer and ``top_k.by`` is a closed enum. Everything else in
+#: :data:`METRIC_FIELDS` (bar ``kl.target``, a read) is checked against the
+#: resolved datasets' columns.
+NON_COLUMN_METRIC_FIELDS: frozenset[str] = frozenset({"k", "by"})
+
 #: What each metric kind consumes from its read (§2.10). ``distribution``
-#: kinds reduce the vocabulary projection at the addressed positions;
-#: ``ids`` kinds consume only the tokens the decode actually produced. The
+#: kinds reduce the read's dense value at the addressed positions (the
+#: vocabulary projection for an ``lm_head`` read, which is every kind but
+#: ``top_k``); ``ids`` kinds consume only the tokens the decode produced. The
 #: split is what lets the planner (§8) tell a text probe — which obliges no
 #: vocabulary projection at all — from a scoring one, so it is a property of
 #: the kind, never of the document.
@@ -212,7 +224,8 @@ TOKEN_FORMS: tuple[TokenForm, ...] = get_args(TokenForm)
 
 #: Metric kinds whose value fields carry string answers that must resolve to
 #: token ids — the kinds ``token_form`` applies to. ``kl`` compares two reads'
-#: distributions and ``top_k`` decodes ids it found, so neither resolves a
+#: distributions and ``top_k`` reports indices it found (decoding them only
+#: when the read happens to tap ``lm_head``), so neither resolves an authored
 #: string and neither accepts the key.
 TOKEN_COLUMN_METRIC_KINDS: frozenset[str] = frozenset(
     {"logit_diff", "token_logit", "cross_entropy", "class_probs", "match"}
@@ -236,6 +249,26 @@ METRIC_FIELD_DEFAULTS: dict[tuple[str, str], Any] = {
 #: form's first token, which is what "prefix" means with logits at one
 #: position (a multi-token answer's first piece).
 MATCH_MODES: tuple[str, ...] = ("exact", "first_token")
+
+#: How ``top_k`` ranks the entries of its read's last axis (§2.10). Mandatory,
+#: because the right answer depends on what the axis *is* and only the author
+#: knows: a vocabulary projection has no meaningful negative entries, while a
+#: residual stream and a signed feature code do — ranking a 100k-latent SAE
+#: code by signed value and by magnitude give different top-k sets, and
+#: silently picking one for the author is how a plot ends up meaning something
+#: other than its caption.
+#:
+#: * ``value`` — the k largest signed entries. Any read.
+#: * ``abs_value`` — the k largest by ``|x|``; the reported value stays signed.
+#:   Any read.
+#: * ``prob`` — softmax the last axis, then take the k largest probabilities.
+#:   Legal **only** on an ``lm_head`` read: a softmax across neurons or SAE
+#:   latents normalizes over an axis that is not an event space, and the
+#:   resulting "probabilities" would mean nothing (validation refuses it).
+TOP_K_RANKINGS: tuple[str, ...] = ("value", "abs_value", "prob")
+
+#: The ``top_k.by`` ranking that normalizes, and so is vocabulary-only.
+VOCAB_TOP_K_RANKING: str = "prob"
 
 #: The bare-string spelling of an all-positions spec (§2.3 sugar). Reserved as
 #: a name so a ``positions`` entry can never shadow the sugar.
@@ -515,7 +548,10 @@ class MetricSpec:
     dataset columns. ``fields`` holds the kind's extra value fields.
     ``token_form`` says how this metric's string answers become token ids
     (``TOKEN_FORMS``); the ``auto`` default is the historical resolver, so an
-    unauthored metric behaves exactly as before."""
+    unauthored metric behaves exactly as before. ``top_k`` additionally
+    carries a mandatory ``by`` (``TOP_K_RANKINGS``) in ``fields``, because a
+    top-k over a signed feature code and one over a vocabulary projection are
+    different questions."""
 
     kind: Leaf
     of: Leaf
@@ -592,6 +628,22 @@ class Document:
             for name in table:
                 seen.setdefault(name, section)
         return seen
+
+
+def metric_reads_vocabulary(doc: Document, metric: MetricSpec) -> bool:
+    """Whether the last axis of ``metric``'s read is the vocabulary.
+
+    True exactly when the ``of`` read taps ``lm_head``. Three places need the
+    same answer and must not disagree: capability derivation (does this
+    document oblige ``full_logits``?, §8), validation (may this ``top_k``
+    normalize?, §2.10) and the reduction itself (are these indices token ids
+    worth decoding?). A dangling ``of`` is validation's error to report, so it
+    answers False here rather than raising."""
+    read = doc.reads.get(str(metric.of))
+    if read is None:
+        return False
+    site = doc.sites.get(str(read.site))
+    return site is not None and site.component == "lm_head"
 
 
 # --------------------------------------------------------------------------- #
@@ -1423,9 +1475,30 @@ def _parse_metric(raw: Any, path: str) -> MetricSpec:
     fields: dict[str, Any] = {}
     for field in extra:
         if field not in obj:
-            raise ParseError("P2", f"metric kind {kind!r} needs {field!r}", path=path)
+            hint = (
+                " — the ranking rule is mandatory because the read decides it: "
+                f"{VOCAB_TOP_K_RANKING!r} (softmax the vocabulary, lm_head reads "
+                "only), 'value' (largest signed entries) or 'abs_value' (largest "
+                "magnitude). A pre-'by' document that scored logits meant "
+                f"{VOCAB_TOP_K_RANKING!r}"
+                if (kind, field) == ("top_k", "by")
+                else ""
+            )
+            raise ParseError(
+                "P2", f"metric kind {kind!r} needs {field!r}{hint}", path=path
+            )
         if field == "k":
             fields[field] = _wrapped(obj[field], _scalar_int, f"{path}.{field}")
+        elif field == "by":
+            # ranking rule, not a dataset column — and not sweepable: a sweep
+            # over `by` would fork a campaign on how a plot is read rather
+            # than on a research variable (same reasoning as `token_form`).
+            fields[field] = _wrapped(
+                obj[field],
+                lambda v, p: _enum(v, TOP_K_RANKINGS, p),
+                f"{path}.{field}",
+                allow_sweep=False,
+            )
         elif field == "groups":
             fields[field] = _wrapped(obj[field], _any_leaf, f"{path}.{field}")
         else:

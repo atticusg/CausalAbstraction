@@ -141,6 +141,74 @@ def test_rule_4_metric_on_non_lm_head_read():
     expect_rule(4, doc)
 
 
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"kind": "class_probs", "groups": {"days": ["Monday"]}},
+        {"kind": "token_logit", "token": "cf_answer"},
+        {"kind": "cross_entropy", "target": "cf_answer"},
+        {"kind": "match", "expected": "cf_answer"},
+    ],
+)
+def test_rule_4_still_binds_the_token_space_kinds_to_lm_head(spec):
+    """``top_k`` was loosened to any read; its siblings were not. Each of
+    these resolves an authored string to a token id, which only an
+    ``lm_head`` read can be indexed by."""
+    doc = base_doc()
+    doc["metrics"]["m"] = {"of": "v_cf", **spec}
+    doc["save"].append(
+        {
+            "value": "m",
+            "model": "original",
+            "input": "counterfactual",
+            "file_path": "m.json",
+        }
+    )
+    expect_rule(4, doc)
+
+
+def test_rule_4_top_k_binds_to_a_read_at_any_component():
+    """The point of the change: a top-k over a wide read is the reduction that
+    keeps the wide tensor off disk, so it must be expressible."""
+    doc = base_doc()
+    doc["metrics"]["tk"] = {"kind": "top_k", "of": "v_cf", "k": 4, "by": "abs_value"}
+    doc["save"].append(
+        {
+            "value": "tk",
+            "model": "original",
+            "input": "counterfactual",
+            "file_path": "tk.json",
+        }
+    )
+    parse_and_validate(doc)
+
+
+def test_rule_4_top_k_by_prob_off_lm_head_is_refused():
+    """A softmax across a residual stream normalizes over an axis that is not
+    an event space — the resulting numbers are probabilities of nothing."""
+    doc = base_doc()
+    doc["metrics"]["tk"] = {"kind": "top_k", "of": "v_cf", "k": 4, "by": "prob"}
+    doc["save"].append(
+        {
+            "value": "tk",
+            "model": "original",
+            "input": "counterfactual",
+            "file_path": "tk.json",
+        }
+    )
+    err = expect_rule(4, doc)
+    assert "prob" in str(err)
+
+
+def test_rule_4_top_k_by_prob_on_lm_head_is_legal():
+    doc = base_doc()
+    doc["metrics"]["tk"] = {"kind": "top_k", "of": "logits", "k": 4, "by": "prob"}
+    doc["save"].append(
+        {"value": "tk", "model": "patched", "input": "base", "file_path": "tk.json"}
+    )
+    parse_and_validate(doc)
+
+
 # rule 5 — read bindings ------------------------------------------------------ #
 
 

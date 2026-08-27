@@ -39,7 +39,13 @@ from causalab.neural.pytorch_hooks.featurizers import Gate, Stage
 from causalab.neural.pytorch_hooks.metrics import column_token_ids
 from causalab.protocol.backend import ExecutionRequest
 from causalab.protocol.errors import ProtocolError
-from causalab.protocol.schema import Document, MetricSpec, concrete_int, concrete_str
+from causalab.protocol.schema import (
+    Document,
+    MetricSpec,
+    concrete_int,
+    concrete_str,
+    metric_reads_vocabulary,
+)
 
 __all__ = ["metric_tensor", "run_training"]
 
@@ -363,6 +369,7 @@ def _run_eval(
             eval_executor.rows_for_metrics(),
             eval_executor.bundle.tokenizer,
             target_value=target,
+            vocab_axis=metric_reads_vocabulary(doc, metric),
         )
         numeric = [v for v in values if isinstance(v, (int, float))]
         scores[name] = sum(numeric) / len(numeric) if numeric else 0.0

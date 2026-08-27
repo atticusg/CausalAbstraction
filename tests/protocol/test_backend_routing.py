@@ -54,13 +54,30 @@ def test_requires_full_logits_when_lm_head_read_saved():
     assert "full_logits" in requires(parse_document(raw))
 
 
-def test_requires_full_logits_for_top_k():
+def test_requires_full_logits_for_top_k_over_an_lm_head_read():
     raw = base_doc()
-    raw["metrics"]["tk"] = {"kind": "top_k", "of": "logits", "k": 5}
+    raw["metrics"]["tk"] = {"kind": "top_k", "of": "logits", "k": 5, "by": "prob"}
     raw["save"].append(
         {"value": "tk", "model": "patched", "input": "base", "file_path": "tk.json"}
     )
     assert "full_logits" in requires(parse_document(raw))
+
+
+def test_top_k_over_a_non_vocabulary_read_needs_no_full_logits():
+    """The saving that motivates any-read ``top_k``: ranking a residual stream
+    obliges no vocabulary projection anywhere, so it must not route the
+    document onto a full-vocab backend."""
+    raw = base_doc()
+    raw["metrics"]["tk"] = {"kind": "top_k", "of": "v_cf", "k": 5, "by": "abs_value"}
+    raw["save"].append(
+        {
+            "value": "tk",
+            "model": "original",
+            "input": "counterfactual",
+            "file_path": "tk.json",
+        }
+    )
+    assert "full_logits" not in requires(parse_document(raw))
 
 
 def test_requires_writable_attention_probs():
