@@ -408,10 +408,29 @@ def bshd(heads: int, head_dim: int, *, note: str | None = None) -> FeatureShape:
     )
 
 
-def bhsd(heads: int, head_dim: int, *, note: str | None = None) -> FeatureShape:
-    """``(batch, heads, position, head_dim)`` — the attention interface's q/k/v."""
+def bhsd(
+    heads: int,
+    head_dim: int,
+    *,
+    position_name: str | None = None,
+    note: str | None = None,
+) -> FeatureShape:
+    """``(batch, heads, position, head_dim)`` — the attention interface's q/k/v.
+
+    ``position_name`` says *which* positions the axis runs over. It matters for
+    exactly one thing: the keys' axis runs over the positions being attended
+    *to*, which under a KV cache is the whole prefix and grows by one per decode
+    step, while the queries' axis is the step itself. Naming it is what lets the
+    executor refuse a continuation read of the keys without a per-component
+    list.
+    """
     return FeatureShape(
-        axes=(_BATCH, Axis("head", heads), _POSITION, Axis("feature", head_dim)),
+        axes=(
+            _BATCH,
+            Axis("head", heads),
+            Axis("position", name=position_name),
+            Axis("feature", head_dim),
+        ),
         flat_inner=False,
         note=note,
     )

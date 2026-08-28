@@ -43,11 +43,41 @@ class NnsightEngine(Engine):
             "pytorch_fn_local",
         }
     )
-    # The module-boundary vocabulary (N4). 'attention_probs' joins with the
-    # attention-interior phase (N5); the interiors this engine exists for
-    # (DeltaNet state, expert interiors) join the schema with their phases.
-    components = frozenset(COMPONENTS) - {"attention_probs"}
-    writable_components = frozenset(COMPONENTS) - {"attention_probs"}
+    # The module-boundary vocabulary (N4). The attention interior joins with
+    # N5; the interiors this engine exists for (DeltaNet state, expert
+    # interiors) join the schema with their phases.
+    #
+    # ⚠️ Round 2's nine attention components are excluded here, for two
+    # different reasons and neither of them "not implemented yet":
+    #
+    # * the four *function-interior* taps and 'attention_probs' live inside one
+    #   `attention_interface(...)` call and are reached by registering an eager
+    #   wrapper — a pytorch_hooks mechanism with no nnsight equivalent, which is
+    #   exactly what N5 is for;
+    # * 'attention_result' is *derived*: computing it re-invokes the
+    #   o-projection, and this engine's `site.module` is an nnsight envoy rather
+    #   than a callable module.
+    #
+    # The four module-boundary taps (v, the pre-RoPE projections, the gate)
+    # would very likely work here unchanged — they are ordinary envoy reads —
+    # but nothing exercises them on this engine, and declaring support this
+    # engine has never been tested for is the claim worth not making.
+    _ROUND_TWO_ATTENTION = frozenset(
+        {
+            "attention_probs",
+            "attention_query",
+            "attention_key",
+            "attention_scores",
+            "attention_z",
+            "attention_result",
+            "attention_value_states",
+            "attention_query_pre_rope",
+            "attention_key_pre_rope",
+            "attention_gate",
+        }
+    )
+    components = frozenset(COMPONENTS) - _ROUND_TWO_ATTENTION
+    writable_components = frozenset(COMPONENTS) - _ROUND_TWO_ATTENTION
     is_local = True
 
     def __init__(self, *, device: str = "cpu") -> None:

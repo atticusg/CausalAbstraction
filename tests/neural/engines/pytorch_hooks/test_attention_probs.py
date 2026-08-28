@@ -1,7 +1,7 @@
 """``attention_probs``: read + write, and the one component `layout` won't describe.
 
 PR4 of the hookpoint-vocabulary stack, and the last of round 1. The three checks
-at the top are nnterp's, ported to this engine
+at the top are nnterp's, ported to this backend
 (``nnterp/rename_utils.py`` ``check_source``): the pattern must have shape
 ``(batch, heads, seq, seq)``, its rows must sum to 1, and **writing it must
 change the logits**. The third is the one that matters, because it is the one a
@@ -15,18 +15,48 @@ than approximated.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 import torch
 
-from causalab.neural.engines.pytorch_hooks.attention_probs import eager_attention_writes
+from causalab.neural.engines.pytorch_hooks.attention_interface import (
+    InterfaceTap,
+    attention_interface_taps,
+)
 from causalab.neural.engines.pytorch_hooks.engine import PytorchHooksEngine
+from causalab.neural.engines.pytorch_hooks.loading import load_model
 from causalab.neural.shared.sites import resolve_site
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import SiteSpec
 
 from ._drive import base_data_section, executor_for
+from .conftest import TINY_GPT2
 
 pytestmark = pytest.mark.smoke
+
+
+def eager_attention_writes(edits: dict) -> Any:
+    """The round-1 spelling, over round 2.3's interface manager.
+
+    Kept as a test-local shim because these tests pin the *pattern-write*
+    behaviour specifically, and phrasing them in terms of "an in-place edit to
+    the pattern for these modules" is what they are about. The manager's own
+    contract (hand out a clone, take back a replacement) is exercised by the
+    round-2 tests.
+    """
+
+    def as_tap(edit: Any) -> tuple[InterfaceTap, ...]:
+        def run(probs: torch.Tensor) -> torch.Tensor:
+            edit(probs)
+            return probs
+
+        return (InterfaceTap(slot="probs", edit=run),)
+
+    return attention_interface_taps(
+        {module_id: as_tap(edit) for module_id, edit in edits.items()}
+    )
+
 
 #: 📐 the fixture's only full-attention layer; 0-2 are Gated DeltaNet.
 FULL_ATTENTION_LAYER = 3
@@ -174,7 +204,7 @@ def test_writing_the_pattern_changes_the_logits(qwen35moe_bundle):
 def test_an_identity_edit_is_bit_identical(qwen35moe_bundle):
     """The wrapper redoes the two lines that follow the softmax
     (``repeat_kv`` + ``matmul(...).transpose(1, 2).contiguous()``). Duplicating
-    library internals is how an engine rots silently, so it is pinned: with an
+    library internals is how a backend rots silently, so it is pinned: with an
     edit that changes nothing, the recomputed logits must equal the unpatched
     logits **exactly**. 📐 Measured max difference 0.0.
 
@@ -324,7 +354,7 @@ def test_no_edits_installs_nothing(qwen35moe_bundle):
         assert "eager" not in ALL_ATTENTION_FUNCTIONS
 
 
-def test_the_engine_now_declares_the_capability():
+def test_the_backend_now_declares_the_capability():
     """§8 routing refused these documents before; it must accept them now."""
     assert "writable_attention_probs" in PytorchHooksEngine.capabilities
 
@@ -426,7 +456,7 @@ def test_a_generated_frame_read_refuses(llama_bundle):
         executor_for(doc, llama_bundle, base_texts=[BASE_TEXT]).read_value("r")
     message = str(excinfo.value)
     assert "generated frame" in message
-    assert "key width" in message
+    assert "no single axis the decode steps stack along" in message
     assert "key_position[key]" in message
 
 
@@ -462,33 +492,83 @@ def test_an_interchange_across_different_lengths_refuses(qwen35moe_bundle):
 # --------------------------------------------------------------------------- #
 
 
-def test_the_post_softmax_math_is_the_modules_own(qwen35moe_bundle, llama_bundle):
+def test_the_eager_math_is_the_modules_own(qwen35moe_bundle, llama_bundle):
     """The registry entry intercepts every attention forward while installed,
     so the wrapper must resolve `eager_attention_forward` from each module's
     own modeling file — borrowing one family's function would silently replace
     another's math (gemma-2's eager soft-caps the logits, for instance)."""
-    from causalab.neural.engines.pytorch_hooks.attention_probs import _post_softmax_math
+    from causalab.neural.engines.pytorch_hooks.attention_interface import (
+        module_eager_attention,
+    )
 
-    qwen_eager, qwen_repeat = _post_softmax_math(qwen35moe_bundle.mixer_at(3))
-    llama_eager, llama_repeat = _post_softmax_math(llama_bundle.mixer_at(0))
+    qwen_eager = module_eager_attention(qwen35moe_bundle.mixer_at(3))
+    llama_eager = module_eager_attention(llama_bundle.mixer_at(0))
     assert "qwen3_5" in qwen_eager.__module__
     assert "llama" in llama_eager.__module__
     assert qwen_eager is not llama_eager
-    assert qwen_repeat is not llama_repeat
 
 
 def test_a_family_without_eager_math_refuses_by_name():
     """A modeling file that exports no eager function cannot be wrapped, and
     approximating it with another family's math is exactly the silent drift
     this module exists to prevent — so it refuses, naming what is missing."""
-    from causalab.neural.engines.pytorch_hooks.attention_probs import _post_softmax_math
+    from causalab.neural.engines.pytorch_hooks.attention_interface import (
+        module_eager_attention,
+    )
 
     class FakeMixer(torch.nn.Module):
         pass
 
     with pytest.raises(ProtocolError) as excinfo:
-        _post_softmax_math(FakeMixer())
+        module_eager_attention(FakeMixer())
     assert "eager_attention_forward" in str(excinfo.value)
+
+
+def test_the_pattern_is_writable_on_a_family_with_no_repeat_kv():
+    """The capability round 2.5's deletion bought, as a behaviour rather than a
+    grep.
+
+    📐 The recompute this module used to carry needed ``repeat_kv``, and GPT-2's
+    modeling file does not export it — it has no GQA, so it has nothing to
+    repeat. A pattern write on gpt2 therefore refused by name. Intercepting the
+    softmax's *output* hands the edited pattern back to the model's own value
+    multiply, so no second symbol is needed and the family that could not be
+    written now can.
+    """
+    import transformers.models.gpt2.modeling_gpt2 as gpt2_modeling
+
+    assert hasattr(gpt2_modeling, "eager_attention_forward")
+    assert not hasattr(gpt2_modeling, "repeat_kv"), "fixture assumption"
+
+    bundle = load_model(TINY_GPT2)
+    encoded = bundle.tokenizer(BASE_TEXT, return_tensors="pt")
+    attn = bundle.mixer_at(1)
+    with torch.no_grad():
+        clean = bundle.model(**encoded).logits.clone()
+
+    def wreck(probs: torch.Tensor) -> None:
+        probs.zero_()
+
+    with eager_attention_writes({id(attn): wreck}):
+        with torch.no_grad():
+            wrecked = bundle.model(**encoded).logits.clone()
+    assert float((wrecked - clean).abs().max()) > 1e-4
+
+
+def test_an_identity_edit_is_bit_identical_on_gpt2_too():
+    """And the identity pin holds there, which is what says the write landed in
+    the right place rather than merely somewhere."""
+    bundle = load_model(TINY_GPT2)
+    encoded = bundle.tokenizer(BASE_TEXT, return_tensors="pt")
+    attn = bundle.mixer_at(1)
+    with torch.no_grad():
+        clean = bundle.model(**encoded).logits.clone()
+    seen: dict[str, object] = {}
+    with eager_attention_writes({id(attn): lambda p: seen.__setitem__("ran", True)}):
+        with torch.no_grad():
+            again = bundle.model(**encoded).logits.clone()
+    assert seen.get("ran"), "the wrapper never ran"
+    assert torch.equal(again, clean)
 
 
 def test_an_identity_edit_is_bit_identical_on_llama(llama_bundle):
