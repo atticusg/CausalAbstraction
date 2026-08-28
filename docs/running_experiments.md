@@ -242,6 +242,8 @@ The tower is **40 layers on a repeating 3+1 schedule**
 mixer, the other 30 carry a Gated DeltaNet (linear-attention) mixer. Both kinds
 carry the **same** MLP — a sparse MoE of 256 experts routed top-8, plus a shared
 expert that runs on every token.
+[`qwen36-35b-a3b-architecture.html`](qwen36-35b-a3b-architecture.html) draws
+that forward pass one box per tensor, lavender where a hookpoint sits.
 
 | | |
 |---|---|
@@ -503,4 +505,4 @@ editing a script busts its reuse, which is why the hash is in the digest.
 | the module map and layering rules | [`CODEBASE.md`](CODEBASE.md) |
 | test tiers and pinned-artifact discipline | [`TESTS.md`](TESTS.md) |
 | worked documents | `causalab/configs/protocols/*.json`, `causalab/configs/workflows/` |
-| a picture of the hookpoints above | [`../playground/qwen36-35b-a3b-architecture.html`](../playground/qwen36-35b-a3b-architecture.html) |
+| a picture of the hookpoints above | [`qwen36-35b-a3b-architecture.html`](qwen36-35b-a3b-architecture.html) |
