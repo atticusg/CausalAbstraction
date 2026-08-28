@@ -11,7 +11,7 @@ source /mnt/data/scripts/config.sh
 export HF_HOME=/mnt/data/artifacts/hf_cache
 
 VENV="$HOME/.venvs/nnsight08-verify"
-uv venv --python 3.12 "$VENV"
+[ -x "$VENV/bin/python" ] || uv venv --python 3.12 "$VENV"
 # Pins mirror causalab's uv.lock (torch 2.9.0, transformers 5.16.1) plus the
 # plan's nnsight rev (causalab-nnsight-engine-plan §0 decision 1).
 uv pip install --python "$VENV/bin/python" \

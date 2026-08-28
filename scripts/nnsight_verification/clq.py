@@ -11,6 +11,13 @@ NDIF's worked example, adopted near-verbatim as causalab's N0 verification run
 this docstring already describes is made explicit below (`max_memory`) — on a
 single 80 GB H100 an uncapped device_map="auto" leaves no headroom for
 activations and expert paging.
+
+Deviation 2 (measured, 2026-08-28, both on the tiny fixture and on the real
+35B here): on transformers 5.16.1 the delta-rule kernels are themselves behind
+a dispatcher — `torch_chunk_gated_delta_rule_0.source` shows only
+`implementation_0` etc., not the kernel body — so every kernel drill peels one
+more level (`.source.implementation_0.source`) than NDIF's original, which ran
+against a transformers where the kernel was called directly.
 """
 
 import sys
@@ -45,7 +52,8 @@ linear_attn = model.model.layers[0].linear_attn
 kernel_op = next(n for n in linear_attn.source.names if "chunk_gated_delta_rule" in n)
 
 with model.trace(prompt) as tracer:
-    kernel = getattr(linear_attn.source, kernel_op).source   # drill into the kernel function
+    # drill into the kernel function (through the 5.16.1 dispatcher — deviation 2)
+    kernel = getattr(linear_attn.source, kernel_op).source.implementation_0.source
     n_chunks = nnsight.save(len(kernel.range_1.output))      # the loop's own range(...)
     states = nnsight.save([])                                # save the container, append raw values
     for _ in tracer.iter[:n_chunks]:                         # one fire per chunk
@@ -58,7 +66,7 @@ print("last one is the cached final state:", torch.equal(states[-1], final))
 # The same location is writable: zero the state after chunk 0 and the tokens of
 # later chunks change, chunk 0's don't.
 with model.trace(prompt) as tracer:
-    kernel = getattr(linear_attn.source, kernel_op).source
+    kernel = getattr(linear_attn.source, kernel_op).source.implementation_0.source
     for _ in tracer.iter[0]:
         kernel.last_recurrent_state_1.output[:] = 0
     patched = nnsight.save(linear_attn.output)
@@ -129,7 +137,7 @@ model.set_experts_implementation("grouped_mm")
 # inside the step-0 branch -- the inner loop restores the outer pin on exit.)
 rec_op = next(n for n in linear_attn.source.names if "recurrent_gated_delta_rule" in n)
 with model.generate(prompt, max_new_tokens=3, do_sample=False) as tracer:
-    kernel = getattr(linear_attn.source, kernel_op).source
+    kernel = getattr(linear_attn.source, kernel_op).source.implementation_0.source
     chunk_states, decode_states, handed_in = nnsight.save([]), nnsight.save([]), nnsight.save([])
     for _ in tracer.iter[:len(kernel.range_1.output)]:        # prefill: one fire per chunk
         chunk_states.append(kernel.last_recurrent_state_1.output)
@@ -137,7 +145,7 @@ with model.generate(prompt, max_new_tokens=3, do_sample=False) as tracer:
         _ = linear_attn.input                                 # anchor this body to step `step`
         rec = getattr(linear_attn.source, rec_op)
         handed_in.append(rec.inputs[1]["initial_state"].clone())  # the cache's buffer: clone, it is updated in place
-        decode_states.append(rec.source.last_recurrent_state_2.output)  # after this token's update
+        decode_states.append(rec.source.implementation_0.source.last_recurrent_state_2.output)  # after this token's update
     generated = nnsight.save(tracer.result)
 print("generate:", repr(model.tokenizer.decode(generated[0, -3:])), "|", len(chunk_states), "chunk states +", len(decode_states), "decode states")
 chain = [chunk_states[-1], *decode_states[:-1]]               # what each decode step should start from
