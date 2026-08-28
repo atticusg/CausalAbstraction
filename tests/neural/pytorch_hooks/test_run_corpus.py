@@ -58,6 +58,8 @@ def _run(name: str, roots: tuple[Path, Path], out: Path, *overrides: str) -> int
         str(out),
         "--set",
         f"model.key={TINY_LLAMA}",
+        "--set",
+        "model.dtype=fp32",  # tiny-random on CPU; 04/05/08 declare bf16
     ]
     for item in overrides:
         argv += ["--set", item]

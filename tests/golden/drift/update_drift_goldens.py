@@ -1,7 +1,7 @@
 """Capture (or refresh) the chat-coherent drift pins on the canonical GPU.
 
     uv run python tests/golden/drift/update_drift_goldens.py \\
-        --device cuda --dtype bf16 --i-have-reviewed-the-diff
+        --device cuda --i-have-reviewed-the-diff
 
 Runs both drift documents through the real CLI, extracts values with the
 same code path the replay test uses (tests/golden/drift/_extract.py),
@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.golden.drift._extract import (  # noqa: E402
     ACCURACY_GATE,
+    DOCS,
     PINS,
     extract_values,
     load_pins,
@@ -38,14 +39,30 @@ from tests.golden.drift._extract import (  # noqa: E402
 )
 
 
+def _document_dtype() -> str:
+    """The dtype the drift documents declare — they agree, and the pins
+    record it as the precision the values were measured at."""
+    from causalab.protocol.loader import load_text
+    from causalab.protocol.schema import MODEL_DTYPE_DEFAULT
+
+    from tests.golden._env import GOLDEN_PROTOCOLS
+
+    dtypes = {
+        load_text(GOLDEN_PROTOCOLS / name)["model"].get("dtype", MODEL_DTYPE_DEFAULT)
+        for name in DOCS
+    }
+    if len(dtypes) != 1:
+        raise SystemExit(f"the drift documents disagree on dtype: {sorted(dtypes)}")
+    return dtypes.pop()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", required=True)
-    parser.add_argument("--dtype", default="bf16", choices=("fp32", "bf16", "fp16"))
     parser.add_argument("--i-have-reviewed-the-diff", action="store_true")
     args = parser.parse_args()
 
-    dirs = run_drift_documents(Path(tempfile.mkdtemp()), args.device, args.dtype)
+    dirs = run_drift_documents(Path(tempfile.mkdtemp()), args.device)
     values = extract_values(dirs)
 
     acc = values["interchange.acc.mean"]
@@ -66,7 +83,9 @@ def main() -> int:
         return 1
 
     pins["values"] = values
-    pins["capture"] = {"device": args.device, "dtype": args.dtype}
+    # precision is the documents' own (§2.1) — only placement is the
+    # capture's, and only placement can differ run to run
+    pins["capture"] = {"device": args.device, "dtype": _document_dtype()}
     PINS.write_text(json.dumps(pins, indent=2) + "\n")
     print(f"wrote {PINS} ({len(values)} keys, acc {acc:.4f})")
     return 0

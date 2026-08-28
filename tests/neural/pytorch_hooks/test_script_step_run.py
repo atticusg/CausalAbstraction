@@ -32,7 +32,7 @@ from tests.tables import frame as table_frame
 pytestmark = pytest.mark.smoke
 
 REPO = Path(__file__).resolve().parents[3]
-METHODS = str(REPO / "causalab/configs/methods")  # absolute: the workflow is in tmp
+METHODS = str(REPO / "causalab/configs/protocols")  # absolute: the workflow is in tmp
 
 #: A pure-read document that loads the fitted basis as a ``pca`` featurizer.
 #: Its ``file_path`` names the script step's run tree, which is what makes the
@@ -68,7 +68,7 @@ PROJECT_DOC = {
 
 
 def _workflow(project_doc: Path) -> dict:
-    tiny = {"model.key": TINY_LLAMA}
+    tiny = {"model.key": TINY_LLAMA, "model.dtype": "fp32"}
     return {
         "version": "1",
         "description": "harvest -> fit_pca -> (select, plot) and back into a protocol step",

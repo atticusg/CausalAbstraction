@@ -7,32 +7,93 @@ The **Intervention Protocol** defines causal intervention experiments on neural 
 
 ## 1. Document layout
 
-Sections in this order (order enforced; `save` last):
+Sections in this order (order enforced; `save` last). A document may also be
+written in two halves — `application` then `method` — which carry these same
+sections between them (§1.1):
 
 | # | key | required | content |
 |---|---|---|---|
 | 1 | `version` | ✓ | `"1"` |
-| 2 | `description` | – | free text, the file's intent |
-| 3 | `model` | ✓ | the neural network ℒ (alias: `neural_model`) |
-| 4 | `data` | ✓ | input rows: `base` (+ `counterfactual`) |
-| 5 | `positions` | – | named token-position specs |
-| 6 | `sites` | ✓ | named activation addresses — the complete tap inventory |
-| 7 | `featurizers` | – | named feature-space maps |
-| 8 | `params` | – | free/constant tensors owned by no featurizer |
-| 9 | `reads` | ✓ | value producers |
-| 10 | `writes` | – | effect definitions (inert until listed) |
-| 11 | `intervened_models` | –* | which writes are in force on which input (*required if `writes` present) |
-| 12 | `metrics` | – | closed reductions over read values |
-| 13 | `train` | – | the fit, declared |
-| 14 | `save` | ✓ | the complete output manifest — non-empty, last |
+| 2 | `type` | –* | `protocol` \| `method` \| `workflow` — what this file is (*required in a method file, §1.1) |
+| 3 | `description` | – | free text, the file's intent |
+| 4 | `model` | ✓ | the neural network ℒ, and how it is realized numerically (alias: `neural_model`) |
+| 5 | `data` | ✓ | input rows: `base` (+ `counterfactual`) |
+| 6 | `positions` | – | named token-position specs |
+| 7 | `sites` | ✓ | named activation addresses — the complete tap inventory |
+| 8 | `featurizers` | – | named feature-space maps |
+| 9 | `params` | – | free/constant tensors owned by no featurizer |
+| 10 | `reads` | ✓ | value producers |
+| 11 | `writes` | – | effect definitions (inert until listed) |
+| 12 | `intervened_models` | –* | which writes are in force on which input (*required if `writes` present) |
+| 13 | `metrics` | – | closed reductions over read values |
+| 14 | `train` | – | the fit, declared |
+| 15 | `save` | ✓ | the complete output manifest — non-empty, last |
 
-- **One global namespace**: every name in sections 5–12 must be unique across
+- **One global namespace**: every name in sections 6–13 must be unique across
   all of them; reserved names: `base`, `counterfactual`, `counterfactual[j]`, `original`.
 - All cross-references must resolve; references are by name, never inline
   duplication.
 - **Artifact-valued fields**: anywhere a scalar or position is expected,
   `{"artifact": "<path>", "key": "<field>"}` reads one value from a prior
   run's artifact at load. Missing artifact = load error.
+
+### 1.1 The method / application split
+
+A document answers two questions at once: *what is the experiment* — the
+hypothesis, what is read, what is written into whom, how it is scored — and
+*what was it run on* — which network, over which rows, at which addresses, in
+which precision. The first half transfers to another model and another task;
+the second half is exactly the part that does not. A document may therefore
+say both, in two labelled halves:
+
+```json
+{
+  "version": "1",
+  "description": "the run's intent",
+  "application": {
+    "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main", "dtype": "bf16"},
+    "data":  {"base": {...}, "counterfactual": {...}},
+    "sites": {"target": {"layer": 18}}
+  },
+  "method": { "...": "reads, writes, intervened_models, metrics, save" }
+}
+```
+
+**One file is one experiment run.** The split is a shape *inside* the
+document, not a second file to keep in step with the first: a run document is
+self-contained, hashable and shareable exactly as a flat one is. The `method`
+half may instead be a **path** to a reusable method file (relative to the
+document, `"type": "method"` at its top level) — the loader inlines it, and
+the record of what ran carries the whole thing either way. A method file may
+also simply be pasted into the half; the `type` and `version` it brings along
+are checked, and a method digests the same inline as in its file.
+
+| | the **method** half | the **application** half |
+|---|---|---|
+| holds | the experiment: `causal_model`, `positions`, `featurizers`, `reads`, `writes`, `intervened_models`, `metrics`, `train`, `save`, and the site *names* it addresses | the inputs and the addresses: `model` (key, revision, dtype, quantization), `data`, and the site records |
+| must hold | `reads` and `save` — what is measured is the method's, never the application's | `model` and `data` — the network and the rows a method leaves open |
+| may not hold | `model`, `data` | — |
+
+A method's `sites` entries may be partial or empty — `"target": {}` names an
+address the application supplies, `{"component": "block_output"}` fixes the
+component and leaves the layer open, `{"component": "lm_head"}` is already
+closed. Everything still open is the method's **signature**, and `explain`
+prints it.
+
+Composition is a **disjoint-or-equal merge**: every leaf comes from exactly
+one half, or from both with the same value (a restatement, cross-checked like
+a `save` entry's bindings, §2.12). An application may *complete* a method,
+never overrule it — a contradiction is a load error (rule 18), because an
+application that could overrule its method would make the method's digest a
+claim about nothing. The two `description`s join, method first.
+
+The composition is an ordinary protocol document: it validates, expands,
+canonicalizes and digests **exactly as the same experiment written flat**.
+Splitting is an authoring choice, not a second dialect, and the point digest —
+the provenance unit — is unmoved by it (§7). Dotted paths (`--set`, a workflow
+step's `set`) address the *composition*, so they mean the same thing in both
+forms. Which method a run used is reported by `explain`, written into the run
+record, and stamped into artifacts; it is not part of the canonical bytes.
 
 ## 2. Section reference
 
@@ -42,8 +103,41 @@ Sections in this order (order enforced; `save` last):
 |---|---|
 | `model.key` | model name (HF key or registry name) — the network as a *name* |
 | `model.revision` | checkpoint revision |
+| `model.dtype` | the compute dtype the weights are realized in: `fp32` (default) \| `bf16` \| `fp16` |
+| `model.quantization` | optional — load-time weight quantization (below) |
 
 - `neural_model` is accepted as an alias of `model`; canonical form uses `model`.
+- **Precision is part of the experiment, not of the run.** The same protocol at
+  `bf16` and at `nf4` produces different numbers, so `dtype` and `quantization`
+  are document vocabulary and enter the digest. An authored file may stay
+  silent — the canonical form materializes `dtype` (§7), so no *record* is ever
+  silent about the precision its numbers came out of. The CLI's `--dtype` is
+  shorthand for `--set model.dtype=…` (§9): it changes the document, and the
+  digest changes with it.
+
+```json
+"model": {
+  "key": "meta-llama/Llama-3.1-8B", "revision": "main", "dtype": "bf16",
+  "quantization": {"scheme": "nf4", "method": "bitsandbytes", "compute_dtype": "bf16", "double_quant": true}
+}
+```
+
+| quantization field | meaning |
+|---|---|
+| `scheme` | ✓ — `int8` (LLM.int8() mixed-precision decomposition) \| `nf4` \| `fp4` (the two 4-bit datatypes) |
+| `method` | the quantizer: `bitsandbytes` (default, the only v1 entry) |
+| `compute_dtype` | dtype the dequantized matmuls run in; defaults to `model.dtype` |
+| `double_quant` | 4-bit only — quantize the quantization constants |
+| `int8_threshold` | `int8` only — the outlier threshold (default `6.0`) |
+
+- There is no bare `int4`: 4-bit is `nf4` or `fp4`, and a field whose point is
+  to name one realization may not be ambiguous about which.
+- Weights quantized **ahead of time** (GPTQ, AWQ) are a property of the
+  checkpoint, so `model.key`/`revision` already name them; `quantization`
+  describes quantization applied *at load* to an unquantized checkpoint.
+- A document with `quantization` requires the `quantized_weights` capability
+  (§8), so a backend that cannot realize it refuses instead of quietly running
+  something else.
 
 ### 2.2 `data`
 
@@ -404,7 +498,7 @@ its table says which:
 | `steps` | `{"epochs": n}` or `{"updates": n}` |
 | `batch` | `{"pairs": n}` — counts base+counterfactual **pairs**, not rows |
 | `anneal` | dotted-path schedules, e.g. `{"gate.theta.temperature": [start, end, frac]}` |
-| `precision` | `{feature, loss, model}` dtypes |
+| `precision` | `{feature, loss}` dtypes — the *model's* dtype is `model.dtype` (§2.1), one home per fact |
 | `eval` | `{every, split, metrics}` |
 | `early_stop` | `{metric, patience, mode}` |
 | `checkpoint` | transient training state (resume); the final artifact is the `save` entry |
@@ -524,6 +618,16 @@ A conforming loader rejects the document unless all of these hold:
     default).
 16. Generation is read-only and prefill-only: no write's `pos` carries
     `generated`, and `train` does not co-occur with a `generated` position.
+17. The model's realization is coherent: a `quantization` block carries only
+    the knobs its own scheme has (`double_quant` is 4-bit vocabulary,
+    `int8_threshold` is int8 vocabulary).
+18. Composition (§1.1): a split document carries both halves, `application`
+    first; the method declares neither `model` nor `data` and does declare
+    `reads` and `save`; the application declares `model` and `data`; a method
+    *file* agrees with the document on `version`; every leaf is supplied by
+    exactly one half, or by both with the same value; and the composition is
+    closed — every input and every site address bound. An unfilled hole is
+    refused with the list of what is missing.
 
 ## 6. Derived — never authored
 
@@ -558,11 +662,17 @@ A conforming loader rejects the document unless all of these hold:
   sampling, and one neural model per document.
 - **Canonical-stamp principle**: the authored file may be minimal; the
   canonical form materializes *everything* — every default (constant LR,
-  optimizer betas, dtypes), every resolved reference (dataset digests,
-  artifact values), every derived width, sugar expanded (int and `"all"`
-  positions, alias `neural_model` → `model`), unordered lists sorted (IM
-  write lists),
-  sweeps expanded to points.
+  optimizer betas, `model.dtype` and the quantization scheme's own knobs),
+  every resolved reference (dataset digests, artifact values), every derived
+  width, sugar expanded (int and `"all"` positions, alias `neural_model` →
+  `model`), unordered lists sorted (IM write lists), sweeps expanded to
+  points. `type` is authoring metadata and is dropped: the canonical form is
+  the experiment, not the file.
+- **Composition is transparent** (§1.1): a document authored as a method plus
+  an application canonicalizes to the same bytes as the same experiment
+  authored as one file, so how a point was reached never moves its digest.
+  Method provenance (the method's own content hash) rides in the run record
+  and the artifact stamp instead.
 - `digest = sha256(canonical bytes)` — sorted keys, canonical floats; each
   param replaced by its content hash. Document digest = campaign; point
   digest = provenance unit, stamped on every artifact as `produced_by`.
@@ -587,9 +697,11 @@ A backend implements these services:
 | stamping | write canonical point protocols + digests; `ArtifactIdentity` into every featurizer bundle's safetensors header |
 
 `ArtifactIdentity` (stamped, checked on any `file_path` load; mismatch
-refuses): `produced_by` digest · model key + revision · tokenizer · site
-record · `k` · parametrization · dtype · trained-on data ref + digest ·
-backend · code commit.
+refuses): `produced_by` digest · model key + revision · **model dtype +
+quantization** · tokenizer · site record · `k` · parametrization · featurizer
+dtype · trained-on data ref + digest · backend · code commit. A rotation
+fitted against bf16 weights is not the same artifact as one fitted against
+fp32 weights, and the stamp is what says so.
 
 **Per entry, not per file.** A swept document writes one file from many
 points, so the file-level stamp carries only what every point agrees on;
@@ -610,6 +722,7 @@ refusal messages generate from the missing capability.
 | `paired_forward` | a write's operand read has a different `input` than the write's model |
 | `full_logits` | a full `lm_head` read is saved, or a metric needs the full vocab (`top_k`, `class_probs`) |
 | `generate` | any position carries `generated` (sec. 2.3) |
+| `quantized_weights` | `model.quantization` present (sec. 2.1) |
 | `writable_attention_probs` | a write targets `attention_probs` |
 | `pytorch_fn_local` | any `pytorch_fn` |
 
@@ -621,6 +734,7 @@ Reference matrix:
 | `paired_forward` | ✓ fused invokes | ✓ pairs per microbatch | ✗ |
 | arbitrary writes | ✓ | ✓ | additive steering only |
 | `full_logits` | ✓ | ✗ vocab-parallel only | ✓ |
+| `quantized_weights` | ✓ bitsandbytes | ✗ | ✓ its own quantizers |
 | `pytorch_fn_local` | ✓ | ✗ | ✗ |
 
 **Materialization (generation).** A continuation read's cost is not the decode,
@@ -645,12 +759,14 @@ before a run.
 **Execution scale.** Documents and workflows are scheduler-agnostic — they
 never name devices, hosts, or job systems. The division of labor:
 
-- A **backend** owns all intra-run execution: device placement, dtype,
-  batching, and any parallelism across a campaign's points or across its own
+- A **backend** owns all intra-run execution: device placement, batching, and
+  any parallelism across a campaign's points or across its own
   accelerators — declared, like everything else, through its capability set
-  and constructor. The reference backend takes `device`/`dtype` and runs
-  points serially; sharded and multi-device backends are backend work, not
-  document vocabulary.
+  and constructor. The reference backend takes `device` and runs points
+  serially; sharded and multi-device backends are backend work, not document
+  vocabulary. **Precision is not on this list**: `dtype` and `quantization`
+  change the numbers, so they are the document's (§2.1), and a backend reads
+  them per point rather than being told once.
 - **Job dispatch is site tooling outside this repository.** The one seam it
   needs is the CLI's `--points START:STOP` selector: an external scheduler
   expands nothing itself, launches `run` per index range, and recombines by
@@ -659,17 +775,72 @@ never name devices, hosts, or job systems. The division of labor:
 
 ## 9. CLI
 
+The four verbs dispatch on the document's type (§1.1): a **workflow** runs its
+step graph, a **method file** answers only what a method can answer
+(`validate`, `digest`, and `explain`, which prints its signature — `run` is
+refused: there are no inputs and no addresses), and a **protocol document**
+runs the full pipeline, a split one composing its halves first.
+
 | verb | effect |
 |---|---|
-| `run <doc>` | validate, expand, plan, execute, stamp |
+| `run <doc>` | validate, expand, plan, execute, stamp; writes `<out>/protocol.json` — the canonical document, its digest, the per-point provenance digests, and the method it was composed from |
 | `validate <doc> [--data]` | sec. 5 checks; `--data` also checks column references |
 | `explain <doc>` | models + forward plan, expanded point count, derived `requires`, resolved bindings, digest, what `save` produces |
 | `digest <doc>` | the campaign digest |
 | `--set path=value` | ad-hoc override — exploration only; promote anything that matters into the file |
-| `--device`, `--dtype` (run) | reference-backend placement: any torch device string (`cpu` default, `cuda`, `cuda:1`, `mps`) and `fp32` (default) \| `bf16` \| `fp16` |
+| `--device` (run) | reference-backend placement: any torch device string (`cpu` default, `cuda`, `cuda:1`, `mps`). Placement is execution; precision is not (§8) |
+| `--dtype` (run) | shorthand for `--set model.dtype=…` — it edits the document, so the run's digest is the overridden document's and the record never lies about what produced the numbers. Refused on a workflow, whose steps each declare their own |
 | `--points START:STOP` (run) | execute one half-open point-index shard of the expanded campaign (sec. 8, execution scale); document runs only — digests and stamps are unaffected |
 
 ## 10. Worked examples
+
+The same interchange experiment as one run document, split into its two halves
+(§1.1). The method fixes the mechanism and the scoring and leaves the inputs
+and the layer open; the application closes them. It composes to the one-file
+flat document further down, digest for digest.
+
+```json
+{
+  "version": "1",
+  "description": "Llama-3.1-8B in bf16, answer-slot residual at layer 18, over the weekdays training pairs.",
+  "application": {
+    "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main", "dtype": "bf16"},
+    "data": {
+      "base":   {"dataset": "weekdays/train", "field": "input"},
+      "counterfactual": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
+    },
+    "sites": {"target": {"layer": 18}}
+  },
+  "method": {
+    "description": "Interchange intervention: swap the answer-slot residual from the counterfactual into base; IIA scoring.",
+    "causal_model": {"key": "weekdays.causal_model"},
+    "sites": {
+      "target":  {"component": "block_output"},
+      "lm_head": {"component": "lm_head"}
+    },
+    "reads": {
+      "v_cf":   {"site": "target",  "pos": -1, "model": "original", "input": "counterfactual"},
+      "logits": {"site": "lm_head", "pos": -1, "model": "patched",  "input": "base"}
+    },
+    "writes": {"patch": {"site": "target", "pos": -1, "do": {"swap": "v_cf"}}},
+    "intervened_models": {"patched": {"input": "base", "writes": ["patch"]}},
+    "metrics": {
+      "iia":        {"kind": "match",      "of": "logits", "expected": "cf_answer"},
+      "logit_diff": {"kind": "logit_diff", "of": "logits", "a": "cf_answer", "b": "base_answer"}
+    },
+    "save": [
+      {"value": "iia",        "model": "patched", "input": "base", "file_path": "iia.parquet"},
+      {"value": "logit_diff", "model": "patched", "input": "base", "file_path": "logit_diff.parquet"}
+    ]
+  }
+}
+```
+
+`causalab explain` on that document prints the composed plan and the method's
+digest; on a method *file* it prints what is still to bind — `model`, `data`,
+and `sites.target.layer`. A layer scan is a one-line edit of the application
+half: `"sites": {"target": {"layer": {"sweep": {"range": [0, 32]}}}}`, with the
+method untouched and still hashing the same.
 
 Path patching (sender → receiver, off-path frozen; shows cross-model flow):
 
