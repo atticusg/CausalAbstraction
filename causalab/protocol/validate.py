@@ -1,6 +1,6 @@
 """The load-error checklist (spec §5) over one concrete document.
 
-:func:`validate_document` runs rules 3–13 and 16 on a parsed, *concrete*
+:func:`validate_document` runs rules 3–13, 16 and 17 on a parsed, *concrete*
 :class:`~causalab.protocol.schema.Document` — a point protocol, or an
 un-swept document. The other rules live where their information lives:
 
@@ -70,8 +70,8 @@ _TRAINABLE_KINDS = frozenset({"subspace", "gate", "sae"})
 
 
 def validate_document(doc: Document, *, backend_is_local: bool | None = None) -> None:
-    """Run checklist rules 3–13 and 16 (13 only when ``backend_is_local`` is
-    given). Raises :class:`ValidationError` on the first violation."""
+    """Run checklist rules 3–13, 16 and 17 (13 only when ``backend_is_local``
+    is given). Raises :class:`ValidationError` on the first violation."""
     names = _check_namespace(doc)  # rule 3
     _check_references(doc, names)  # rule 4 (+ the rule-5 read bindings)
     _check_writes_inert(doc, names)  # rule 6
@@ -81,6 +81,7 @@ def validate_document(doc: Document, *, backend_is_local: bool | None = None) ->
     _check_sinks(doc)  # rule 11
     _check_trainability(doc)  # rule 12
     _check_generation(doc)  # rule 16
+    _check_model_realization(doc)  # rule 17
     if backend_is_local is not None:
         _check_pytorch_fn(doc, backend_is_local)  # rule 13
 
@@ -1020,4 +1021,50 @@ def _check_pytorch_fn(doc: Document, backend_is_local: bool) -> None:
                 f"write {ename!r} uses pytorch_fn, which only a local backend may "
                 "run (§2.8) — the selected backend is not local",
                 path=f"writes.{ename}.do",
+            )
+
+
+# --------------------------------------------------------------------------- #
+# rule 17 — the model's numeric realization is coherent
+# --------------------------------------------------------------------------- #
+
+
+def _check_model_realization(doc: Document) -> None:
+    """§2.1 — a ``quantization`` block only carries the knobs its own scheme
+    has. The enums are the parser's job (rule 1); what needs the whole block
+    in one place is the cross-field question: ``double_quant`` and
+    ``compute_dtype`` are 4-bit vocabulary and ``int8_threshold`` is
+    LLM.int8() vocabulary, so any of them under the wrong scheme is a document
+    that reads as if it configured something it did not.
+
+    📐 ``compute_dtype`` earns its place here by measurement: the backend
+    reads it as ``bnb_4bit_compute_dtype``, and the int8 branch of
+    ``_bitsandbytes_config`` builds ``BitsAndBytesConfig(load_in_8bit=True,
+    llm_int8_threshold=…)`` — nowhere for it to go. Left admissible, two int8
+    documents differing only in ``compute_dtype`` hashed differently while
+    producing identical numbers."""
+    quantization = doc.model.quantization
+    if quantization is None:
+        return
+    scheme = quantization.scheme
+    if not isinstance(scheme, str):
+        return  # a swept scheme is checked per point
+    wrong = {
+        "double_quant": scheme not in ("nf4", "fp4"),
+        "compute_dtype": scheme not in ("nf4", "fp4"),
+        "int8_threshold": scheme != "int8",
+    }
+    for field, is_wrong in wrong.items():
+        if getattr(quantization, field) is not None and is_wrong:
+            raise ValidationError(
+                17,
+                f"model.quantization.{field} does not apply to scheme "
+                f"{scheme!r} — it is "
+                + (
+                    "a 4-bit knob (nf4 / fp4)"
+                    if field in ("double_quant", "compute_dtype")
+                    else "an int8 knob"
+                )
+                + " (§2.1)",
+                path=f"model.quantization.{field}",
             )
