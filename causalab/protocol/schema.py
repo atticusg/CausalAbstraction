@@ -121,6 +121,8 @@ Component = Literal[
     "router_logits",
     "router_scores",
     "expert_idx",
+    "expert_gate_proj",
+    "expert_up_proj",
     "expert_activation",
     "expert_output",
     "routed_output",

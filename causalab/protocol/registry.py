@@ -23,8 +23,14 @@ component                            shape
 ``block_output``, ``attention_output``,   residual stream. The three norm taps
 ``mlp_input``, ``mlp_output``,       are here because an RMSNorm maps the
 ``ln_final``, ``attention_input_norm``,   residual stream to itself, so both
-``block_mid``, ``mlp_input_norm``,   its sides are hidden-wide
-``expert_output``
+``block_mid``, ``mlp_input_norm``    its sides are hidden-wide
+``expert_gate_proj``,                ``(batch·position, top_k·moe_inner)``,
+``expert_up_proj``,                  token-major and **ranking**: slot *k* is
+``expert_activation``                the *k*-th ranked expert (the two proj
+                                     halves share one fused capture)
+``expert_output``                    ``(batch·position, top_k·hidden)``,
+                                     token-major, ranking; the value is
+                                     pre-routing-weight
 ``mlp_activation``                   ``(batch, position, intermediate)`` (the
                                      family caveat of *which* tensor this
                                      names lives in the backend, not here)
@@ -196,7 +202,6 @@ _HIDDEN_COMPONENTS: frozenset[str] = frozenset(
         "mlp_input",
         "mlp_output",
         "ln_final",
-        "expert_output",
         "attention_input_norm",
         "block_mid",
         "mlp_input_norm",
@@ -376,6 +381,49 @@ def component_shape(info: ModelInfo, component: str) -> FeatureShape:
                 "fitted across positions is fitted across a shuffled basis. "
                 "Read it directly, or featurize 'router_logits', whose axis is "
                 "the fixed all-experts one."
+            ),
+        )
+    if component in ("expert_gate_proj", "expert_up_proj"):
+        # the two halves of the routed up-projection's fused [gate_e | up_e]
+        # output — one capture, two addresses (the `attention_gate` precedent),
+        # token-major and ranked like the rest of the interior
+        if info.num_experts_per_tok is None or info.moe_intermediate_size is None:
+            raise ValidationError(
+                4,
+                f"model {info.key!r} declares no routed-expert inner width "
+                f"(moe_intermediate_size) or top-k; {component} has no width",
+            )
+        return shapes.flat_topk_fused_features(
+            info.num_experts_per_tok,
+            2,
+            0 if component == "expert_gate_proj" else 1,
+            info.moe_intermediate_size,
+            ranking=True,
+            note=(
+                "Its slot axis is a per-token ranking (see 'expert_activation'); "
+                "join slots to experts through 'expert_idx'."
+            ),
+        )
+    if component == "expert_output":
+        # the down-projection's output BEFORE the routing weight — hidden-wide
+        # per (token, slot), token-major. The registry identity:
+        # routed_output == sum over slots of expert_output · router_scores,
+        # exact (the model computes precisely this sum, in this order).
+        if info.num_experts_per_tok is None:
+            raise ValidationError(
+                4,
+                f"model {info.key!r} declares no num_experts_per_tok; "
+                f"{component} has no width",
+            )
+        return shapes.flat_topk_features(
+            info.num_experts_per_tok,
+            info.hidden_size,
+            ranking=True,
+            note=(
+                "Its slot axis is a per-token ranking (see 'expert_activation'); "
+                "join slots to experts through 'expert_idx'. The value is "
+                "pre-routing-weight: routed_output == the slot-sum of "
+                "expert_output · router_scores."
             ),
         )
     if component == "expert_activation":

@@ -480,7 +480,10 @@ _MOE_COMPONENTS: frozenset[str] = frozenset(
         "shared_expert_activation",
         "shared_expert_output",
         "shared_expert_gate",
+        "expert_gate_proj",
+        "expert_up_proj",
         "expert_activation",
+        "expert_output",
     }
 )
 
@@ -492,7 +495,10 @@ _MOE_COMPONENTS: frozenset[str] = frozenset(
 #: shared ``act_fn``, which the wrapper hooks for the duration of that call).
 #: See :mod:`causalab.neural.engines.pytorch_hooks.experts_interface`.
 EXPERTS_FUNCTION_SLOTS: dict[str, str] = {
+    "expert_gate_proj": "gate_up",
+    "expert_up_proj": "gate_up",
     "expert_activation": "activation",
+    "expert_output": "down",
 }
 
 
@@ -532,19 +538,31 @@ def _moe_site(
             f"{sorted(name for name, _ in mlp.named_children())}) is not one — "
             "extend the tap table in pytorch_hooks/sites.py."
         )
-    # The `expert` sub-axis selects one of `num_experts` experts, which none of
-    # these tensors is indexed by: the router's axes are all-experts (logits) or
-    # top-k (scores, indices), and the shared expert is not one of the routed
-    # ones. Refusing beats silently ignoring it — the mistake `stream` made.
-    if spec.expert is not None:
+    # The `expert` sub-axis is the ragged face of the routed interior: select
+    # the (position, slot) pairs the router sent to one expert. Only the
+    # interior-slot components carry it — the router's own axes are all-experts
+    # (logits) or top-k (scores, indices), and the shared expert is not one of
+    # the routed experts, so `expert` on those is refused rather than silently
+    # ignored (the mistake `stream` made).
+    expert = spec.expert if isinstance(spec.expert, int) else None
+    if spec.expert is not None and component not in EXPERTS_FUNCTION_SLOTS:
         raise ProtocolError(
             "P4",
             f"site names expert {spec.expert!r} on component {component!r}, "
             "which has no per-expert axis: the router's axes are all-experts "
             "or top-k, and the shared expert is not one of the routed experts. "
-            "The 'expert' sub-axis lands with the interior-slot components "
-            "(round 3.2).",
+            "The per-expert interior components are 'expert_gate_proj', "
+            "'expert_up_proj', 'expert_activation' and 'expert_output'.",
         )
+    if expert is not None:
+        total = bundle.info.num_experts
+        if total is None or not 0 <= expert < total:
+            raise ProtocolError(
+                "P4",
+                f"site names expert {expert} on component {component!r}, but "
+                f"{bundle.key!r} routes over {total} experts — the sub-axis "
+                "selects one of them by its id.",
+            )
 
     shape = component_shape(bundle.info, component)
 
@@ -577,6 +595,7 @@ def _moe_site(
             component=component,
             shape=shape,
             interface_slot=EXPERTS_FUNCTION_SLOTS[component],
+            expert=expert,
         )
 
     def flat(module: Any, kind: str, tuple_index: int | None = None) -> ResolvedSite:
@@ -704,15 +723,6 @@ def resolve_site(bundle: Any, spec: SiteSpec) -> ResolvedSite:
         # form, which is what makes the executor refuse to gather or featurize
         # it without any component name appearing in that refusal.
         return tap(_attn(bundle, layer), "out", tuple_index=1, interface_slot="probs")
-    if component == "expert_output":
-        raise NotImplementedError(
-            f"the pytorch_hooks engine has no tap for {component!r} yet — "
-            "expert_output names the per-expert loop interior, which needs the "
-            "ragged value shape (follow-up F2). The rest of the MoE surface — "
-            "the router, the combined routed output and the shared expert — "
-            "resolves; see _moe_site (sites.py)."
-        )
-
     block = _blocks(bundle)[layer]
     if component == "attention_input_norm":
         # input_layernorm's OUTPUT: what the mixer actually consumes
