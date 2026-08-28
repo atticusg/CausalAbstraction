@@ -38,8 +38,10 @@ The steps link to these supporting documents when needed:
   contains the older complete pipeline for deciding whether a given subspace is
   causal.
 
-All three predate the causalab protocol refactor. Their scientific guidance remains
-useful, but their commands are no longer valid.
+The implementation guides describe the current protocol runner. The
+`explore-subspace` and older subspace pipeline documents still predate the protocol
+refactor; use their scientific guidance, but verify every command against the
+current implementation guides.
 
 ## Relationship to the causalab library
 

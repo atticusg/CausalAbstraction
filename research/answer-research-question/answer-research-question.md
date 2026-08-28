@@ -122,15 +122,17 @@ $WORKDIR/
 
 ## What is not in the six steps
 
-The steps link to three older sets of reference documents. Their scientific
-guidance remains useful, but their commands are no longer valid.
+The steps also link to implementation guidance and two older research paths.
 
 - [`../implementation/`](../implementation/) — the causalab codebase: task
-  packages, the analysis catalog, running things, common failures.
+  packages, protocol and workflow authoring, execution, and common failures. These
+  guides describe the current protocol runner.
 - [`../explore-subspace/`](../explore-subspace/) — verifying a subspace's
-  description before designing experiments against it.
+  description before designing experiments against it. Its commands predate the
+  protocol refactor.
 - [`../subspace-causal-analysis-pipeline/`](../subspace-causal-analysis-pipeline/)
-  — the older end-to-end path for a *given* subspace.
+  — the older end-to-end path for a *given* subspace. Its commands also predate the
+  protocol refactor.
 
 ## Execution stubs
 
