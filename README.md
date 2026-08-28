@@ -70,8 +70,11 @@ causalab/
 ├── protocol/        # engine-free document layer: load, validate, canonicalize,
 │                    #   digest, sweep expansion, engine routing, workflow model, CLI
 ├── neural/
-│   ├── pytorch_hooks/  # the reference engine: sites, positions, mechanisms,
-│   │                   #   featurizers, metrics, train loop, stamping
+│   ├── shared/      # what every engine uses: sites, encoding, layouts,
+│   │                #   mechanisms, featurizers, metrics, outputs, executor base
+│   ├── engines/
+│   │   ├── pytorch_hooks/    # the reference engine: hooks, decode, train loop
+│   │   └── nnsight_tracing/  # the nnsight engine: traces (the 'nnsight' extra)
 │   └── token_positions.py
 ├── analysis/        # numerical analysis a script step runs (fits, statistics, operands)
 ├── workflow/        # the workflow runner: run-tree overlay, script invocation, manifest

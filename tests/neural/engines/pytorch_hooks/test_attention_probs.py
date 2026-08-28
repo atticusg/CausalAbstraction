@@ -20,7 +20,7 @@ import torch
 
 from causalab.neural.engines.pytorch_hooks.attention_probs import eager_attention_writes
 from causalab.neural.engines.pytorch_hooks.engine import PytorchHooksEngine
-from causalab.neural.engines.pytorch_hooks.sites import resolve_site
+from causalab.neural.shared.sites import resolve_site
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import SiteSpec
 

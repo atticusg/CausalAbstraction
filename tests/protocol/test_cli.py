@@ -189,17 +189,59 @@ def test_engine_auto_tolerates_a_missing_optional_engine(
     assert capturing_engine.last is not None
 
 
+class _AbsentModule:
+    """A meta-path finder that makes one module unimportable, so the
+    not-installed path stays testable in an env that has the extra."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == self.name or fullname.startswith(self.name + "."):
+            raise ModuleNotFoundError(f"No module named {fullname!r} (simulated)")
+        return None
+
+
 def test_engine_nnsight_refuses_by_name_when_not_installed(
-    capturing_engine, artifacts_root, tmp_path, capsys
+    capturing_engine, artifacts_root, tmp_path, capsys, monkeypatch
 ):
     """Naming an engine that is not installed is an error that says which
     extra provides it — unlike auto, which quietly narrows to what exists."""
+    import sys as _sys
+
+    target = "causalab.neural.engines.nnsight_tracing"
+    for mod in [m for m in list(_sys.modules) if m.startswith(target)]:
+        monkeypatch.delitem(_sys.modules, mod)
+    monkeypatch.setattr(_sys, "meta_path", [_AbsentModule(target), *_sys.meta_path])
     code = main(
         _run_argv("01_harvest_im.json", artifacts_root, tmp_path, "--engine", "nnsight")
     )
     assert code == 1
     err = capsys.readouterr().err
     assert "nnsight" in err and "extra" in err
+
+
+def test_engine_nnsight_selects_the_nnsight_engine(
+    capturing_engine, artifacts_root, tmp_path, monkeypatch
+):
+    """--engine nnsight builds the nnsight engine (stubbed here — the real
+    one's answers are pinned by its parity suite)."""
+    import sys as _sys
+    import types
+
+    class _CapturingNnsight(_CapturingEngine):
+        name = "nnsight"
+
+    stub = types.ModuleType("causalab.neural.engines.nnsight_tracing")
+    stub.NnsightEngine = _CapturingNnsight
+    monkeypatch.setitem(_sys.modules, "causalab.neural.engines.nnsight_tracing", stub)
+    _CapturingNnsight.last = None
+    code = main(
+        _run_argv("01_harvest_im.json", artifacts_root, tmp_path, "--engine", "nnsight")
+    )
+    assert code == 0
+    assert _CapturingNnsight.last is not None
+    assert _CapturingNnsight.last.name == "nnsight"
 
 
 def test_run_defaults_stay_cpu_fp32(capturing_engine, artifacts_root, tmp_path):

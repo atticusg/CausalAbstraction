@@ -35,7 +35,7 @@ from typing import Any, Mapping
 import torch
 
 from causalab.neural.engines.pytorch_hooks.executor import PointExecutor, document_seed
-from causalab.neural.engines.pytorch_hooks.featurizers import Gate, Stage
+from causalab.neural.shared.featurizers import Gate, Stage
 from causalab.neural.shared.metrics import column_token_ids
 from causalab.protocol.engine import ExecutionRequest
 from causalab.protocol.errors import ProtocolError

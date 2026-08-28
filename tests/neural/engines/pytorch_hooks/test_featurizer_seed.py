@@ -35,7 +35,7 @@ import pytest
 import torch
 
 from causalab.neural.engines.pytorch_hooks.executor import document_seed
-from causalab.neural.engines.pytorch_hooks.featurizers import Gate, build_stack
+from causalab.neural.shared.featurizers import Gate, build_stack
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import FeaturizerSpec, parse_document
 

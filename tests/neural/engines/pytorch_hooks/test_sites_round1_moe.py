@@ -20,7 +20,7 @@ import copy
 import pytest
 import torch
 
-from causalab.neural.engines.pytorch_hooks.sites import (
+from causalab.neural.shared.sites import (
     READ_ONLY_COMPONENTS,
     resolve_site,
 )
