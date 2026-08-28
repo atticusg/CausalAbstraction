@@ -20,7 +20,7 @@ Two semantics deliberately preserved from the oracle:
   ``act_fn``'s output (``act(gate_proj(x))``, NOT the down-projection's
   input), GPT-2 taps ``c_proj``'s input (which IS the down-projection's
   input). Inherited 1:1 from the pyvene era and pinned by the oracle.
-* ``attention_value`` with a ``head`` is the ``[H*d, (H+1)*d]`` column
+* ``attention_premix`` with a ``head`` is the ``[H*d, (H+1)*d]`` column
   slice of the o-projection's **input** — query-head space (``head_dim``
   honours a decoupled ``config.head_dim``). 📐 On a **gated** attention
   family (Qwen3.5/3.6's ``self_attn``, where the mixer multiplies by a
@@ -42,19 +42,12 @@ import dataclasses
 from typing import Any
 
 from causalab.protocol.errors import ProtocolError
+from causalab.protocol.registry import component_shape, head_space_refusal
 from causalab.protocol.schema import SiteSpec
+from causalab.protocol.shapes import FeatureShape
 
-from causalab.neural.shared.layout import Layout
-
-#: The attention pattern's declared layout: (batch, heads, query, key) is
-#: honestly undescribed by the contract vocabulary (follow-up F1), so it is
-#: "native" — the executors bypass position gathering for it. Kept here so the
-#: map and the engines agree; pytorch_hooks' eager write machinery re-exports
-#: it.
-ATTENTION_PROBS_LAYOUT: Layout = "native"
 
 __all__ = [
-    "ATTENTION_PROBS_LAYOUT",
     "READ_ONLY_COMPONENTS",
     "SWAP_ONLY_COMPONENTS",
     "ResolvedSite",
@@ -124,20 +117,22 @@ class ResolvedSite:
     module's own tensor shape relates to the executor's ``(batch, position,
     feature)`` contract.
 
-    ``layout`` and ``tuple_index`` both default to the historical behaviour, so
-    a tap that does not mention them is unchanged: contract-shaped, and element
-    0 of a tuple payload. See :mod:`causalab.neural.shared.layout` for
-    what the non-default values mean and which architectures need them.
+    ``shape`` is never chosen per tap: :func:`resolve_site` reads it from
+    :func:`~causalab.protocol.registry.component_shape`, so the description each
+    engine converts by and the description the protocol layer validates against
+    are the same object. ``tuple_index`` defaults to the historical rule —
+    element 0 of a tuple payload. See :mod:`causalab.neural.shared.layout` for
+    how the conversion is computed from the declared axes.
     """
 
     module: Any
     kind: str  # "in" | "out"
+    #: The module's native tensor shape; converted to/from the executor's
+    #: contract at the hook boundary rather than special-cased per component.
+    shape: FeatureShape
     feature_slice: slice | None = None
     layer: int = 0
     component: str = "block_output"
-    #: The module's native tensor layout; converted to/from the contract at the
-    #: hook boundary rather than special-cased per component.
-    layout: Layout = "bsd"
     #: Which element of a tuple payload the tap means. None keeps the historical
     #: rule (element 0 of a tuple, else the payload itself); an explicit index
     #: is required for e.g. a router returning (logits, scores, indices).
@@ -146,9 +141,9 @@ class ResolvedSite:
     @property
     def depth(self) -> tuple[int, int]:
         """(layer, intra-order) — matches the protocol planner's ranks."""
-        from causalab.protocol.plan import COMPONENT_RANK  # one shared table
+        from causalab.protocol.plan import COMPONENT_RANK, UNRANKED  # one table
 
-        rank = COMPONENT_RANK.get(self.component, 100)
+        rank = COMPONENT_RANK.get(self.component, UNRANKED)
         if self.component in ("ln_final", "lm_head"):
             return (1_000_000, rank)
         return (self.layer, rank)
@@ -177,8 +172,41 @@ def _o_proj(bundle: Any, layer: int) -> Any:
     return attn.c_proj if bundle.is_gpt2_family else attn.o_proj
 
 
-def _head_dim(bundle: Any) -> int:
-    return bundle.info.head_dim
+def _embedding(bundle: Any) -> Any:
+    return (
+        bundle.model.transformer.wte
+        if bundle.is_gpt2_family
+        else bundle.model.model.embed_tokens
+    )
+
+
+def _head_slice(bundle: Any, component: str, head: int | None) -> slice | None:
+    """The feature-axis slice a ``head`` names — or a refusal.
+
+    The bound comes from the component's own shape, not from
+    ``info.num_heads``. 📐 That distinction is not cosmetic: under GQA the
+    KV-space components are ``num_key_value_heads`` wide, and a query-space
+    bound over them produces a slice that is *empty* rather than out of range.
+    Python does not raise on that — the read saves a ``(b, n_pos, 0)`` tensor
+    and the write mutates nothing — which is the silent no-op that
+    ``READ_ONLY_COMPONENTS`` exists to prevent elsewhere.
+    """
+    if head is None:
+        return None
+    shape = component_shape(bundle.info, component)
+    space = shape.head_space
+    if space is None:
+        raise ProtocolError("P4", head_space_refusal(component, head, shape))
+    if not 0 <= head < space:
+        raise ProtocolError(
+            "P4",
+            f"site names head {head} on component {component!r}, which has "
+            f"{space} heads ({shape.describe()})",
+        )
+    width = shape.width
+    assert width is not None  # a head axis implies a feature axis
+    per_head = width // space
+    return slice(head * per_head, (head + 1) * per_head)
 
 
 #: Components that only exist on a full-attention mixer. A Gated DeltaNet layer
@@ -279,13 +307,15 @@ def _moe_site(
             "The per-expert interior is 'expert_output' (follow-up F2).",
         )
 
+    shape = component_shape(bundle.info, component)
+
     def flat(module: Any, kind: str, tuple_index: int | None = None) -> ResolvedSite:
         return ResolvedSite(
             module=module,
             kind=kind,
             layer=layer,
             component=component,
-            layout="flat_td",
+            shape=shape,
             tuple_index=tuple_index,
         )
 
@@ -328,37 +358,45 @@ def resolve_site(bundle: Any, spec: SiteSpec) -> ResolvedSite:
     layer = spec.layer if isinstance(spec.layer, int) else 0
     head = spec.head if isinstance(spec.head, int) else None
 
+    def tap(
+        module: Any,
+        kind: str,
+        *,
+        feature_slice: slice | None = None,
+        tuple_index: int | None = None,
+    ) -> ResolvedSite:
+        """One tap, with its shape read from the component table.
+
+        The shape is resolved *here* rather than at each branch so that adding a
+        component means adding a table entry and a module, never a third place
+        that has an opinion about the tensor's axes."""
+        return ResolvedSite(
+            module=module,
+            kind=kind,
+            shape=component_shape(bundle.info, component),
+            feature_slice=feature_slice,
+            layer=layer,
+            component=component,
+            tuple_index=tuple_index,
+        )
+
     if component == "input_ids":
         # the ids themselves, taken as the embedding's INPUT: that is the one
         # module boundary they cross, and a forward pre-hook already exists for
-        # the "in" side. Read-only and layer-less (§5.4); `bs` layout because
-        # there is no feature axis, only one integer per position.
-        module = (
-            bundle.model.transformer.wte
-            if bundle.is_gpt2_family
-            else bundle.model.model.embed_tokens
-        )
-        return ResolvedSite(
-            module=module, kind="in", layer=0, component=component, layout="bs"
-        )
+        # the "in" side. Read-only and layer-less (§5.4); the shape has no
+        # feature axis at all, only one integer per position.
+        return tap(_embedding(bundle), "in")
     if component == "embeddings":
-        module = (
-            bundle.model.transformer.wte
-            if bundle.is_gpt2_family
-            else bundle.model.model.embed_tokens
-        )
-        return ResolvedSite(module=module, kind="out", layer=0, component=component)
+        return tap(_embedding(bundle), "out")
     if component == "lm_head":
-        return ResolvedSite(
-            module=bundle.model.lm_head, kind="out", layer=layer, component=component
-        )
+        return tap(bundle.model.lm_head, "out")
     if component == "ln_final":
         module = (
             bundle.model.transformer.ln_f
             if bundle.is_gpt2_family
             else bundle.model.model.norm
         )
-        return ResolvedSite(module=module, kind="out", layer=layer, component=component)
+        return tap(module, "out")
 
     # Order matters: the stream check runs FIRST so that a full-attention-only
     # component at a Gated DeltaNet layer refuses with the architectural reason
@@ -370,17 +408,10 @@ def resolve_site(bundle: Any, spec: SiteSpec) -> ResolvedSite:
     if component == "attention_probs":
         # element 1 of the mixer's (attn_output, attn_weights). Reading is an
         # ordinary tap; WRITING is not — see the attention_probs module, which
-        # owns that half. `native` because this shape is (batch, heads, query,
-        # key) and honestly undescribed (follow-up F1), not because it is
-        # contract-shaped.
-        return ResolvedSite(
-            module=_attn(bundle, layer),
-            kind="out",
-            layer=layer,
-            component=component,
-            layout=ATTENTION_PROBS_LAYOUT,
-            tuple_index=1,
-        )
+        # owns that half. Its shape has two position axes and so no contract
+        # form, which is what makes the executor refuse to gather or featurize
+        # it without any component name appearing in that refusal.
+        return tap(_attn(bundle, layer), "out", tuple_index=1)
     if component == "expert_output":
         raise NotImplementedError(
             f"the pytorch_hooks engine has no tap for {component!r} yet — "
@@ -393,62 +424,38 @@ def resolve_site(bundle: Any, spec: SiteSpec) -> ResolvedSite:
     block = _blocks(bundle)[layer]
     if component == "attention_input_norm":
         # input_layernorm's OUTPUT: what the mixer actually consumes
-        return ResolvedSite(
-            module=block.input_layernorm, kind="out", layer=layer, component=component
-        )
+        return tap(block.input_layernorm, "out")
     if component == "block_mid":
         # post_attention_layernorm's INPUT is resid_mid — the residual stream
         # after the mixer has been added and before the MLP branch
-        return ResolvedSite(
-            module=block.post_attention_layernorm,
-            kind="in",
-            layer=layer,
-            component=component,
-        )
+        return tap(block.post_attention_layernorm, "in")
     if component == "mlp_input_norm":
         # ...and its OUTPUT is what the MoE block consumes
-        return ResolvedSite(
-            module=block.post_attention_layernorm,
-            kind="out",
-            layer=layer,
-            component=component,
-        )
+        return tap(block.post_attention_layernorm, "out")
     if component == "block_output":
-        return ResolvedSite(module=block, kind="out", layer=layer, component=component)
+        return tap(block, "out")
     if component == "block_input":
-        return ResolvedSite(module=block, kind="in", layer=layer, component=component)
+        return tap(block, "in")
     if component == "attention_output":
-        return ResolvedSite(
-            module=_attn(bundle, layer), kind="out", layer=layer, component=component
-        )
-    if component == "attention_value":
-        feature_slice = None
-        if head is not None:
-            d = _head_dim(bundle)
-            feature_slice = slice(head * d, (head + 1) * d)
-        return ResolvedSite(
-            module=_o_proj(bundle, layer),
-            kind="in",
-            feature_slice=feature_slice,
-            layer=layer,
-            component=component,
+        return tap(_attn(bundle, layer), "out")
+    if component == "attention_premix":
+        return tap(
+            _o_proj(bundle, layer),
+            "in",
+            feature_slice=_head_slice(bundle, component, head),
         )
     mlp = block.mlp
     if component in _MOE_COMPONENTS:
         return _moe_site(bundle, mlp, component, spec, layer)
     if component == "mlp_input":
-        return ResolvedSite(module=mlp, kind="in", layer=layer, component=component)
+        return tap(mlp, "in")
     if component == "mlp_output":
-        return ResolvedSite(module=mlp, kind="out", layer=layer, component=component)
+        return tap(mlp, "out")
     if component == "mlp_activation":
         if bundle.is_gpt2_family:
-            return ResolvedSite(
-                module=mlp.c_proj, kind="in", layer=layer, component=component
-            )
+            return tap(mlp.c_proj, "in")
         if hasattr(mlp, "act_fn"):
-            return ResolvedSite(
-                module=mlp.act_fn, kind="out", layer=layer, component=component
-            )
+            return tap(mlp.act_fn, "out")
         raise NotImplementedError(
             f"mlp_activation: this MLP (children="
             f"{sorted(name for name, _ in mlp.named_children())}) matches no "

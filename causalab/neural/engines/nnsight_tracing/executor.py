@@ -151,7 +151,7 @@ class TracePointExecutor(ExecutorBase):
             native = tap_tensor(envoy.output, site.tuple_index)
         else:
             native = envoy.input
-        return to_contract(native, site.layout, batch_size=batch_size)
+        return to_contract(native, site.shape, batch_size=batch_size)
 
     def _land_writes(
         self,
@@ -170,9 +170,11 @@ class TracePointExecutor(ExecutorBase):
         else:
             payload = None
             native = envoy.input.clone()
-        contract = to_contract(native, site.layout, batch_size=batch_size)
+        contract = to_contract(native, site.shape, batch_size=batch_size)
         self._apply_writes_to_contract(entries, input_role, batch, contract)
-        new_native = from_contract(contract, site.layout, batch_size=batch_size)
+        new_native = from_contract(
+            contract, site.shape, batch_size=batch_size, native=native
+        )
         if site.kind == "out":
             envoy.output = rebuild_payload(payload, site.tuple_index, new_native)
         else:

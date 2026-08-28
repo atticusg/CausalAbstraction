@@ -7,7 +7,7 @@
     "counterfactual": {"dataset": "ioi/test", "field": "counterfactual_inputs[0]"}
   },
   "sites": {
-    "sender":   {"component": "attention_value",  "layer": 9, "head": 9},
+    "sender":   {"component": "attention_premix",  "layer": 9, "head": 9},
     "receiver": {"component": "block_input",      "layer": 12},
     "a10":      {"component": "attention_output", "layer": 10},
     "a11":      {"component": "attention_output", "layer": 11},
