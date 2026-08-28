@@ -86,6 +86,10 @@ EXPECTED: dict[str, tuple[int | None, int | None, bool]] = {
     "attention_key_pre_rope": (64, 4, True),
     "attention_value_states": (64, 4, True),
     "attention_gate": (128, 8, True),
+    "attention_query": (128, 8, True),
+    "attention_key": (64, 4, True),
+    "attention_scores": (None, 8, False),
+    "attention_z": (128, 8, True),
     "attention_premix": (128, 8, True),
     "attention_output": (64, None, True),
     "block_mid": (64, None, True),
@@ -139,13 +143,19 @@ def test_width_and_the_shape_agree(component: str) -> None:
             component_width(GQA, component)
 
 
-def test_the_pattern_is_the_only_shape_with_two_position_axes() -> None:
-    """Which is what makes every one of the executor's refusals about it
-    derivable rather than written by hand."""
+def test_only_the_pattern_and_the_scores_have_two_position_axes() -> None:
+    """Which is what makes every one of the executor's refusals about them
+    derivable rather than written by hand — and they are the same shape one step
+    apart, which is the whole point of `attention_scores`: everything true of
+    the pattern's axes is true of the scores', and nothing true of its
+    *normalization* is."""
     without_contract = [
         c for c in COMPONENTS if not component_shape(GQA, c).has_contract_form
     ]
-    assert without_contract == ["attention_probs"]
+    assert sorted(without_contract) == ["attention_probs", "attention_scores"]
+    probs = component_shape(GQA, "attention_probs")
+    scores = component_shape(GQA, "attention_scores")
+    assert probs.axes == scores.axes
 
 
 # --------------------------------------------------------------------------- #
@@ -357,16 +367,20 @@ def test_the_attention_band_has_room_for_round_twos_insertions() -> None:
     taken = set(COMPONENT_RANK.values())
     #: The slots `plan.py` still holds open, updated as each PR claims one —
     #: which is the point: a PR that takes a slot has to say so here.
-    still_reserved = (200, 210, 220, 240, 350)
+    still_reserved = (350,)
     assert not taken & set(still_reserved)
     # and each lands between the tap before it and the one after
     assert COMPONENT_RANK["attention_input_norm"] < min(still_reserved)
     assert max(still_reserved) < COMPONENT_RANK["attention_output"]
-    # round 2.2 claimed its four, at the numbers plan.py reserved for them
+    # rounds 2.2 and 2.3 claimed eight, at the numbers plan.py reserved
     assert COMPONENT_RANK["attention_query_pre_rope"] == 160
     assert COMPONENT_RANK["attention_key_pre_rope"] == 170
     assert COMPONENT_RANK["attention_value_states"] == 180
     assert COMPONENT_RANK["attention_gate"] == 190
+    assert COMPONENT_RANK["attention_query"] == 200
+    assert COMPONENT_RANK["attention_key"] == 210
+    assert COMPONENT_RANK["attention_scores"] == 220
+    assert COMPONENT_RANK["attention_z"] == 240
 
 
 def test_a_kv_space_head_is_refused_at_load_not_just_at_the_tap(env) -> None:

@@ -51,6 +51,8 @@ from causalab.protocol.shapes import FeatureShape
 from causalab.neural.pytorch_hooks.loading import ModelBundle
 
 __all__ = [
+    "ATTENTION_FUNCTION_SLOTS",
+    "NORMALIZED_TAPS",
     "READ_ONLY_COMPONENTS",
     "SWAP_ONLY_COMPONENTS",
     "ResolvedSite",
@@ -139,6 +141,16 @@ class ResolvedSite:
     #: rule (element 0 of a tuple, else the payload itself); an explicit index
     #: is required for e.g. a router returning (logits, scores, indices).
     tuple_index: int | None = None
+    #: Where inside the attention function this component lives, when it is not
+    #: a module boundary at all — see
+    #: :mod:`causalab.neural.pytorch_hooks.attention_interface`.
+    #:
+    #: Set together with ``kind == "interface"`` for the four function-interior
+    #: components. ``attention_probs`` is the one site that sets it while
+    #: keeping an ordinary ``kind``: the mixer *returns* the pattern, so reading
+    #: it is a plain module tap, and only the write has to go through the
+    #: function.
+    interface_slot: str | None = None
 
     @property
     def depth(self) -> tuple[int, int]:
@@ -336,12 +348,53 @@ def _attention_interior_site(
     return tap(getattr(attn, proj_name), "out", feature_slice=feature_slice)
 
 
+#: The mixer's interior *inside the attention function* — round 2.3.
+#:
+#: 📐 These four are not module boundaries: ``transformers`` computes them within
+#: one ``attention_interface(...)`` call, so ``query`` and ``key`` are its
+#: arguments (post-RoPE, and for ``key`` before ``repeat_kv``), the scores are
+#: the softmax's input inside it, and ``z`` is its return. See
+#: :mod:`causalab.neural.pytorch_hooks.attention_interface`.
+ATTENTION_FUNCTION_SLOTS: dict[str, str] = {
+    "attention_query": "query",
+    "attention_key": "key",
+    "attention_scores": "scores",
+    "attention_z": "z",
+}
+
+
+#: Taps a write may only **replace**, because the tensor is a normalized
+#: distribution and nothing downstream restores that property.
+#:
+#: This is the distinction ``attention_scores`` exists to remove. Both tensors
+#: have the same axes — ``(batch, head, query, key)`` — and a delta, a scale or a
+#: clamp on either one is arithmetically fine; the difference is entirely in what
+#: happens *next*. After the pattern: the value multiply, which assumes rows
+#: summing to 1 and gets whatever the edit produced. After the scores: the
+#: model's own softmax, which renormalizes by construction.
+#:
+#: So the pattern accepts only ``swap`` (an interchange, which substitutes one
+#: valid distribution for another) and the scores accept every mechanism —
+#: attention knockout is ``add_scaled`` with a large negative constant, head
+#: boosting is a scale — and the refusal names the alternative rather than just
+#: saying no.
+NORMALIZED_TAPS: dict[str, str] = {
+    "attention_probs": (
+        "its rows are a probability distribution and the value multiply "
+        "immediately downstream assumes they sum to 1 — nothing renormalizes "
+        "them after an edit. Write 'attention_scores' instead: it is the same "
+        "tensor one step earlier, upstream of the model's own softmax, so every "
+        "mechanism is legal there and the rows still sum to 1 by construction"
+    ),
+}
+
+
 #: Components that only exist on a full-attention mixer. A Gated DeltaNet layer
 #: has no attention matrix at all — there is nothing to read and nothing to
 #: write — so naming one at such a layer is an error about the *architecture*,
 #: not a missing feature (§5.3).
 _FULL_ATTENTION_ONLY: frozenset[str] = frozenset(
-    {"attention_probs"} | _ATTENTION_INTERIOR
+    {"attention_probs"} | _ATTENTION_INTERIOR | set(ATTENTION_FUNCTION_SLOTS)
 )
 
 
@@ -496,6 +549,7 @@ def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
         feature_slice: slice | None = None,
         tuple_index: int | None = None,
         keeps_head_axis: bool = False,
+        interface_slot: str | None = None,
     ) -> ResolvedSite:
         """One tap, with its shape read from the component table.
 
@@ -522,6 +576,7 @@ def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
             layer=layer,
             component=component,
             tuple_index=tuple_index,
+            interface_slot=interface_slot,
         )
 
     if component == "input_ids":
@@ -555,7 +610,7 @@ def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
         # owns that half. Its shape has two position axes and so no contract
         # form, which is what makes the executor refuse to gather or featurize
         # it without any component name appearing in that refusal.
-        return tap(_attn(bundle, layer), "out", tuple_index=1)
+        return tap(_attn(bundle, layer), "out", tuple_index=1, interface_slot="probs")
     if component == "expert_output":
         raise NotImplementedError(
             f"the pytorch_hooks backend has no tap for {component!r} yet — "
@@ -591,6 +646,16 @@ def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
     if component in _ATTENTION_INTERIOR:
         return _attention_interior_site(
             bundle, _attn(bundle, layer), component, layer, head, tap
+        )
+    if component in ATTENTION_FUNCTION_SLOTS:
+        # No module boundary to hook: these four live inside one call. The
+        # module is carried anyway, because it is what identifies *which*
+        # mixer's call to tap.
+        return tap(
+            _attn(bundle, layer),
+            "interface",
+            feature_slice=_head_slice(bundle, component, head),
+            interface_slot=ATTENTION_FUNCTION_SLOTS[component],
         )
     mlp = block.mlp
     if component in _MOE_COMPONENTS:

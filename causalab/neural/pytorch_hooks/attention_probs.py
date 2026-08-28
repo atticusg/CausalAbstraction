@@ -19,171 +19,123 @@ measured the same way: 0.0 change in the logits. The edit has to happen *between
 the softmax and the value multiply, which means going through the attention
 function itself.
 
-``transformers`` resolves that function per forward::
+How the call is intercepted — and what is left in this module
+------------------------------------------------------------
 
-    attention_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
-        self.config._attn_implementation, eager_attention_forward
-    )
+:mod:`.attention_interface` owns the interception (registering a wrapper under
+``ALL_ATTENTION_FUNCTIONS["eager"]``, scoped to one forward). What stays here is
+the part that is specific to the *pattern*: an edit to it has to be carried
+forward by redoing the two lines the eager function runs after its softmax,
+because by the time the function returns, ``attn_output`` has already been
+computed from the pattern.
 
-📐 ``"eager"`` is **not** registered by default (the registry holds
-``sdpa``, the flash variants, ``flex_attention`` and the ``paged|*`` family), so
-that call falls through to the module's own ``eager_attention_forward``.
-Registering ``"eager"`` therefore *inserts* a wrapper rather than replacing one,
-and removing the key restores the original behaviour exactly. The backend forces
-eager attention at load time (``loading.py``), which is what makes this the only
-implementation we need to wrap.
-
-**What the wrapper duplicates, and why that is safe.** It calls the real eager
-function, applies the edit, and then redoes only the two lines that follow the
-softmax::
+**What that duplicates, and why it is safe.** It redoes exactly::
 
     value_states = repeat_kv(value, module.num_key_value_groups)
     attn_output = torch.matmul(edited, value_states).transpose(1, 2).contiguous()
 
-Duplicating library internals is normally how a backend rots silently. Here it is
-pinned: with an **identity** edit the recomputed output must equal the
+Duplicating library internals is normally how a backend rots silently. Here it
+is pinned: with an **identity** edit the recomputed output must equal the
 unpatched output *exactly*, which
 :func:`tests...test_attention_probs.test_an_identity_edit_is_bit_identical`
 asserts (📐 measured max difference 0.0). If a future transformers changes what
-happens after the softmax — a different scaling, a dropout that is not a no-op in
-eval, an output reshape — that test fails rather than the numbers quietly
+happens after the softmax — a different scaling, a dropout that is not a no-op
+in eval, an output reshape — that test fails rather than the numbers quietly
 drifting.
+
+⚠️ **This is the transcription round 2.5 exists to delete.** Round 2.3 taps the
+softmax to reach ``attention_scores``; intercepting the same softmax's *output*
+reaches the pattern with nothing duplicated and no per-family resolution at all.
 
 Scope: a write replaces the **whole** pattern, which is what an interchange on
 attention does (and what nnterp's own check does: ``self[layer] = rnd``).
 Addressing a single query position, or a feature slice of the key axis, is
-refused rather than approximated — and the refusal is now *generated*: the tap
+refused rather than approximated — and the refusal is *generated*: the tap
 declares ``(batch, head, position[query], key_position[key])``, which has two
 position axes and therefore no ``(batch, position, feature)`` contract form, and
 the executor refuses every operation that needs one. See
 :mod:`causalab.protocol.shapes`.
+
+⚠️ Every mechanism but ``swap`` is refused here, because a delta or a scale
+leaves rows that no longer sum to 1 and nothing downstream renormalizes them.
+One step earlier that objection disappears entirely — write
+``attention_scores``, upstream of the model's own softmax.
 """
 
 from __future__ import annotations
 
-import contextlib
 import importlib
-from typing import Any, Callable, Iterator, Mapping
+from typing import Any, Callable
 
 import torch
 
 from causalab.protocol.errors import ProtocolError
 
-__all__ = ["eager_attention_writes"]
+__all__ = ["module_eager_attention", "post_softmax_value_multiply"]
 
 
-@contextlib.contextmanager
-def eager_attention_writes(
-    edits: Mapping[int, Callable[[torch.Tensor], None]],
-) -> Iterator[None]:
-    """Make in-place edits to the attention pattern actually reach the output.
+def _from_modeling(module: Any, name: str, why: str) -> Callable[..., Any]:
+    """One symbol out of the modeling file the module's class was defined in.
 
-    Args:
-        edits: ``id(module) -> edit``, where ``edit`` mutates a
-            ``(batch, heads, query, key)`` tensor **in place**. A mixer module
-            absent from the mapping is untouched and pays only a dict lookup.
-
-    The registry entry is global while installed, so this must wrap the forward
-    it applies to and nothing wider. On exit the ``"eager"`` key is removed (or
-    restored, if something else had registered one), which puts
-    ``get_interface`` back on the module default.
-    """
-    from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
-
-    if not edits:
-        yield
-        return
-
-    def wrapper(
-        module: Any,
-        query: torch.Tensor,
-        key: torch.Tensor,
-        value: torch.Tensor,
-        attention_mask: torch.Tensor | None,
-        scaling: float,
-        dropout: float = 0.0,
-        **kwargs: Any,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        # Resolved from the MODULE's own modeling file, per call: while the
-        # registry entry is installed it intercepts every attention forward,
-        # so borrowing one family's function would silently replace another
-        # family's math (gemma-2's eager soft-caps the logits, say). Each
-        # module keeps its own; a family this cannot resolve refuses below.
-        eager_attention_forward, repeat_kv = _post_softmax_math(module)
-
-        out, weights = eager_attention_forward(
-            module,
-            query,
-            key,
-            value,
-            attention_mask,
-            scaling=scaling,
-            dropout=dropout,
-            **kwargs,
-        )
-        edit = edits.get(id(module))
-        if edit is None:
-            return out, weights
-        edited = weights.clone()
-        edit(edited)
-        value_states = repeat_kv(value, module.num_key_value_groups)
-        recomputed = torch.matmul(edited.to(value_states.dtype), value_states)
-        return recomputed.transpose(1, 2).contiguous(), edited
-
-    had_key = "eager" in ALL_ATTENTION_FUNCTIONS
-    previous = ALL_ATTENTION_FUNCTIONS["eager"] if had_key else None
-    ALL_ATTENTION_FUNCTIONS["eager"] = wrapper
-    try:
-        yield
-    finally:
-        if had_key:
-            ALL_ATTENTION_FUNCTIONS["eager"] = previous
-        else:
-            _unregister(ALL_ATTENTION_FUNCTIONS, "eager")
-
-
-def _post_softmax_math(module: Any) -> tuple[Callable[..., Any], Callable[..., Any]]:
-    """The mixer's own ``eager_attention_forward`` and ``repeat_kv``.
-
-    Resolved from the modeling file the module's class was defined in, so the
-    wrapper defers to the implementation that belongs to the model being run
-    — never another family's. transformers stamps both names into every
-    modeling file that uses the attention-interface pattern, so on any model
-    the backend can force to eager these resolve; a family where they do not
-    is refused by name rather than approximated with a different family's
-    math, which would be exactly the silent drift this module is built to
-    prevent.
+    Resolved per module, so a wrapper defers to the implementation that belongs
+    to the model being run — never another family's. transformers stamps these
+    names into every modeling file that uses the attention-interface pattern,
+    and a family where one is missing is refused by name rather than served
+    another family's version, which would silently change what the model
+    computes (gemma-2's eager soft-caps its logits, say).
     """
     modeling = importlib.import_module(type(module).__module__)
-    eager = getattr(modeling, "eager_attention_forward", None)
-    repeat = getattr(modeling, "repeat_kv", None)
-    if eager is None or repeat is None:
-        missing = "eager_attention_forward" if eager is None else "repeat_kv"
+    found = getattr(modeling, name, None)
+    if found is None:
         raise ProtocolError(
             "P4",
-            f"attention-pattern write on {type(module).__name__}: its modeling "
-            f"module {type(module).__module__!r} exports no {missing!r} to "
-            "wrap. Extend attention_probs.py for this family — borrowing "
-            "another family's post-softmax math would silently change what "
-            "the model computes.",
+            f"{why} on {type(module).__name__}: its modeling module "
+            f"{type(module).__module__!r} exports no {name!r}. Extend "
+            "attention_probs.py for this family — borrowing another family's "
+            "version would silently change what the model computes.",
         )
-    return eager, repeat
+    return found
 
 
-def _unregister(registry: Any, name: str) -> None:
-    """Remove a key from ``ALL_ATTENTION_FUNCTIONS``.
+def module_eager_attention(module: Any) -> Callable[..., Any]:
+    """The mixer's own ``eager_attention_forward``.
 
-    ``AttentionInterface`` is dict-like but its deletion surface has moved
-    between versions, so try the documented spelling first and fall back to the
-    backing mapping. Leaving the key installed would silently keep the wrapper
-    in force for the rest of the process, which is the one outcome worth being
-    thorough about.
+    ⚠️ Deliberately does **not** also require ``repeat_kv``. The two are needed
+    by different things: every interface tap needs the eager function, and only
+    a *pattern write* needs ``repeat_kv`` to redo the value multiply. 📐 GPT-2's
+    modeling file exports the first and not the second (it has no GQA, so it has
+    nothing to repeat), and asking for both made a plain read of the attention
+    interior on gpt2 fail with a message about pattern writes.
     """
-    try:
-        del registry[name]
-        return
-    except (KeyError, TypeError, AttributeError):
-        pass
-    backing = getattr(registry, "_local_mapping", None)
-    if isinstance(backing, dict):
-        backing.pop(name, None)
+    return _from_modeling(
+        module, "eager_attention_forward", "an attention-interface tap"
+    )
+
+
+def post_softmax_value_multiply(
+    payload: tuple[Any, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Carry an edited attention pattern forward, by redoing the two lines the
+    eager function runs after its softmax::
+
+        value_states = repeat_kv(value, module.num_key_value_groups)
+        attn_output = torch.matmul(probs, value_states).transpose(1, 2).contiguous()
+
+    Duplicating library internals is normally how a backend rots silently. Here
+    it is pinned: with an **identity** edit the recomputed output must equal the
+    unpatched output exactly, which
+    ``tests...test_attention_probs.test_an_identity_edit_is_bit_identical``
+    asserts (📐 measured max difference 0.0). If a future transformers changes
+    what happens after the softmax, that test fails rather than the numbers
+    quietly drifting.
+
+    ⚠️ This is the transcription round 2.5 exists to delete: intercepting the
+    softmax's *output* (which :mod:`.attention_interface` already does to reach
+    the scores) reaches the same place with nothing duplicated and no per-family
+    resolution.
+    """
+    module, probs, value, _out, _weights = payload
+    repeat_kv = _from_modeling(module, "repeat_kv", "an attention-pattern write")
+    value_states = repeat_kv(value, module.num_key_value_groups)
+    recomputed = torch.matmul(probs.to(value_states.dtype), value_states)
+    return recomputed.transpose(1, 2).contiguous(), probs

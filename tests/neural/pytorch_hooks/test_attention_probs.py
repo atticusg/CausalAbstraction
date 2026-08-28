@@ -15,10 +15,16 @@ than approximated.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 import torch
 
-from causalab.neural.pytorch_hooks.attention_probs import eager_attention_writes
+from causalab.neural.pytorch_hooks.attention_interface import (
+    InterfaceTap,
+    attention_interface_taps,
+)
+from causalab.neural.pytorch_hooks.attention_probs import post_softmax_value_multiply
 from causalab.neural.pytorch_hooks.backend import PytorchHooksBackend
 from causalab.neural.pytorch_hooks.sites import resolve_site
 from causalab.protocol.errors import ProtocolError
@@ -27,6 +33,30 @@ from causalab.protocol.schema import SiteSpec
 from ._drive import base_data_section, executor_for
 
 pytestmark = pytest.mark.smoke
+
+
+def eager_attention_writes(edits: dict) -> Any:
+    """The round-1 spelling, over round 2.3's interface manager.
+
+    Kept as a test-local shim because these tests pin the *pattern-write*
+    behaviour specifically, and phrasing them in terms of "an in-place edit to
+    the pattern for these modules" is what they are about. The manager's own
+    contract (hand out a clone, take back a replacement) is exercised by the
+    round-2 tests.
+    """
+
+    def as_tap(edit: Any) -> tuple[InterfaceTap, ...]:
+        def run(probs: torch.Tensor) -> torch.Tensor:
+            edit(probs)
+            return probs
+
+        return (InterfaceTap(slot="probs", edit=run),)
+
+    return attention_interface_taps(
+        {module_id: as_tap(edit) for module_id, edit in edits.items()},
+        post_softmax=post_softmax_value_multiply,
+    )
+
 
 #: 📐 the fixture's only full-attention layer; 0-2 are Gated DeltaNet.
 FULL_ATTENTION_LAYER = 3
@@ -426,7 +456,7 @@ def test_a_generated_frame_read_refuses(llama_bundle):
         executor_for(doc, llama_bundle, base_texts=[BASE_TEXT]).read_value("r")
     message = str(excinfo.value)
     assert "generated frame" in message
-    assert "key width" in message
+    assert "no single axis the decode steps stack along" in message
     assert "key_position[key]" in message
 
 
@@ -462,33 +492,46 @@ def test_an_interchange_across_different_lengths_refuses(qwen35moe_bundle):
 # --------------------------------------------------------------------------- #
 
 
-def test_the_post_softmax_math_is_the_modules_own(qwen35moe_bundle, llama_bundle):
+def test_the_eager_math_is_the_modules_own(qwen35moe_bundle, llama_bundle):
     """The registry entry intercepts every attention forward while installed,
     so the wrapper must resolve `eager_attention_forward` from each module's
     own modeling file — borrowing one family's function would silently replace
     another's math (gemma-2's eager soft-caps the logits, for instance)."""
-    from causalab.neural.pytorch_hooks.attention_probs import _post_softmax_math
+    from causalab.neural.pytorch_hooks.attention_probs import module_eager_attention
 
-    qwen_eager, qwen_repeat = _post_softmax_math(qwen35moe_bundle.mixer_at(3))
-    llama_eager, llama_repeat = _post_softmax_math(llama_bundle.mixer_at(0))
+    qwen_eager = module_eager_attention(qwen35moe_bundle.mixer_at(3))
+    llama_eager = module_eager_attention(llama_bundle.mixer_at(0))
     assert "qwen3_5" in qwen_eager.__module__
     assert "llama" in llama_eager.__module__
     assert qwen_eager is not llama_eager
-    assert qwen_repeat is not llama_repeat
 
 
 def test_a_family_without_eager_math_refuses_by_name():
     """A modeling file that exports no eager function cannot be wrapped, and
     approximating it with another family's math is exactly the silent drift
     this module exists to prevent — so it refuses, naming what is missing."""
-    from causalab.neural.pytorch_hooks.attention_probs import _post_softmax_math
+    from causalab.neural.pytorch_hooks.attention_probs import module_eager_attention
 
     class FakeMixer(torch.nn.Module):
         pass
 
     with pytest.raises(ProtocolError) as excinfo:
-        _post_softmax_math(FakeMixer())
+        module_eager_attention(FakeMixer())
     assert "eager_attention_forward" in str(excinfo.value)
+
+
+def test_only_the_pattern_write_needs_repeat_kv(qwen35moe_bundle):
+    """📐 The two symbols are needed by different things, and GPT-2's modeling
+    file exports the first and not the second (no GQA, so nothing to repeat).
+    Requiring both made a plain read of the attention interior on gpt2 fail with
+    a message about pattern writes."""
+    import transformers.models.gpt2.modeling_gpt2 as gpt2_modeling
+    from causalab.neural.pytorch_hooks.attention_probs import module_eager_attention
+
+    assert hasattr(gpt2_modeling, "eager_attention_forward")
+    assert not hasattr(gpt2_modeling, "repeat_kv")
+    # ...and the tap that needs only the first resolves on qwen unchanged
+    assert module_eager_attention(qwen35moe_bundle.mixer_at(3)) is not None
 
 
 def test_an_identity_edit_is_bit_identical_on_llama(llama_bundle):
