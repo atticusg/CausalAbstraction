@@ -266,13 +266,15 @@ def test_attention_probs_at_a_deltanet_layer_refuses_on_the_architecture(
     assert "linear_attention" in message
 
 
-def test_attention_probs_at_a_full_attention_layer_is_merely_unimplemented(
-    qwen35moe_bundle,
-):
-    """The other half of the ordering: at layer 3 the tensor exists, and the
-    refusal is a roadmap statement (PR4), not an architectural one."""
-    with pytest.raises(NotImplementedError):
-        resolve_site(qwen35moe_bundle, _spec("attention_probs", 3))
+def test_attention_probs_at_a_full_attention_layer_resolves(qwen35moe_bundle):
+    """The other half of the ordering. This test used to assert
+    ``NotImplementedError`` — a roadmap statement, which PR4 discharged by
+    implementing the component. What must survive is the *asymmetry*: at layer 3
+    the tensor exists and the tap resolves, while at a DeltaNet layer it refuses
+    for a reason that is permanent (the test above)."""
+    site = resolve_site(qwen35moe_bundle, _spec("attention_probs", 3))
+    assert site.module is qwen35moe_bundle.mixer_at(3)
+    assert site.tuple_index == 1
 
 
 # --------------------------------------------------------------------------- #

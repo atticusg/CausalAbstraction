@@ -48,6 +48,7 @@ from causalab.neural.pytorch_hooks.mechanisms import (
     is_additive,
     operand_names,
 )
+from causalab.neural.pytorch_hooks.attention_probs import eager_attention_writes
 from causalab.neural.pytorch_hooks.sites import (
     READ_ONLY_COMPONENTS,
     SWAP_ONLY_COMPONENTS,
@@ -66,6 +67,7 @@ from causalab.protocol.errors import ProtocolError
 from causalab.protocol.plan import generated_budget
 from causalab.protocol.registry import component_width
 from causalab.protocol.schema import (
+    ALL_POSITIONS,
     Document,
     PositionSpec,
     ReadSpec,
@@ -370,7 +372,18 @@ class PointExecutor:
         }
 
         with contextlib.ExitStack() as hooks:
+            # An attention-pattern write cannot ride a forward hook: the hook
+            # fires after the pattern has been consumed, so the edit would be a
+            # silent no-op. It goes through the eager attention function instead.
+            pattern_edits = {
+                id(module): fn
+                for module, kind, w_layout, w_tuple_index, fn in write_hooks
+                if w_layout == "native"
+            }
+            hooks.enter_context(eager_attention_writes(pattern_edits))
             for module, kind, w_layout, w_tuple_index, fn in write_hooks:
+                if w_layout == "native":
+                    continue
                 hooks.enter_context(
                     _installed(
                         module,
@@ -463,7 +476,32 @@ class PointExecutor:
         steps: dict[tuple[int, str], list[torch.Tensor]] = {}
         cache = prefill.past_key_values
         with contextlib.ExitStack() as hooks:
-            for site in gen_capture_sites.values():
+            for name, site in gen_capture_sites.items():
+                if site.component == "attention_probs":
+                    # 📐 Each decode step attends over the whole cache, so the
+                    # pattern is (batch, heads, 1, prompt + step): the key axis
+                    # GROWS by one per step while the query axis stays 1. The
+                    # accumulating sink stacks steps on dim 1, which for every
+                    # other component is the position axis and here is heads —
+                    # so the concat either raises a bare torch size error
+                    # (measured: "Expected size 9 but got size 10") or, for a
+                    # single-step budget, silently returns one step's pattern
+                    # shaped like a frame. Neither is a continuation read.
+                    #
+                    # Saying what a correct one would mean — a ragged key axis
+                    # per step, addressed per query row — is exactly the typed
+                    # feature-shape descriptor, follow-up F1. Refuse by name
+                    # until then, as round 1 does for every other thing the
+                    # descriptor is needed for.
+                    raise ProtocolError(
+                        "P4",
+                        f"read {name!r} reads 'attention_probs' in the "
+                        "generated frame, which round 1 does not support: with "
+                        "a KV cache each step's pattern has a different key "
+                        "width, so the steps do not stack into one tensor. "
+                        "Read it in the prompt frame, or wait on the typed "
+                        "feature-shape descriptor (follow-up F1).",
+                    )
                 key = _tap_key(site)
                 if key not in steps:
                     steps[key] = []
@@ -639,6 +677,8 @@ class PointExecutor:
         served from kept ``ln_final`` activations: the vocabulary projection
         happens at the addressed positions and nowhere else.
         """
+        if site.component == "attention_probs":
+            return _whole_attention_pattern(rname, read, raw)
         if per_row is None:
             per_row = self._positions(read.pos, batch, input_role)
         gathered = self._gather(raw, per_row, f"read {rname!r}")
@@ -773,6 +813,40 @@ class PointExecutor:
 
         def apply(tensor: torch.Tensor) -> None:
             for ename, write, site in ordered:
+                if site.component == "attention_probs":
+                    # Symmetric with the read (see _whole_attention_pattern):
+                    # the pattern's feature axis is a position axis, so the
+                    # position gather below would index heads with positions.
+                    # Round 1 replaces the whole pattern — which is what only
+                    # `swap` means. Any other mechanism (a delta, a scale, a
+                    # clamp) would leave rows that no longer sum to 1, and the
+                    # code below would treat its payload as a whole pattern
+                    # anyway; refuse by name rather than produce one that is
+                    # plausible and wrong.
+                    if str(write.do.mechanism) != "swap":
+                        raise ProtocolError(
+                            "P4",
+                            f"write {ename!r} applies {str(write.do.mechanism)!r} "
+                            "to 'attention_probs' — round 1 supports only a "
+                            "whole-pattern 'swap' (an interchange). Anything "
+                            "that re-weights rows needs the typed feature-shape "
+                            "descriptor and a renormalization story "
+                            "(follow-up F1).",
+                        )
+                    _whole_attention_pattern(ename, write, tensor)
+                    replacement = self._operand_lookup(write.do.payload)
+                    if replacement.shape != tensor.shape:
+                        raise ProtocolError(
+                            "P2",
+                            f"write {ename!r} replaces the whole attention "
+                            f"pattern, but its operand has shape "
+                            f"{tuple(replacement.shape)} and the pattern is "
+                            f"{tuple(tensor.shape)} — an attention-pattern "
+                            "interchange needs both inputs to have the same "
+                            "number of positions",
+                        )
+                    tensor.copy_(replacement.to(tensor.dtype))
+                    continue
                 per_row = self._positions(write.pos, batch, input_role)
                 widths = {len(row) for row in per_row}
                 if len(widths) != 1:
@@ -838,6 +912,51 @@ class PointExecutor:
 # --------------------------------------------------------------------------- #
 # hook plumbing (mirrors the oracle's _install / capture helpers)
 # --------------------------------------------------------------------------- #
+
+
+def _whole_attention_pattern(
+    rname: str, read: "ReadSpec | WriteSpec", raw: torch.Tensor
+) -> torch.Tensor:
+    """An ``attention_probs`` read: the whole (batch, heads, query, key) pattern.
+
+    Round-1 scope, and the reason it is a bypass rather than a gather: this
+    tensor has **two** position axes and its feature axis *is* a position axis,
+    so ``_gather`` (dim 0 batch, dim 1 position) would index the head axis with
+    position indices, and ``dims`` would slice the key axis as though it were
+    features. Both would produce plausible numbers from the wrong tensor.
+
+    Rather than approximate, the two forms that need a typed feature-shape
+    descriptor are refused and named as follow-up F1. What remains — the whole
+    pattern, at ``pos: "all"`` — is exactly what an interchange on attention
+    needs, and what nnterp's own check exercises (``self[layer] = rnd``).
+    """
+    pos = read.pos
+    whole = getattr(pos, "all", None) is True or pos == ALL_POSITIONS
+    if not whole:
+        raise ProtocolError(
+            "P4",
+            f"read {rname!r} addresses positions on 'attention_probs', which "
+            "has two position axes (batch, heads, query, key) — its feature "
+            "axis IS a position axis. Round 1 exposes the whole pattern: use "
+            'pos: "all". Addressing one query row, or slicing the key axis, '
+            "needs the typed feature-shape descriptor (follow-up F1).",
+        )
+    if read.featurizer is not None:
+        raise ProtocolError(
+            "P4",
+            f"read {rname!r} featurizes 'attention_probs', whose feature axis "
+            "is a position axis — a featurizer would be fitted across key "
+            "positions, which is not a feature space. Needs the typed "
+            "feature-shape descriptor (follow-up F1).",
+        )
+    if isinstance(read.dims, tuple):
+        raise ProtocolError(
+            "P4",
+            f"read {rname!r} slices 'dims' on 'attention_probs': that would "
+            "select key positions as though they were features. Needs the "
+            "typed feature-shape descriptor (follow-up F1).",
+        )
+    return raw
 
 
 @contextlib.contextmanager
