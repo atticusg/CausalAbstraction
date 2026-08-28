@@ -48,6 +48,7 @@ from causalab.protocol.schema import (
     RESERVED_NAMES,
     SaveEntry,
     VOCAB_TOP_K_RANKING,
+    metric_reads_vocabulary,
 )
 
 __all__ = ["validate_document"]
@@ -226,21 +227,37 @@ def _check_references(doc: Document, names: dict[str, str]) -> None:
             )
         of_read = doc.reads[str(metric.of)]
         of_site = doc.sites[str(of_read.site)]
-        if metric.kind not in _ANY_READ_METRIC_KINDS and of_site.component != "lm_head":
+        # What the read actually hands the metric. The site alone cannot
+        # answer this: a featurizer re-expresses an lm_head projection in its
+        # own latents and `dims` re-indexes a slice of it, so either one takes
+        # the value out of token-id space even though the site says lm_head.
+        is_vocabulary = metric_reads_vocabulary(doc, metric)
+        if of_site.component != "lm_head":
+            not_vocab_because = f"taps {of_site.component!r}"
+        elif of_read.featurizer is not None:
+            not_vocab_because = (
+                "taps 'lm_head' through a featurizer, whose latents are not token ids"
+            )
+        else:
+            not_vocab_because = (
+                "taps 'lm_head' through a 'dims' slice, whose re-indexed "
+                "entries are not token ids"
+            )
+        if metric.kind not in _ANY_READ_METRIC_KINDS and not is_vocabulary:
             # not in the §5 checklist: the token-space kinds name vocab
-            # entries, which only lm_head produces (an interpretation this
-            # loader commits to; surfaced in the PR notes)
+            # entries, which only a plain lm_head read produces (an
+            # interpretation this loader commits to; surfaced in the PR notes)
             raise ValidationError(
                 4,
                 f"metric {qname!r} names vocabulary tokens, but its read "
-                f"{metric.of!r} taps {of_site.component!r} — token-space metric "
-                "kinds bind to lm_head reads",
+                f"{metric.of!r} {not_vocab_because} — token-space metric "
+                "kinds bind to plain lm_head reads (no featurizer, no dims)",
                 path=f"{p}.of",
             )
         if (
             metric.kind == "top_k"
             and metric.fields.get("by") == VOCAB_TOP_K_RANKING
-            and of_site.component != "lm_head"
+            and not is_vocabulary
         ):
             # `top_k` itself is axis-agnostic, but its normalizing ranking is
             # not: a softmax across neurons or SAE latents normalizes over an
@@ -249,8 +266,8 @@ def _check_references(doc: Document, names: dict[str, str]) -> None:
             raise ValidationError(
                 4,
                 f"metric {qname!r} ranks by {VOCAB_TOP_K_RANKING!r}, which "
-                f"softmaxes a vocabulary, but its read {metric.of!r} taps "
-                f"{of_site.component!r} — rank by 'value' or 'abs_value' on a "
+                f"softmaxes a vocabulary, but its read {metric.of!r} "
+                f"{not_vocab_because} — rank by 'value' or 'abs_value' on a "
                 "read that is not a vocabulary projection (§2.10)",
                 path=f"{p}.by",
             )

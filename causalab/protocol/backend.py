@@ -19,7 +19,7 @@ from typing import Any, Mapping, Sequence
 from causalab.protocol.errors import ValidationError
 from causalab.protocol.plan import generated_budget
 from causalab.protocol.resolve import ResolutionEnv
-from causalab.protocol.schema import Document, metric_reads_vocabulary
+from causalab.protocol.schema import Document, MetricSpec
 
 __all__ = [
     "Backend",
@@ -48,6 +48,25 @@ CAPABILITIES: tuple[str, ...] = (
 #: SAE code obliges no vocabulary projection at all. Charging it ``full_logits``
 #: would route such a document onto a full-vocab backend for nothing.
 _FULL_VOCAB_METRICS = frozenset({"top_k", "class_probs"})
+
+
+def _metric_read_obliges_full_projection(doc: Document, metric: MetricSpec) -> bool:
+    """Whether serving ``metric``'s read means materializing the vocabulary.
+
+    Deliberately NOT :func:`~causalab.protocol.schema.metric_reads_vocabulary`:
+    that predicate asks what the read *hands the metric* (token ids, or a
+    featurizer's latents / a ``dims`` re-index), which governs softmaxing and
+    decoding. This one asks what the backend must *compute upstream* — and a
+    featurized ``lm_head`` read still consumes the whole projection, its
+    featurizer merely re-expresses it. The two questions diverge exactly
+    there. A ``dims`` slice is the one transform that needs only its named
+    rows, matching the saved-read rule above.
+    """
+    read = doc.reads.get(str(metric.of))
+    if read is None:
+        return False
+    site = doc.sites.get(str(read.site))
+    return site is not None and site.component == "lm_head" and read.dims is None
 
 
 def requires(doc: Document) -> frozenset[str]:
@@ -87,7 +106,9 @@ def requires(doc: Document) -> frozenset[str]:
             if site.component == "lm_head":
                 needed.add("full_logits")
     for metric in doc.metrics.values():
-        if metric.kind in _FULL_VOCAB_METRICS and metric_reads_vocabulary(doc, metric):
+        if metric.kind in _FULL_VOCAB_METRICS and _metric_read_obliges_full_projection(
+            doc, metric
+        ):
             needed.add("full_logits")
     for read in doc.reads.values():
         if generated_budget(doc, read.pos) is not None:
