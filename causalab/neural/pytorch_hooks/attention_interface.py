@@ -156,11 +156,23 @@ class _SoftmaxTap(TorchFunctionMode):
 
 
 def _apply(taps: "tuple[InterfaceTap, ...]", slot: str, value: torch.Tensor):
-    """Run the read and the edit declared for ``slot``, in that order.
+    """Run every tap declared for ``slot``, in order.
 
-    The read sees the value the model computed; the edit replaces it. Reading
-    *before* editing is the only order that lets one document read a tensor and
-    write it in the same forward without the read observing its own write.
+    Two orderings, and only one of them is this function's to choose:
+
+    * **within one tap**, the read runs before the edit — a tap that does both
+      observes the value the model computed, not its own replacement;
+    * **across taps**, registration order decides, and the executor registers
+      edits before reads. So a document that reads and writes the same slot in
+      one forward sees the *written* value.
+
+    That second one is not an accident of this file: it is what the module-hook
+    path already does, because ``_installed`` is entered before ``_capturing``
+    and hooks fire in registration order. 📐 Measured equal on both paths —
+    ``attention_premix`` (a module boundary) and ``attention_query`` /
+    ``attention_z`` (interface slots) all read back exactly the written value,
+    difference 0.0. The two tap mechanisms have to agree here or the same
+    document would mean different things depending on which components it named.
     """
     for tap in taps:
         if tap.slot != slot:
