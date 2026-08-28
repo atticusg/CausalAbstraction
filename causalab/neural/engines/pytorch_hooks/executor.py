@@ -34,6 +34,10 @@ from causalab.neural.engines.pytorch_hooks.attention_interface import (
     InterfaceTap,
     attention_interface_taps,
 )
+from causalab.neural.engines.pytorch_hooks.experts_interface import (
+    ExpertsTap,
+    experts_interface_taps,
+)
 from causalab.neural.shared.encoding import Continuation, EncodedBatch, resolve_steps
 from causalab.neural.shared.executor_base import (
     ExecutorBase,
@@ -127,9 +131,19 @@ class PointExecutor(ExecutorBase):
             # registry entry and nesting two of them would let the inner
             # wrapper's edits replace the outer's.
             interface: dict[int, list[InterfaceTap]] = {}
+            experts: dict[int, list[ExpertsTap]] = {}
             batch_size = batch.input_ids.shape[0]
 
             for site, fn in write_hooks:
+                if site.kind == "experts":
+                    assert site.interface_slot is not None
+                    experts.setdefault(id(site.module), []).append(
+                        ExpertsTap(
+                            slot=site.interface_slot,
+                            edit=_experts_edit(site, fn, batch_size),
+                        )
+                    )
+                    continue
                 if site.interface_slot is not None:
                     interface.setdefault(id(site.module), []).append(
                         InterfaceTap(
@@ -153,6 +167,15 @@ class PointExecutor(ExecutorBase):
                 if key in capture:
                     continue
                 capture[key] = torch.empty(0)  # placeholder; filled by the tap
+                if site.kind == "experts":
+                    assert site.interface_slot is not None
+                    experts.setdefault(id(site.module), []).append(
+                        ExpertsTap(
+                            slot=site.interface_slot,
+                            read=_experts_capture(capture, key, site, batch_size),
+                        )
+                    )
+                    continue
                 if site.kind == "interface":
                     assert site.interface_slot is not None
                     interface.setdefault(id(site.module), []).append(
@@ -176,6 +199,11 @@ class PointExecutor(ExecutorBase):
             hooks.enter_context(
                 attention_interface_taps(
                     {mid: tuple(entries) for mid, entries in interface.items()}
+                )
+            )
+            hooks.enter_context(
+                experts_interface_taps(
+                    {mid: tuple(entries) for mid, entries in experts.items()}
                 )
             )
             with torch.enable_grad() if self.grad_enabled else torch.no_grad():
@@ -246,6 +274,7 @@ class PointExecutor(ExecutorBase):
         cache = prefill.past_key_values
         with contextlib.ExitStack() as hooks:
             interface: dict[int, list[InterfaceTap]] = {}
+            experts: dict[int, list[ExpertsTap]] = {}
             batch_size = batch.input_ids.shape[0]
             for name, site in gen_capture_sites.items():
                 _refuse_unstackable(name, site)
@@ -253,6 +282,15 @@ class PointExecutor(ExecutorBase):
                 if key in steps:
                     continue
                 steps[key] = []
+                if site.kind == "experts":
+                    assert site.interface_slot is not None
+                    experts.setdefault(id(site.module), []).append(
+                        ExpertsTap(
+                            slot=site.interface_slot,
+                            read=_experts_accumulate(steps[key], site, batch_size),
+                        )
+                    )
+                    continue
                 if site.kind == "interface":
                     assert site.interface_slot is not None
                     interface.setdefault(id(site.module), []).append(
@@ -275,6 +313,11 @@ class PointExecutor(ExecutorBase):
             hooks.enter_context(
                 attention_interface_taps(
                     {mid: tuple(entries) for mid, entries in interface.items()}
+                )
+            )
+            hooks.enter_context(
+                experts_interface_taps(
+                    {mid: tuple(entries) for mid, entries in experts.items()}
                 )
             )
             for _ in range(depth):
@@ -417,6 +460,57 @@ def _interface_accumulate(
     """The read half for a decode: append per step, as ``_accumulating`` does."""
 
     def read(native: torch.Tensor) -> None:
+        sink.append(to_contract(native, site.shape, batch_size=batch_size))
+
+    return read
+
+
+def _experts_edit(
+    site: ResolvedSite, write: Callable[[torch.Tensor], None], batch_size: int
+) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
+    """Adapt an in-place contract-shaped writer to the experts interface.
+
+    Same contract as :func:`_interface_edit`: the manager hands out a clone in
+    the taps' token-major form, this converts it to ``(batch, position,
+    feature)``, lets the shared write math mutate it, and converts back. The
+    routing table rides along unused here — round 3.2's ``expert`` sub-axis is
+    what consumes it.
+    """
+
+    def edit(native: torch.Tensor, _idx: torch.Tensor) -> torch.Tensor:
+        contract = to_contract(native, site.shape, batch_size=batch_size)
+        write(contract)
+        return from_contract(contract, site.shape, batch_size=batch_size, native=native)
+
+    return edit
+
+
+def _experts_capture(
+    sink: dict[Any, torch.Tensor],
+    key: Any,
+    site: ResolvedSite,
+    batch_size: int,
+) -> Callable[[torch.Tensor, torch.Tensor], None]:
+    """The read half — the same contract shape ``_capturing`` produces."""
+
+    def read(native: torch.Tensor, _idx: torch.Tensor) -> None:
+        sink[key] = to_contract(native, site.shape, batch_size=batch_size)
+
+    return read
+
+
+def _experts_accumulate(
+    sink: list[torch.Tensor], site: ResolvedSite, batch_size: int
+) -> Callable[[torch.Tensor, torch.Tensor], None]:
+    """The read half for a decode: append per step, as ``_accumulating`` does.
+
+    Safe for every experts-interface shape: the interior is token-indexed, so a
+    decode step is exactly one position per row and the steps stack on the
+    position axis (unlike ``attention_key``, nothing here grows with the
+    prefix).
+    """
+
+    def read(native: torch.Tensor, _idx: torch.Tensor) -> None:
         sink.append(to_contract(native, site.shape, batch_size=batch_size))
 
     return read

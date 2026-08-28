@@ -62,6 +62,10 @@ GQA = ModelInfo(
     num_experts=32,
     num_experts_per_tok=4,
     shared_expert_intermediate_size=48,
+    # ⚠️ deliberately different from shared_expert_intermediate_size (48) and
+    # intermediate_size (128): on the fixture all three are 32, so only a table
+    # like this one can catch a wrong-field read (§1.1 of the round-3 plan).
+    moe_intermediate_size=24,
 )
 
 
@@ -102,6 +106,9 @@ EXPECTED: dict[str, tuple[int | None, int | None, bool]] = {
     "router_logits": (32, None, True),
     "router_scores": (4, None, True),
     "expert_idx": (4, None, False),
+    # token-major routed interior: top_k (4) slots of moe_intermediate_size
+    # (24) features each, on a ranking axis
+    "expert_activation": (4 * 24, None, True),
     "expert_output": (64, None, True),
     "routed_output": (64, None, True),
     "shared_expert_gate_proj": (48, None, True),
@@ -283,6 +290,18 @@ def test_a_plain_read_of_a_ranking_axis_is_untouched(env) -> None:
     raw["model"]["key"] = "test/moe"
     raw["sites"]["tgt"] = {"component": "router_scores", "layer": 3}
     assert canonicalize(raw, env)["sites"]["tgt"]["component"] == "router_scores"
+
+
+def test_the_routed_interior_is_a_ranking_axis_too(env) -> None:
+    """Round 3's token-major representation puts slot *k* of `expert_activation`
+    on the *k*-th ranked expert — `router_scores`' situation exactly, so the
+    same basis-fitting refusal applies and the same per-column reads do not."""
+    shape = component_shape(GQA, "expert_activation")
+    assert shape.ranking is True
+    raw = _moe_doc_with_featurizer("subspace")
+    raw["sites"]["tgt"] = {"component": "expert_activation", "layer": 3}
+    with pytest.raises(ValidationError, match="per-token ranking"):
+        canonicalize(in_order(raw), env)
 
 
 # --------------------------------------------------------------------------- #

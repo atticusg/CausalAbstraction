@@ -99,7 +99,14 @@ COMPONENT_RANK: dict[str, int] = {
     "router_logits": 510,
     "router_scores": 520,
     "expert_idx": 530,
-    "expert_output": 540,  # per-expert interior (still refused — follow-up F2)
+    # The per-expert interior (round 3), in the order the grouped experts
+    # function computes it: the fused [gate | up] projection's two halves land
+    # at 532/534, the activation between them and the down-projection at 536,
+    # and the down-projection's (pre-routing-weight) output keeps its reserved
+    # 540 — all between `expert_idx` and `routed_output`, forward order, no
+    # renumbering.
+    "expert_activation": 536,
+    "expert_output": 540,  # per-expert interior (the rest lands in round 3.2)
     "routed_output": 550,
     "mlp_activation": 600,
     # the shared expert runs beside the routed ones; its gate is *consumed*

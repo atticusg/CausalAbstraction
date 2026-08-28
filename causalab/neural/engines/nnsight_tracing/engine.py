@@ -76,8 +76,20 @@ class NnsightEngine(Engine):
             "attention_gate",
         }
     )
-    components = frozenset(COMPONENTS) - _ROUND_TWO_ATTENTION
-    writable_components = frozenset(COMPONENTS) - _ROUND_TWO_ATTENTION
+    # Round 3's routed-expert interior is excluded for the first of those two
+    # reasons: every one of its components is reached by replacing the
+    # `ALL_EXPERTS_FUNCTIONS["grouped_mm"]` dispatch entry and patching
+    # `_grouped_linear` inside it — a pytorch_hooks mechanism the tracing
+    # engine cannot express (there is no per-expert module for an envoy to
+    # bind to; the experts module's only child is one shared act_fn).
+    _ROUND_THREE_MOE_INTERIOR = frozenset(
+        {
+            "expert_activation",
+        }
+    )
+    _UNDECLARED = _ROUND_TWO_ATTENTION | _ROUND_THREE_MOE_INTERIOR
+    components = frozenset(COMPONENTS) - _UNDECLARED
+    writable_components = frozenset(COMPONENTS) - _UNDECLARED
     is_local = True
 
     def __init__(self, *, device: str = "cpu") -> None:

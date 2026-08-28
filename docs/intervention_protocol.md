@@ -279,7 +279,8 @@ execution order:
 `attention_key` · `attention_scores` · `attention_z` · `attention_result` ·
 `attention_output` · `attention_premix` · `attention_probs` · `block_mid` ·
 `mlp_input_norm` · `mlp_input` · `router_logits` · `router_scores` ·
-`expert_idx` · `expert_output` · `routed_output` · `mlp_activation` ·
+`expert_idx` · `expert_activation` · `expert_output` · `routed_output` ·
+`mlp_activation` ·
 `shared_expert_gate_proj` · `shared_expert_up_proj` ·
 `shared_expert_activation` · `shared_expert_output` · `shared_expert_gate` ·
 `mlp_output` · `block_output` · `ln_final` · `lm_head`
@@ -304,8 +305,22 @@ execution order:
   `router_probs` is *derived* — `softmax(router_logits)` — and is not a
   component. `routed_output` is the combined expert output, and the **shared
   expert** exposes its SwiGLU interior plus `shared_expert_gate`, the scalar
-  that mixes it in. `expert_output` names the *per-expert* interior and is not
-  addressable yet: it needs a ragged value shape.
+  that mixes it in. The *routed* per-expert interior (round 3) has no module
+  boundaries at all — the experts module stores its weights as 3-D parameters
+  and computes the whole interior inside one dispatched
+  `ALL_EXPERTS_FUNCTIONS["grouped_mm"]` call — so its components are reached by
+  wrapping that dispatch entry, and they carry a **dispatch pin**: a model
+  loaded with any other `experts_implementation` (the `"eager"` per-expert
+  loop, `"batched_mm"`) is refused by name, because a different factorization
+  computes different intermediates even where the block's output agrees (to
+  4.2e-7 on the fixture). `expert_activation` is the activated gate half,
+  `act_fn(gate_e)` — the same tensor `mlp_activation` names on the llama
+  family — represented **token-major**: `(batch·position, top_k · d_expert)`,
+  slot *k* the *k*-th ranked expert, joined to experts through `expert_idx`.
+  Its slot axis is a ranking, like `router_scores`, with the same
+  basis-fitting refusal. The remaining interior slots (`expert_gate_proj`,
+  `expert_up_proj`, `expert_output`) and the ragged `expert:` sub-axis land
+  with round 3.2.
 - **`expert_idx` is a routing table, not a feature space** — the same rule as
   `input_ids`: integer ids, no featurizer, no width. And `router_scores` has a
   width but its axis is a per-token **ranking**, not a basis: column *k* is the
