@@ -5,8 +5,8 @@ it turns a raw JSON/YAML mapping into a typed, frozen
 :class:`Document` — or refuses with a structured
 :class:`~causalab.protocol.errors.ParseError` /
 :class:`~causalab.protocol.errors.ValidationError`. Everything here is
-backend-free and torch-free: sites, positions, featurizers and writes are
-pure data records; a backend interprets them (spec §8).
+engine-free and torch-free: sites, positions, featurizers and writes are
+pure data records; an engine interprets them (spec §8).
 
 Parsing owns the *shape* rules of the spec:
 
@@ -347,7 +347,7 @@ PRECISION_DTYPES: tuple[str, ...] = ("fp32", "bf16", "fp16")
 MODEL_DTYPE_DEFAULT: str = "fp32"
 
 #: Weight-quantization schemes (§2.1). Each names one *load-time* scheme the
-#: reference backend can realize through bitsandbytes: ``int8`` is LLM.int8()
+#: reference engine can realize through bitsandbytes: ``int8`` is LLM.int8()
 #: mixed-precision decomposition, ``nf4`` / ``fp4`` are the two 4-bit
 #: quantization types. There is no bare ``int4``: bitsandbytes' 4-bit is one
 #: of these two datatypes, and "int4" would not say which — the whole point
@@ -356,7 +356,7 @@ MODEL_DTYPE_DEFAULT: str = "fp32"
 #: checkpoint, so they are named by ``model.key``/``revision``, not here.
 QUANT_SCHEMES: tuple[str, ...] = ("int8", "nf4", "fp4")
 
-#: Quantizers (§2.1). One entry in v1 — the library the reference backend
+#: Quantizers (§2.1). One entry in v1 — the library the reference engine
 #: calls; naming it keeps a document honest when a second one appears.
 QUANT_METHODS: tuple[str, ...] = ("bitsandbytes",)
 
@@ -508,7 +508,7 @@ class PositionSpec:
     column when ``anchor_source`` is ``"column"``), only modify
     ``index``/``span``, and are mutually exclusive. ``all`` selects every
     content token of the row and takes no modifiers. Positions are never
-    resolved to integers in the document — resolution is a backend
+    resolved to integers in the document — resolution is an engine
     service against a ``PositionFrame`` (§2.3, §8).
 
     ``generated`` is a **frame selector**, not an anchor: it says the

@@ -70,7 +70,7 @@ class DatasetResolver(Protocol):
     (``validate``/``explain``/``digest``) only need the first two, but a
     resolver that cannot produce rows cannot back a ``run`` — so the
     requirement is declared here instead of being discovered by a ``getattr``
-    probe deep inside a backend."""
+    probe deep inside an engine."""
 
     def digest(self, ref: str) -> str: ...
 
@@ -223,7 +223,7 @@ def read_safetensors_metadata(path: Path) -> Mapping[str, Any] | None:
 
 #: The stamped-identity schema for featurizer bundles: these keys live in the
 #: safetensors ``__metadata__`` table (string-valued, per the format). The
-#: backend stamps them at save; the loader refuses a ``file_path`` load whose
+#: engine stamps them at save; the loader refuses a ``file_path`` load whose
 #: stamped values contradict the document (§2.5).
 #:
 #: ⚠️ **Migration.** ``model_dtype`` and ``model_quantization`` joined this
@@ -247,7 +247,7 @@ ARTIFACT_IDENTITY_KEYS: tuple[str, ...] = (
     "dtype",
     "trained_on",
     "trained_on_digest",
-    "backend",
+    "engine",
     "commit",
 )
 

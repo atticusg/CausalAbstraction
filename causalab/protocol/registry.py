@@ -19,7 +19,7 @@ component          feature width
                    ``hidden_size`` — the three norm taps are residual-stream
                    shaped, being an RMSNorm's input or output
 ``mlp_activation`` ``intermediate_size`` (the family caveat of what tensor
-                   this names lives in the backend, not here)
+                   this names lives in the engine, not here)
 ``attention_value``
                    ``head_dim`` with a ``head`` sub-axis, else
                    ``num_kv_heads * head_dim`` (KV-head space under GQA)
