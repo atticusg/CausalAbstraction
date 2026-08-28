@@ -153,7 +153,7 @@ def test_das_fit_reduces_its_own_objective():
     """Optimizing CE on the training rows must reduce CE on those rows —
     compare the document's metric before and after the fit."""
     from causalab.neural.engines.pytorch_hooks.loading import load_model
-    from causalab.neural.engines.pytorch_hooks.metrics import compute_metric
+    from causalab.neural.shared.metrics import compute_metric
 
     bundle = load_model(TINY_LLAMA)
 

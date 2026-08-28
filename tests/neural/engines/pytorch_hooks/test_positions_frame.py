@@ -8,7 +8,7 @@ import pytest
 
 import torch
 
-from causalab.neural.engines.pytorch_hooks.encoding import (
+from causalab.neural.shared.encoding import (
     Continuation,
     encode,
     resolve_position,

@@ -30,8 +30,8 @@ from pathlib import Path
 import pytest
 from safetensors.torch import load_file
 
-from causalab.neural.pytorch_hooks.loading import load_model
-from causalab.neural.pytorch_hooks.metrics import column_first_token_id
+from causalab.neural.engines.pytorch_hooks.loading import load_model
+from causalab.neural.shared.metrics import column_first_token_id
 from causalab.cli import main
 
 from tests.neural.engines.pytorch_hooks.conftest import TINY_LLAMA

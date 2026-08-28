@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from causalab.neural.pytorch_hooks.encoding import encode
+from causalab.neural.shared.encoding import encode
 
 from tests.neural.engines.pytorch_hooks import hook_oracle_lib as oracle_lib
 from tests.neural.engines.pytorch_hooks._drive import base_data_section, executor_for
@@ -222,7 +222,7 @@ def test_variable_position_reads_the_substring_tokens(llama_bundle):
         doc, llama_bundle, base_texts=[text], extra_columns={"animal": ["brown fox"]}
     )
     batch = encode(llama_bundle.tokenizer, [text])
-    from causalab.neural.pytorch_hooks.encoding import resolve_position
+    from causalab.neural.shared.encoding import resolve_position
     from causalab.protocol.schema import PositionSpec
 
     positions = resolve_position(
@@ -331,7 +331,7 @@ def test_all_positions_lm_head_matches_the_models_logits(bundle):
 def test_all_positions_is_ragged_across_rows(llama_bundle):
     """Rows of different lengths make an all read ragged; the flat gather
     and its widths are the row-wise captures, padding excluded."""
-    from causalab.neural.pytorch_hooks.executor import RaggedValue
+    from causalab.neural.engines.pytorch_hooks.executor import RaggedValue
 
     texts = ["one two three", "a much longer sentence right here"]
     doc = {
