@@ -58,10 +58,15 @@ __all__ = [
     "MetricKind",
     "MetricDomain",
     "MetricSpec",
+    "DOCUMENT_TYPES",
+    "MODEL_DTYPE_DEFAULT",
     "ModelRef",
     "NON_COLUMN_METRIC_FIELDS",
     "OPTIONAL_METRIC_FIELDS",
     "ParamSpec",
+    "QUANT_METHODS",
+    "QUANT_SCHEMES",
+    "QuantizationSpec",
     "PositionSpec",
     "ReadSpec",
     "RESERVED_NAMES",
@@ -285,6 +290,7 @@ RESERVED_NAMES: frozenset[str] = frozenset(
 #: at position 3 as an alias of ``model`` and canonicalizes away.
 SECTION_ORDER: tuple[str, ...] = (
     "version",
+    "type",
     "description",
     "model",
     "data",
@@ -317,6 +323,38 @@ NAMED_SECTIONS: tuple[str, ...] = (
 )
 
 PRECISION_DTYPES: tuple[str, ...] = ("fp32", "bf16", "fp16")
+
+#: The compute dtype a document runs in when it authors none (§2.1). This is
+#: the value canonicalization materializes, so every canonical form names a
+#: dtype and every digest covers it; ``fp32`` keeps an unauthored document
+#: running exactly as it did when dtype was an execution flag.
+MODEL_DTYPE_DEFAULT: str = "fp32"
+
+#: Weight-quantization schemes (§2.1). Each names one *load-time* scheme the
+#: reference backend can realize through bitsandbytes: ``int8`` is LLM.int8()
+#: mixed-precision decomposition, ``nf4`` / ``fp4`` are the two 4-bit
+#: quantization types. There is no bare ``int4``: bitsandbytes' 4-bit is one
+#: of these two datatypes, and "int4" would not say which — the whole point
+#: of putting the field in the record is that it names one realization.
+#: Weights quantized *ahead of time* (GPTQ, AWQ) are a property of the
+#: checkpoint, so they are named by ``model.key``/``revision``, not here.
+QUANT_SCHEMES: tuple[str, ...] = ("int8", "nf4", "fp4")
+
+#: Quantizers (§2.1). One entry in v1 — the library the reference backend
+#: calls; naming it keeps a document honest when a second one appears.
+QUANT_METHODS: tuple[str, ...] = ("bitsandbytes",)
+
+#: Quantization fields that only make sense for some schemes (rule 17).
+_QUANT_4BIT_FIELDS: tuple[str, ...] = ("double_quant",)
+_QUANT_INT8_FIELDS: tuple[str, ...] = ("int8_threshold",)
+
+#: The document types (§1.1). A protocol document may be written flat or split
+#: into ``application`` + ``method`` halves — both are ``protocol``; ``method``
+#: is a reusable method *file*, the one shape structure cannot name. ``type``
+#: is authoring metadata — it declares what a file is so a typo cannot
+#: masquerade as a different kind — and canonicalization drops it: the
+#: canonical form is the experiment, not the file.
+DOCUMENT_TYPES: tuple[str, ...] = ("protocol", "method", "workflow")
 
 #: Optimizer field vocabulary and per-name defaults, materialized into the
 #: canonical form (§7: "every default (constant LR, optimizer betas, dtypes)").
@@ -404,12 +442,36 @@ def concrete_str(value: Leaf, what: str) -> str:
 
 
 @dataclasses.dataclass(frozen=True)
+class QuantizationSpec:
+    """§2.1 — how the weights are quantized at load.
+
+    Quantization changes what the network computes, so it is document
+    vocabulary, not an execution flag: two runs of the same protocol at
+    ``nf4`` and at ``bf16`` are two experiments, and their digests say so.
+    Every field that moves a number is here — the scheme, the quantizer, the
+    dtype the dequantized matmuls run in, and the scheme's own knobs.
+    """
+
+    scheme: Leaf
+    method: Leaf = "bitsandbytes"
+    compute_dtype: Leaf | None = None
+    double_quant: Leaf | None = None
+    int8_threshold: Leaf | None = None
+
+
+@dataclasses.dataclass(frozen=True)
 class ModelRef:
-    """§2.1 — the network as a name. ``revision`` defaults to ``"main"``
-    (materialized by canonicalization when unauthored)."""
+    """§2.1 — the network as a name, plus how it is realized numerically.
+
+    ``revision`` defaults to ``"main"`` and ``dtype`` to
+    :data:`MODEL_DTYPE_DEFAULT` (both materialized by canonicalization when
+    unauthored, §7).
+    """
 
     key: Leaf
     revision: Leaf = "main"
+    dtype: Leaf | None = None
+    quantization: QuantizationSpec | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -870,6 +932,12 @@ def _scalar_number(value: Any, path: str) -> float | int:
     return value
 
 
+def _scalar_bool(value: Any, path: str) -> bool:
+    if not isinstance(value, bool):
+        raise ParseError("P2", f"expected true or false (got {value!r})", path=path)
+    return value
+
+
 def _int_list(value: Any, path: str) -> tuple[int, ...]:
     if not isinstance(value, list) or not all(
         isinstance(v, int) and not isinstance(v, bool) for v in value
@@ -895,7 +963,7 @@ def _any_leaf(value: Any, path: str) -> Any:
 
 def _parse_model(raw: Any, path: str) -> ModelRef:
     obj = _require_mapping(raw, path)
-    _check_keys(obj, ("key", "revision"), path)
+    _check_keys(obj, ("key", "revision", "dtype", "quantization"), path)
     if "key" not in obj:
         raise ParseError("P2", "model needs a 'key'", path=path)
     key = _wrapped(obj["key"], _scalar_str, f"{path}.key")
@@ -904,7 +972,61 @@ def _parse_model(raw: Any, path: str) -> ModelRef:
         if "revision" in obj
         else "main"
     )
-    return ModelRef(key=key, revision=revision)
+    dtype = (
+        _wrapped(
+            obj["dtype"],
+            lambda v, p: _enum(v, PRECISION_DTYPES, p),
+            f"{path}.dtype",
+        )
+        if "dtype" in obj
+        else None
+    )
+    quantization = (
+        _parse_quantization(obj["quantization"], f"{path}.quantization")
+        if "quantization" in obj
+        else None
+    )
+    return ModelRef(key=key, revision=revision, dtype=dtype, quantization=quantization)
+
+
+def _parse_quantization(raw: Any, path: str) -> QuantizationSpec:
+    obj = _require_mapping(raw, path)
+    _check_keys(
+        obj,
+        ("scheme", "method", "compute_dtype", *_QUANT_4BIT_FIELDS, *_QUANT_INT8_FIELDS),
+        path,
+    )
+    if "scheme" not in obj:
+        raise ParseError(
+            "P2",
+            f"quantization needs a 'scheme' — one of {list(QUANT_SCHEMES)}",
+            path=path,
+        )
+    return QuantizationSpec(
+        scheme=_wrapped(
+            obj["scheme"], lambda v, p: _enum(v, QUANT_SCHEMES, p), f"{path}.scheme"
+        ),
+        method=_wrapped(
+            obj["method"], lambda v, p: _enum(v, QUANT_METHODS, p), f"{path}.method"
+        )
+        if "method" in obj
+        else "bitsandbytes",
+        compute_dtype=_wrapped(
+            obj["compute_dtype"],
+            lambda v, p: _enum(v, PRECISION_DTYPES, p),
+            f"{path}.compute_dtype",
+        )
+        if "compute_dtype" in obj
+        else None,
+        double_quant=_wrapped(obj["double_quant"], _scalar_bool, f"{path}.double_quant")
+        if "double_quant" in obj
+        else None,
+        int8_threshold=_wrapped(
+            obj["int8_threshold"], _scalar_number, f"{path}.int8_threshold"
+        )
+        if "int8_threshold" in obj
+        else None,
+    )
 
 
 def _parse_data_role(raw: Any, path: str) -> DataRole:
@@ -1649,7 +1771,7 @@ def _parse_train(raw: Any, path: str) -> TrainSpec:
     precision = None
     if "precision" in obj:
         precision_raw = _require_mapping(obj["precision"], f"{path}.precision")
-        _check_keys(precision_raw, ("feature", "loss", "model"), f"{path}.precision")
+        _check_keys(precision_raw, ("feature", "loss"), f"{path}.precision")
         precision = {
             key: _wrapped(
                 value,
@@ -1822,6 +1944,17 @@ def parse_document(raw: Mapping[str, Any]) -> Document:
     """
     normalized = _normalize_top_level(raw)
     _check_section_order(list(normalized))
+    declared_type = normalized.get("type")
+    if declared_type is not None:
+        declared_type = _enum(declared_type, DOCUMENT_TYPES, "type")
+        if declared_type != "protocol":
+            raise ParseError(
+                "P2",
+                f"this file declares type {declared_type!r}, but it is being read "
+                "as a protocol document — a method binds to an application and "
+                "the composition is what runs (§1.1)",
+                path="type",
+            )
     for section in REQUIRED_SECTIONS:
         if section not in normalized:
             raise ParseError("P2", f"missing required section {section!r}")

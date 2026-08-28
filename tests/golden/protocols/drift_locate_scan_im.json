@@ -3,7 +3,8 @@
   "description": "Chat-coherent drift tier, layer scan: interchange IIA over six block_output layers of Qwen3-4B on the raw-completion weekday task - the protocol-native analogue of the old tier's scores_per_layer pins. One shared source harvest across the six points (compute-sharing falls out of content dedup). Values captured by tests/golden/drift/update_drift_goldens.py on the canonical GPU.",
   "model": {
     "key": "Qwen/Qwen3-4B-Instruct-2507",
-    "revision": "main"
+    "revision": "main",
+    "dtype": "bf16"
   },
   "data": {
     "base": {

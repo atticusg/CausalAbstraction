@@ -13,15 +13,27 @@ torch-free.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Any
 
 from causalab.protocol.backend import requires_campaign
 from causalab.protocol.errors import ProtocolError
-from causalab.protocol.loader import LoadedProtocol, check_data_columns, load
+from causalab.protocol.loader import (
+    LoadedProtocol,
+    check_data_columns,
+    load,
+    load_text,
+)
 from causalab.protocol.plan import plan_point
+from causalab.protocol.method import (
+    document_type,
+    method_digest,
+    parse_method,
+)
 from causalab.protocol.resolve import ResolutionEnv
+from causalab.protocol.schema import MODEL_DTYPE_DEFAULT
 from causalab.protocol.sweep import coordinate_label
 
 __all__ = ["main"]
@@ -62,8 +74,15 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
     Dispatch between document types lives in :mod:`causalab.cli`, so this module
     — and the whole ``protocol/`` package — links against nothing in the
     workflow layer. That is what lets someone use the intervention protocol on
-    its own."""
+    its own.
+
+    A **method** file (§1.1) is dispatched here rather than there: it is a
+    protocol-family document, and telling it apart needs `document_type`,
+    which is this package's."""
     try:
+        raw = dict(load_text(args.document))
+        if document_type(raw) == "method":
+            return _method_main(args, raw)
         if args.verb == "run":
             from causalab.cli import ensure_model_registered
 
@@ -101,7 +120,7 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
         result = _run(
             loaded,
             env,
-            hooks.PytorchHooksBackend(device=args.device, dtype=args.dtype),
+            hooks.PytorchHooksBackend(device=args.device),
             args.out,
             points=args.points,
         )
@@ -133,6 +152,7 @@ def _run(
         if points is not None
         else range(len(loaded.expansion.points))
     )
+    _write_run_record(loaded, out, selected)
     request = ExecutionRequest(
         points=tuple(loaded.expansion.points[i].raw for i in selected),
         canonical=tuple(loaded.canonical_points[i] for i in selected),
@@ -145,10 +165,90 @@ def _run(
     return chosen.execute(request)
 
 
+def _method_main(args: argparse.Namespace, raw: dict[str, Any]) -> int:
+    """The verbs on a method file (§1.1).
+
+    A method has no inputs, so there is nothing to plan, expand or run: what
+    it can answer is "is this a well-formed method", "what does it hash to"
+    and "what must I bind to use it" — the last being the thing a reader of a
+    shared method actually needs.
+    """
+    if args.verb == "run":
+        print(
+            "refused: this is a method file — it names no network, no data and "
+            "no addresses. Bind it from a document's `application` half "
+            "(§1.1), and run that.",
+            file=sys.stderr,
+        )
+        return 1
+    method = parse_method(raw)
+    if args.verb == "digest":
+        print(method_digest(raw))
+        return 0
+    if args.verb == "validate":
+        print(
+            f"OK: {args.document} — method, digest {method_digest(raw)[:16]}…, "
+            f"{len(method.signature.lines())} binding"
+            f"{'s' if len(method.signature.lines()) != 1 else ''} to supply"
+        )
+        return 0
+    print(f"digest    {method_digest(raw)}")
+    if method.description:
+        print(f"about     {method.description.splitlines()[0]}")
+    print("binds     the application half must supply")
+    for line in method.signature.lines():
+        print(f"  {line}")
+    print("save")
+    for entry in raw.get("save", []):
+        print(f"  {entry.get('value')} -> {entry.get('file_path')}")
+    return 0
+
+
+def _write_run_record(loaded: LoadedProtocol, out: Path, selected: range) -> Path:
+    """``<out>/protocol.json`` — the record of what ran.
+
+    The saved tables say what the numbers are; this says what produced them:
+    the canonical document (every default materialized, dtype and
+    quantization included), its digest, the per-point provenance digests, and
+    the method this document was composed from. It is what someone reproducing
+    the run reads first, and it is written before execution so a crashed run
+    still says what it was.
+    """
+    record = {
+        "document_digest": loaded.document_digest,
+        "canonical": loaded.canonical_document,
+        "points": [
+            {
+                "index": index,
+                "digest": loaded.point_digests[index],
+                "coords": dict(loaded.expansion.points[index].coords),
+            }
+            for index in selected
+        ],
+    }
+    if loaded.method_digest is not None:
+        record["method"] = {
+            "digest": loaded.method_digest,
+            "ref": loaded.method_ref,
+        }
+    out.mkdir(parents=True, exist_ok=True)
+    target = out / "protocol.json"
+    target.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    return target
+
+
 def _explain(loaded: LoadedProtocol) -> None:
     doc = loaded.point_documents[0]
     axes = loaded.expansion.axes
     print(f"digest    {loaded.document_digest}")
+    if loaded.method_digest is not None:
+        ref = f" ({loaded.method_ref})" if loaded.method_ref else " (inline)"
+        print(f"method    {loaded.method_digest}{ref}")
+    model = doc.model
+    realization = f"{model.key}@{model.revision} {model.dtype or MODEL_DTYPE_DEFAULT}"
+    if model.quantization is not None:
+        realization += f" + {model.quantization.scheme} ({model.quantization.method})"
+    print(f"model     {realization}")
     if axes:
         print(
             f"axes      {', '.join(f'{a.id} ({len(a.values)} values)' for a in axes)}"

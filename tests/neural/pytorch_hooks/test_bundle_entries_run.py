@@ -33,9 +33,12 @@ from tests.tables import frame as table_frame
 pytestmark = pytest.mark.smoke
 
 REPO = Path(__file__).resolve().parents[3]
-METHODS = str(REPO / "causalab/configs/methods")
+METHODS = str(REPO / "causalab/configs/protocols")
 
-TINY = {"model.key": TINY_LLAMA}
+# tiny-random on CPU runs fp32, while the shipped documents declare bf16 —
+# and the realization is part of a fit bundle's identity (§8), so the fit
+# and the apply have to name the same one
+TINY = {"model.key": TINY_LLAMA, "model.dtype": "fp32"}
 
 
 def _run_workflow(base: Path, document: dict) -> Path:

@@ -225,10 +225,21 @@ def read_safetensors_metadata(path: Path) -> Mapping[str, Any] | None:
 #: safetensors ``__metadata__`` table (string-valued, per the format). The
 #: backend stamps them at save; the loader refuses a ``file_path`` load whose
 #: stamped values contradict the document (§2.5).
+#:
+#: ⚠️ **Migration.** ``model_dtype`` and ``model_quantization`` joined this
+#: schema when precision entered the record (§2.1). A bundle fitted before
+#: that carries neither, so it no longer matches a document that names them
+#: and ``_check_loaded_featurizers`` refuses it. That is intended and not a
+#: bug to route around — a rotation fitted in bf16 is not the same artifact as
+#: one fitted in fp32, and pretending otherwise is what the stamp exists to
+#: prevent. Locally kept fitted artifacts must be re-fitted once; nothing in
+#: the repo ships one.
 ARTIFACT_IDENTITY_KEYS: tuple[str, ...] = (
     "produced_by",
     "model_key",
     "model_revision",
+    "model_dtype",
+    "model_quantization",
     "tokenizer",
     "site",
     "k",
