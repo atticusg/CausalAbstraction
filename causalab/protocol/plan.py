@@ -105,8 +105,10 @@ COMPONENT_RANK: dict[str, int] = {
     # and the down-projection's (pre-routing-weight) output keeps its reserved
     # 540 — all between `expert_idx` and `routed_output`, forward order, no
     # renumbering.
+    "expert_gate_proj": 532,
+    "expert_up_proj": 534,
     "expert_activation": 536,
-    "expert_output": 540,  # per-expert interior (the rest lands in round 3.2)
+    "expert_output": 540,  # the down-projection's output, before the routing weight
     "routed_output": 550,
     "mlp_activation": 600,
     # the shared expert runs beside the routed ones; its gate is *consumed*

@@ -83,6 +83,7 @@ __all__ = [
     "flat_td",
     "flat_topk",
     "flat_topk_features",
+    "flat_topk_fused_features",
 ]
 
 #: What one axis of a tapped tensor means.
@@ -405,6 +406,37 @@ def flat_topk_features(
     return FeatureShape(
         axes=(_BATCH, _POSITION, Axis("topk", k), Axis("feature", width)),
         flat_batch=True,
+        ranking=ranking,
+        note=note,
+    )
+
+
+def flat_topk_fused_features(
+    k: int,
+    splits: int,
+    index: int,
+    width: int,
+    *,
+    ranking: bool = False,
+    note: str | None = None,
+) -> FeatureShape:
+    """``(batch*position, k·splits·width)``, naming one split per slot.
+
+    The routed experts' up-projection emits ``[gate_e | up_e]`` per (token,
+    slot) pair in one tensor; ``expert_gate_proj`` is split 0 and
+    ``expert_up_proj`` split 1 — one capture, two addresses, the
+    ``attention_gate`` precedent with a top-k axis in front.
+    """
+    return FeatureShape(
+        axes=(
+            _BATCH,
+            _POSITION,
+            Axis("topk", k),
+            Axis("fused", splits),
+            Axis("feature", width),
+        ),
+        flat_batch=True,
+        fused_index=index,
         ranking=ranking,
         note=note,
     )

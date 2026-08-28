@@ -425,15 +425,6 @@ def test_head_is_refused_because_nothing_here_has_heads(qwen35moe_bundle):
         )
 
 
-def test_the_expert_sub_axis_is_not_claimed_yet(qwen35moe_bundle):
-    """Round 3.2's surface, refused rather than ignored until it lands."""
-    with pytest.raises(ProtocolError, match="round 3.2"):
-        resolve_site(
-            qwen35moe_bundle,
-            SiteSpec(component="expert_activation", layer=MOE_LAYER, expert=3),
-        )
-
-
 def test_a_dense_mlp_family_is_refused_architecturally():
     bundle = load_model(TINY_LLAMA)
     with pytest.raises(NotImplementedError, match="sparse-MoE"):
@@ -450,3 +441,246 @@ def test_the_shape_declares_the_fixtures_widths(qwen35moe_bundle):
     assert shape.ranking is True
     assert shape.flat_batch is True
     assert shape.head_space is None
+
+
+# --------------------------------------------------------------------------- #
+# round 3.2 — the interface-slot components
+# --------------------------------------------------------------------------- #
+
+INTERIOR = (
+    "expert_gate_proj",
+    "expert_up_proj",
+    "expert_activation",
+    "expert_output",
+)
+
+#: 📐 token-major contract widths on the fixture: the projection halves and the
+#: activation are moe_intermediate_size (32) per slot, the down-projection's
+#: output is hidden (8) per slot.
+INTERIOR_WIDTH = {
+    "expert_gate_proj": TOP_K * D_EXPERT,
+    "expert_up_proj": TOP_K * D_EXPERT,
+    "expert_activation": TOP_K * D_EXPERT,
+    "expert_output": TOP_K * 8,
+}
+
+
+def _hit_and_missing_expert(bundle: ModelBundle) -> tuple[int, int]:
+    """One expert the router chose often at these tokens, and one it never did
+    (📐 40 of 128 experts are hit on the 5-token prompt, so both exist)."""
+    doc = _read_doc("expert_idx")
+    idx = executor_for(doc, bundle, base_texts=[TEXT]).read_value("idx" and "r")
+    chosen = set(int(x) for x in idx.reshape(-1))
+    hit = int(idx.reshape(-1).mode().values)
+    missing = next(i for i in range(128) if i not in chosen)
+    return hit, missing
+
+
+@pytest.mark.parametrize("component", INTERIOR)
+def test_every_interior_component_resolves_and_reads(qwen35moe_bundle, component):
+    site = resolve_site(
+        qwen35moe_bundle, SiteSpec(component=component, layer=MOE_LAYER)
+    )
+    assert site.kind == "experts"
+    value = executor_for(
+        _read_doc(component), qwen35moe_bundle, base_texts=[TEXT]
+    ).read_value("r")
+    assert tuple(value.shape) == (1, 5, INTERIOR_WIDTH[component])
+
+
+def test_the_projection_halves_share_one_fused_capture(qwen35moe_bundle):
+    """The `attention_gate` precedent with a top-k axis in front: gate and up
+    are chunks of one projection output, and the registry identity
+    ``expert_activation == act_fn(expert_gate_proj)`` pins which chunk is
+    which — exactly, because the model's own SiLU is deterministic."""
+    doc = _read_doc("expert_gate_proj")
+    doc["sites"]["act"] = {"component": "expert_activation", "layer": MOE_LAYER}
+    doc["reads"]["a"] = {
+        "site": "act",
+        "pos": "all",
+        "model": "original",
+        "input": "base",
+    }
+    doc["save"].append(
+        {
+            "value": "a",
+            "model": "original",
+            "input": "base",
+            "file_path": "b.safetensors",
+        }
+    )
+    executor = executor_for(doc, qwen35moe_bundle, base_texts=[TEXT])
+    gate, act = executor.read_value("r"), executor.read_value("a")
+    torch.testing.assert_close(torch.nn.functional.silu(gate), act, atol=0.0, rtol=0.0)
+
+
+def test_the_registry_identity_reconstructs_routed_output_exactly(qwen35moe_bundle):
+    """The docstring identity, asserted: ``routed_output == Σ_slot
+    expert_output · router_scores`` — at exactly 0.0, because the model computes
+    precisely this sum in this order. 📐 This is also the tie-order guard on the
+    recomputed sort: rows attributed to the wrong tokens would break it loudly."""
+    doc = _read_doc("expert_output")
+    doc["sites"]["scores"] = {"component": "router_scores", "layer": MOE_LAYER}
+    doc["sites"]["routed"] = {"component": "routed_output", "layer": MOE_LAYER}
+    for name, site in (("s", "scores"), ("o", "routed")):
+        doc["reads"][name] = {
+            "site": site,
+            "pos": "all",
+            "model": "original",
+            "input": "base",
+        }
+        doc["save"].append(
+            {
+                "value": name,
+                "model": "original",
+                "input": "base",
+                "file_path": f"{name}.safetensors",
+            }
+        )
+    executor = executor_for(doc, qwen35moe_bundle, base_texts=[TEXT])
+    out = executor.read_value("r").reshape(1, 5, TOP_K, 8)
+    scores = executor.read_value("s").reshape(1, 5, TOP_K, 1)
+    routed = executor.read_value("o")
+    torch.testing.assert_close((out * scores).sum(2), routed, atol=0.0, rtol=0.0)
+
+
+@pytest.mark.parametrize("component", ("expert_gate_proj", "expert_output"))
+def test_interior_writes_hold_the_identity_bar(qwen35moe_bundle, component):
+    """swap-with-own-value is exactly 0.0 through the fused scatter and the
+    re-sort; a counterfactual swap moves the logits (📐 expert_out +1 moved
+    them by 1.53 in the probe)."""
+    doc = _write_doc(component, {"swap": "v_cf"})
+    doc["reads"]["v_cf"]["input"] = "base"
+    assert _moved(qwen35moe_bundle, doc) == 0.0
+    assert _moved(qwen35moe_bundle, _write_doc(component, {"swap": "v_cf"})) > 1e-4
+
+
+# --------------------------------------------------------------------------- #
+# round 3.2 — the `expert:` sub-axis
+# --------------------------------------------------------------------------- #
+
+
+def test_the_expert_face_selects_exactly_the_routed_pairs(qwen35moe_bundle):
+    """The ragged face against a manual join: rows where ``expert_idx == e``,
+    in (position, slot) order, at exactly 0.0."""
+    from causalab.neural.shared.executor_base import RaggedValue
+
+    hit, _ = _hit_and_missing_expert(qwen35moe_bundle)
+    doc = _read_doc("expert_activation")
+    doc["sites"]["idxs"] = {"component": "expert_idx", "layer": MOE_LAYER}
+    doc["reads"]["i"] = {
+        "site": "idxs",
+        "pos": "all",
+        "model": "original",
+        "input": "base",
+    }
+    doc["save"].append(
+        {
+            "value": "i",
+            "model": "original",
+            "input": "base",
+            "file_path": "i.safetensors",
+        }
+    )
+    executor = executor_for(doc, qwen35moe_bundle, base_texts=[TEXT])
+    full, idx = executor.read_value("r"), executor.read_value("i")
+
+    faced = _read_doc("expert_activation")
+    faced["sites"]["tap"]["expert"] = hit
+    value = executor_for(faced, qwen35moe_bundle, base_texts=[TEXT]).read_value("r")
+    assert isinstance(value, RaggedValue)
+    mask = idx.reshape(1, 5, TOP_K) == hit
+    manual = full.reshape(1, 5, TOP_K, D_EXPERT)[mask]
+    assert value.widths == (int(mask.sum()),)
+    torch.testing.assert_close(value.flat, manual, atol=0.0, rtol=0.0)
+
+
+def test_an_expert_no_token_chose_reads_as_width_zero(qwen35moe_bundle):
+    """The honest form of the never-fired-hook question: there is no hook to
+    not-fire. The router simply sent this expert nothing at these positions,
+    and the read says so as data — width-0 rows, no error."""
+    from causalab.neural.shared.executor_base import RaggedValue
+
+    _, missing = _hit_and_missing_expert(qwen35moe_bundle)
+    doc = _read_doc("expert_activation")
+    doc["sites"]["tap"]["expert"] = missing
+    value = executor_for(doc, qwen35moe_bundle, base_texts=[TEXT]).read_value("r")
+    assert isinstance(value, RaggedValue)
+    assert value.widths == (0,)
+    assert tuple(value.flat.shape) == (0, D_EXPERT)
+
+
+def test_a_write_under_expert_lands_only_on_that_experts_rows(qwen35moe_bundle):
+    """Doubling one hit expert's activations moves the logits; the same write
+    aimed at an unchosen expert lands nowhere — exactly 0.0, the data-fact twin
+    of the width-0 read."""
+    hit, missing = _hit_and_missing_expert(qwen35moe_bundle)
+
+    def masked_doc(expert: int) -> dict:
+        doc = _write_doc(
+            "expert_activation", {"add_scaled": {"op": "v_cf", "alpha": 1.0}}
+        )
+        doc["sites"]["tap"]["expert"] = expert
+        # the operand reads the token-major form: the write site owns the mask
+        doc["sites"]["whole"] = {"component": "expert_activation", "layer": MOE_LAYER}
+        doc["reads"]["v_cf"] = {
+            "site": "whole",
+            "pos": "all",
+            "model": "original",
+            "input": "base",
+        }
+        return doc
+
+    assert _moved(qwen35moe_bundle, masked_doc(hit)) > 1e-4
+    assert _moved(qwen35moe_bundle, masked_doc(missing)) == 0.0
+
+
+def test_the_expert_face_reads_in_the_generated_frame(qwen35moe_bundle):
+    """D7 extends to the ragged face: the routing table accumulates per decode
+    step, so the face selects over the generated tokens' own routing."""
+    from causalab.neural.shared.executor_base import RaggedValue
+
+    hit, _ = _hit_and_missing_expert(qwen35moe_bundle)
+    doc = _read_doc("expert_output")
+    doc["sites"]["tap"]["expert"] = hit
+    doc["positions"] = {"window": {"generated": {"max_new_tokens": 3}, "all": True}}
+    doc["reads"]["r"]["pos"] = "window"
+    value = executor_for(doc, qwen35moe_bundle, base_texts=[TEXT]).read_value("r")
+    assert isinstance(value, RaggedValue)
+    assert len(value.widths) == 1
+    assert value.flat.shape[-1] == 8  # hidden-wide rows
+
+
+def test_expert_bounds_are_refused_by_name(qwen35moe_bundle):
+    with pytest.raises(ProtocolError, match="128 experts"):
+        resolve_site(
+            qwen35moe_bundle,
+            SiteSpec(component="expert_activation", layer=MOE_LAYER, expert=128),
+        )
+
+
+def test_expert_on_a_router_component_is_still_refused(qwen35moe_bundle):
+    with pytest.raises(ProtocolError, match="no per-expert axis"):
+        resolve_site(
+            qwen35moe_bundle,
+            SiteSpec(component="router_scores", layer=MOE_LAYER, expert=3),
+        )
+
+
+@pytest.mark.parametrize(
+    "field, value", [("featurizer", "f"), ("dims", [0, 1])], ids=["featurizer", "dims"]
+)
+def test_featurizer_and_dims_are_refused_on_the_expert_face(
+    qwen35moe_bundle, field, value
+):
+    """Both are sized against the token-major ``top_k · d`` axis, and the face's
+    rows are ``d``-wide — applying either would index a different space than
+    the author named."""
+    hit, _ = _hit_and_missing_expert(qwen35moe_bundle)
+    doc = _read_doc("expert_activation")
+    doc["sites"]["tap"]["expert"] = hit
+    if field == "featurizer":
+        doc["featurizers"] = {"f": {"kind": "standardize"}}
+    doc["reads"]["r"][field] = value
+    with pytest.raises(ProtocolError, match="expert"):
+        executor_for(doc, qwen35moe_bundle, base_texts=[TEXT]).read_value("r")
