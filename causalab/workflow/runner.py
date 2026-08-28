@@ -1,12 +1,12 @@
 """The workflow runner (docs/workflow_protocol.md §8).
 
 Executes a loaded workflow: steps in topological order, each step's outputs
-under ``<out-root>/<output_dir>/<step>/``, protocol steps through the standard backend
+under ``<out-root>/<output_dir>/<step>/``, protocol steps through the standard engine
 routing against the run-tree/external artifact overlay, and script steps by
 resolving their inputs, calling ``main(inputs, outputs)``, then verifying and
 stamping what they wrote.
 
-There is no backend choice at the workflow level — backends are chosen per
+There is no engine choice at the workflow level — engines are chosen per
 protocol step from the list the caller supplies (v2 ships one).
 
 **The run tree is the publication.** There is no `save` section and no copy
@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from causalab.protocol.backend import Backend, ExecutionRequest, choose_backend
+from causalab.protocol.engine import Engine, ExecutionRequest, choose_engine
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.loader import apply_overrides, load, load_text
 from causalab.protocol.resolve import ArtifactStore, ResolutionEnv
@@ -49,7 +49,7 @@ __all__ = [
 ]
 
 #: What identity a script-written tensor is stamped as coming from.
-SCRIPT_BACKEND = "script"
+SCRIPT_ENGINE = "script"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -113,7 +113,7 @@ def run_workflow(
     loaded: LoadedWorkflow,
     env: ResolutionEnv,
     out_root: Path,
-    backends: Sequence[Backend],
+    engines: Sequence[Engine],
     *,
     resume: bool = False,
     reuse_nondeterministic: bool = False,
@@ -142,7 +142,7 @@ def run_workflow(
             step_manifest[name] = skipped
             continue
         if isinstance(step, ProtocolStep):
-            entry = _run_protocol_step(name, step, loaded, run_env, step_dir, backends)
+            entry = _run_protocol_step(name, step, loaded, run_env, step_dir, engines)
         else:
             entry = _run_script_step(name, step, loaded, run_root, step_dir)
         step_manifest[name] = entry
@@ -215,7 +215,7 @@ def _run_protocol_step(
     loaded: LoadedWorkflow,
     run_env: ResolutionEnv,
     step_dir: Path,
-    backends: Sequence[Backend],
+    engines: Sequence[Engine],
 ) -> dict[str, Any]:
     doc_path = (loaded.workflow_dir / step.document).resolve()
     overridden = apply_overrides(dict(load_text(doc_path)), step.set)
@@ -225,7 +225,7 @@ def _run_protocol_step(
         run_env,
         point_cap=step.max_points if step.max_points is not None else DEFAULT_POINT_CAP,
     )
-    backend = choose_backend(list(inner.point_documents), backends)
+    engine = choose_engine(list(inner.point_documents), engines)
     request = ExecutionRequest(
         points=tuple(p.raw for p in inner.expansion.points),
         canonical=inner.canonical_points,
@@ -235,13 +235,13 @@ def _run_protocol_step(
         env=run_env,
         output_dir=step_dir,
     )
-    result = backend.execute(request)
+    result = engine.execute(request)
     return {
         "type": "intervention_protocol",
         "status": "completed",
         "identity": inner.document_digest,
         "document": step.document,
-        "backend": backend.name,
+        "engine": engine.name,
         "document_digest": inner.document_digest,  # fully resolved (§7)
         "points": len(inner.expansion.points),
         "point_digests": list(inner.point_digests),  # the provenance units (§7)
@@ -276,7 +276,7 @@ def _run_script_step(
 
     identity = step_io.inherited_identity(tensor_identities)
     identity["produced_by"] = loaded.step_digests[name]
-    identity["backend"] = SCRIPT_BACKEND
+    identity["engine"] = SCRIPT_ENGINE
 
     for slot, decl in step.outputs.items():
         target = outputs[slot]

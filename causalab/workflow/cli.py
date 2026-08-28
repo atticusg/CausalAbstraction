@@ -129,11 +129,11 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
     import importlib
 
     try:
-        hooks = importlib.import_module("causalab.neural.pytorch_hooks")
+        hooks = importlib.import_module("causalab.neural.engines.pytorch_hooks")
     except ModuleNotFoundError as err:
         print(
-            f"refused: no execution backend available ({err}) — 'run' needs "
-            "the reference backend causalab.neural.pytorch_hooks",
+            f"refused: no execution engine available ({err}) — 'run' needs "
+            "the reference engine causalab.neural.engines.pytorch_hooks",
             file=sys.stderr,
         )
         return 1
@@ -143,7 +143,7 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
         loaded,
         env,
         args.out,
-        [hooks.PytorchHooksBackend(device=args.device)],
+        [hooks.PytorchHooksEngine(device=args.device)],
         resume=getattr(args, "resume", False),
         reuse_nondeterministic=getattr(args, "reuse_nondeterministic", False),
     )

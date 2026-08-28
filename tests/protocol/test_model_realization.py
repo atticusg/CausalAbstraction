@@ -3,7 +3,7 @@
 Precision is not an execution flag: two runs of one protocol at bf16 and at
 nf4 are two experiments. These tests pin that the document can say so, that
 the canonical form always says so even when the author did not, that the
-digest moves when the realization moves, and that a backend which cannot
+digest moves when the realization moves, and that an engine which cannot
 realize a quantization refuses instead of running something else.
 """
 
@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from causalab.protocol.backend import Backend, choose_backend, requires
+from causalab.protocol.engine import Engine, choose_engine, requires
 from causalab.protocol.canonical import canonicalize, digest
 from causalab.protocol.errors import ParseError, ValidationError
 from causalab.protocol.loader import load
@@ -107,7 +107,7 @@ def test_int8_does_not_materialize_a_compute_dtype(env):
     two int8 documents differing only there hashed differently while running
     identically.
 
-    📐 The backend reads it as `bnb_4bit_compute_dtype`; the int8 branch of
+    📐 The engine reads it as `bnb_4bit_compute_dtype`; the int8 branch of
     `_bitsandbytes_config` builds `BitsAndBytesConfig(load_in_8bit=True,
     llm_int8_threshold=…)` and has nowhere to put it. A field in the canonical
     form that moves no number inverts the rule the form exists to keep.
@@ -163,7 +163,7 @@ def test_a_knob_under_the_wrong_scheme_is_rule_17(quantization, field):
 # --------------------------------------------------------------------------- #
 
 
-class _Plain(Backend):
+class _Plain(Engine):
     name = "plain"
     capabilities = frozenset({"paired_forward"})
 
@@ -175,7 +175,7 @@ def test_quantization_requires_a_capability_and_refuses_without_it():
     doc = parse_document(doc_with_model(quantization=NF4))
     assert "quantized_weights" in requires(doc)
     with pytest.raises(ValidationError) as err:
-        choose_backend(doc, [_Plain()])
+        choose_engine(doc, [_Plain()])
     assert "quantized_weights" in str(err.value)
 
 
