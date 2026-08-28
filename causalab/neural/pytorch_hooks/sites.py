@@ -86,6 +86,14 @@ READ_ONLY_COMPONENTS: dict[str, str] = {
         "the model's token input is not an activation; change the row's text "
         "instead, or write 'embeddings' to edit the vector the ids look up"
     ),
+    "attention_result": (
+        "it is derived, not computed: the model never forms the per-head "
+        "contribution at all — it forms their sum, by projecting the whole "
+        "'attention_premix' at once — so there is no tensor here for a write "
+        "to change. Write 'attention_premix' instead, with the same 'head'; "
+        "'attention_result' is a linear function of it, so a write there moves "
+        "this by exactly the projection of what you wrote"
+    ),
     "router_logits": (
         "the MoE block discards the router's logits (it destructures them into "
         "'_') and routes on the scores and indices it computed from them, so a "
@@ -151,6 +159,15 @@ class ResolvedSite:
     #: it is a plain module tap, and only the write has to go through the
     #: function.
     interface_slot: str | None = None
+    #: The head the site named, kept alongside ``feature_slice`` because a
+    #: *derived* component slices in a space the raw tensor does not have.
+    head: int | None = None
+    #: Set when the component's value is **computed from** the tapped tensor
+    #: rather than being it. Then ``shape`` describes what is captured and
+    #: :func:`~causalab.protocol.registry.component_shape` describes the value —
+    #: the one place in the backend where those two differ, and the field exists
+    #: so that difference is declared rather than inferred.
+    derivation: str | None = None
 
     @property
     def depth(self) -> tuple[int, int]:
@@ -393,8 +410,19 @@ NORMALIZED_TAPS: dict[str, str] = {
 #: has no attention matrix at all — there is nothing to read and nothing to
 #: write — so naming one at such a layer is an error about the *architecture*,
 #: not a missing feature (§5.3).
+#: 🐞 ``attention_premix`` and ``attention_result`` belong here too, and did not
+#: before. Both are the o-projection's input, and 📐 a Gated DeltaNet layer has
+#: no ``o_proj`` at all — its children are
+#: ``[conv1d, in_proj_a, in_proj_b, in_proj_qkv, in_proj_z, norm, out_proj]`` —
+#: so naming either at such a layer raised a bare
+#: ``AttributeError: 'Qwen3_5MoeGatedDeltaNet' object has no attribute 'o_proj'``
+#: out of the tap table instead of the architectural refusal that says why the
+#: box does not exist there. ``attention_output`` is deliberately *not* here: a
+#: DeltaNet layer does produce a mixer output, and it resolves.
 _FULL_ATTENTION_ONLY: frozenset[str] = frozenset(
-    {"attention_probs"} | _ATTENTION_INTERIOR | set(ATTENTION_FUNCTION_SLOTS)
+    {"attention_probs", "attention_premix", "attention_result"}
+    | _ATTENTION_INTERIOR
+    | set(ATTENTION_FUNCTION_SLOTS)
 )
 
 
@@ -550,6 +578,8 @@ def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
         tuple_index: int | None = None,
         keeps_head_axis: bool = False,
         interface_slot: str | None = None,
+        shape: FeatureShape | None = None,
+        derivation: str | None = None,
     ) -> ResolvedSite:
         """One tap, with its shape read from the component table.
 
@@ -565,7 +595,10 @@ def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
         descriptor the backend owns. Everything the protocol layer validates
         against is family-independent and stays in the one table.
         """
-        shape = component_shape(bundle.info, component)
+        # `shape` is overridden only by a *derived* component, whose tap
+        # captures a different tensor than the one the component names.
+        if shape is None:
+            shape = component_shape(bundle.info, component)
         if keeps_head_axis:
             shape = dataclasses.replace(shape, flat_inner=False)
         return ResolvedSite(
@@ -577,6 +610,8 @@ def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
             component=component,
             tuple_index=tuple_index,
             interface_slot=interface_slot,
+            head=head,
+            derivation=derivation,
         )
 
     if component == "input_ids":
@@ -642,6 +677,25 @@ def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
             _o_proj(bundle, layer),
             "in",
             feature_slice=_head_slice(bundle, component, head),
+        )
+    if component == "attention_result":
+        # 📐 The model never computes this. Each head's contribution to the
+        # residual stream is `premix[..., h·d:(h+1)·d] @ W_o[:, h·d:(h+1)·d].T`,
+        # and the model forms only their sum — by projecting the whole premix at
+        # once. So the tap is `attention_premix`'s, and the value is derived
+        # from it after the position gather, which keeps the cost
+        # `n_positions · H · hidden` rather than `seq · H · hidden`.
+        #
+        # No `feature_slice`: a `head` here selects in the *result's* space
+        # (hidden-wide blocks), not the captured tensor's (head_dim-wide), and
+        # naming one makes the derivation cheap rather than making it a slice.
+        if head is not None:
+            _head_slice(bundle, component, head)  # bound-check, discard
+        return tap(
+            _o_proj(bundle, layer),
+            "in",
+            shape=component_shape(bundle.info, "attention_premix"),
+            derivation="attention_result",
         )
     if component in _ATTENTION_INTERIOR:
         return _attention_interior_site(
