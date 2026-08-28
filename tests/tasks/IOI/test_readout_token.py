@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from causalab.neural.pytorch_hooks.metrics import column_token_id
+from causalab.neural.shared.metrics import column_token_id
 from causalab.tasks.IOI.causal_models import NAMES
 
 pytestmark = pytest.mark.numerical_unit

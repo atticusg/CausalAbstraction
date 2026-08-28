@@ -7,7 +7,7 @@ exactly once below, in one of four categories:
 - **re-driven oracle** — oracle/behavioral tests whose assertions were kept
   verbatim and re-driven through protocol documents (same tolerances, same
   ground truth: the raw-hook oracle, moved intact to
-  `tests/neural/pytorch_hooks/hook_oracle_lib.py`).
+  `tests/neural/engines/pytorch_hooks/hook_oracle_lib.py`).
 - **replaced interface** — tests bound to a deleted interface (hydra configs,
   runner, methods/analyses wrappers, the Plan API) replaced by
   protocol-equivalent tests of the same behavior.
@@ -20,7 +20,7 @@ exactly once below, in one of four categories:
 **Baseline** (at `a50637c`): 3205 tests, 12 pre-existing failures, all in
 `tests/runner/test_run_exp_dispatch.py`. **Outcome** (post-cut, `c05b308`):
 1333 passed, 0 failed — the kept frozen trees plus the new-layer tests in
-`tests/protocol/` and `tests/neural/pytorch_hooks/`.
+`tests/protocol/` and `tests/neural/engines/pytorch_hooks/`.
 
 Path conventions: the *old file* column is relative to the table's area; *new
 file* paths are relative to `tests/`. Parametrized data dirs (`configs/`,
@@ -308,7 +308,7 @@ site tooling that hooks in via the CLI's `--points` shard selector.
   dataset-serialization seam (§2.2): a task's counterfactual dataset is
   serialized by `causalab/tasks/serialize.py` and driven as corpus document
   `10_task_table_iia_im.json`; the pin is
-  `tests/neural/pytorch_hooks/test_end_to_end_iia.py`. Values are captured
+  `tests/neural/engines/pytorch_hooks/test_end_to_end_iia.py`. Values are captured
   fresh, not carried over — the retired test scored generated strings through
   `task.checker`, a document scores an argmax against the answer's declared
   forms, and its coherent-model half used a chat template v1 cannot express.

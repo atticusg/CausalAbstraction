@@ -1,17 +1,17 @@
-"""The backend-free intervention-protocol layer.
+"""The engine-free intervention-protocol layer.
 
 ``docs/intervention_protocol.md`` is the normative spec; this package is
-its loader, validator, canonicalizer, sweep expander, planner, backend
+its loader, validator, canonicalizer, sweep expander, planner, engine
 contract, and CLI. Nothing here imports torch or an execution engine — a
 document is a value, and this layer owns everything decidable from the
 value plus a resolution environment.
 """
 
-from causalab.protocol.backend import (
-    Backend,
+from causalab.protocol.engine import (
+    Engine,
     ExecutionRequest,
     RunResult,
-    choose_backend,
+    choose_engine,
     requires,
 )
 from causalab.protocol.canonical import canonical_bytes, canonicalize, digest
@@ -31,7 +31,7 @@ from causalab.protocol.validate import validate_document
 
 __all__ = [
     "ArtifactStore",
-    "Backend",
+    "Engine",
     "DatasetResolver",
     "Document",
     "ExecutionRequest",
@@ -47,7 +47,7 @@ __all__ = [
     "ValidationError",
     "canonical_bytes",
     "canonicalize",
-    "choose_backend",
+    "choose_engine",
     "digest",
     "expand",
     "find_axes",
