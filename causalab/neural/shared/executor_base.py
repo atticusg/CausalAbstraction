@@ -32,6 +32,7 @@ from causalab.neural.shared.mechanisms import (
     is_additive,
 )
 from causalab.neural.shared.sites import (
+    NORMALIZED_TAPS,
     READ_ONLY_COMPONENTS,
     SWAP_ONLY_COMPONENTS,
     ResolvedSite,
@@ -86,7 +87,7 @@ class RaggedValue:
 
 
 #: What identifies a tap for capture-sink sharing — see :func:`tap_key`.
-TapKey = tuple[int, str, FeatureShape, int | None]
+TapKey = tuple[int, str, FeatureShape, int | None, str | None]
 
 
 def tap_key(site: ResolvedSite) -> TapKey:
@@ -97,7 +98,13 @@ def tap_key(site: ResolvedSite) -> TapKey:
     — so the shape and tuple index are part of the identity. Keying on the
     module alone would let one tap read another's tensor.
     """
-    return (id(site.module), site.kind, site.shape, site.tuple_index)
+    return (
+        id(site.module),
+        site.kind,
+        site.shape,
+        site.tuple_index,
+        site.interface_slot,
+    )
 
 
 def whole_native_tensor(
@@ -146,6 +153,56 @@ def whole_native_tensor(
             f"{shape.axes[-1].label} entries as though they were features.",
         )
     return raw
+
+
+def _derive(site: ResolvedSite, value: torch.Tensor, rname: str) -> torch.Tensor:
+    """Compute a derived component from the tensor its tap captured."""
+    if site.derivation == "attention_result":
+        return _attention_result(site, value)
+    raise ProtocolError("P2", f"read {rname!r}: unknown derivation {site.derivation!r}")
+
+
+def _attention_result(site: ResolvedSite, premix: torch.Tensor) -> torch.Tensor:
+    """Head ``h``'s contribution to the residual stream.
+
+    ``result[..., h, :] = premix[..., h·d:(h+1)·d] @ W_o[:, h·d:(h+1)·d].T`` —
+    the part of the block's attention output that head ``h`` is responsible for.
+    The model never forms it: it projects the whole premix at once, so what it
+    computes is the *sum* over heads (plus the o-projection's bias, if it has
+    one). ``sum_h result == attention_output - bias`` is the identity that
+    defines this component, and the test suite pins it.
+
+    Computed by **masking and re-projecting** rather than by slicing the weight
+    matrix. That is deliberate: ``nn.Linear`` stores ``(out, in)`` and
+    transformers' ``Conv1D`` (GPT-2's ``c_proj``) stores ``(in, out)``, so a
+    weight-slicing implementation has to know which family it is looking at and
+    is silently wrong if it guesses. Running the projection the model's own
+    module defines cannot be wrong about its own layout, and the bias — which is
+    *not* attributable to any head — is subtracted back off explicitly.
+
+    ⚠️ Calls ``site.module`` directly, so it needs a real ``nn.Module``. That is
+    why the nnsight engine, whose ``site.module`` is an envoy, does not declare
+    this component.
+    """
+    module = site.module
+    bias = getattr(module, "bias", None)
+    heads = site.shape.head_space
+    assert heads is not None  # the premix tap always has a head axis
+    per_head = premix.shape[-1] // heads
+
+    def contribution(head: int) -> torch.Tensor:
+        masked = torch.zeros_like(premix)
+        window = slice(head * per_head, (head + 1) * per_head)
+        masked[..., window] = premix[..., window]
+        out = module(masked)
+        return out if bias is None else out - bias
+
+    if site.head is not None:
+        return contribution(site.head)
+    # The whole tensor: `heads` times wider than `attention_output`. On a real
+    # A3B that is 64x at hidden 4096, which is why naming a `head` is
+    # encouraged — but it is a documented cost, not a refusal.
+    return torch.cat([contribution(head) for head in range(heads)], dim=-1)
 
 
 class ExecutorBase:
@@ -406,7 +463,10 @@ class ExecutorBase:
         elif site.feature_slice is not None:
             width = site.feature_slice.stop - site.feature_slice.start
         else:
-            width = component_width(self.bundle.info, site.component, head=None)
+            # `head=site.head` matters only for a *derived* component, which
+            # carries no feature_slice: a head there narrows the value's width
+            # without narrowing the captured tensor's.
+            width = component_width(self.bundle.info, site.component, head=site.head)
         return build_stack(
             read.featurizer,
             dict(self.doc.featurizers),
@@ -453,6 +513,12 @@ class ExecutorBase:
                 gathered = project(gathered)
         ragged = isinstance(gathered, RaggedValue)
         value = gathered.flat if isinstance(gathered, RaggedValue) else gathered
+        if site.derivation is not None:
+            # After the gather, deliberately: the value is `heads` times wider
+            # than the tensor it comes from, so deriving it before the gather
+            # would cost `seq · H · hidden` where this costs
+            # `n_positions · H · hidden`.
+            value = _derive(site, value, rname)
         if site.feature_slice is not None:
             value = value[..., site.feature_slice]
         stack = self._read_stack(read, site)
@@ -563,37 +629,68 @@ class ExecutorBase:
 
         for ename, write, site in sorted(entries, key=class_rank):
             if not site.shape.has_contract_form:
-                # Symmetric with the read (see whole_native_tensor): the
-                # pattern's feature axis is a position axis, so the position
-                # gather below would index heads with positions. A write here
-                # replaces the whole tensor — which is what only `swap` means.
-                # Any other mechanism (a delta, a scale, a clamp) would leave
-                # rows that no longer sum to 1, and the code below would treat
-                # its payload as a whole pattern anyway; refuse rather than
-                # produce one that is plausible and wrong.
-                if str(write.do.mechanism) != "swap":
+                # Symmetric with the read (see whole_native_tensor): this
+                # tensor's feature axis is a position axis, so the position
+                # gather below would index heads with positions and `dims`
+                # would slice key positions as features. Both are refused
+                # there; what is left is the whole tensor, edited whole.
+                whole_native_tensor(ename, write, tensor, site)
+                mechanism = str(write.do.mechanism)
+                if site.component in NORMALIZED_TAPS and mechanism != "swap":
                     raise ProtocolError(
                         "P4",
-                        f"write {ename!r} applies {str(write.do.mechanism)!r} "
-                        f"to {site.component!r}, whose shape is "
-                        f"{site.shape.describe()}: only a whole-tensor 'swap' "
-                        "(an interchange) is supported, because the rows of a "
-                        "pattern must still sum to 1 and nothing downstream "
-                        "renormalizes them.",
+                        f"write {ename!r} applies {mechanism!r} to "
+                        f"{site.component!r}, which only a whole-tensor "
+                        f"'swap' may change: "
+                        f"{NORMALIZED_TAPS[site.component]}.",
                     )
-                whole_native_tensor(ename, write, tensor, site)
-                replacement = self._operand_lookup(write.do.payload)
-                if replacement.shape != tensor.shape:
+                if mechanism == "swap":
+                    replacement = self._operand_lookup(write.do.payload)
+                    if not isinstance(replacement, torch.Tensor):
+                        raise ProtocolError(
+                            "P2",
+                            f"write {ename!r} swaps {site.component!r} with "
+                            "a scalar; a whole-tensor interchange needs a "
+                            "tensor operand read from elsewhere",
+                        )
+                    if replacement.shape != tensor.shape:
+                        raise ProtocolError(
+                            "P2",
+                            f"write {ename!r} replaces the whole "
+                            f"{site.component!r} tensor, but its operand has "
+                            f"shape {tuple(replacement.shape)} and the tap is "
+                            f"{tuple(tensor.shape)} — an interchange needs "
+                            "both inputs to have the same number of positions",
+                        )
+                    tensor.copy_(replacement.to(tensor.dtype))
+                elif mechanism == "gaussian":
+                    # 📐 The noise is drawn as (batch, position, feature) and
+                    # its `axis` names the feature axis' tensor-parallel
+                    # semantics. This tap has no feature axis — its last axis
+                    # is key positions — so there is nothing for either to
+                    # mean, and the draw does not even fit (measured: "shape
+                    # '[1, 8, 5, 5]' is invalid for input of size 40").
+                    # Refused by name rather than reshaped into something that
+                    # would run.
                     raise ProtocolError(
-                        "P2",
-                        f"write {ename!r} replaces the whole attention "
-                        f"pattern, but its operand has shape "
-                        f"{tuple(replacement.shape)} and the pattern is "
-                        f"{tuple(tensor.shape)} — an attention-pattern "
-                        "interchange needs both inputs to have the same "
-                        "number of positions",
+                        "P4",
+                        f"write {ename!r} applies 'gaussian' to "
+                        f"{site.component!r}, whose shape is "
+                        f"{site.shape.describe()}: the noise is drawn per "
+                        "(batch, position, feature) and its 'axis' names how "
+                        "the feature axis is sharded, and this tap has no "
+                        "feature axis at all. Swap in a noise tensor of the "
+                        "tap's own shape instead.",
                     )
-                tensor.copy_(replacement.to(tensor.dtype))
+                else:
+                    # 📐 Arithmetic on the whole tensor, with no gather: for
+                    # `attention_scores` this is the point of the component.
+                    # `_written_value` broadcasts a scalar operand over any
+                    # rank, and `dims` and featurizers are already refused
+                    # above, so there is no feature axis for it to mis-slice.
+                    tensor.copy_(
+                        self._written_value(ename, write, site, tensor).to(tensor.dtype)
+                    )
                 continue
             per_row = self._positions(write.pos, batch, input_role)
             widths = {len(row) for row in per_row}

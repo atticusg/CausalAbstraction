@@ -275,7 +275,8 @@ execution order:
 
 `input_ids` · `embeddings` · `block_input` · `attention_input_norm` ·
 `attention_query_pre_rope` · `attention_key_pre_rope` ·
-`attention_value_states` · `attention_gate` ·
+`attention_value_states` · `attention_gate` · `attention_query` ·
+`attention_key` · `attention_scores` · `attention_z` · `attention_result` ·
 `attention_output` · `attention_premix` · `attention_probs` · `block_mid` ·
 `mlp_input_norm` · `mlp_input` · `router_logits` · `router_scores` ·
 `expert_idx` · `expert_output` · `routed_output` · `mlp_activation` ·
@@ -317,12 +318,24 @@ execution order:
 - **`expert` is refused on every round-1 MoE component.** None of these tensors
   is indexed by expert: the router's axes are all-experts or top-k, and the
   shared expert is not one of the routed experts.
-- **Two components are read-only, and a write to either is refused** rather than
+- **`attention_result` is the per-head contribution to the residual stream**,
+  and the only component the model never computes: the block projects the whole
+  `attention_premix` at once, so what the forward pass forms is the *sum* over
+  heads. `sum_h attention_result == attention_output` (minus the o-projection's
+  bias, which belongs to no head) is the identity that defines it.
+  Naming a `head` is strongly encouraged — the dense form is `heads` times
+  `attention_output`, which on a 64-head model at hidden 4096 is 64× the memory
+  — but the whole tensor is not refused, only documented. The read is derived
+  after the position gather, so the cost is `n_positions · heads · hidden`
+  rather than `seq · heads · hidden`.
+- **Three components are read-only, and a write to any is refused** rather than
   silently discarded. `input_ids` is the model's input. `router_logits` is
   discarded by the MoE block itself, which routes on the scores and indices it
   computed from them — so a write there could not reach anything. Write
   `router_scores` to reweight the chosen experts, or `expert_idx` to change
-  which experts fire.
+  which experts fire. `attention_result` is *derived* — there is no tensor there
+  to change — so write `attention_premix` with the same `head` instead; the
+  result is a linear function of it.
 - **The mixer's interior is four module boundaries, not four chunk ops.**
   `attention_query_pre_rope` and `attention_key_pre_rope` are the queries and
   keys as the mixer computes them, *before* RoPE rotates them — on a family with
@@ -344,6 +357,32 @@ execution order:
   component by name rather than returning a slice of `q`. All four components
   are refused on a fused-qkv family (GPT-2's `c_attn`), and all four require a
   full-attention layer.
+- **Four more components live *inside* the attention function**, where no
+  forward hook reaches: `attention_query` and `attention_key` are the post-RoPE
+  queries and keys as that function receives them (`attention_key` before the
+  GQA `repeat_kv`, so **KV-head space**), `attention_scores` is the softmax's
+  input, and `attention_z` is the function's result — the mixer's output
+  *before* the gate multiply and the o-projection. Unlike the module-boundary
+  four, these do not depend on separate q/k/v projections, so they read on a
+  fused-qkv family too.
+- **`attention_scores` is the write surface `attention_probs` could not be.**
+  They are the same tensor one step apart and have identical axes; what differs
+  is what happens next. After the pattern comes the value multiply, which
+  assumes rows summing to 1 and gets whatever an edit produced — so the pattern
+  accepts only `swap`. After the scores comes the model's own softmax, which
+  renormalizes by construction — so **every mechanism is legal**. Attention
+  knockout is an `add_scaled` of a large negative mask; head boosting is a
+  scale. Note that a *uniform* shift is a no-op, because softmax is invariant to
+  a shift along the axis it normalizes: a knockout has to be targeted, which
+  means a full-shape operand rather than a scalar. `gaussian` is refused, since
+  its noise is drawn per feature axis and this tap has none.
+- **Continuation reads are refused where the steps do not stack.** A decode step
+  attends over the whole KV cache, so a tensor indexed by the positions being
+  attended *to* grows by one per step while the query axis stays 1.
+  `attention_probs`, `attention_scores` (two position axes) and `attention_key`
+  (one position axis, over the keys) therefore refuse in the `generated` frame;
+  `attention_query` and `attention_z` are query-axis-shaped and read normally.
+  Writes never need the rule — rule 16 already makes them prefill-only.
 - **`attention_probs` is the whole attention pattern**, `(batch, heads, query,
   key)`, and round 1 exposes it whole: `pos: "all"`. Both of its trailing axes
   are positions — its *feature* axis IS a position axis — so addressing one
@@ -354,7 +393,10 @@ execution order:
   form, and each refusal follows from something that form would have provided.
   A write replaces the whole pattern, which is what an
   interchange on attention means, and both inputs must have the same number of
-  positions.
+  positions. The edit is handed back to the model's own value multiply — nothing
+  recomputes it — so a write here works on every family whose eager attention
+  the backend can wrap, and only `swap` is refused arithmetic because nothing
+  downstream restores rows summing to 1.
 - **`stream` names a mixer stream, and it is a per-layer fact.** It is one of
   `full_attention` / `linear_attention`. A hybrid tower carries a different mixer
   at different depths (Qwen3.6's text tower alternates Gated DeltaNet with gated

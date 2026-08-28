@@ -30,13 +30,15 @@ from typing import Any, Callable, Iterator, Mapping
 
 import torch
 
-from causalab.neural.engines.pytorch_hooks.attention_probs import (
-    eager_attention_writes,
+from causalab.neural.engines.pytorch_hooks.attention_interface import (
+    InterfaceTap,
+    attention_interface_taps,
 )
 from causalab.neural.shared.encoding import Continuation, EncodedBatch, resolve_steps
 from causalab.neural.shared.executor_base import (
     ExecutorBase,
     RaggedValue,
+    TapKey,
     document_seed,
     tap_key,
 )
@@ -117,43 +119,65 @@ class PointExecutor(ExecutorBase):
         }
 
         with contextlib.ExitStack() as hooks:
-            # An attention-pattern write cannot ride a forward hook: the hook
-            # fires after the pattern has been consumed, so the edit would be a
-            # silent no-op. It goes through the eager attention function instead.
-            pattern_edits = {
-                id(module): fn
-                for module, kind, w_shape, w_tuple_index, fn in write_hooks
-                if not w_shape.has_contract_form
-            }
-            hooks.enter_context(eager_attention_writes(pattern_edits))
-            for module, kind, w_shape, w_tuple_index, fn in write_hooks:
-                if not w_shape.has_contract_form:
+            # Four of the mixer's tensors — and the attention pattern's *write*
+            # — are not module boundaries: transformers computes them inside one
+            # `attention_interface(...)` call, so a forward hook on the mixer
+            # fires after they have already been consumed. They are collected
+            # first and installed together, because the interception is one
+            # registry entry and nesting two of them would let the inner
+            # wrapper's edits replace the outer's.
+            interface: dict[int, list[InterfaceTap]] = {}
+            batch_size = batch.input_ids.shape[0]
+
+            for site, fn in write_hooks:
+                if site.interface_slot is not None:
+                    interface.setdefault(id(site.module), []).append(
+                        InterfaceTap(
+                            slot=site.interface_slot,
+                            edit=_interface_edit(site, fn, batch_size),
+                        )
+                    )
                     continue
                 hooks.enter_context(
                     _installed(
-                        module,
-                        kind,
+                        site.module,
+                        site.kind,
                         fn,
-                        shape=w_shape,
-                        tuple_index=w_tuple_index,
-                        batch_size=batch.input_ids.shape[0],
+                        shape=site.shape,
+                        tuple_index=site.tuple_index,
+                        batch_size=batch_size,
                     )
                 )
             for site in capture_sites.values():
                 key = tap_key(site)
-                if key not in capture:
-                    capture[key] = torch.empty(0)  # placeholder; filled by hook
-                    hooks.enter_context(
-                        _capturing(
-                            site.module,
-                            site.kind,
-                            capture,
-                            key,
-                            shape=site.shape,
-                            tuple_index=site.tuple_index,
-                            batch_size=batch.input_ids.shape[0],
+                if key in capture:
+                    continue
+                capture[key] = torch.empty(0)  # placeholder; filled by the tap
+                if site.kind == "interface":
+                    assert site.interface_slot is not None
+                    interface.setdefault(id(site.module), []).append(
+                        InterfaceTap(
+                            slot=site.interface_slot,
+                            read=_interface_capture(capture, key, site, batch_size),
                         )
                     )
+                    continue
+                hooks.enter_context(
+                    _capturing(
+                        site.module,
+                        site.kind,
+                        capture,
+                        key,
+                        shape=site.shape,
+                        tuple_index=site.tuple_index,
+                        batch_size=batch_size,
+                    )
+                )
+            hooks.enter_context(
+                attention_interface_taps(
+                    {mid: tuple(entries) for mid, entries in interface.items()}
+                )
+            )
             with torch.enable_grad() if self.grad_enabled else torch.no_grad():
                 prefill = self.bundle.model(
                     input_ids=batch.input_ids,
@@ -218,46 +242,41 @@ class PointExecutor(ExecutorBase):
         rows = int(mask.shape[0])
 
         tokens: list[torch.Tensor] = [nxt]
-        steps: dict[tuple[int, str], list[torch.Tensor]] = {}
+        steps: dict[TapKey, list[torch.Tensor]] = {}
         cache = prefill.past_key_values
         with contextlib.ExitStack() as hooks:
+            interface: dict[int, list[InterfaceTap]] = {}
+            batch_size = batch.input_ids.shape[0]
             for name, site in gen_capture_sites.items():
-                if not site.shape.has_contract_form:
-                    # 📐 Each decode step attends over the whole cache, so the
-                    # pattern is (batch, heads, 1, prompt + step): the key axis
-                    # GROWS by one per step while the query axis stays 1. The
-                    # accumulating sink stacks steps on dim 1, which for every
-                    # other component is the position axis and here is heads —
-                    # so the concat either raises a bare torch size error
-                    # (measured: "Expected size 9 but got size 10") or, for a
-                    # single-step budget, silently returns one step's pattern
-                    # shaped like a frame. Neither is a continuation read.
-                    #
-                    # The condition is the shape, not the name: stacking steps
-                    # on the position axis is only meaningful for a tap that has
-                    # one position axis, and a tap with two has no
-                    # non-arbitrary answer to which one grows.
-                    raise ProtocolError(
-                        "P4",
-                        f"read {name!r} reads {site.component!r} in the "
-                        "generated frame, whose shape is "
-                        f"{site.shape.describe()}: with a KV cache each step's "
-                        "pattern has a different key width, so the steps do not "
-                        "stack into one tensor. Read it in the prompt frame.",
-                    )
+                _refuse_unstackable(name, site)
                 key = tap_key(site)
-                if key not in steps:
-                    steps[key] = []
-                    hooks.enter_context(
-                        _accumulating(
-                            site.module,
-                            site.kind,
-                            steps[key],
-                            shape=site.shape,
-                            tuple_index=site.tuple_index,
-                            batch_size=batch.input_ids.shape[0],
+                if key in steps:
+                    continue
+                steps[key] = []
+                if site.kind == "interface":
+                    assert site.interface_slot is not None
+                    interface.setdefault(id(site.module), []).append(
+                        InterfaceTap(
+                            slot=site.interface_slot,
+                            read=_interface_accumulate(steps[key], site, batch_size),
                         )
                     )
+                    continue
+                hooks.enter_context(
+                    _accumulating(
+                        site.module,
+                        site.kind,
+                        steps[key],
+                        shape=site.shape,
+                        tuple_index=site.tuple_index,
+                        batch_size=batch_size,
+                    )
+                )
+            hooks.enter_context(
+                attention_interface_taps(
+                    {mid: tuple(entries) for mid, entries in interface.items()}
+                )
+            )
             for _ in range(depth):
                 mask = torch.cat([mask, torch.ones_like(nxt)], dim=1)
                 next_pos = next_pos + 1
@@ -331,24 +350,16 @@ class PointExecutor(ExecutorBase):
 
     def _build_write_hooks(
         self, write_names: tuple[str, ...], input_role: str, batch: EncodedBatch
-    ) -> list[
-        tuple[Any, str, FeatureShape, int | None, Callable[[torch.Tensor], None]]
-    ]:
-        """One in-place hook per written-to tap, applying every write at that
-        address in class order (the shared write math, executor_base)."""
-        hooks: list[
-            tuple[Any, str, FeatureShape, int | None, Callable[[torch.Tensor], None]]
-        ] = []
+    ) -> list[tuple[ResolvedSite, Callable[[torch.Tensor], None]]]:
+        """One in-place writer per written-to tap, applying every write at that
+        address in class order (the shared write math, executor_base).
+
+        Returns the *site* rather than its parts: a tap may be a module
+        boundary or an attention-interface slot, and only the site knows which.
+        """
+        hooks: list[tuple[ResolvedSite, Callable[[torch.Tensor], None]]] = []
         for site, entries in self._resolve_write_addresses(write_names).values():
-            hooks.append(
-                (
-                    site.module,
-                    site.kind,
-                    site.shape,
-                    site.tuple_index,
-                    self._address_writer(entries, input_role, batch),
-                )
-            )
+            hooks.append((site, self._address_writer(entries, input_role, batch)))
         return hooks
 
     def _address_writer(
@@ -366,6 +377,91 @@ class PointExecutor(ExecutorBase):
 # --------------------------------------------------------------------------- #
 # hook plumbing (mirrors the oracle's _install / capture helpers)
 # --------------------------------------------------------------------------- #
+
+
+def _interface_edit(
+    site: ResolvedSite, write: Callable[[torch.Tensor], None], batch_size: int
+) -> Callable[[torch.Tensor], torch.Tensor]:
+    """Adapt an in-place contract-shaped writer to the interface's protocol.
+
+    The manager hands out a clone and takes back a replacement, which is why
+    this can convert, mutate and convert back without any of it reaching the
+    model's own storage.
+    """
+
+    def edit(native: torch.Tensor) -> torch.Tensor:
+        contract = to_contract(native, site.shape, batch_size=batch_size)
+        write(contract)
+        return from_contract(contract, site.shape, batch_size=batch_size, native=native)
+
+    return edit
+
+
+def _interface_capture(
+    sink: dict[Any, torch.Tensor],
+    key: Any,
+    site: ResolvedSite,
+    batch_size: int,
+) -> Callable[[torch.Tensor], None]:
+    """The read half — the same contract shape ``_capturing`` produces."""
+
+    def read(native: torch.Tensor) -> None:
+        sink[key] = to_contract(native, site.shape, batch_size=batch_size)
+
+    return read
+
+
+def _interface_accumulate(
+    sink: list[torch.Tensor], site: ResolvedSite, batch_size: int
+) -> Callable[[torch.Tensor], None]:
+    """The read half for a decode: append per step, as ``_accumulating`` does."""
+
+    def read(native: torch.Tensor) -> None:
+        sink.append(to_contract(native, site.shape, batch_size=batch_size))
+
+    return read
+
+
+def _refuse_unstackable(name: str, site: ResolvedSite) -> None:
+    """Refuse a continuation read whose steps do not stack into a frame.
+
+    📐 A decode step attends over the whole KV cache, so a tensor indexed by the
+    positions being attended *to* is ``prompt + step`` long at step ``step``
+    while the query axis stays 1. The accumulating sink concatenates steps on
+    dim 1, which for an ordinary tap is the position axis, so such a tap either
+    raises a bare torch size error (measured: "Expected size 9 but got size 10")
+    or, for a single-step budget, silently returns one step shaped like a frame.
+    Neither is a continuation read.
+
+    Both conditions are read off the declared axes rather than a component list:
+
+    * **two position axes** — the attention pattern and the scores. There is no
+      non-arbitrary answer to which of them the steps stack along;
+    * **one position axis, over the keys** — ``attention_key``. Its own length
+      is what grows, so consecutive steps are different lengths.
+
+    ``attention_query`` and ``attention_z`` are query-axis-shaped and accumulate
+    correctly, which is why this is a property of the axes and not of "anything
+    inside the attention function".
+    """
+    shape = site.shape
+    if shape.has_contract_form and not any(
+        axis.kind == "position" and axis.name == "key" for axis in shape.axes
+    ):
+        return
+    why = (
+        "it has two position axes, so there is no single axis the decode steps "
+        "stack along"
+        if not shape.has_contract_form
+        else "its position axis runs over the positions being attended to, "
+        "which under a KV cache is the whole prefix and grows by one per step"
+    )
+    raise ProtocolError(
+        "P4",
+        f"read {name!r} reads {site.component!r} in the generated frame, whose "
+        f"shape is {shape.describe()}: {why}, so the steps do not stack into "
+        "one tensor. Read it in the prompt frame.",
+    )
 
 
 @contextlib.contextmanager
