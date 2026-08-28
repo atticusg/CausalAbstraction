@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterator, Mapping
 
 import torch
 
-from causalab.neural.engines.pytorch_hooks.encoding import (
+from causalab.neural.shared.encoding import (
     Continuation,
     EncodedBatch,
     encode,
@@ -41,7 +41,7 @@ from causalab.neural.engines.pytorch_hooks.featurizers import (
     build_stack,
 )
 from causalab.neural.engines.pytorch_hooks.loading import ModelBundle
-from causalab.neural.engines.pytorch_hooks.mechanisms import (
+from causalab.neural.shared.mechanisms import (
     apply_absolute,
     apply_delta,
     apply_renormalize,
@@ -55,7 +55,7 @@ from causalab.neural.engines.pytorch_hooks.sites import (
     ResolvedSite,
     resolve_site,
 )
-from causalab.neural.engines.pytorch_hooks.layout import (
+from causalab.neural.shared.layout import (
     Layout,
     from_contract,
     rebuild_payload,

@@ -44,7 +44,7 @@ from causalab.protocol.schema import SiteSpec
 
 from causalab.neural.engines.pytorch_hooks.loading import ModelBundle
 from causalab.neural.engines.pytorch_hooks.attention_probs import ATTENTION_PROBS_LAYOUT
-from causalab.neural.engines.pytorch_hooks.layout import Layout
+from causalab.neural.shared.layout import Layout
 
 __all__ = [
     "READ_ONLY_COMPONENTS",
@@ -118,7 +118,7 @@ class ResolvedSite:
 
     ``layout`` and ``tuple_index`` both default to the historical behaviour, so
     a tap that does not mention them is unchanged: contract-shaped, and element
-    0 of a tuple payload. See :mod:`causalab.neural.engines.pytorch_hooks.layout` for
+    0 of a tuple payload. See :mod:`causalab.neural.shared.layout` for
     what the non-default values mean and which architectures need them.
     """
 

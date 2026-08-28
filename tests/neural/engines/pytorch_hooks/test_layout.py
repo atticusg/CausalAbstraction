@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from causalab.neural.pytorch_hooks.layout import (
+from causalab.neural.shared.layout import (
     LAYOUTS,
     LayoutError,
     from_contract,
