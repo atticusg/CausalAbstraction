@@ -77,8 +77,10 @@ COMPONENT_RANK: dict[str, int] = {
     "delta_beta": 166,  # kernel kwarg beta — sigmoid(in_proj_b), per head
     "delta_decay": 168,  # kernel kwarg g — the log-decay, negative reals
     "attention_key_pre_rope": 170,
-    # 172/174/176 are reserved for the per-step interior (round 4.3):
-    # delta_kv_mem, delta_state_update, delta_state — loop order
+    # the per-step interior (round 4.3), in loop order: readout, update, state
+    "delta_kv_mem": 172,  # (S_{t-1}·exp(g_t) · k̂_t).sum — what the state recalls
+    "delta_state_update": 174,  # (v_t − kv_mem_t)·β_t — the diagram's `delta`
+    "delta_state": 176,  # S_t, one d_k × d_v matrix per head per step
     "delta_kernel_output": 178,  # kernel return[0]: pre-norm, pre-gate
     "attention_value_states": 180,
     # the DeltaNet post-norm, post-gate mixer input — the exact analogue of

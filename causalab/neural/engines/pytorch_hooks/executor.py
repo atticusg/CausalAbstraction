@@ -137,6 +137,14 @@ class PointExecutor(ExecutorBase):
             for site, fn in write_hooks:
                 if site.kind == "delta":
                     assert site.interface_slot is not None
+                    if site.interface_slot == "state":
+                        # a state write must feed forward, so it rides the
+                        # stepwise substitution's own surface — `fn` here IS
+                        # the per-step writer (_build_write_hooks)
+                        delta.setdefault(site.module, []).append(
+                            DeltaTap(slot="state", edit_state=fn)
+                        )
+                        continue
                     delta.setdefault(site.module, []).append(
                         DeltaTap(
                             slot=site.interface_slot,
@@ -393,15 +401,23 @@ class PointExecutor(ExecutorBase):
 
     def _build_write_hooks(
         self, write_names: tuple[str, ...], input_role: str, batch: EncodedBatch
-    ) -> list[tuple[ResolvedSite, Callable[[torch.Tensor], None]]]:
+    ) -> list[tuple[ResolvedSite, Callable[..., Any]]]:
         """One in-place writer per written-to tap, applying every write at that
         address in class order (the shared write math, executor_base).
 
         Returns the *site* rather than its parts: a tap may be a module
         boundary or an attention-interface slot, and only the site knows which.
         """
-        hooks: list[tuple[ResolvedSite, Callable[[torch.Tensor], None]]] = []
+        hooks: list[tuple[ResolvedSite, Callable[..., Any]]] = []
         for site, entries in self._resolve_write_addresses(write_names).values():
+            if site.kind == "delta" and site.interface_slot == "state":
+                # the one address whose writer is per-step (step, S) -> S:
+                # a state edit feeds forward, so the whole-tensor contract
+                # cannot express it (executor_base._state_step_writer)
+                hooks.append(
+                    (site, self._state_step_writer(entries, input_role, batch))
+                )
+                continue
             hooks.append((site, self._address_writer(entries, input_role, batch)))
         return hooks
 
