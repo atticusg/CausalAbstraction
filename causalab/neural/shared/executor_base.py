@@ -94,7 +94,7 @@ class RaggedValue:
 
 
 #: What identifies a tap for capture-sink sharing — see :func:`tap_key`.
-TapKey = tuple[int, str, FeatureShape, int | None, str | None, tuple | None]
+TapKey = tuple[int, str, FeatureShape, int | None, str | None, int | None, tuple | None]
 
 
 def tap_key(site: ResolvedSite, source: Any = None) -> TapKey:
@@ -104,6 +104,10 @@ def tap_key(site: ResolvedSite, source: Any = None) -> TapKey:
     different tuple element, or the same tensor read through a different shape
     — so the shape and tuple index are part of the identity. Keying on the
     module alone would let one tap read another's tensor.
+
+    ``expert`` is part of the identity for the write path's sake: two writes
+    at the same interior slot naming *different* experts must land as two
+    separately masked applications, and the address grouping keys on this.
 
     ``source`` is an engine-specific *interior* address (the nnsight engine's
     :class:`~causalab.neural.engines.nnsight_tracing.addresses.SourceAddress`):
@@ -117,6 +121,7 @@ def tap_key(site: ResolvedSite, source: Any = None) -> TapKey:
         site.shape,
         site.tuple_index,
         site.interface_slot,
+        site.expert,
         None
         if source is None
         else (
@@ -515,6 +520,7 @@ class ExecutorBase:
         *,
         per_row: list[list[int]] | None = None,
         project: Callable[[torch.Tensor], torch.Tensor] | None = None,
+        expert_idx: torch.Tensor | None = None,
     ) -> "torch.Tensor | RaggedValue":
         """One read's value: gather at its positions, then featurize.
 
@@ -529,6 +535,8 @@ class ExecutorBase:
             return whole_native_tensor(rname, read, raw, site)
         if per_row is None:
             per_row = self._positions(read.pos, batch, input_role)
+        if site.expert is not None:
+            return self._expert_selected(rname, read, site, raw, expert_idx, per_row)
         gathered = self._gather(raw, per_row, f"read {rname!r}")
         if project is not None:
             if isinstance(gathered, RaggedValue):
@@ -561,6 +569,78 @@ class ExecutorBase:
             assert isinstance(gathered, RaggedValue)
             return RaggedValue(flat=value, widths=gathered.widths)
         return value
+
+    def _expert_selected(
+        self,
+        rname: str,
+        read: ReadSpec,
+        site: ResolvedSite,
+        raw: torch.Tensor,
+        expert_idx: torch.Tensor | None,
+        per_row: list[list[int]],
+    ) -> RaggedValue:
+        """The ragged face of the routed interior: the (position, slot) pairs
+        the router sent to ``site.expert``, as flat ``(selected, d)`` rows plus
+        per-example widths.
+
+        An expert no token chose returns width-0 rows — **a data fact, not an
+        error** (there is no per-expert hook to have not fired; the router
+        simply sent it nothing at these positions).
+
+        ``featurizer`` and ``dims`` are refused here rather than resized: the
+        document sized them against the token-major form (``top_k · d``), and
+        these rows are ``d``-wide — silently applying either would index a
+        different space than the author named.
+        """
+        if expert_idx is None:
+            raise ProtocolError(
+                "P2",
+                f"read {rname!r} selects expert {site.expert}, but the engine "
+                "captured no routing table alongside the tap — an executor bug, "
+                "not a document error",
+            )
+        if read.featurizer is not None:
+            raise ProtocolError(
+                "P4",
+                f"read {rname!r} featurizes the 'expert: {site.expert}' face of "
+                f"{site.component!r}, whose rows are d_expert-wide while the "
+                "component (and any featurizer sized against it) is top_k·d "
+                "wide. Featurize the token-major form — drop 'expert' — or read "
+                "this face raw.",
+            )
+        if isinstance(read.dims, tuple):
+            raise ProtocolError(
+                "P4",
+                f"read {rname!r} slices 'dims' on the 'expert: {site.expert}' "
+                f"face of {site.component!r}: 'dims' indexes the token-major "
+                "top_k·d axis, and these rows are d-wide. Drop 'expert' or "
+                "drop 'dims'.",
+            )
+        gathered = self._gather(raw, per_row, f"read {rname!r}")
+        idx_gathered = self._gather(expert_idx, per_row, f"read {rname!r}")
+        if isinstance(gathered, RaggedValue):
+            assert isinstance(idx_gathered, RaggedValue)
+            flat_value, pos_widths = gathered.flat, gathered.widths
+            flat_idx = idx_gathered.flat
+        else:
+            assert isinstance(idx_gathered, torch.Tensor)
+            rows, n_pos = gathered.shape[0], gathered.shape[1]
+            flat_value = gathered.reshape(rows * n_pos, gathered.shape[-1])
+            flat_idx = idx_gathered.reshape(rows * n_pos, idx_gathered.shape[-1])
+            pos_widths = (n_pos,) * rows
+        top_k = flat_idx.shape[-1]
+        per_slot = flat_value.shape[-1] // top_k
+        mask = flat_idx == site.expert  # (positions, top_k)
+        selected = flat_value.reshape(-1, top_k, per_slot)[mask]
+        counts = mask.sum(dim=-1)  # hits per (example, position) row
+        widths: list[int] = []
+        offset = 0
+        for width in pos_widths:
+            widths.append(int(counts[offset : offset + width].sum()))
+            offset += width
+        if not self.grad_enabled:
+            selected = selected.detach().cpu()
+        return RaggedValue(flat=selected, widths=tuple(widths))
 
     def _state_read(
         self,

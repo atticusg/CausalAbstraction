@@ -299,17 +299,21 @@ LINEAR_ATTENTION: dict[str, SourceAddress] = {
 #: ``attention_interface``, resolved the same way). 📐 Measured on
 #: ``tiny-random/qwen3.5-moe`` and matching the real A3B's inventory: the
 #: kernel sorts the ``(token, slot)`` rows by expert (``torch_sort``), runs
-#: the fused gate_up projection (``_apply_gate``'s ``chunk`` splits it),
-#: down-projects, un-sorts (``inv_perm``) and weights (``weighted_out_1``,
-#: token-major again). The sorted layout is bookkeeping, so every sorted-space
-#: value carries ``align`` and is presented token-major.
+#: the fused gate_up projection (``proj_out_0``; ``_apply_gate`` splits and
+#: gates it), down-projects (``proj_out_3``), un-sorts (``inv_perm``) and
+#: weights. The sorted layout is bookkeeping, so every sorted-space value
+#: carries ``align`` and is presented token-major.
 MOE_EXPERTS: dict[str, SourceAddress] = {
+    # The two halves of the fused [gate_e | up_e] projection are ONE capture —
+    # the first _grouped_linear's return (`proj_out_0`, pre-chunk) — with two
+    # addresses through the declared fused axis: the same one-capture
+    # presentation the reference engine's dispatch wrapper serves (round 3).
+    # The `_0` suffix is load-bearing the way `inv_perm_1`'s is: `proj_out` is
+    # reassigned down the forward (`proj_out_3` is the down-projection).
     "expert_gate_proj": SourceAddress(
         module="mlp.experts",
         op_pattern="experts_forward",
-        peel=("self__apply_gate",),
-        field="gate_up_out_chunk",
-        tuple_index=0,
+        field="proj_out_0",
         expert_rows=True,
         align="torch_sort",
         requires=frozenset({"experts_grouped"}),
@@ -317,9 +321,7 @@ MOE_EXPERTS: dict[str, SourceAddress] = {
     "expert_up_proj": SourceAddress(
         module="mlp.experts",
         op_pattern="experts_forward",
-        peel=("self__apply_gate",),
-        field="gate_up_out_chunk",
-        tuple_index=1,
+        field="proj_out_0",
         expert_rows=True,
         align="torch_sort",
         requires=frozenset({"experts_grouped"}),
@@ -327,10 +329,24 @@ MOE_EXPERTS: dict[str, SourceAddress] = {
     "expert_activation": SourceAddress(
         module="mlp.experts",
         op_pattern="experts_forward",
-        # the _apply_gate call's own return: act(gate)·up, the down-projection's
-        # input — the same tensor `shared_expert_activation` names on the
-        # shared expert
-        field="self__apply_gate",
+        # the act call INSIDE _apply_gate: act_fn(gate) alone, before the
+        # `· up` multiply — the same tensor `mlp_activation` names on the
+        # llama family (the registry's round-3 semantics; the _apply_gate
+        # call's own return is act(gate)·up, a different tensor).
+        peel=("self__apply_gate",),
+        field="self_act_fn",
+        expert_rows=True,
+        align="torch_sort",
+        requires=frozenset({"experts_grouped"}),
+    ),
+    "expert_output": SourceAddress(
+        module="mlp.experts",
+        op_pattern="experts_forward",
+        # the down-projection's return (`proj_out_3`), BEFORE the routing
+        # weight — the registry identity: routed_output == the slot-sum of
+        # expert_output · router_scores. Still expert-sorted at this line,
+        # hence the align (the weighting and un-sort happen downstream).
+        field="proj_out_3",
         expert_rows=True,
         align="torch_sort",
         requires=frozenset({"experts_grouped"}),
@@ -343,15 +359,6 @@ MOE_EXPERTS: dict[str, SourceAddress] = {
         # empty_like allocation, `_1` the filled table, and neither line is a
         # call, so the call-op rule cannot separate them.
         field="inv_perm_1",
-        expert_rows=True,
-        requires=frozenset({"experts_grouped"}),
-    ),
-    "expert_output": SourceAddress(
-        module="mlp.experts",
-        op_pattern="experts_forward",
-        # after the kernel's own un-sort and the router weighting: token-major
-        # weighted contributions, summing to `routed_output` over the top-k
-        field="weighted_out_1",
         expert_rows=True,
         requires=frozenset({"experts_grouped"}),
     ),

@@ -46,26 +46,23 @@ class PytorchHooksEngine(Engine):
         }
     )
     # The reference engine serves the module-boundary and attention-interface
-    # vocabulary, writes included. Read-only/swap-only components and stream
-    # constraints are *protocol policy* (the sites.py refusal tables, shared
-    # across engines), not capability gaps: declaring router_logits unwritable
-    # here would turn "a write here reaches nothing, write router_scores
-    # instead" into "try another engine", which is the wrong answer for every
-    # engine. The fused-forward interiors (the per-expert MoE interior, N6;
-    # the Gated DeltaNet interior, N7) are the vocabulary another engine owns:
-    # those tensors live inside one fused forward — the experts kernel, the
-    # delta kernel — where no hook can reach. Absent from these sets, so
-    # routing names the nnsight engine for free, and a document arriving here
-    # unrouted refuses by name in the executor.
-    _INTERIOR_COMPONENTS = frozenset(
-        {
-            "expert_gate_proj",
-            "expert_up_proj",
-            "expert_activation",
-            "expert_permutation",
-            "expert_output",
-        }
-    ) | frozenset(c for c in COMPONENTS if c.startswith("deltanet_"))
+    # vocabulary, writes included — and the routed-expert interior, which
+    # round 3 reaches by wrapping the grouped experts dispatch (there is no
+    # per-expert module, but the dispatch entry is this engine's to replace).
+    # Read-only/swap-only components and stream constraints are *protocol
+    # policy* (the sites.py refusal tables, shared across engines), not
+    # capability gaps: declaring router_logits unwritable here would turn "a
+    # write here reaches nothing, write router_scores instead" into "try
+    # another engine", which is the wrong answer for every engine. What stays
+    # another engine's vocabulary: `expert_permutation` (the serving kernel's
+    # own bookkeeping, a `.source` line with no dispatch-slot face) and the
+    # Gated DeltaNet interior (N7) — tensors inside a fused forward where no
+    # hook can reach. Absent from these sets, so routing names the nnsight
+    # engine for free, and a document arriving here unrouted refuses by name
+    # in the executor.
+    _INTERIOR_COMPONENTS = frozenset({"expert_permutation"}) | frozenset(
+        c for c in COMPONENTS if c.startswith("deltanet_")
+    )
     components = frozenset(COMPONENTS) - _INTERIOR_COMPONENTS
     writable_components = frozenset(COMPONENTS) - _INTERIOR_COMPONENTS
     is_local = True

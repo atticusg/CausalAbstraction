@@ -347,10 +347,24 @@ class TracePointExecutor(ExecutorBase):
         four function-interior slots, and the pattern — whose *write* has no
         boundary; this engine serves its read from the same op); those are
         looked up in the per-stream address table. ``kind="interior"`` marks
-        the per-expert MoE interior, keyed by component. Everything else is
+        a fused-forward interior keyed by component, and ``kind="experts"``
+        is the routed-expert interior's shared resolution (round 3's dispatch
+        wrapper on the reference engine) — this engine lands the same
+        components through the ``MOE_EXPERTS`` addresses. Everything else is
         the envoy path unchanged.
         """
-        if site.kind == "interior":
+        if site.kind in ("interior", "experts"):
+            if site.expert is not None:
+                # the ragged `expert:` face is served by the reference
+                # engine's dispatch wrapper; nothing captures the routing
+                # table alongside a `.source` read here yet
+                raise ProtocolError(
+                    "P4",
+                    f"site names expert {site.expert!r} on "
+                    f"{site.component!r}, and the nnsight engine does not "
+                    "serve the ragged 'expert:' face — read the token-major "
+                    "form here, or route to the reference engine.",
+                )
             # the expert interior lives under mlp; the DeltaNet interior on
             # the mixer, keyed by its stream — one lookup covers both
             address = MOE_EXPERTS.get(site.component) or ADDRESSES.get(
@@ -451,19 +465,29 @@ class TracePointExecutor(ExecutorBase):
         if address.align is not None:
             value = value[torch.argsort(perm)]
         if address.expert_rows:
-            # (batch·position·top_k, d) → (batch·position, top_k·d); an
-            # integral tap has no feature axis, so its row is the top-k itself
-            row_width = tap.site.shape.width or self._topk_width(tap.site)
-            value = value.reshape(-1, row_width)
+            # (batch·position·top_k, d) → (batch·position, top_k·d). The row
+            # width is the NATIVE packed width — every declared axis behind
+            # the position, fused split included (a fused capture's native row
+            # is top_k·splits·d; the split is selected later, in to_contract)
+            # — so it is read off the axes, not off `shape.width` (the
+            # contract width, which a fused shape is narrower than). An
+            # integral tap has no feature axis, so its row is the top-k
+            # itself.
+            value = value.reshape(-1, self._native_row_width(tap.site))
         return value
 
     @staticmethod
-    def _topk_width(site: ResolvedSite) -> int:
-        width = next(
-            (axis.width for axis in site.shape.axes if axis.kind == "topk"), None
-        )
-        assert width is not None  # expert_rows implies a top-k axis
-        return width
+    def _native_row_width(site: ResolvedSite) -> int:
+        widths = [
+            axis.width
+            for axis in site.shape.axes
+            if axis.kind in ("topk", "fused", "feature")
+        ]
+        assert widths  # expert_rows implies at least a top-k axis
+        row = 1
+        for width in widths:
+            row *= width
+        return row
 
     def _drill(self, source: Any, pattern: str, site: ResolvedSite) -> Any:
         """One matched op on one ``.source``, with the refusal made legible."""
@@ -673,7 +697,7 @@ class TracePointExecutor(ExecutorBase):
         chunked one), so a prompt-frame address is not evidence the tensor
         exists per step.
         """
-        if site.kind == "interior":
+        if site.kind in ("interior", "experts"):
             stream = self.bundle.stream_at(site.layer)
             address = GENERATED_ADDRESSES.get(stream, {}).get(site.component)
             if address is None:
@@ -875,12 +899,14 @@ class TracePointExecutor(ExecutorBase):
             )
             if address.expert_rows:
                 # back to one row per (token, slot), then to the kernel's own
-                # order — the exact inverse of _present_native. (The integral
-                # expert tap is read-only policy, so a writable one always has
-                # a feature axis to size the row by.)
-                width = site.shape.width
-                assert width is not None
-                rows = new_native.reshape(-1, width // self._topk_width(site))
+                # order — the exact inverse of _present_native. The per-slot
+                # row is the NATIVE row over top_k (a fused capture's slot row
+                # is splits·d, and from_contract has already written the edit
+                # back into the whole fused native).
+                topk = next(
+                    axis.width for axis in site.shape.axes if axis.kind == "topk"
+                )
+                rows = new_native.reshape(-1, self._native_row_width(site) // topk)
                 if address.align is not None:
                     rows = rows[perm]
                 raw[:] = rows

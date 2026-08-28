@@ -3,7 +3,7 @@
 PR3 of the hookpoint-vocabulary stack. Nine components, every one a plain module
 output or input (§2.1) — the router is a module returning a 3-tuple and the
 experts are a fused module, so nothing here needs the ragged value shape that
-the per-expert interior does (that is ``expert_output``, follow-up F2).
+the per-expert interior does (that is round 3's ``expert_output``).
 
 Two kinds of assertion, as in PR2. Shapes are 📐 measurements against a real
 ``qwen3_5_moe`` checkpoint, so a mismatch is a finding. Identities are stronger:
@@ -237,20 +237,6 @@ def test_an_expert_sub_axis_refuses(qwen35moe_bundle):
             SiteSpec(component="router_scores", layer=0, expert=3),
         )
     assert "no per-expert axis" in str(excinfo.value)
-
-
-def test_expert_output_resolves_as_an_interior_this_engine_refuses_by_name(
-    qwen35moe_bundle,
-):
-    """N6 flipped the follow-up-F2 refusal: the per-expert interior now
-    *resolves* — to ``kind="interior"``, the marker for a tensor inside the
-    fused experts forward — and it is the executor (and routing, by the absent
-    component declaration) that keeps it off this engine, naming the one that
-    serves it. See tests/neural/engines/nnsight_tracing/test_expert_interior.py
-    for that half."""
-    site = resolve_site(qwen35moe_bundle, SiteSpec(component="expert_output", layer=0))
-    assert site.kind == "interior"
-    assert site.module is qwen35moe_bundle.model.model.layers[0].mlp.experts
 
 
 # --------------------------------------------------------------------------- #

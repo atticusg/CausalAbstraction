@@ -54,6 +54,7 @@ from causalab.protocol.shapes import FeatureShape
 __all__ = [
     "ATTENTION_FUNCTION_SLOTS",
     "DELTA_KERNEL_SLOTS",
+    "EXPERTS_FUNCTION_SLOTS",
     "NORMALIZED_TAPS",
     "READ_ONLY_COMPONENTS",
     "SWAP_ONLY_COMPONENTS",
@@ -185,6 +186,12 @@ class ResolvedSite:
     #: The head the site named, kept alongside ``feature_slice`` because a
     #: *derived* component slices in a space the raw tensor does not have.
     head: int | None = None
+    #: The expert the site named — the ragged face of a routed-interior tap
+    #: (round 3.2): select the (position, slot) pairs the router sent to this
+    #: expert. Carried on the site rather than lowered to a slice, because
+    #: which rows it selects is a *runtime* fact (the routing), not a static
+    #: one.
+    expert: int | None = None
     #: Set when the component's value is **computed from** the tapped tensor
     #: rather than being it. Then ``shape`` describes what is captured and
     #: :func:`~causalab.protocol.registry.component_shape` describes the value —
@@ -563,24 +570,36 @@ _MOE_COMPONENTS: frozenset[str] = frozenset(
         "shared_expert_activation",
         "shared_expert_output",
         "shared_expert_gate",
-    }
-)
-
-#: The per-expert interior (N6): tensors the fused experts module computes
-#: *inside* its forward, one vector per routed (token, slot) pair. No module
-#: boundary exists for any of them, so they resolve to ``kind="interior"`` —
-#: the analogue of ``"interface"`` for the attention function — and the
-#: engine that serves interiors (the nnsight engine, through its `.source`
-#: address table) lands them; the reference engine refuses by name.
-_EXPERT_INTERIOR: frozenset[str] = frozenset(
-    {
         "expert_gate_proj",
         "expert_up_proj",
         "expert_activation",
-        "expert_permutation",
         "expert_output",
     }
 )
+
+#: The routed-expert interior *inside the experts dispatch* — round 3.
+#:
+#: 📐 These are not module boundaries: ``Qwen3_5MoeExperts`` stores its weights
+#: as 3-D parameters and computes the whole interior inside one dispatched
+#: ``ALL_EXPERTS_FUNCTIONS["grouped_mm"]`` call (its only child is the one
+#: shared ``act_fn``, which the wrapper hooks for the duration of that call).
+#: The reference engine taps them by wrapping that dispatch
+#: (:mod:`causalab.neural.engines.pytorch_hooks.experts_interface`); the
+#: nnsight engine lands the same components through its `.source` address
+#: table (N6) — both consume the ``kind="experts"`` resolution below.
+EXPERTS_FUNCTION_SLOTS: dict[str, str] = {
+    "expert_gate_proj": "gate_up",
+    "expert_up_proj": "gate_up",
+    "expert_activation": "activation",
+    "expert_output": "down",
+}
+
+
+def _experts_implementation(bundle: Any) -> str:
+    """The experts implementation the loaded model dispatches on — read from
+    the config the modeling code itself reads."""
+    config = getattr(bundle.model.config, "text_config", None) or bundle.model.config
+    return str(getattr(config, "_experts_implementation", "<undeclared>"))
 
 
 def _moe_site(
@@ -612,27 +631,70 @@ def _moe_site(
             f"{sorted(name for name, _ in mlp.named_children())}) is not one — "
             "extend the tap table in pytorch_hooks/sites.py."
         )
-    # The `expert` sub-axis selects one of `num_experts` experts, which none of
-    # these tensors is indexed by: the router's axes are all-experts (logits) or
-    # top-k (scores, indices), the shared expert is not one of the routed ones,
-    # and the per-expert interior is indexed by routed *slot* (its top-k axis;
-    # which expert fills a slot is `expert_idx`'s answer). Refusing beats
-    # silently ignoring it — the mistake `stream` made.
-    if spec.expert is not None:
+    # The `expert` sub-axis is the ragged face of the routed interior: select
+    # the (position, slot) pairs the router sent to one expert. Only the
+    # interior-slot components carry it — the router's own axes are all-experts
+    # (logits) or top-k (scores, indices), and the shared expert is not one of
+    # the routed experts, so `expert` on those is refused rather than silently
+    # ignored (the mistake `stream` made).
+    expert = spec.expert if isinstance(spec.expert, int) else None
+    if spec.expert is not None and component not in EXPERTS_FUNCTION_SLOTS:
         raise ProtocolError(
             "P4",
             f"site names expert {spec.expert!r} on component {component!r}, "
             "which has no per-expert axis: the router's axes are all-experts "
-            "or top-k, the shared expert is not one of the routed experts, and "
-            "the per-expert interior is indexed by routed slot — read "
-            "'expert_idx' for which expert fills each slot.",
+            "or top-k, and the shared expert is not one of the routed experts. "
+            "The per-expert interior components are 'expert_gate_proj', "
+            "'expert_up_proj', 'expert_activation' and 'expert_output'.",
         )
+    if expert is not None:
+        total = bundle.info.num_experts
+        if total is None or not 0 <= expert < total:
+            raise ProtocolError(
+                "P4",
+                f"site names expert {expert} on component {component!r}, but "
+                f"{bundle.key!r} routes over {total} experts — the sub-axis "
+                "selects one of them by its id.",
+            )
 
     shape = component_shape(bundle.info, component)
 
-    if component in _EXPERT_INTERIOR:
-        # inside the fused experts forward — no module boundary anywhere; the
-        # experts module is carried because it identifies whose forward to tap
+    if component in EXPERTS_FUNCTION_SLOTS:
+        # the dispatch pin (§0 of the round-3 plan): the interior tensors these
+        # components name are the *grouped* function's locals. Another
+        # implementation — the "eager" per-expert loop, "batched_mm" — computes
+        # the same block output (📐 to 4.2e-7) by a different factorization,
+        # whose intermediates are different tensors. Same numbers, wrong
+        # provenance: refused by name, naming the knob.
+        impl = _experts_implementation(bundle)
+        if impl != "grouped_mm":
+            raise ProtocolError(
+                "P4",
+                f"component {component!r} taps the interior of the grouped "
+                f"experts dispatch, but this model runs "
+                f"experts_implementation={impl!r} — a different factorization "
+                "whose intermediates are different tensors, even though the "
+                "block's output agrees. Load the model with "
+                "experts_implementation='grouped_mm' (the default), or extend "
+                "experts_interface.py for this implementation.",
+            )
+        if spec.head is not None and isinstance(spec.head, int):
+            # no head axis anywhere in the MoE interior; refuse rather than drop
+            _head_slice(bundle, component, spec.head)
+        return ResolvedSite(
+            module=mlp.experts,
+            kind="experts",
+            layer=layer,
+            component=component,
+            shape=shape,
+            interface_slot=EXPERTS_FUNCTION_SLOTS[component],
+            expert=expert,
+        )
+    if component == "expert_permutation":
+        # the serving kernel's row bookkeeping, inside the fused experts
+        # forward (N6) — no module boundary and no dispatch slot; only the
+        # nnsight engine's `.source` address table lands it, so it resolves
+        # to the interior kind and the reference engine refuses by name.
         return ResolvedSite(
             module=mlp.experts,
             kind="interior",
@@ -885,7 +947,7 @@ def resolve_site(bundle: Any, spec: SiteSpec) -> ResolvedSite:
             interface_slot=ATTENTION_FUNCTION_SLOTS[component],
         )
     mlp = block.mlp
-    if component in _MOE_COMPONENTS or component in _EXPERT_INTERIOR:
+    if component in _MOE_COMPONENTS or component == "expert_permutation":
         return _moe_site(bundle, mlp, component, spec, layer)
     if component == "mlp_input":
         return tap(mlp, "in")

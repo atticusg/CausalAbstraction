@@ -51,11 +51,14 @@ component                            shape
                                      expert-sorted order
 ``expert_gate_proj``,                ``(batch·position, top_k·moe_inner)`` —
 ``expert_up_proj``,                  one vector per routed expert slot,
-``expert_activation``                token-major (round N6)
-``expert_output``                    ``(batch·position, top_k·hidden)`` — each
-                                     slot's weighted contribution; summing
-                                     over the top-k axis gives
-                                     ``routed_output``
+``expert_activation``                token-major and **ranking**: slot *k* is
+                                     the *k*-th ranked expert (the two proj
+                                     halves share one fused capture)
+``expert_output``                    ``(batch·position, top_k·hidden)``,
+                                     token-major, ranking; the value is
+                                     **pre-routing-weight**: summing
+                                     ``expert_output · router_scores`` over
+                                     the top-k axis gives ``routed_output``
 ``shared_expert_gate_proj``,         ``(batch·position, shared_inner)``
 ``shared_expert_up_proj``,
 ``shared_expert_activation``
@@ -121,9 +124,12 @@ class ModelInfo:
     #: widths (dense ``intermediate_size``, ``moe_intermediate_size`` per routed
     #: expert, and this one), and reading the wrong one is silent.
     shared_expert_intermediate_size: int | None = None
-    #: The routed experts' inner width (``moe_intermediate_size``) — the third
-    #: of the three spellings above, sizing the per-expert interior
-    #: (``expert_gate_proj`` and friends, round N6).
+    #: The *routed* experts' inner width (``moe_intermediate_size``) — the third
+    #: of those three inner widths, and the feature width of the per-expert
+    #: interior (``expert_gate_proj`` and friends). ⚠️ On
+    #: ``tiny-random/qwen3.5-moe`` all three widths are 32, so the fixture
+    #: cannot tell a wrong choice from a right one — which is exactly why this
+    #: is its own field rather than a fallback through one of the others.
     moe_intermediate_size: int | None = None
     #: The Gated DeltaNet mixer's dimensions (rounds 4 / N7). Its q/k live in
     #: *key-head* space and its v/gate/state in *value-head* space — two
@@ -230,16 +236,6 @@ _HIDDEN_COMPONENTS: frozenset[str] = frozenset(
         "block_mid",
         "mlp_input_norm",
     }
-)
-
-#: The per-expert interior (round N6): one vector per routed expert *slot*,
-#: token-major — ``(batch*position, top_k * width)``. What differs per
-#: component is only the width: the projections and the activation are
-#: ``moe_intermediate_size`` wide, ``expert_output`` is hidden-wide (each
-#: slot's weighted contribution to the residual stream, summing to
-#: ``routed_output`` over the top-k axis).
-_EXPERT_INTERIOR_INNER: frozenset[str] = frozenset(
-    {"expert_gate_proj", "expert_up_proj", "expert_activation"}
 )
 
 #: Both MoE branches write into the residual stream, so both are hidden-wide —
@@ -417,37 +413,88 @@ def component_shape(info: ModelInfo, component: str) -> FeatureShape:
                 "the fixed all-experts one."
             ),
         )
-    if component in _EXPERT_INTERIOR_INNER or component in (
-        "expert_output",
-        "expert_permutation",
-    ):
+    if component in ("expert_gate_proj", "expert_up_proj"):
+        # the two halves of the routed up-projection's fused [gate_e | up_e]
+        # output — one capture, two addresses (the `attention_gate` precedent),
+        # token-major and ranked like the rest of the interior
+        if info.num_experts_per_tok is None or info.moe_intermediate_size is None:
+            raise ValidationError(
+                4,
+                f"model {info.key!r} declares no routed-expert inner width "
+                f"(moe_intermediate_size) or top-k; {component} has no width",
+            )
+        return shapes.flat_topk_fused_features(
+            info.num_experts_per_tok,
+            2,
+            0 if component == "expert_gate_proj" else 1,
+            info.moe_intermediate_size,
+            ranking=True,
+            note=(
+                "Its slot axis is a per-token ranking (see 'expert_activation'); "
+                "join slots to experts through 'expert_idx'."
+            ),
+        )
+    if component == "expert_permutation":
         if info.num_experts_per_tok is None:
             raise ValidationError(
                 4,
                 f"model {info.key!r} declares no num_experts_per_tok; "
                 f"{component} has no top-k axis",
             )
-        if component == "expert_permutation":
-            return shapes.flat_topk(
-                info.num_experts_per_tok,
-                integral=True,
-                note=(
-                    "It is the serving kernel's row bookkeeping: for each "
-                    "(token, slot) pair, the row index in expert-sorted order. "
-                    "Read it to align raw kernel-order tensors; the per-expert "
-                    "components themselves are already presented token-major."
-                ),
-            )
-        if component == "expert_output":
-            return shapes.flat_topk_features(info.num_experts_per_tok, info.hidden_size)
-        if info.moe_intermediate_size is None:
+        return shapes.flat_topk(
+            info.num_experts_per_tok,
+            integral=True,
+            note=(
+                "It is the serving kernel's row bookkeeping: for each "
+                "(token, slot) pair, the row index in expert-sorted order. "
+                "Read it to align raw kernel-order tensors; the per-expert "
+                "components themselves are already presented token-major."
+            ),
+        )
+    if component == "expert_output":
+        # the down-projection's output BEFORE the routing weight — hidden-wide
+        # per (token, slot), token-major. The registry identity:
+        # routed_output == sum over slots of expert_output · router_scores,
+        # exact (the model computes precisely this sum, in this order).
+        if info.num_experts_per_tok is None:
             raise ValidationError(
                 4,
-                f"model {info.key!r} declares no moe_intermediate_size; "
+                f"model {info.key!r} declares no num_experts_per_tok; "
                 f"{component} has no width",
             )
         return shapes.flat_topk_features(
-            info.num_experts_per_tok, info.moe_intermediate_size
+            info.num_experts_per_tok,
+            info.hidden_size,
+            ranking=True,
+            note=(
+                "Its slot axis is a per-token ranking (see 'expert_activation'); "
+                "join slots to experts through 'expert_idx'. The value is "
+                "pre-routing-weight: routed_output == the slot-sum of "
+                "expert_output · router_scores."
+            ),
+        )
+    if component == "expert_activation":
+        # The routed-expert interior, token-major: slot j of a token's row is
+        # what its j-th ranked expert computed — the activated gate half,
+        # act_fn(gate_e), the same tensor `mlp_activation` names on the llama
+        # family. Ranked like `router_scores`, and for the same reason.
+        if info.num_experts_per_tok is None or info.moe_intermediate_size is None:
+            raise ValidationError(
+                4,
+                f"model {info.key!r} declares no routed-expert inner width "
+                f"(moe_intermediate_size) or top-k; {component} has no width",
+            )
+        return shapes.flat_topk_features(
+            info.num_experts_per_tok,
+            info.moe_intermediate_size,
+            ranking=True,
+            note=(
+                "Its slot axis is a per-token ranking: slot k belongs to the "
+                "k-th ranked expert, a different expert for different tokens, "
+                "so a basis fitted across positions is fitted across a "
+                "shuffled basis. Join slots to experts through 'expert_idx', "
+                "which has the same (token, slot) rows."
+            ),
         )
     if component in _SHARED_EXPERT_INNER:
         if info.shared_expert_intermediate_size is None:
