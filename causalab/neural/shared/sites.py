@@ -53,6 +53,7 @@ from causalab.protocol.shapes import FeatureShape
 
 __all__ = [
     "ATTENTION_FUNCTION_SLOTS",
+    "EXPERTS_FUNCTION_SLOTS",
     "NORMALIZED_TAPS",
     "READ_ONLY_COMPONENTS",
     "SWAP_ONLY_COMPONENTS",
@@ -164,6 +165,12 @@ class ResolvedSite:
     #: The head the site named, kept alongside ``feature_slice`` because a
     #: *derived* component slices in a space the raw tensor does not have.
     head: int | None = None
+    #: The expert the site named — the ragged face of a routed-interior tap
+    #: (round 3.2): select the (position, slot) pairs the router sent to this
+    #: expert. Carried on the site rather than lowered to a slice, because
+    #: which rows it selects is a *runtime* fact (the routing), not a static
+    #: one.
+    expert: int | None = None
     #: Set when the component's value is **computed from** the tapped tensor
     #: rather than being it. Then ``shape`` describes what is captured and
     #: :func:`~causalab.protocol.registry.component_shape` describes the value —
@@ -473,8 +480,27 @@ _MOE_COMPONENTS: frozenset[str] = frozenset(
         "shared_expert_activation",
         "shared_expert_output",
         "shared_expert_gate",
+        "expert_activation",
     }
 )
+
+#: The routed-expert interior *inside the experts dispatch* — round 3.
+#:
+#: 📐 These are not module boundaries: ``Qwen3_5MoeExperts`` stores its weights
+#: as 3-D parameters and computes the whole interior inside one dispatched
+#: ``ALL_EXPERTS_FUNCTIONS["grouped_mm"]`` call (its only child is the one
+#: shared ``act_fn``, which the wrapper hooks for the duration of that call).
+#: See :mod:`causalab.neural.engines.pytorch_hooks.experts_interface`.
+EXPERTS_FUNCTION_SLOTS: dict[str, str] = {
+    "expert_activation": "activation",
+}
+
+
+def _experts_implementation(bundle: Any) -> str:
+    """The experts implementation the loaded model dispatches on — read from
+    the config the modeling code itself reads."""
+    config = getattr(bundle.model.config, "text_config", None) or bundle.model.config
+    return str(getattr(config, "_experts_implementation", "<undeclared>"))
 
 
 def _moe_site(
@@ -516,10 +542,42 @@ def _moe_site(
             f"site names expert {spec.expert!r} on component {component!r}, "
             "which has no per-expert axis: the router's axes are all-experts "
             "or top-k, and the shared expert is not one of the routed experts. "
-            "The per-expert interior is 'expert_output' (follow-up F2).",
+            "The 'expert' sub-axis lands with the interior-slot components "
+            "(round 3.2).",
         )
 
     shape = component_shape(bundle.info, component)
+
+    if component in EXPERTS_FUNCTION_SLOTS:
+        # the dispatch pin (§0 of the round-3 plan): the interior tensors these
+        # components name are the *grouped* function's locals. Another
+        # implementation — the "eager" per-expert loop, "batched_mm" — computes
+        # the same block output (📐 to 4.2e-7) by a different factorization,
+        # whose intermediates are different tensors. Same numbers, wrong
+        # provenance: refused by name, naming the knob.
+        impl = _experts_implementation(bundle)
+        if impl != "grouped_mm":
+            raise ProtocolError(
+                "P4",
+                f"component {component!r} taps the interior of the grouped "
+                f"experts dispatch, but this model runs "
+                f"experts_implementation={impl!r} — a different factorization "
+                "whose intermediates are different tensors, even though the "
+                "block's output agrees. Load the model with "
+                "experts_implementation='grouped_mm' (the default), or extend "
+                "experts_interface.py for this implementation.",
+            )
+        if spec.head is not None and isinstance(spec.head, int):
+            # no head axis anywhere in the MoE interior; refuse rather than drop
+            _head_slice(bundle, component, spec.head)
+        return ResolvedSite(
+            module=mlp.experts,
+            kind="experts",
+            layer=layer,
+            component=component,
+            shape=shape,
+            interface_slot=EXPERTS_FUNCTION_SLOTS[component],
+        )
 
     def flat(module: Any, kind: str, tuple_index: int | None = None) -> ResolvedSite:
         return ResolvedSite(

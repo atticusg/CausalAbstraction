@@ -82,6 +82,7 @@ __all__ = [
     "bsd",
     "flat_td",
     "flat_topk",
+    "flat_topk_features",
 ]
 
 #: What one axis of a tapped tensor means.
@@ -380,6 +381,30 @@ def flat_topk(
         axes=(_BATCH, _POSITION, Axis("topk", k)),
         flat_batch=True,
         integral=integral,
+        ranking=ranking,
+        note=note,
+    )
+
+
+def flat_topk_features(
+    k: int,
+    width: int,
+    *,
+    ranking: bool = False,
+    note: str | None = None,
+) -> FeatureShape:
+    """``(batch*position, k·width)`` — the routed-expert interior, token-major.
+
+    One row per token, ``k`` slots of ``width`` features each, in ranking
+    order: slot *j* holds the value the token's *j*-th ranked expert computed.
+    That is ``router_scores``' situation exactly, which is what ``ranking``
+    says — a basis fitted across positions is fitted across a shuffled basis.
+    Consumers join slots to experts through ``expert_idx``, whose
+    ``(batch·position, k)`` rows are the same slots.
+    """
+    return FeatureShape(
+        axes=(_BATCH, _POSITION, Axis("topk", k), Axis("feature", width)),
+        flat_batch=True,
         ranking=ranking,
         note=note,
     )

@@ -104,6 +104,13 @@ class ModelInfo:
     #: widths (dense ``intermediate_size``, ``moe_intermediate_size`` per routed
     #: expert, and this one), and reading the wrong one is silent.
     shared_expert_intermediate_size: int | None = None
+    #: The *routed* experts' inner width (``moe_intermediate_size``) — the third
+    #: of those three inner widths, and the feature width of the per-expert
+    #: interior (``expert_activation``). ⚠️ On ``tiny-random/qwen3.5-moe`` all
+    #: three widths are 32, so the fixture cannot tell a wrong choice from a
+    #: right one — which is exactly why this is its own field rather than a
+    #: fallback through one of the others.
+    moe_intermediate_size: int | None = None
 
 
 _REGISTRY: dict[str, ModelInfo] = {}
@@ -174,6 +181,7 @@ def model_info_from_hf_config(key: str, config: Any) -> ModelInfo:
             getattr(text, "shared_expert_intermediate_size", None)
             or getattr(text, "moe_intermediate_size", None)
         ),
+        moe_intermediate_size=getattr(text, "moe_intermediate_size", None),
     )
 
 
@@ -368,6 +376,29 @@ def component_shape(info: ModelInfo, component: str) -> FeatureShape:
                 "fitted across positions is fitted across a shuffled basis. "
                 "Read it directly, or featurize 'router_logits', whose axis is "
                 "the fixed all-experts one."
+            ),
+        )
+    if component == "expert_activation":
+        # The routed-expert interior, token-major: slot j of a token's row is
+        # what its j-th ranked expert computed — the activated gate half,
+        # act_fn(gate_e), the same tensor `mlp_activation` names on the llama
+        # family. Ranked like `router_scores`, and for the same reason.
+        if info.num_experts_per_tok is None or info.moe_intermediate_size is None:
+            raise ValidationError(
+                4,
+                f"model {info.key!r} declares no routed-expert inner width "
+                f"(moe_intermediate_size) or top-k; {component} has no width",
+            )
+        return shapes.flat_topk_features(
+            info.num_experts_per_tok,
+            info.moe_intermediate_size,
+            ranking=True,
+            note=(
+                "Its slot axis is a per-token ranking: slot k belongs to the "
+                "k-th ranked expert, a different expert for different tokens, "
+                "so a basis fitted across positions is fitted across a "
+                "shuffled basis. Join slots to experts through 'expert_idx', "
+                "which has the same (token, slot) rows."
             ),
         )
     if component in _SHARED_EXPERT_INNER:
