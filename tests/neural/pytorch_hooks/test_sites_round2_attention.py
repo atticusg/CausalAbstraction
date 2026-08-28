@@ -38,7 +38,7 @@ from causalab.protocol.registry import component_shape, component_width
 from causalab.protocol.schema import SiteSpec
 
 from ._drive import base_data_section, executor_for
-from .conftest import TINY_GPT2, TINY_LLAMA
+from .conftest import TINY_GPT2
 
 pytestmark = pytest.mark.smoke
 
@@ -176,9 +176,7 @@ def test_the_pre_rope_taps_keep_their_head_axis_only_where_the_module_does(
 
 
 @pytest.mark.parametrize("component", sorted(LLAMA_TAPS))
-def test_a_family_without_q_norm_taps_the_bare_projection(
-    llama_bundle, component: str
-):
+def test_a_family_without_q_norm_taps_the_bare_projection(llama_bundle, component: str):
     attribute, native_shape, width = LLAMA_TAPS[component]
     site = resolve_site(llama_bundle, SiteSpec(component=component, layer=LLAMA_LAYER))
     assert site.module is getattr(_mixer(llama_bundle, LLAMA_LAYER), attribute)
@@ -211,9 +209,7 @@ def test_the_ranks_run_in_forward_order():
 def test_v_is_the_v_projection_of_what_the_mixer_consumes(qwen35moe_bundle):
     """``attention_value_states`` == ``v_proj(attention_input_norm)``."""
     bundle = qwen35moe_bundle
-    captured = _capture(
-        bundle, FULL_ATTENTION_LAYER, ("attention_value_states",)
-    )
+    captured = _capture(bundle, FULL_ATTENTION_LAYER, ("attention_value_states",))
     norm = _capture_component(bundle, FULL_ATTENTION_LAYER, "attention_input_norm")
     attn = _mixer(bundle, FULL_ATTENTION_LAYER)
     with torch.no_grad():
@@ -282,9 +278,7 @@ def test_the_gate_is_what_separates_premix_from_the_mixer_output(qwen35moe_bundl
     components genuinely different boxes rather than two names for one.
     """
     bundle = qwen35moe_bundle
-    gate = _capture(bundle, FULL_ATTENTION_LAYER, ("attention_gate",))[
-        "attention_gate"
-    ]
+    gate = _capture(bundle, FULL_ATTENTION_LAYER, ("attention_gate",))["attention_gate"]
     premix = _capture_component(bundle, FULL_ATTENTION_LAYER, "attention_premix")
     assert premix.shape == gate.shape
     # the gate is a real modulation, not a constant: if it were ~1 everywhere
@@ -293,9 +287,7 @@ def test_the_gate_is_what_separates_premix_from_the_mixer_output(qwen35moe_bundl
     assert float((sigmoid - 1.0).abs().max()) > 1e-3
 
 
-def _capture_component(
-    bundle: ModelBundle, layer: int, component: str
-) -> torch.Tensor:
+def _capture_component(bundle: ModelBundle, layer: int, component: str) -> torch.Tensor:
     """One tap, in contract shape — handles the ``in`` side that ``_capture``
     does not (``attention_premix`` is the o-projection's *input*)."""
     encoded = bundle.tokenizer(TEXT, return_tensors="pt")

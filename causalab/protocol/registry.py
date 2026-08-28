@@ -279,6 +279,32 @@ def component_shape(info: ModelInfo, component: str) -> FeatureShape:
         # `tiny-random/qwen3.5-moe`. This component is split 1 of 2, and the
         # fused descriptor is what keeps a write to it from disturbing q.
         return shapes.bs_fused_heads(info.num_heads, 2, 1, info.head_dim)
+    if component == "attention_query":
+        # 📐 the attention interface's first argument: (b, H, s, d), post-RoPE.
+        return shapes.bhsd(info.num_heads, info.head_dim)
+    if component == "attention_key":
+        # 📐 its second argument: (b, H_kv, s, d), post-RoPE and BEFORE
+        # `repeat_kv` — so KV-head space. The position axis is named because it
+        # runs over the positions being attended *to*: under a KV cache that is
+        # the whole prefix, growing by one per decode step, which is what makes
+        # a continuation read of it meaningless rather than merely awkward.
+        return shapes.bhsd(info.num_kv_heads, info.head_dim, position_name="key")
+    if component == "attention_scores":
+        # the softmax's INPUT — same axes as the pattern, one step earlier, and
+        # the difference is everything: nothing downstream assumes scores are
+        # normalized, because the model's own softmax has yet to run.
+        return shapes.attention_pattern(
+            info.num_heads,
+            note=(
+                "Read it whole at pos: \"all\". Unlike 'attention_probs', "
+                "every write mechanism is legal here — the model's own softmax "
+                "runs after the edit, so rows still sum to 1 by construction."
+            ),
+        )
+    if component == "attention_z":
+        # 📐 the interface's return[0]: (b, s, H, d) — already transposed back,
+        # and BEFORE the gate multiply and the o-projection.
+        return shapes.bshd(info.num_heads, info.head_dim)
     if component == "lm_head":
         return shapes.bsd(info.vocab_size)
     if component == "attention_probs":

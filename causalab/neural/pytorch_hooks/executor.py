@@ -48,8 +48,13 @@ from causalab.neural.pytorch_hooks.mechanisms import (
     is_additive,
     operand_names,
 )
-from causalab.neural.pytorch_hooks.attention_probs import eager_attention_writes
+from causalab.neural.pytorch_hooks.attention_interface import (
+    InterfaceTap,
+    attention_interface_taps,
+)
+from causalab.neural.pytorch_hooks.attention_probs import post_softmax_value_multiply
 from causalab.neural.pytorch_hooks.sites import (
+    NORMALIZED_TAPS,
     READ_ONLY_COMPONENTS,
     SWAP_ONLY_COMPONENTS,
     ResolvedSite,
@@ -119,7 +124,7 @@ def _hidden_of(out: Any) -> torch.Tensor:
 
 
 #: What identifies a tap for capture-sink sharing — see :func:`_tap_key`.
-TapKey = tuple[int, str, FeatureShape, int | None]
+TapKey = tuple[int, str, FeatureShape, int | None, str | None]
 
 
 def _tap_key(site: "ResolvedSite") -> TapKey:
@@ -132,7 +137,13 @@ def _tap_key(site: "ResolvedSite") -> TapKey:
     identity. Keying on the module alone would let one tap read another's
     tensor.
     """
-    return (id(site.module), site.kind, site.shape, site.tuple_index)
+    return (
+        id(site.module),
+        site.kind,
+        site.shape,
+        site.tuple_index,
+        site.interface_slot,
+    )
 
 
 class PointExecutor:
@@ -378,50 +389,66 @@ class PointExecutor:
         }
 
         with contextlib.ExitStack() as hooks:
-            # An attention-pattern write cannot ride a forward hook: the hook
-            # fires after the pattern has been consumed, so the edit would be a
-            # silent no-op. It goes through the eager attention function instead.
-            #
-            # The discriminator is the shape, not the component name: a tap
-            # with no contract form is one whose feature axis is a position
-            # axis, and the only such tap is the attention pattern — which is
-            # also the only tensor a forward hook cannot write. Round 2.3
-            # generalizes the routing when more of the mixer's interior needs
-            # the attention function.
-            pattern_edits = {
-                id(module): fn
-                for module, kind, w_shape, w_tuple_index, fn in write_hooks
-                if not w_shape.has_contract_form
-            }
-            hooks.enter_context(eager_attention_writes(pattern_edits))
-            for module, kind, w_shape, w_tuple_index, fn in write_hooks:
-                if not w_shape.has_contract_form:
+            # Four of the mixer's tensors — and the attention pattern's *write*
+            # — are not module boundaries: transformers computes them inside one
+            # `attention_interface(...)` call, so a forward hook on the mixer
+            # fires after they have already been consumed. They are collected
+            # first and installed together, because the interception is one
+            # registry entry and nesting two of them would let the inner
+            # wrapper's edits replace the outer's.
+            interface: dict[int, list[InterfaceTap]] = {}
+            batch_size = batch.input_ids.shape[0]
+
+            for site, fn in write_hooks:
+                if site.interface_slot is not None:
+                    interface.setdefault(id(site.module), []).append(
+                        InterfaceTap(
+                            slot=site.interface_slot,
+                            edit=_interface_edit(site, fn, batch_size),
+                        )
+                    )
                     continue
                 hooks.enter_context(
                     _installed(
-                        module,
-                        kind,
+                        site.module,
+                        site.kind,
                         fn,
-                        shape=w_shape,
-                        tuple_index=w_tuple_index,
-                        batch_size=batch.input_ids.shape[0],
+                        shape=site.shape,
+                        tuple_index=site.tuple_index,
+                        batch_size=batch_size,
                     )
                 )
             for site in capture_sites.values():
                 key = _tap_key(site)
-                if key not in capture:
-                    capture[key] = torch.empty(0)  # placeholder; filled by hook
-                    hooks.enter_context(
-                        _capturing(
-                            site.module,
-                            site.kind,
-                            capture,
-                            key,
-                            shape=site.shape,
-                            tuple_index=site.tuple_index,
-                            batch_size=batch.input_ids.shape[0],
+                if key in capture:
+                    continue
+                capture[key] = torch.empty(0)  # placeholder; filled by the tap
+                if site.kind == "interface":
+                    assert site.interface_slot is not None
+                    interface.setdefault(id(site.module), []).append(
+                        InterfaceTap(
+                            slot=site.interface_slot,
+                            read=_interface_capture(capture, key, site, batch_size),
                         )
                     )
+                    continue
+                hooks.enter_context(
+                    _capturing(
+                        site.module,
+                        site.kind,
+                        capture,
+                        key,
+                        shape=site.shape,
+                        tuple_index=site.tuple_index,
+                        batch_size=batch_size,
+                    )
+                )
+            hooks.enter_context(
+                attention_interface_taps(
+                    {mid: tuple(entries) for mid, entries in interface.items()},
+                    post_softmax=post_softmax_value_multiply,
+                )
+            )
             with torch.enable_grad() if self.grad_enabled else torch.no_grad():
                 prefill = self.bundle.model(
                     input_ids=batch.input_ids,
@@ -489,43 +516,39 @@ class PointExecutor:
         steps: dict[TapKey, list[torch.Tensor]] = {}
         cache = prefill.past_key_values
         with contextlib.ExitStack() as hooks:
+            interface: dict[int, list[InterfaceTap]] = {}
+            batch_size = batch.input_ids.shape[0]
             for name, site in gen_capture_sites.items():
-                if not site.shape.has_contract_form:
-                    # 📐 Each decode step attends over the whole cache, so the
-                    # pattern is (batch, heads, 1, prompt + step): the key axis
-                    # GROWS by one per step while the query axis stays 1. The
-                    # accumulating sink stacks steps on dim 1, which for every
-                    # other component is the position axis and here is heads —
-                    # so the concat either raises a bare torch size error
-                    # (measured: "Expected size 9 but got size 10") or, for a
-                    # single-step budget, silently returns one step's pattern
-                    # shaped like a frame. Neither is a continuation read.
-                    #
-                    # The condition is the shape, not the name: stacking steps
-                    # on the position axis is only meaningful for a tap that has
-                    # one position axis, and a tap with two has no
-                    # non-arbitrary answer to which one grows.
-                    raise ProtocolError(
-                        "P4",
-                        f"read {name!r} reads {site.component!r} in the "
-                        "generated frame, whose shape is "
-                        f"{site.shape.describe()}: with a KV cache each step's "
-                        "pattern has a different key width, so the steps do not "
-                        "stack into one tensor. Read it in the prompt frame.",
-                    )
+                _refuse_unstackable(name, site)
                 key = _tap_key(site)
-                if key not in steps:
-                    steps[key] = []
-                    hooks.enter_context(
-                        _accumulating(
-                            site.module,
-                            site.kind,
-                            steps[key],
-                            shape=site.shape,
-                            tuple_index=site.tuple_index,
-                            batch_size=batch.input_ids.shape[0],
+                if key in steps:
+                    continue
+                steps[key] = []
+                if site.kind == "interface":
+                    assert site.interface_slot is not None
+                    interface.setdefault(id(site.module), []).append(
+                        InterfaceTap(
+                            slot=site.interface_slot,
+                            read=_interface_accumulate(steps[key], site, batch_size),
                         )
                     )
+                    continue
+                hooks.enter_context(
+                    _accumulating(
+                        site.module,
+                        site.kind,
+                        steps[key],
+                        shape=site.shape,
+                        tuple_index=site.tuple_index,
+                        batch_size=batch_size,
+                    )
+                )
+            hooks.enter_context(
+                attention_interface_taps(
+                    {mid: tuple(entries) for mid, entries in interface.items()},
+                    post_softmax=post_softmax_value_multiply,
+                )
+            )
             for _ in range(depth):
                 mask = torch.cat([mask, torch.ones_like(nxt)], dim=1)
                 next_pos = next_pos + 1
@@ -755,9 +778,7 @@ class PointExecutor:
 
     def _build_write_hooks(
         self, write_names: tuple[str, ...], input_role: str, batch: EncodedBatch
-    ) -> list[
-        tuple[Any, str, FeatureShape, int | None, Callable[[torch.Tensor], None]]
-    ]:
+    ) -> list[tuple[ResolvedSite, Callable[[torch.Tensor], None]]]:
         """One in-place hook per written-to tap, applying every write at that
         address in class order.
 
@@ -794,20 +815,10 @@ class PointExecutor:
             by_address.setdefault(key, []).append((ename, write, site))
             addresses[key] = site
 
-        hooks: list[
-            tuple[Any, str, FeatureShape, int | None, Callable[[torch.Tensor], None]]
-        ] = []
+        hooks: list[tuple[ResolvedSite, Callable[[torch.Tensor], None]]] = []
         for key, entries in by_address.items():
             site = addresses[key]
-            hooks.append(
-                (
-                    site.module,
-                    site.kind,
-                    site.shape,
-                    site.tuple_index,
-                    self._address_writer(entries, input_role, batch),
-                )
-            )
+            hooks.append((site, self._address_writer(entries, input_role, batch)))
         return hooks
 
     def _address_writer(
@@ -827,38 +838,70 @@ class PointExecutor:
         def apply(tensor: torch.Tensor) -> None:
             for ename, write, site in ordered:
                 if not site.shape.has_contract_form:
-                    # Symmetric with the read (see _whole_native_tensor):
-                    # the pattern's feature axis is a position axis, so the
-                    # position gather below would index heads with positions.
-                    # A write here replaces the whole tensor — which is what
-                    # only `swap` means. Any other mechanism (a delta, a scale,
-                    # a clamp) would leave rows that no longer sum to 1, and the
-                    # code below would treat its payload as a whole pattern
-                    # anyway; refuse rather than produce one that is plausible
-                    # and wrong.
-                    if str(write.do.mechanism) != "swap":
+                    # Symmetric with the read (see _whole_native_tensor): this
+                    # tensor's feature axis is a position axis, so the position
+                    # gather below would index heads with positions and `dims`
+                    # would slice key positions as features. Both are refused
+                    # there; what is left is the whole tensor, edited whole.
+                    _whole_native_tensor(ename, write, tensor, site)
+                    mechanism = str(write.do.mechanism)
+                    if site.component in NORMALIZED_TAPS and mechanism != "swap":
                         raise ProtocolError(
                             "P4",
-                            f"write {ename!r} applies {str(write.do.mechanism)!r} "
-                            f"to {site.component!r}, whose shape is "
-                            f"{site.shape.describe()}: only a whole-tensor "
-                            "'swap' (an interchange) is supported, because the "
-                            "rows of a pattern must still sum to 1 and "
-                            "nothing downstream renormalizes them.",
+                            f"write {ename!r} applies {mechanism!r} to "
+                            f"{site.component!r}, which only a whole-tensor "
+                            f"'swap' may change: "
+                            f"{NORMALIZED_TAPS[site.component]}.",
                         )
-                    _whole_native_tensor(ename, write, tensor, site)
-                    replacement = self._operand_lookup(write.do.payload)
-                    if replacement.shape != tensor.shape:
+                    if mechanism == "swap":
+                        replacement = self._operand_lookup(write.do.payload)
+                        if not isinstance(replacement, torch.Tensor):
+                            raise ProtocolError(
+                                "P2",
+                                f"write {ename!r} swaps {site.component!r} with "
+                                "a scalar; a whole-tensor interchange needs a "
+                                "tensor operand read from elsewhere",
+                            )
+                        if replacement.shape != tensor.shape:
+                            raise ProtocolError(
+                                "P2",
+                                f"write {ename!r} replaces the whole "
+                                f"{site.component!r} tensor, but its operand has "
+                                f"shape {tuple(replacement.shape)} and the tap is "
+                                f"{tuple(tensor.shape)} — an interchange needs "
+                                "both inputs to have the same number of positions",
+                            )
+                        tensor.copy_(replacement.to(tensor.dtype))
+                    elif mechanism == "gaussian":
+                        # 📐 The noise is drawn as (batch, position, feature)
+                        # and its `axis` names the feature axis' tensor-parallel
+                        # semantics. This tap has no feature axis — its last
+                        # axis is key positions — so there is nothing for either
+                        # to mean, and the draw does not even fit (measured:
+                        # "shape '[1, 8, 5, 5]' is invalid for input of size
+                        # 40"). Refused by name rather than reshaped into
+                        # something that would run.
                         raise ProtocolError(
-                            "P2",
-                            f"write {ename!r} replaces the whole attention "
-                            f"pattern, but its operand has shape "
-                            f"{tuple(replacement.shape)} and the pattern is "
-                            f"{tuple(tensor.shape)} — an attention-pattern "
-                            "interchange needs both inputs to have the same "
-                            "number of positions",
+                            "P4",
+                            f"write {ename!r} applies 'gaussian' to "
+                            f"{site.component!r}, whose shape is "
+                            f"{site.shape.describe()}: the noise is drawn per "
+                            "(batch, position, feature) and its 'axis' names "
+                            "how the feature axis is sharded, and this tap has "
+                            "no feature axis at all. Swap in a noise tensor of "
+                            "the tap's own shape instead.",
                         )
-                    tensor.copy_(replacement.to(tensor.dtype))
+                    else:
+                        # 📐 Arithmetic on the whole tensor, with no gather: for
+                        # `attention_scores` this is the point of the component.
+                        # `_written_value` broadcasts a scalar operand over any
+                        # rank, and `dims` and featurizers are already refused
+                        # above, so there is no feature axis for it to mis-slice.
+                        tensor.copy_(
+                            self._written_value(ename, write, site, tensor).to(
+                                tensor.dtype
+                            )
+                        )
                     continue
                 per_row = self._positions(write.pos, batch, input_role)
                 widths = {len(row) for row in per_row}
@@ -973,6 +1016,91 @@ def _whole_native_tensor(
             f"{shape.axes[-1].label} entries as though they were features.",
         )
     return raw
+
+
+def _interface_edit(
+    site: "ResolvedSite", write: Callable[[torch.Tensor], None], batch_size: int
+) -> Callable[[torch.Tensor], torch.Tensor]:
+    """Adapt an in-place contract-shaped writer to the interface's protocol.
+
+    The manager hands out a clone and takes back a replacement, which is why
+    this can convert, mutate and convert back without any of it reaching the
+    model's own storage.
+    """
+
+    def edit(native: torch.Tensor) -> torch.Tensor:
+        contract = to_contract(native, site.shape, batch_size=batch_size)
+        write(contract)
+        return from_contract(contract, site.shape, batch_size=batch_size, native=native)
+
+    return edit
+
+
+def _interface_capture(
+    sink: dict[Any, torch.Tensor],
+    key: Any,
+    site: "ResolvedSite",
+    batch_size: int,
+) -> Callable[[torch.Tensor], None]:
+    """The read half — the same contract shape ``_capturing`` produces."""
+
+    def read(native: torch.Tensor) -> None:
+        sink[key] = to_contract(native, site.shape, batch_size=batch_size)
+
+    return read
+
+
+def _interface_accumulate(
+    sink: list[torch.Tensor], site: "ResolvedSite", batch_size: int
+) -> Callable[[torch.Tensor], None]:
+    """The read half for a decode: append per step, as ``_accumulating`` does."""
+
+    def read(native: torch.Tensor) -> None:
+        sink.append(to_contract(native, site.shape, batch_size=batch_size))
+
+    return read
+
+
+def _refuse_unstackable(name: str, site: "ResolvedSite") -> None:
+    """Refuse a continuation read whose steps do not stack into a frame.
+
+    📐 A decode step attends over the whole KV cache, so a tensor indexed by the
+    positions being attended *to* is ``prompt + step`` long at step ``step``
+    while the query axis stays 1. The accumulating sink concatenates steps on
+    dim 1, which for an ordinary tap is the position axis, so such a tap either
+    raises a bare torch size error (measured: "Expected size 9 but got size 10")
+    or, for a single-step budget, silently returns one step shaped like a frame.
+    Neither is a continuation read.
+
+    Both conditions are read off the declared axes rather than a component list:
+
+    * **two position axes** — the attention pattern and the scores. There is no
+      non-arbitrary answer to which of them the steps stack along;
+    * **one position axis, over the keys** — ``attention_key``. Its own length
+      is what grows, so consecutive steps are different lengths.
+
+    ``attention_query`` and ``attention_z`` are query-axis-shaped and accumulate
+    correctly, which is why this is a property of the axes and not of "anything
+    inside the attention function".
+    """
+    shape = site.shape
+    if shape.has_contract_form and not any(
+        axis.kind == "position" and axis.name == "key" for axis in shape.axes
+    ):
+        return
+    why = (
+        "it has two position axes, so there is no single axis the decode steps "
+        "stack along"
+        if not shape.has_contract_form
+        else "its position axis runs over the positions being attended to, "
+        "which under a KV cache is the whole prefix and grows by one per step"
+    )
+    raise ProtocolError(
+        "P4",
+        f"read {name!r} reads {site.component!r} in the generated frame, whose "
+        f"shape is {shape.describe()}: {why}, so the steps do not stack into "
+        "one tensor. Read it in the prompt frame.",
+    )
 
 
 @contextlib.contextmanager

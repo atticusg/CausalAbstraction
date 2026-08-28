@@ -52,12 +52,8 @@ __all__ = [
 #: output and the per-head result), and the reserved slots below say where each
 #: goes so that each PR is an insertion rather than a re-pin.
 #:
-#: Still reserved, in forward order through the mixer::
+#: Still reserved::
 #:
-#:     200  attention_query             post-RoPE q, at the interface
-#:     210  attention_key               post-RoPE k, at the interface
-#:     220  attention_scores            the softmax's input
-#:     240  attention_z                 the interface's return, pre-gate
 #:     350  attention_result            the per-head contribution to the stream
 COMPONENT_RANK: dict[str, int] = {
     "input_ids": -10,  # the model's input: before every activation
@@ -74,7 +70,14 @@ COMPONENT_RANK: dict[str, int] = {
     # produced with q (one fused projection) and consumed at the very end, at
     # `attn_output * sigmoid(gate)` — ranked where it is produced
     "attention_gate": 190,
+    # ...then RoPE rotates q and k, and the attention function runs: scores,
+    # softmax, and the weighted sum of values. These four are taps *inside* that
+    # function rather than module boundaries — see pytorch_hooks/attention_interface.py.
+    "attention_query": 200,
+    "attention_key": 210,
+    "attention_scores": 220,
     "attention_probs": 230,
+    "attention_z": 240,
     # 🔤 `attention_premix` was `attention_value` until round 2. It is the
     # o-projection's INPUT — on a gated family `z · σ(gate)`, on an ungated one
     # `z` — which is the mixer's output just before it is mixed back into the
