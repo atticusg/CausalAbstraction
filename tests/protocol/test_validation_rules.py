@@ -676,7 +676,7 @@ def test_rule_4_decode_over_a_prompt_frame_read():
             "value": "said",
             "model": "patched",
             "input": "base",
-            "file_path": "said.parquet",
+            "file_path": "said.json",
         }
     ]
     err = expect_rule(4, doc)
@@ -691,7 +691,7 @@ def test_decode_over_a_continuation_read_is_legal():
             "value": "said",
             "model": "patched",
             "input": "base",
-            "file_path": "said.parquet",
+            "file_path": "said.json",
         }
     ]
     parse_and_validate(doc)
