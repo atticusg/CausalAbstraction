@@ -177,39 +177,6 @@ def test_write_parity_full_attention_layer(
 # --------------------------------------------------------------------------- #
 
 
-def _align(hooks_value, trace_value, relation, info):
-    """Bring the two engines' captures of one DeltaNet tensor into one frame.
-
-    The transforms are declared, not searched: each is the documented
-    difference between the two vocabularies, so a wrong address cannot be
-    massaged into agreement by this function.
-    """
-    if relation == "identical":
-        return hooks_value, trace_value
-    if relation == "gva_tile":
-        # `delta_*` is the kernel's argument, already tiled to the value-head
-        # count; `deltanet_*` is the pre-`repeat_interleave` projection in
-        # key-head space. The tile is over the HEAD axis of an unflattened view.
-        h_k, h_v = info.linear_num_key_heads, info.linear_num_value_heads
-        d_k = info.linear_key_head_dim
-        b, s = trace_value.shape[0], trace_value.shape[1]
-        tiled = (
-            trace_value.reshape(b, s, h_k, d_k)
-            .repeat_interleave(h_v // h_k, dim=2)
-            .reshape(b, s, h_v * d_k)
-        )
-        return hooks_value, tiled
-    if relation == "chunk_boundary":
-        # `delta_state` is per step; `deltanet_state` per 64-token chunk. The
-        # chunk's state is the step-state at the chunk's last position (the
-        # final chunk may be partial, hence the clamp).
-        n_chunks, seq = trace_value.shape[1], hooks_value.shape[1]
-        idx = [min(sweep.DELTA_CHUNK * (i + 1) - 1, seq - 1) for i in range(n_chunks)]
-        selected = hooks_value[:, idx].reshape(trace_value.shape)
-        return selected, trace_value
-    raise AssertionError(f"unknown relation {relation!r}")
-
-
 @pytest.mark.parametrize(
     "hooks_component,trace_component,relation", sweep.DELTA_FAMILY_PAIRS
 )
@@ -237,7 +204,7 @@ def test_delta_family_cross_engine_agreement(
         rows=LONG_ROWS,
         with_cf=False,
     ).read_value("r")
-    left, right = _align(hooked, traced, relation, hooks_qwen.info)
+    left, right = sweep.align_delta_pair(hooked, traced, relation, hooks_qwen.info)
     sweep.assert_same(
         left,
         right,
