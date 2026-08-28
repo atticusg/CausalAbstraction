@@ -308,14 +308,18 @@ def test_wrong_stream_refusal_is_identical(hooks_qwen, trace_qwen):
 # --------------------------------------------------------------------------- #
 
 
-def test_attention_probs_routes_to_the_reference_engine():
+def test_attention_probs_no_longer_routes_away():
+    """N5 flipped this pin: the pattern (and the whole attention interior) is
+    served here through the `.source` address table, so a document naming it
+    stays on this engine when it is first in the list."""
     doc = parse_document(in_order(_read_doc("attention_probs", 3)))
     engines = [NnsightEngine(), PytorchHooksEngine()]
     chosen = choose_engine(doc, engines)
-    assert isinstance(chosen, PytorchHooksEngine)
-    assert component_capability("attention_probs") not in (
+    assert isinstance(chosen, NnsightEngine)
+    assert component_capability("attention_probs") in (
         NnsightEngine().effective_capabilities
     )
+    assert "writable_attention_probs" in NnsightEngine().capabilities
 
 
 def test_a_generated_read_reaching_the_executor_refuses_by_phase(trace_llama):
