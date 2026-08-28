@@ -12,6 +12,7 @@ from causalab.neural.pytorch_hooks.metrics import (
     column_token_id,
     column_token_ids,
     compute_metric,
+    compute_windowed_metric,
 )
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import MetricSpec
@@ -171,6 +172,41 @@ def test_top_k_refuses_a_k_outside_the_read_width(tokenizer, k):
         compute_metric(metric, _SIGNED_CODE, [{}], tokenizer, vocab_axis=False)
 
 
+def test_windowed_top_k_carries_vocab_axis_through_to_the_reduction(tokenizer):
+    """The generated frame reduces through :func:`compute_windowed_metric`, and
+    ``vocab_axis`` has to survive that hop.
+
+    The prompt-frame cases above pin the reduction itself; this pins the
+    *plumbing*, which is the half a windowed read could silently lose — a
+    non-vocabulary read reduced with ``vocab_axis`` left at its ``True``
+    default would decode neuron indices as token ids and softmax across
+    neurons, and both wrong columns would look plausible in the saved table.
+
+    Also pins the regrouping: rows address different position counts (2, 1, 0),
+    and the flatten/cat/split round trip has to hand each row back its own.
+    """
+    windows = [
+        torch.tensor(
+            [[0.5, -7.0, 3.0, -0.25, 6.0, -2.0], [1.0, 2.0, 9.0, 0.0, -3.0, 0.5]]
+        ),
+        torch.tensor([[-8.0, 0.1, 0.2, 0.3, 0.4, 0.5]]),
+        torch.zeros(0, 6),  # addressed no positions — a result, not a misalignment
+    ]
+    metric = MetricSpec(kind="top_k", of="code", fields={"k": 2, "by": "value"})
+    got = compute_windowed_metric(
+        metric, windows, [{}, {}, {}], tokenizer, vocab_axis=False
+    )
+
+    assert [len(row) for row in got] == [2, 1, 0]
+    assert [[entry["indices"] for entry in row] for row in got] == [
+        [[4, 2], [2, 1]],
+        [[5, 4]],
+        [],
+    ]
+    # neither vocabulary column may appear anywhere in the windowed output
+    assert all(set(entry) == {"indices", "values"} for row in got for entry in row)
+
+
 def test_class_probs_sums_group_members(tokenizer):
     metric = MetricSpec(
         kind="class_probs",
@@ -265,6 +301,9 @@ def test_a_pinned_form_refuses_rather_than_falling_back(gpt2_tokenizer):
         column_token_id(gpt2_tokenizer, "haus", token_form="space_prefixed")
     # and the bare row it refused to fall back to is genuinely resolvable
     assert column_token_id(gpt2_tokenizer, "haus", token_form="bare") == 30404
+    # `auto` is the form that IS allowed to fall back, and it lands on that same
+    # row — the contrast is what makes the refusal above a pin, not an accident
+    assert column_token_id(gpt2_tokenizer, "haus", token_form="auto") == 30404
 
 
 def test_the_two_forms_collapse_on_sentencepiece(tokenizer):
