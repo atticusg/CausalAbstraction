@@ -275,8 +275,8 @@ execution order:
 
 `input_ids` · `embeddings` · `block_input` · `attention_input_norm` ·
 `delta_qkv` · `delta_gate` · `delta_conv` · `delta_query` · `delta_key` ·
-`delta_value` · `delta_beta` · `delta_decay` · `delta_kernel_output` ·
-`delta_premix` ·
+`delta_value` · `delta_beta` · `delta_decay` · `delta_kv_mem` ·
+`delta_state_update` · `delta_state` · `delta_kernel_output` · `delta_premix` ·
 `attention_query_pre_rope` · `attention_key_pre_rope` ·
 `attention_value_states` · `attention_gate` · `attention_query` ·
 `attention_key` · `attention_scores` · `attention_z` · `attention_result` ·
@@ -436,6 +436,31 @@ execution order:
   a family whose modeling file does not export the four globals. The untiled
   q/k and the post-split views are not components (F7: one box, one address —
   they are `delta_conv` rows re-viewed).
+- **The DeltaNet per-step interior is read by stepping the library's own
+  recurrent kernel** (round 4.3) — intercept, never transcribe, §2.3 of the
+  round plan. `delta_state` is the recurrent state `S_t`: one `d_k × d_v`
+  matrix per head per step, the second shape with no feature space (after the
+  attention pattern) — but unlike the pattern it keeps its one position axis,
+  so positions gather on the *steps* axis, `head:` selects a matrix stack, and
+  `featurizer`/`dims` refuse off the declared axes. `delta_kv_mem`
+  (`(S_{t-1}·exp(g_t) · k̂_t).sum`) and `delta_state_update` (`(v_t −
+  kv_mem_t)·β_t`, the diagram's `delta`) are derived from adjacent states and
+  pinned by the reconstruction identity `S_t == S_{t-1}·exp(g_t) + k̂_t ⊗
+  delta_t` against the kernel's own returned states, exactly. At **prefill** a
+  read runs the stepwise loop in the chunked call's *shadow*: the base forward
+  is bit-identical, and the cost is O(seq) extra kernel calls at the tapped
+  layer only (on a real checkpoint a full-seq all-layers `delta_state` is
+  `layers · seq · heads · d_k · d_v` floats — address positions early). At
+  **decode** the model runs the recurrent kernel natively, so generated-frame
+  reads are plain per-step captures, pinned cross-path against test-side
+  stepping. A **write** to `delta_state` substitutes the stepwise loop for the
+  chunked call so edits feed forward — the one deliberate path-forcing in the
+  vocabulary, costing ~5e-7 on the fixture's logits, pinned per layer as a
+  bound. Its tensor operand must cover exactly the write's addressed steps
+  (step-for-step, no broadcasting). `delta_kv_mem` is **read-only** (a memory
+  readout has no independent existence — write `delta_state` or `delta_value`)
+  and `delta_state_update` writes are deferred (D6: they lower exactly onto a
+  state edit via the reconstruction identity).
 - **`stream` names a mixer stream, and it is a per-layer fact.** It is one of
   `full_attention` / `linear_attention`. A hybrid tower carries a different mixer
   at different depths (Qwen3.6's text tower alternates Gated DeltaNet with gated

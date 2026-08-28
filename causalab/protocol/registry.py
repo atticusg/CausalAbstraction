@@ -406,6 +406,9 @@ def component_shape(info: ModelInfo, component: str) -> FeatureShape:
         "delta_beta",
         "delta_decay",
         "delta_kernel_output",
+        "delta_kv_mem",
+        "delta_state_update",
+        "delta_state",
     ):
         missing = [
             name
@@ -474,6 +477,28 @@ def component_shape(info: ModelInfo, component: str) -> FeatureShape:
         if component in ("delta_value", "delta_kernel_output"):
             # kernel arg 2, and return[0] — v-head space, (b, s, heads, d_v).
             # The output is pre-norm, pre-gate core_attn_out.
+            return shapes.bshd(info.linear_num_value_heads, info.linear_value_head_dim)
+        if component == "delta_state":
+            # ⚠️ On a real checkpoint this is the expensive read: a full-seq
+            # all-layers delta_state is layers · seq · heads · d_k · d_v floats
+            # (30 · seq · 32·128·128 on the A3B). Address positions early — the
+            # gather runs on the steps axis before anything is kept.
+            return shapes.state_matrix(
+                info.linear_num_value_heads,
+                info.linear_key_head_dim,
+                info.linear_value_head_dim,
+                note=(
+                    "It is the recurrent state S_t: one d_k × d_v matrix per "
+                    "head per step. Read it whole (optionally with 'head:'); "
+                    "its per-step faces are 'delta_kv_mem' (what the decayed "
+                    "state recalls for k̂_t) and 'delta_state_update' (what is "
+                    "written in)."
+                ),
+            )
+        if component in ("delta_kv_mem", "delta_state_update"):
+            # per-step d_v vectors per head, stacked over steps — derived from
+            # adjacent states and pinned by the reconstruction identity
+            # S_t == S_{t-1}·exp(g_t) + k̂_t ⊗ delta_t (round-4 plan §2.3)
             return shapes.bshd(info.linear_num_value_heads, info.linear_value_head_dim)
         if component == "delta_beta":
             return shapes.bsh(

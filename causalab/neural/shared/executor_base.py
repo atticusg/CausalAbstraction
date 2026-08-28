@@ -513,6 +513,8 @@ class ExecutorBase:
                 gathered = project(gathered)
         ragged = isinstance(gathered, RaggedValue)
         value = gathered.flat if isinstance(gathered, RaggedValue) else gathered
+        if site.shape.state_axes:
+            return self._state_read(rname, read, site, value, gathered)
         if site.derivation is not None:
             # After the gather, deliberately: the value is `heads` times wider
             # than the tensor it comes from, so deriving it before the gather
@@ -533,6 +535,149 @@ class ExecutorBase:
             assert isinstance(gathered, RaggedValue)
             return RaggedValue(flat=value, widths=gathered.widths)
         return value
+
+    def _state_read(
+        self,
+        rname: str,
+        read: ReadSpec,
+        site: ResolvedSite,
+        value: torch.Tensor,
+        gathered: "torch.Tensor | RaggedValue",
+    ) -> "torch.Tensor | RaggedValue":
+        """The tail of a read whose trailing axes form a state matrix.
+
+        The tensor keeps its native layout — ``(batch, steps, heads, d_k,
+        d_v)`` after the position gather — because there is no feature vector
+        to flatten to. ``head:`` selects on the head axis directly;
+        ``featurizer`` and ``dims`` are refused off the declared axes (the same
+        generated refusals the attention pattern gets, with the position gather
+        kept, which is what distinguishes the two shapes).
+        """
+        what = f"{site.component!r} ({site.shape.describe()})"
+        if read.featurizer is not None:
+            raise ProtocolError(
+                "P4",
+                f"read {rname!r} featurizes {what}: {site.shape.refusal('it')}",
+            )
+        if isinstance(read.dims, tuple):
+            raise ProtocolError(
+                "P4",
+                f"read {rname!r} slices 'dims' on {what}: that would select "
+                "d_v columns of a matrix as though they were features.",
+            )
+        if site.head is not None:
+            # dim 0 of a ragged flat is the gathered rows; dense keeps
+            # (batch, steps) in front — the head axis is right after either way
+            value = (
+                value[:, site.head]
+                if isinstance(gathered, RaggedValue)
+                else value[:, :, site.head]
+            )
+        if not self.grad_enabled:
+            value = value.detach().cpu()
+        if isinstance(gathered, RaggedValue):
+            return RaggedValue(flat=value, widths=gathered.widths)
+        return value
+
+    def _state_step_writer(
+        self,
+        entries: list[tuple[str, WriteSpec, ResolvedSite]],
+        input_role: str,
+        batch: EncodedBatch,
+    ) -> Callable[[int, torch.Tensor], torch.Tensor]:
+        """Per-step application of ``delta_state`` writes, for the stepwise
+        substitution (round-4 plan §2.3).
+
+        A state edit must feed forward — step ``t``'s replacement is what step
+        ``t+1`` decays and writes into — so the shared whole-tensor write math
+        cannot land it. Instead each addressed step applies the same
+        class-ordered mechanisms to that step's matrix, flattened to one
+        row: ``v_pre`` is ``S_t`` as ``(1, 1, heads·d_k·d_v)``, and a tensor
+        operand (a ``delta_state`` read) is sliced to the same (row, step)
+        before the mechanism sees it, so ``swap`` interchanges step-for-step.
+
+        ``dims`` is refused (a matrix has no feature columns); ``featurizer``
+        refuses through the width lookup, as every state read does.
+        """
+
+        def class_rank(entry: tuple[str, WriteSpec, ResolvedSite]) -> int:
+            do = entry[1].do
+            if str(do.mechanism) == "renormalize":
+                return 2
+            return 1 if is_additive(do) else 0
+
+        prepared: list[tuple[str, WriteSpec, ResolvedSite, list[list[int]]]] = []
+        for ename, write, site in sorted(entries, key=class_rank):
+            if isinstance(write.dims, tuple):
+                raise ProtocolError(
+                    "P4",
+                    f"write {ename!r} slices 'dims' on {site.component!r} "
+                    f"({site.shape.describe()}): that would select d_v columns "
+                    "of a matrix as though they were features.",
+                )
+            prepared.append(
+                (ename, write, site, self._positions(write.pos, batch, input_role))
+            )
+
+        def edit_state(step: int, state: torch.Tensor) -> torch.Tensor:
+            edited = state
+            for ename, write, site, per_row in prepared:
+                for row, positions in enumerate(per_row):
+                    if step not in positions:
+                        continue
+                    j = positions.index(step)
+                    if edited is state:
+                        edited = state.clone()
+                    v_pre = edited[row : row + 1].reshape(1, 1, -1)
+                    v_new = self._written_value(
+                        ename,
+                        write,
+                        site,
+                        v_pre,
+                        lookup=self._state_operand(
+                            ename, row, j, len(positions), v_pre
+                        ),
+                    )
+                    edited[row] = v_new.reshape(edited.shape[1:]).to(edited.dtype)
+            return edited
+
+        return edit_state
+
+    def _state_operand(
+        self, ename: str, row: int, step_index: int, n_steps: int, v_pre: torch.Tensor
+    ) -> Callable[[Any], "torch.Tensor | float"]:
+        """Operand lookup for one (row, addressed-step) state application: a
+        tensor operand must be a state read — ``(batch, steps, heads, d_k,
+        d_v)`` — covering **exactly the write's addressed steps** (the standard
+        write path's elementwise rule, stated rather than broadcast), and is
+        sliced to this row and step so the mechanism math sees two aligned
+        single-step rows."""
+
+        def lookup(value: Any) -> "torch.Tensor | float":
+            operand = self._operand_lookup(value)
+            if not isinstance(operand, torch.Tensor):
+                return operand
+            if operand.dim() != 5:
+                raise ProtocolError(
+                    "P2",
+                    f"write {ename!r} hands {value!r} to a 'delta_state' "
+                    f"write, but its shape is {tuple(operand.shape)} — a state "
+                    "operand is a 'delta_state' read, (batch, steps, heads, "
+                    "d_k, d_v), applied step for step",
+                )
+            if operand.shape[1] != n_steps:
+                raise ProtocolError(
+                    "P2",
+                    f"write {ename!r}: operand {value!r} covers "
+                    f"{operand.shape[1]} steps, but the write addresses "
+                    f"{n_steps} — the j-th operand step lands on the j-th "
+                    "addressed step, so both sides must cover the same steps "
+                    "(read the operand at the write's own positions)",
+                )
+            sliced = operand[row : row + 1, step_index : step_index + 1]
+            return sliced.reshape(1, 1, -1).to(v_pre.device)
+
+        return lookup
 
     # ------------------------------------------------------------------ #
     # writes (the math; landing them is the engine's job)
@@ -711,10 +856,23 @@ class ExecutorBase:
             tensor[rows, idx] = slice_view
 
     def _written_value(
-        self, ename: str, write: WriteSpec, site: ResolvedSite, v_pre: torch.Tensor
+        self,
+        ename: str,
+        write: WriteSpec,
+        site: ResolvedSite,
+        v_pre: torch.Tensor,
+        *,
+        lookup: "Callable[[Any], torch.Tensor | float] | None" = None,
     ) -> torch.Tensor:
         """featurize → class-ordered do → inverse, honoring dims and the
-        error-term contract."""
+        error-term contract.
+
+        ``lookup`` overrides operand resolution — the state-write path slices
+        tensor operands to one (row, step) so the same mechanism math applies
+        per step; everything else uses :meth:`_operand_lookup` unchanged.
+        """
+        if lookup is None:
+            lookup = self._operand_lookup
         stack = self._read_stack(write, site)
         f0, errs = stack.featurize(v_pre)
         dims = None
@@ -730,15 +888,13 @@ class ExecutorBase:
         if str(do.mechanism) == "renormalize":
             pass  # applied last, below
         elif is_additive(do):
-            delta = apply_delta(
-                do, select(f0), self._operand_lookup, batch=batch_size, n_pos=n_pos
-            )
+            delta = apply_delta(do, select(f0), lookup, batch=batch_size, n_pos=n_pos)
             if dims is None:
                 f = f + delta
             else:
                 f.index_copy_(-1, dims, select(f) + delta)
         else:
-            written = apply_absolute(do, select(f0), self._operand_lookup)
+            written = apply_absolute(do, select(f0), lookup)
             written = written.broadcast_to(select(f0).shape).to(f.dtype)
             if dims is None:
                 f = written.clone()
