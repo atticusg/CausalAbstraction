@@ -31,6 +31,14 @@ __all__ = ["BundlePoint", "ModelBundle", "TensorBundle", "load_model"]
 _DTYPES = {"fp32": torch.float32, "bf16": torch.bfloat16, "fp16": torch.float16}
 
 
+#: The mixer children that mean a layer runs full (softmax) attention, and the
+#: ones that mean it runs a linear-attention kernel. Named here so
+#: :meth:`ModelBundle.stream_at` and :meth:`ModelBundle.mixer_at` read the same
+#: table instead of each carrying its own probe order.
+_FULL_ATTENTION_CHILDREN: tuple[str, ...] = ("self_attn", "attn")
+_LINEAR_ATTENTION_CHILDREN: tuple[str, ...] = ("linear_attn",)
+
+
 @dataclasses.dataclass(frozen=True)
 class ModelBundle:
     """One loaded model with everything the executor needs."""
@@ -69,11 +77,31 @@ class ModelBundle:
 
         Returns one of ``"full_attention"`` (a ``self_attn``/``attn`` child) or
         ``"linear_attention"`` (a ``linear_attn`` child).
+
+        Raises:
+            ProtocolError: the block has no recognised mixer child, or has
+                children of *both* kinds. The second case is hypothetical — no
+                family in the round-1 box map ships it — but probing in a fixed
+                order would answer "full_attention" for it silently, and every
+                per-layer tap downstream would then attach to the wrong module
+                and still produce plausible numbers. A named refusal is the
+                same trade this module makes everywhere else.
         """
         block = self.blocks[layer]
-        if hasattr(block, "self_attn") or hasattr(block, "attn"):
+        full = [name for name in _FULL_ATTENTION_CHILDREN if hasattr(block, name)]
+        linear = [name for name in _LINEAR_ATTENTION_CHILDREN if hasattr(block, name)]
+        if full and linear:
+            raise ProtocolError(
+                "P4",
+                f"layer {layer} of {self.key!r} carries both a full-attention "
+                f"child ({', '.join(full)}) and a linear-attention child "
+                f"({', '.join(linear)}) — the stream of a layer must be one or "
+                "the other, so extend the stream table in "
+                "pytorch_hooks/loading.py to say which this family means",
+            )
+        if full:
             return "full_attention"
-        if hasattr(block, "linear_attn"):
+        if linear:
             return "linear_attention"
         raise ProtocolError(
             "P4",
@@ -83,14 +111,22 @@ class ModelBundle:
         )
 
     def mixer_at(self, layer: int) -> Any:
-        """The attention/mixer module at ``layer``, whichever stream it is."""
+        """The attention/mixer module at ``layer``, whichever stream it is.
+
+        Resolved *through* :meth:`stream_at` rather than by its own probe, so
+        the two can never disagree about a block: one answer, one place.
+        """
         block = self.blocks[layer]
-        for name in ("attn", "self_attn", "linear_attn"):
+        names = (
+            _FULL_ATTENTION_CHILDREN
+            if self.stream_at(layer) == "full_attention"
+            else _LINEAR_ATTENTION_CHILDREN
+        )
+        for name in names:
             child = getattr(block, name, None)
             if child is not None:
                 return child
-        self.stream_at(layer)  # raises with the useful message
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable")  # stream_at only answers if one exists
 
     @property
     def streams(self) -> tuple[str, ...]:

@@ -192,6 +192,63 @@ def test_a_site_naming_the_right_stream_resolves(qwen35moe_bundle):
         assert site.module is qwen35moe_bundle.mixer_at(layer)
 
 
+def test_a_block_carrying_both_mixer_kinds_refuses_instead_of_guessing(
+    qwen35moe_bundle,
+):
+    """A hypothetical block with both children must not resolve silently.
+
+    No family in the round-1 box map ships one, so this is a guard rather than
+    a regression — but `stream_at` answers by probing children, and a fixed
+    probe order would call such a block "full_attention" without a word. Every
+    per-layer tap would then attach to one of its two mixers and go on
+    producing plausible numbers, which is the failure mode the whole
+    stream-per-layer fix exists to remove.
+
+    Built by grafting a `linear_attn` child onto the fixture's one real
+    full-attention layer, so the block is a genuine torch module in both
+    respects and not a stub that only looks like one.
+    """
+    full_layer = qwen35moe_bundle.streams.index("full_attention")
+    linear_layer = qwen35moe_bundle.streams.index("linear_attention")
+    block = qwen35moe_bundle.blocks[full_layer]
+    donor = qwen35moe_bundle.blocks[linear_layer].linear_attn
+
+    block.add_module("linear_attn", donor)
+    try:
+        with pytest.raises(ProtocolError) as excinfo:
+            qwen35moe_bundle.stream_at(full_layer)
+        message = str(excinfo.value)
+        assert "self_attn" in message and "linear_attn" in message
+        # and mixer_at must not answer either, since it resolves through stream_at
+        with pytest.raises(ProtocolError):
+            qwen35moe_bundle.mixer_at(full_layer)
+    finally:
+        del block._modules["linear_attn"]
+
+    # the fixture is intact again — the graft must not leak into later tests
+    assert qwen35moe_bundle.stream_at(full_layer) == "full_attention"
+
+
+def test_mixer_at_and_stream_at_never_disagree(qwen35moe_bundle, llama_bundle):
+    """`mixer_at` picks the child that matches the stream `stream_at` named.
+
+    They used to probe independently, in different orders (`attn` before
+    `self_attn` in one, the reverse in the other) — harmless for every family
+    here, and exactly the kind of duplicated table that stops being harmless
+    once a family has both names.
+    """
+    for bundle in (qwen35moe_bundle, llama_bundle):
+        for layer, stream in enumerate(bundle.streams):
+            block = bundle.blocks[layer]
+            mixer = bundle.mixer_at(layer)
+            if stream == "full_attention":
+                assert mixer is getattr(block, "self_attn", None) or mixer is getattr(
+                    block, "attn", None
+                )
+            else:
+                assert mixer is block.linear_attn
+
+
 # --------------------------------------------------------------------------- #
 # §5.3 — refuse for the permanent reason before the temporary one
 # --------------------------------------------------------------------------- #
