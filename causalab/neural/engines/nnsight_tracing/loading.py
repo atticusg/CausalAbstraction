@@ -9,11 +9,14 @@ one component→module map, never forked (plan §2.3). The ``module`` a resolved
 site carries is then an *envoy*, whose ``.input``/``.output`` the trace
 executor reads and assigns.
 
-Attention runs **eager**, like the reference engine: the captured-goldens
-context pins eager, and cross-engine parity must compare like against like.
-The on-demand implementation switching the plan proposes (§5.3, D5) arrives
-with the attention-interior phase (N5), where sdpa first becomes viable for
-documents that never touch the pattern.
+Attention runs under the **model default** implementation (sdpa on the
+target families): a document that never touches the scores or the pattern
+pays nothing for them. A group whose interior addresses require eager
+switches it on around its own trace and restores the default after —
+:meth:`TracePointExecutor._switched_implementations` (D5, decided: on
+demand). Callers that must compare like against like — the cross-engine
+parity suite, whose reference engine loads eager — pin it explicitly with
+``attn_implementation="eager"``.
 """
 
 from __future__ import annotations
@@ -93,6 +96,7 @@ def load_model(
     *,
     dtype: str = "fp32",
     device: str = "cpu",
+    attn_implementation: str | None = None,
 ) -> NnsightBundle:
     """Load (and cache) one nnsight bundle.
 
@@ -100,6 +104,10 @@ def load_model(
     padding with ``pad = eos`` when the checkpoint ships no pad token — the
     same contract the reference bundle loads under, so both engines encode
     identical batches.
+
+    ``attn_implementation=None`` keeps the checkpoint's own default (D5); the
+    executor switches on demand for the traces that need another one. Passing
+    one pins it — what the parity suite does to compare like against like.
     """
     from nnsight.modeling.transformers import TransformersModel
 
@@ -108,7 +116,11 @@ def load_model(
         task="text-generation",
         revision=revision,
         dtype=_DTYPES[dtype],
-        attn_implementation="eager",
+        **(
+            {}
+            if attn_implementation is None
+            else {"attn_implementation": attn_implementation}
+        ),
     )
     tokenizer = model.tokenizer
     tokenizer.padding_side = "left"

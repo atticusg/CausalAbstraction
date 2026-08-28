@@ -10,21 +10,44 @@ tensor, and a read at a written address sees the write because envoy
 assignment replaces the value later accesses observe (measured in the N4
 probes, mirroring the reference engine's write-before-capture hook order).
 
+Interior components — tensors ``transformers`` computes inside one call, with
+no module boundary to hook — are the third landing (N5): the address table in
+:mod:`causalab.neural.engines.nnsight_tracing.addresses` names the op, the
+executor navigates ``envoy.source`` to it inside the trace, and the same
+``to_contract``/``from_contract`` round-trip runs on what it finds. Only the
+address differs between engines, never the policy or the payload math.
+
 Operations are issued in forward-execution order (site depth, writes before
 reads at the same depth) — module-boundary envoys are order-tolerant, but the
-``.source`` interiors that arrive in N5–N7 are not (``MissedProviderError``),
-so the discipline starts here.
+``.source`` interiors are not (``OutOfOrderError``), and the renumbered
+attention band of :data:`~causalab.protocol.plan.COMPONENT_RANK` *is* the
+in-forward op order, which the test suite pins rather than assumes.
 
-v1 boundaries: no generated frame (arrives with N8's ``tracer.iter`` step
-anchoring; routing keeps ``generate`` documents on the reference engine) and
-no ``attention_probs`` (N5's eager interface taps; likewise routed away).
-Both still refuse legibly here in case a document arrives unrouted.
+Some interior addresses only exist under a specific implementation — the
+fused attention kernels never materialize the scores — so a group whose taps
+require one switches it on around its trace and restores the model default
+after (D5). The applied set is stamped as execution metadata, never canonical
+form: the document and its digest are implementation-blind.
+
+v1 boundary: no generated frame (arrives with N8's ``tracer.iter`` step
+anchoring; routing keeps ``generate`` documents on the reference engine). It
+still refuses legibly here in case a document arrives unrouted.
 """
 
 from __future__ import annotations
 
+import contextlib
+from dataclasses import dataclass
+from typing import Any, Iterator
+
 import torch
 
+from causalab.neural.engines.nnsight_tracing.addresses import (
+    ADDRESSES,
+    AddressResolutionError,
+    SourceAddress,
+    match_op,
+)
 from causalab.neural.shared.encoding import EncodedBatch
 from causalab.neural.shared.executor_base import ExecutorBase, tap_key
 from causalab.neural.shared.layout import (
@@ -40,6 +63,17 @@ from causalab.protocol.plan import generated_budget
 from causalab.protocol.schema import WriteSpec
 
 __all__ = ["TracePointExecutor"]
+
+
+@dataclass(frozen=True)
+class ResolvedTap:
+    """One tap as this engine lands it: the shared resolution (policy, layout,
+    layer — :class:`ResolvedSite` is the cross-engine vocabulary and stays
+    untouched) plus, for an interior component, its ``.source`` address."""
+
+    site: ResolvedSite
+    #: ``None`` = a module boundary (the N4 path: ``envoy.input``/``.output``).
+    source: SourceAddress | None = None
 
 
 class TracePointExecutor(ExecutorBase):
@@ -81,71 +115,194 @@ class TracePointExecutor(ExecutorBase):
                 )
             taps.append((rname, read))
 
-        read_sites = {
-            rname: resolve_site(self.bundle, self.doc.sites[str(read.site)])
+        read_taps = {
+            rname: self._wrap(resolve_site(self.bundle, self.doc.sites[str(read.site)]))
             for rname, read in taps
         }
-        write_addresses = self._resolve_write_addresses(write_names)
-        for site in (
-            *read_sites.values(),
-            *(site for site, _ in write_addresses.values()),
-        ):
-            if site.component == "attention_probs":
-                raise ProtocolError(
-                    "P4",
-                    "'attention_probs' is not in the nnsight engine's "
-                    "component set yet — its attention-interior taps (the "
-                    "eager interface source) are phase N5 of the engine plan; "
-                    "the reference engine serves it today.",
-                )
+        write_taps = {
+            key: (self._wrap(site), entries)
+            for key, (site, entries) in self._resolve_write_addresses(
+                write_names
+            ).items()
+        }
+
+        group_taps = [*read_taps.values(), *(tap for tap, _ in write_taps.values())]
+        required = frozenset(
+            requirement
+            for tap in group_taps
+            if tap.source is not None
+            for requirement in tap.source.requires
+        )
+        self.applied_requirements |= required
 
         # one trace per group, operations in forward-execution order; a write
-        # lands before a read at the same depth so the read sees it
-        operations: list[tuple[int, tuple[int, int], str, ResolvedSite, list]] = []
-        for site, entries in write_addresses.values():
-            operations.append((0, site.depth, "write", site, entries))
+        # lands before a read at the same depth so the read sees it, and the
+        # `.source` interiors demand the order outright
+        operations: list[tuple[int, tuple[int, int], str, ResolvedTap, list]] = []
+        for tap, entries in write_taps.values():
+            operations.append((0, tap.site.depth, "write", tap, entries))
         seen_keys: set = set()
-        for site in read_sites.values():
-            key = tap_key(site)
+        for tap in read_taps.values():
+            key = tap_key(tap.site, tap.source)
             if key not in seen_keys:
                 seen_keys.add(key)
-                operations.append((1, site.depth, "read", site, []))
+                operations.append((1, tap.site.depth, "read", tap, []))
         operations.sort(key=lambda op: (op[1], op[0]))
 
         import nnsight
 
         batch_size = int(batch.input_ids.shape[0])
         saves: dict = {}
+        #: navigated `.source` values, shared within one trace so two taps on
+        #: one op (q and k are one rope call) request it once
+        self._trace_sources: dict = {}
         with torch.no_grad():
-            with self.bundle.model.trace(
-                {
-                    "input_ids": batch.input_ids,
-                    "attention_mask": batch.attention_mask,
-                },
-                position_ids=batch.position_ids(),
-            ):
-                for _, _, op_kind, site, entries in operations:
-                    if op_kind == "write":
-                        self._land_writes(site, entries, input_role, batch)
-                    else:
-                        saves[tap_key(site)] = nnsight.save(
-                            self._tap_contract(site, batch_size)
-                        )
+            with self._switched_implementations(required):
+                with self.bundle.model.trace(
+                    {
+                        "input_ids": batch.input_ids,
+                        "attention_mask": batch.attention_mask,
+                    },
+                    position_ids=batch.position_ids(),
+                ):
+                    for _, _, op_kind, tap, entries in operations:
+                        if op_kind == "write":
+                            self._land_writes(tap, entries, input_role, batch)
+                        else:
+                            saves[tap_key(tap.site, tap.source)] = nnsight.save(
+                                self._tap_contract(tap, batch_size)
+                            )
+        self._trace_sources = {}
 
         for rname, read in taps:
-            site = read_sites[rname]
-            raw = saves[tap_key(site)]
+            tap = read_taps[rname]
+            raw = saves[tap_key(tap.site, tap.source)]
             self._read_values[rname] = self._finalize_read(
-                rname, read, site, raw, batch, input_role
+                rname, read, tap.site, raw, batch, input_role
             )
         self._groups_run.add((model, input_role))
+
+    # ------------------------------------------------------------------ #
+    # interior addressing (N5)
+    # ------------------------------------------------------------------ #
+
+    def _wrap(self, site: ResolvedSite) -> ResolvedTap:
+        """Pair the shared resolution with this engine's landing.
+
+        An ``interface_slot`` marks a component with no module boundary (the
+        four function-interior slots, and the pattern — whose *write* has no
+        boundary; this engine serves its read from the same op). Those are
+        looked up in the per-stream address table; everything else is the
+        envoy path unchanged.
+        """
+        if site.interface_slot is None:
+            return ResolvedTap(site=site)
+        stream = self.bundle.stream_at(site.layer)
+        address = ADDRESSES.get(stream, {}).get(site.component)
+        if address is None:
+            raise ProtocolError(
+                "P4",
+                f"component {site.component!r} has no interior address for a "
+                f"{stream!r} layer in the nnsight engine's table "
+                "(neural/engines/nnsight_tracing/addresses.py) — extend the "
+                "table, or route to the reference engine.",
+            )
+        return ResolvedTap(site=site, source=address)
+
+    def _source_value(self, tap: ResolvedTap) -> Any:
+        """The traced tensor an interior address names, navigated in-trace.
+
+        Memoized per trace by the address' op identity (before
+        ``tuple_index``), so two components on one op — q and k are the two
+        elements of one rope call — request its value once; ``.source`` ops
+        refuse a second request after the model has run past them.
+        """
+        address = tap.source
+        assert address is not None
+        site = tap.site
+        key = (
+            id(site.module),
+            address.op_pattern,
+            address.peel,
+            address.field,
+            address.arg,
+        )
+        if key not in self._trace_sources:
+            op = self._drill(site.module.source, address.op_pattern, site)
+            for entry in address.peel:
+                op = self._drill(op.source, entry, site)
+            if address.field is not None:
+                op = self._drill(op.source, address.field, site)
+            if address.arg is not None:
+                index, keyword = address.arg
+                self._trace_sources[key] = op.inputs[index][keyword]
+            else:
+                self._trace_sources[key] = op.output
+        value = self._trace_sources[key]
+        if address.tuple_index is not None:
+            value = value[address.tuple_index]
+        return value
+
+    def _drill(self, source: Any, pattern: str, site: ResolvedSite) -> Any:
+        """One matched op on one ``.source``, with the refusal made legible."""
+
+        def line_of(name: str) -> str:
+            op = getattr(source, name)
+            text, line = getattr(op, "text", None), getattr(op, "line", None)
+            if not isinstance(text, str) or not isinstance(line, int):
+                return ""
+            return text.splitlines()[line - 1]
+
+        try:
+            return getattr(source, match_op(pattern, source.names, line_of))
+        except AddressResolutionError as error:
+            import transformers
+
+            raise ProtocolError(
+                "P4",
+                f"addressing {site.component!r} at layer {site.layer} of "
+                f"{self.bundle.key!r} (transformers "
+                f"{transformers.__version__}): {error}",
+            ) from error
+
+    @contextlib.contextmanager
+    def _switched_implementations(self, required: frozenset[str]) -> Iterator[None]:
+        """Run one trace under the implementations its addresses require.
+
+        📐 The runtime switch is verified on the real A3B and the fixture
+        (`set_attn_implementation` both directions). The model default is
+        restored afterwards, so a document that never touches the pattern
+        keeps whatever the checkpoint prefers (sdpa) — D5, decided: on demand.
+        """
+        model = self.bundle.model
+        previous: str | None = None
+        if "attn_eager" in required:
+            # 📐 nnsight dispatches the real model on first trace, and dispatch
+            # rebuilds the config — a switch applied before it is silently
+            # reset (measured: eager set pre-dispatch, sdpa ran). Dispatch
+            # first, so the switch lands on the model that will run.
+            if not getattr(model, "dispatched", True):
+                model.dispatch()
+            if model.config._attn_implementation != "eager":
+                previous = model.config._attn_implementation
+                model.set_attn_implementation("eager")
+        try:
+            yield
+        finally:
+            if previous is not None:
+                model.set_attn_implementation(previous)
 
     # ------------------------------------------------------------------ #
     # in-trace plumbing
     # ------------------------------------------------------------------ #
 
-    def _tap_contract(self, site: ResolvedSite, batch_size: int) -> torch.Tensor:
-        """One tap's tensor in the contract shape, read off its envoy."""
+    def _tap_contract(self, tap: ResolvedTap, batch_size: int) -> torch.Tensor:
+        """One tap's tensor in the contract shape — read off its envoy, or
+        off the op its interior address names."""
+        site = tap.site
+        if tap.source is not None:
+            native = self._source_value(tap)
+            return to_contract(native, site.shape, batch_size=batch_size)
         envoy = site.module
         if site.kind == "out":
             native = tap_tensor(envoy.output, site.tuple_index)
@@ -155,15 +312,35 @@ class TracePointExecutor(ExecutorBase):
 
     def _land_writes(
         self,
-        site: ResolvedSite,
+        tap: ResolvedTap,
         entries: list[tuple[str, WriteSpec, ResolvedSite]],
         input_role: str,
         batch: EncodedBatch,
     ) -> None:
         """Apply every write at one address (shared class-ordered math) and
-        assign the result back to the envoy."""
-        envoy = site.module
+        assign the result back — to the envoy, or into the interior op's
+        tensor.
+
+        The interior landing is an in-place fill (``value[:] = new``): the op
+        has already produced its tensor when the write runs, and everything
+        downstream — the next op in the same forward, a later read of the
+        same address — consumes that same object. 📐 Verified consumed on the
+        fixture and the real A3B (zeroing the softmax input moved the logits
+        by 1.78; a pattern write is #53's finding).
+        """
+        site = tap.site
         batch_size = int(batch.input_ids.shape[0])
+        if tap.source is not None:
+            value = self._source_value(tap)
+            native = value.clone()
+            contract = to_contract(native, site.shape, batch_size=batch_size)
+            self._apply_writes_to_contract(entries, input_role, batch, contract)
+            new_native = from_contract(
+                contract, site.shape, batch_size=batch_size, native=native
+            )
+            value[:] = new_native
+            return
+        envoy = site.module
         if site.kind == "out":
             payload = envoy.output
             native = tap_tensor(payload, site.tuple_index).clone()

@@ -87,16 +87,22 @@ class RaggedValue:
 
 
 #: What identifies a tap for capture-sink sharing — see :func:`tap_key`.
-TapKey = tuple[int, str, FeatureShape, int | None, str | None]
+TapKey = tuple[int, str, FeatureShape, int | None, str | None, tuple | None]
 
 
-def tap_key(site: ResolvedSite) -> TapKey:
+def tap_key(site: ResolvedSite, source: Any = None) -> TapKey:
     """Identity of a tap for capture-sink sharing.
 
     Two sites may share a module and side yet mean different tensors — a
     different tuple element, or the same tensor read through a different shape
     — so the shape and tuple index are part of the identity. Keying on the
     module alone would let one tap read another's tensor.
+
+    ``source`` is an engine-specific *interior* address (the nnsight engine's
+    :class:`~causalab.neural.engines.nnsight_tracing.addresses.SourceAddress`):
+    two interior taps may share the module, side and even shape while meaning
+    different ops inside its forward, so its identity joins the key. It
+    defaults to ``None`` so a hook-engine tap's key is unchanged.
     """
     return (
         id(site.module),
@@ -104,6 +110,15 @@ def tap_key(site: ResolvedSite) -> TapKey:
         site.shape,
         site.tuple_index,
         site.interface_slot,
+        None
+        if source is None
+        else (
+            source.op_pattern,
+            source.peel,
+            source.field,
+            source.arg,
+            source.tuple_index,
+        ),
     )
 
 
@@ -245,6 +260,10 @@ class ExecutorBase:
         #: same list the gather used, kept because metrics need to know
         #: *which* steps a value covers (and that a row covered none)
         self._read_steps: dict[str, list[list[int]]] = {}
+        #: implementation requirements the run's addresses imposed (§7.3,
+        #: e.g. "attn_eager") — execution metadata, stamped into the artifact
+        #: identity next to the engine name, never canonical form
+        self.applied_requirements: set[str] = set()
 
     # ------------------------------------------------------------------ #
     # public surface

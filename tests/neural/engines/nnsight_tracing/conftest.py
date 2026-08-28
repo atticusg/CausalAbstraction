@@ -45,7 +45,9 @@ def hooks_llama() -> ModelBundle:
 
 @pytest.fixture(scope="session")
 def trace_llama() -> NnsightBundle:
-    return load_trace_model(TINY_LLAMA)
+    # eager pinned explicitly: the reference engine loads eager, and parity
+    # must compare like against like (§7.3)
+    return load_trace_model(TINY_LLAMA, attn_implementation="eager")
 
 
 @pytest.fixture(scope="session")
@@ -55,4 +57,12 @@ def hooks_qwen() -> ModelBundle:
 
 @pytest.fixture(scope="session")
 def trace_qwen() -> NnsightBundle:
+    return load_trace_model(TINY_QWEN35_MOE, attn_implementation="eager")
+
+
+@pytest.fixture(scope="session")
+def trace_qwen_default_impl() -> NnsightBundle:
+    """The D5 path: no pin, so the checkpoint's own default (sdpa) — what the
+    engine's loader gives a real document, and what the on-demand switch is
+    tested against."""
     return load_trace_model(TINY_QWEN35_MOE)
