@@ -203,9 +203,14 @@ def test_an_identity_edit_is_bit_identical(qwen35moe_bundle):
     )
 
 
-def test_the_wrapper_only_touches_the_modules_it_was_given(qwen35moe_bundle):
-    """Scoping: the registry entry is global while installed, so a mixer absent
-    from the edit map must be left alone."""
+def test_the_wrapper_leaves_a_deltanet_mixer_alone(qwen35moe_bundle):
+    """Scoping against a mixer that is not an attention module at all.
+
+    ⚠️ Weak on its own, and kept only as the cheap half: a DeltaNet layer never
+    consults ``ALL_ATTENTION_FUNCTIONS``, so this passes even for a wrapper
+    that ignored its edit map entirely and edited every module it saw. The
+    test below is the one that can fail.
+    """
     encoded = qwen35moe_bundle.tokenizer(BASE_TEXT, return_tensors="pt")
     with torch.no_grad():
         clean = qwen35moe_bundle.model(**encoded).logits.clone()
@@ -219,6 +224,69 @@ def test_the_wrapper_only_touches_the_modules_it_was_given(qwen35moe_bundle):
         with torch.no_grad():
             same = qwen35moe_bundle.model(**encoded).logits.clone()
     assert torch.equal(same, clean)
+
+
+def test_the_wrapper_only_touches_the_modules_it_was_given(llama_bundle):
+    """Scoping, on a model where an unedited module DOES reach the wrapper.
+
+    The registry entry is global while installed, so every full-attention
+    forward in the model goes through it — the edit map is the only thing
+    keeping one layer's edit off another's pattern. 📐 tiny-random-Llama has
+    two full-attention layers, so an implementation that ignored the map would
+    call the edit twice, and one that keyed it wrongly would call it zero
+    times. Both are visible here; neither is visible against a DeltaNet mixer.
+    """
+    assert len(llama_bundle.blocks) == 2, "this test needs two attention layers"
+    encoded = llama_bundle.tokenizer(BASE_TEXT, return_tensors="pt")
+
+    seen: list[tuple[int, ...]] = []
+
+    def record(probs: torch.Tensor) -> None:
+        seen.append(tuple(probs.shape))
+
+    edited = llama_bundle.mixer_at(0)
+    with eager_attention_writes({id(edited): record}):
+        with torch.no_grad():
+            llama_bundle.model(**encoded)
+
+    assert len(seen) == 1, (
+        f"the edit ran {len(seen)} times for a map naming one of two attention "
+        "layers — the wrapper is not scoping by module"
+    )
+
+
+def test_an_edit_to_one_layer_leaves_the_other_layers_pattern_intact(llama_bundle):
+    """The same scoping property, checked on the tensor rather than the count.
+
+    Layer 0's pattern is zeroed while layer 1's is merely observed. If the
+    wrapper shared one edit across modules, layer 1's rows would come back
+    zeroed too; they must still sum to 1, because layer 1 is a *reader* in the
+    map. That both entries are honoured separately is the point — the map is
+    per module, not a single global callback.
+    """
+    encoded = llama_bundle.tokenizer(BASE_TEXT, return_tensors="pt")
+    later: list[torch.Tensor] = []
+
+    def wreck(probs: torch.Tensor) -> None:
+        probs.zero_()
+
+    def observe(probs: torch.Tensor) -> None:
+        later.append(probs.clone())
+
+    with eager_attention_writes(
+        {
+            id(llama_bundle.mixer_at(0)): wreck,
+            id(llama_bundle.mixer_at(1)): observe,
+        }
+    ):
+        with torch.no_grad():
+            llama_bundle.model(**encoded)
+
+    (pattern,) = later
+    rows = pattern.sum(dim=-1)
+    assert torch.allclose(rows, torch.ones_like(rows), atol=1e-5), (
+        "layer 1's pattern did not sum to 1 — layer 0's zeroing edit reached it"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -297,6 +365,50 @@ def test_the_forms_that_need_f1_are_refused(qwen35moe_bundle, kwargs, needle):
         ).read_value("r")
     message = str(excinfo.value)
     assert needle in message
+    assert "F1" in message
+
+
+def test_a_generated_frame_read_refuses(llama_bundle):
+    """The decode path needs F1 too, and used to say so in torch's words.
+
+    📐 Before this refusal the same document raised a bare
+    ``RuntimeError: Sizes of tensors must match except in dimension 1.
+    Expected size 9 but got size 10`` out of ``torch.cat`` — a KV-cached step
+    attends over the whole cache, so the key axis grows by one per step while
+    the query axis stays 1, and the per-step patterns do not stack. The author
+    of the document learns nothing from that message; they learn the shape of
+    our sink.
+
+    Refused by name now, in the same F1 terms as the prompt-frame forms above.
+    """
+    doc = {
+        "version": "1",
+        "model": {"key": "test", "revision": "main"},
+        "data": base_data_section(with_counterfactual=False),
+        "positions": {"window": {"generated": {"max_new_tokens": 4}, "all": True}},
+        "sites": {"tap": {"component": "attention_probs", "layer": 0}},
+        "reads": {
+            "r": {
+                "site": "tap",
+                "pos": "window",
+                "model": "original",
+                "input": "base",
+            }
+        },
+        "save": [
+            {
+                "value": "r",
+                "model": "original",
+                "input": "base",
+                "file_path": "a.safetensors",
+            }
+        ],
+    }
+    with pytest.raises(ProtocolError) as excinfo:
+        executor_for(doc, llama_bundle, base_texts=[BASE_TEXT]).read_value("r")
+    message = str(excinfo.value)
+    assert "generated frame" in message
+    assert "key width" in message
     assert "F1" in message
 
 
