@@ -61,7 +61,18 @@ GQA = ModelInfo(
     vocab_size=1000,
     num_experts=32,
     num_experts_per_tok=4,
+    # deliberately three DIFFERENT inner widths (dense 128, shared 48, routed
+    # 24): the tiny fixture checkpoint carries all three equal, so this table
+    # is the one place a wrong-spelling pick is distinguishable at all
     shared_expert_intermediate_size=48,
+    moe_intermediate_size=24,
+    # the DeltaNet mixer's four dimensions (N7), again deliberately distinct
+    # from each other and from the attention head numbers: q/k live in
+    # key-head space (2 heads x 16), v/gate/state in value-head space (4 x 8)
+    linear_num_key_heads=2,
+    linear_num_value_heads=4,
+    linear_key_head_dim=16,
+    linear_value_head_dim=8,
 )
 
 
@@ -90,6 +101,21 @@ EXPECTED: dict[str, tuple[int | None, int | None, bool]] = {
     "attention_key": (64, 4, True),
     "attention_scores": (None, 8, False),
     "attention_z": (128, 8, True),
+    # the DeltaNet interior (N7): key_dim = 2·16 = 32, value_dim = 4·8 = 32,
+    # so the fused q|k|v projection is 96 wide; q/k are key-head space (2
+    # heads), everything value-shaped is value-head space (4)
+    "deltanet_qkv": (96, None, True),
+    "deltanet_qkv_conv": (96, None, True),
+    "deltanet_query": (32, 2, True),
+    "deltanet_key": (32, 2, True),
+    "deltanet_value": (32, 4, True),
+    "deltanet_beta": (4, None, True),
+    "deltanet_decay": (4, None, True),
+    "deltanet_gate": (32, 4, True),
+    "deltanet_core_out": (32, 4, True),
+    "deltanet_gated_out": (32, 4, True),
+    # per chunk: a (k_dim x v_dim) matrix per value head — 16·8 per head
+    "deltanet_state": (4 * 16 * 8, 4, True),
     "attention_premix": (128, 8, True),
     # ⚠️ the *value's* shape: this component is derived, and hidden-wide per
     # head rather than head_dim-wide
@@ -102,7 +128,14 @@ EXPECTED: dict[str, tuple[int | None, int | None, bool]] = {
     "router_logits": (32, None, True),
     "router_scores": (4, None, True),
     "expert_idx": (4, None, False),
-    "expert_output": (64, None, True),
+    # the per-expert interior (N6): one vector per routed slot, token-major —
+    # top_k · width, with the projections in the routed experts' own inner
+    # width and the output hidden-wide
+    "expert_gate_proj": (4 * 24, None, True),
+    "expert_up_proj": (4 * 24, None, True),
+    "expert_activation": (4 * 24, None, True),
+    "expert_permutation": (4, None, False),
+    "expert_output": (4 * 64, None, True),
     "routed_output": (64, None, True),
     "shared_expert_gate_proj": (48, None, True),
     "shared_expert_up_proj": (48, None, True),
