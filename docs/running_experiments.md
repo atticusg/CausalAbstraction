@@ -121,7 +121,7 @@ Anything outside them is a load error, not a fallback.
 
 | vocabulary | values |
 |---|---|
-| `sites.component` | the 62 hookpoints in [§5](#5-hookpoints-on-qwen36-35b-a3b) |
+| `sites.component` | 62 names; the 61 the A3B exposes are tabulated in [§5](#5-hookpoints-on-qwen36-35b-a3b) (the 62nd, `mlp_activation`, has no tensor on this architecture) |
 | `sites.stream` | `full_attention` · `linear_attention` — a per-layer fact on a hybrid tower, refused at load if the layer carries the other one |
 | `sites.head` / `sites.expert` | sub-axis selectors, legal only where the component has that axis |
 | `writes.do` | `swap` · `add_scaled` · `lerp` · `affine` · `gaussian` · `renormalize` · `clamp` · `pytorch_fn` (local-only) |
