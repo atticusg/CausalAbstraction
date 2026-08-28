@@ -125,10 +125,14 @@ class ModelInfo:
     #: of the three spellings above, sizing the per-expert interior
     #: (``expert_gate_proj`` and friends, round N6).
     moe_intermediate_size: int | None = None
-    #: The Gated DeltaNet mixer's dimensions (round N7). Its q/k live in
+    #: The Gated DeltaNet mixer's dimensions (rounds 4 / N7). Its q/k live in
     #: *key-head* space and its v/gate/state in *value-head* space — two
     #: different head counts, the linear-attention analogue of GQA, and the
     #: same silent-empty-slice hazard if one bound is used for the other.
+    #: ⚠️ Four independent numbers, deliberately not derived from each other:
+    #: the fixture has 2× GVA tiling (``num_value_heads == 2 · num_key_heads``)
+    #: and equal head dims, and a table that assumed either coupling would be
+    #: silently wrong on a family that breaks it.
     linear_num_key_heads: int | None = None
     linear_num_value_heads: int | None = None
     linear_key_head_dim: int | None = None
@@ -456,6 +460,132 @@ def component_shape(info: ModelInfo, component: str) -> FeatureShape:
     if component == "shared_expert_gate":
         # one scalar per token: how much of the shared expert to mix in
         return shapes.flat_td(1)
+    if component in (
+        "delta_qkv",
+        "delta_gate",
+        "delta_premix",
+        "delta_conv",
+        "delta_query",
+        "delta_key",
+        "delta_value",
+        "delta_beta",
+        "delta_decay",
+        "delta_kernel_output",
+        "delta_kv_mem",
+        "delta_state_update",
+        "delta_state",
+    ):
+        missing = [
+            name
+            for name in (
+                "linear_num_value_heads",
+                "linear_num_key_heads",
+                "linear_key_head_dim",
+                "linear_value_head_dim",
+            )
+            if getattr(info, name) is None
+        ]
+        if missing:
+            raise ValidationError(
+                4,
+                f"model {info.key!r} declares no linear-attention stream "
+                f"(missing {', '.join(missing)}); {component} has no width",
+            )
+        assert info.linear_num_value_heads is not None  # for the type-checker
+        assert info.linear_num_key_heads is not None
+        assert info.linear_key_head_dim is not None
+        assert info.linear_value_head_dim is not None
+        if component == "delta_qkv":
+            # 📐 in_proj_qkv's fused [q | k | v] output: widths key_dim,
+            # key_dim, value_dim — UNEQUAL (128/128/256 on the fixture), so
+            # there is no head packing to declare and no `head:` here;
+            # whole-tensor and `dims` only. The kernel-boundary components
+            # (round 4.2) are the per-head faces of the same information.
+            key_dim = info.linear_num_key_heads * info.linear_key_head_dim
+            value_dim = info.linear_num_value_heads * info.linear_value_head_dim
+            return shapes.bsd(
+                2 * key_dim + value_dim,
+                note=(
+                    "It is the fused [q | k | v] projection, widths "
+                    f"{key_dim}/{key_dim}/{value_dim} — unequal, so it has no "
+                    "head axis. The per-head faces are the kernel-boundary "
+                    "components ('delta_query'/'delta_key'/'delta_value')."
+                ),
+            )
+        if component == "delta_conv":
+            # 📐 causal_conv1d_fn's return: (batch, conv_dim, position) —
+            # channels-first, the existing bds layout, as #48 predicted. Same
+            # fused unequal widths as delta_qkv, so no head axis here either.
+            key_dim = info.linear_num_key_heads * info.linear_key_head_dim
+            value_dim = info.linear_num_value_heads * info.linear_value_head_dim
+            return shapes.bds(
+                2 * key_dim + value_dim,
+                note=(
+                    "It is the convolved fused [q | k | v], channels-first and "
+                    "with unequal split widths, so it has no head axis. The "
+                    "per-head faces are 'delta_query'/'delta_key'/'delta_value'."
+                ),
+            )
+        if component in ("delta_query", "delta_key"):
+            # 📐 kernel args 0/1: (b, s, heads, d_k) — already tiled to the
+            # v-head count (GVA repeat_interleave happens BEFORE the kernel)
+            # and PRE-l2norm (the kernel normalizes and scales internally).
+            return shapes.bshd(
+                info.linear_num_value_heads,
+                info.linear_key_head_dim,
+                note=(
+                    "Captured pre-l2norm: the kernel applies l2norm and the "
+                    "1/sqrt(d) scale internally, so this is the tensor a write "
+                    "can actually steer."
+                ),
+            )
+        if component in ("delta_value", "delta_kernel_output"):
+            # kernel arg 2, and return[0] — v-head space, (b, s, heads, d_v).
+            # The output is pre-norm, pre-gate core_attn_out.
+            return shapes.bshd(info.linear_num_value_heads, info.linear_value_head_dim)
+        if component == "delta_state":
+            # ⚠️ On a real checkpoint this is the expensive read: a full-seq
+            # all-layers delta_state is layers · seq · heads · d_k · d_v floats
+            # (30 · seq · 32·128·128 on the A3B). Address positions early — the
+            # gather runs on the steps axis before anything is kept.
+            return shapes.state_matrix(
+                info.linear_num_value_heads,
+                info.linear_key_head_dim,
+                info.linear_value_head_dim,
+                note=(
+                    "It is the recurrent state S_t: one d_k × d_v matrix per "
+                    "head per step. Read it whole (optionally with 'head:'); "
+                    "its per-step faces are 'delta_kv_mem' (what the decayed "
+                    "state recalls for k̂_t) and 'delta_state_update' (what is "
+                    "written in)."
+                ),
+            )
+        if component in ("delta_kv_mem", "delta_state_update"):
+            # per-step d_v vectors per head, stacked over steps — derived from
+            # adjacent states and pinned by the reconstruction identity
+            # S_t == S_{t-1}·exp(g_t) + k̂_t ⊗ delta_t (round-4 plan §2.3)
+            return shapes.bshd(info.linear_num_value_heads, info.linear_value_head_dim)
+        if component == "delta_beta":
+            return shapes.bsh(
+                info.linear_num_value_heads,
+                note=(
+                    "One scalar gate per head per position — "
+                    "sigmoid(in_proj_b), in (0, 1)."
+                ),
+            )
+        if component == "delta_decay":
+            return shapes.bsh(
+                info.linear_num_value_heads,
+                note=(
+                    "The log-decay g — negative reals (the state multiplies by "
+                    "exp(g) per step), not a probability."
+                ),
+            )
+        # delta_gate (in_proj_z's output) and delta_premix (out_proj's input)
+        # are both value-head space: v-heads · v-head-dim, head-major, flat.
+        return shapes.bs_flat_heads(
+            info.linear_num_value_heads, info.linear_value_head_dim
+        )
     if component.startswith("deltanet_"):
         return _deltanet_shape(info, component)
     raise ValidationError(
@@ -540,12 +670,15 @@ def head_space_refusal(component: str, head: int, shape: FeatureShape) -> str:
     :func:`component_width` (which refuses if anything reaches it another way),
     so the two cannot drift into disagreeing about what a head means.
     """
-    return (
+    message = (
         f"component {component!r} has no head axis — its shape is "
         f"{shape.describe()} — so head {head} would be validated and then "
         "silently dropped. Name a component that has heads "
         "('attention_premix'), or drop the 'head' field."
     )
+    # the shape's note is the "…so do this instead" half a refusal cannot
+    # generate — delta_qkv's names the per-head faces of the same information
+    return f"{message} {shape.note}" if shape.note else message
 
 
 def component_width(info: ModelInfo, component: str, *, head: int | None = None) -> int:

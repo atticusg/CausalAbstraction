@@ -59,13 +59,33 @@ COMPONENT_RANK: dict[str, int] = {
     "embeddings": 0,
     "block_input": 100,
     "attention_input_norm": 150,  # input_layernorm, between resid_pre and mixer
+    # The DeltaNet mixer's interior (round 4) interleaves numerically with the
+    # full-attention band below: a layer carries one stream or the other, so
+    # only relative order *within* a stream is ever compared, and the numbers
+    # avoid every attention slot so that neither round renumbers the other.
+    "delta_qkv": 152,  # in_proj_qkv's fused [q|k|v] output, pre-conv
+    "delta_gate": 154,  # in_proj_z's output — the output gate, produced early
+    "delta_conv": 156,  # causal_conv1d_fn's return, channels-first
+    "delta_query": 158,  # kernel arg 0: post-conv, post-tiling, PRE-l2norm
     # The mixer's interior, in the order the forward computes it. All four are
     # module boundaries: q_norm/k_norm run BEFORE RoPE and are nn.Modules, so
     # the pre-RoPE projections are ordinary forward hooks rather than taps
     # inside the attention function.
     "attention_query_pre_rope": 160,
+    "delta_key": 162,  # kernel arg 1
+    "delta_value": 164,  # kernel arg 2
+    "delta_beta": 166,  # kernel kwarg beta — sigmoid(in_proj_b), per head
+    "delta_decay": 168,  # kernel kwarg g — the log-decay, negative reals
     "attention_key_pre_rope": 170,
+    # the per-step interior (round 4.3), in loop order: readout, update, state
+    "delta_kv_mem": 172,  # (S_{t-1}·exp(g_t) · k̂_t).sum — what the state recalls
+    "delta_state_update": 174,  # (v_t − kv_mem_t)·β_t — the diagram's `delta`
+    "delta_state": 176,  # S_t, one d_k × d_v matrix per head per step
+    "delta_kernel_output": 178,  # kernel return[0]: pre-norm, pre-gate
     "attention_value_states": 180,
+    # the DeltaNet post-norm, post-gate mixer input — the exact analogue of
+    # attention_premix, which is why the name
+    "delta_premix": 182,
     # produced with q (one fused projection) and consumed at the very end, at
     # `attn_output * sigmoid(gate)` — ranked where it is produced
     "attention_gate": 190,

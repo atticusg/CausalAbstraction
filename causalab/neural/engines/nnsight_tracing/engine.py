@@ -60,8 +60,20 @@ class NnsightEngine(Engine):
     # is the first vocabulary only this engine serves — the reference engine
     # leaves it undeclared, so routing lands it here by name; the DeltaNet
     # interior joins the schema with N7 and enters the same way.
-    components = frozenset(COMPONENTS)
-    writable_components = frozenset(COMPONENTS)
+    #
+    # Round 4's `delta_*` vocabulary is the *reference engine's* DeltaNet
+    # interior: the kernel boundary is reached by swapping the modeling
+    # file's module globals for the dynamic extent of one mixer forward, and
+    # the per-step interior by stepping the recurrent kernel inside the
+    # swapped globals — pytorch_hooks mechanisms with no nnsight equivalent
+    # (this engine's DeltaNet interior is the `deltanet_*` set, N7). The
+    # `delta_*` module-boundary taps (qkv, gate, premix) are ordinary envoy
+    # reads and would very likely work here unchanged — but nothing exercises
+    # them on this engine, and declaring support this engine has never been
+    # tested for is the claim worth not making.
+    _ROUND_FOUR_DELTA = frozenset(c for c in COMPONENTS if c.startswith("delta_"))
+    components = frozenset(COMPONENTS) - _ROUND_FOUR_DELTA
+    writable_components = frozenset(COMPONENTS) - _ROUND_FOUR_DELTA
     is_local = True
 
     def __init__(self, *, device: str = "cpu") -> None:

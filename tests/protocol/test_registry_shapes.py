@@ -66,13 +66,15 @@ GQA = ModelInfo(
     # is the one place a wrong-spelling pick is distinguishable at all
     shared_expert_intermediate_size=48,
     moe_intermediate_size=24,
-    # the DeltaNet mixer's four dimensions (N7), again deliberately distinct
-    # from each other and from the attention head numbers: q/k live in
-    # key-head space (2 heads x 16), v/gate/state in value-head space (4 x 8)
-    linear_num_key_heads=2,
-    linear_num_value_heads=4,
-    linear_key_head_dim=16,
-    linear_value_head_dim=8,
+    # ⚠️ the DeltaNet mixer's four dimensions, deliberately uncoupled: v-heads
+    # is not 2·k-heads and the two head dims differ — the fixture's couplings
+    # (2× GVA tiling, equal dims) are exactly what a table must not assume
+    # (round-4 plan §1.1). q/k live in key-head space (3 heads × 10),
+    # v/gate/state in value-head space (6 × 12).
+    linear_num_value_heads=6,
+    linear_num_key_heads=3,
+    linear_key_head_dim=10,
+    linear_value_head_dim=12,
 )
 
 
@@ -92,6 +94,28 @@ EXPECTED: dict[str, tuple[int | None, int | None, bool]] = {
     "embeddings": (64, None, True),
     "block_input": (64, None, True),
     "attention_input_norm": (64, None, True),
+    # the DeltaNet interior's module boundaries: qkv is 2·(3·10) + 6·12 = 132
+    # wide with NO head axis (unequal fused widths); the gate and the premix
+    # are value-head space, 6 heads of 12
+    "delta_qkv": (132, None, True),
+    "delta_gate": (72, 6, True),
+    "delta_premix": (72, 6, True),
+    # the kernel boundary: conv is the fused width again (no head axis); q/k
+    # are TILED to the 6 v-heads of the 10-wide key head dim; the gates' one
+    # scalar per head makes the feature axis the head axis
+    "delta_conv": (132, None, True),
+    "delta_query": (60, 6, True),
+    "delta_key": (60, 6, True),
+    "delta_value": (72, 6, True),
+    "delta_beta": (6, 6, True),
+    "delta_decay": (6, 6, True),
+    # the per-step interior: the derived faces are ordinary v-head spaces; the
+    # state's trailing axes form a d_k × d_v matrix per head — a head axis to
+    # select on, but no feature vector, so no width and no featurizer
+    "delta_kv_mem": (72, 6, True),
+    "delta_state_update": (72, 6, True),
+    "delta_state": (None, 6, False),
+    "delta_kernel_output": (72, 6, True),
     "attention_probs": (None, 8, False),
     "attention_query_pre_rope": (128, 8, True),
     "attention_key_pre_rope": (64, 4, True),
@@ -101,21 +125,21 @@ EXPECTED: dict[str, tuple[int | None, int | None, bool]] = {
     "attention_key": (64, 4, True),
     "attention_scores": (None, 8, False),
     "attention_z": (128, 8, True),
-    # the DeltaNet interior (N7): key_dim = 2·16 = 32, value_dim = 4·8 = 32,
-    # so the fused q|k|v projection is 96 wide; q/k are key-head space (2
-    # heads), everything value-shaped is value-head space (4)
-    "deltanet_qkv": (96, None, True),
-    "deltanet_qkv_conv": (96, None, True),
-    "deltanet_query": (32, 2, True),
-    "deltanet_key": (32, 2, True),
-    "deltanet_value": (32, 4, True),
-    "deltanet_beta": (4, None, True),
-    "deltanet_decay": (4, None, True),
-    "deltanet_gate": (32, 4, True),
-    "deltanet_core_out": (32, 4, True),
-    "deltanet_gated_out": (32, 4, True),
-    # per chunk: a (k_dim x v_dim) matrix per value head — 16·8 per head
-    "deltanet_state": (4 * 16 * 8, 4, True),
+    # the DeltaNet interior (N7): key_dim = 3·10 = 30, value_dim = 6·12 = 72,
+    # so the fused q|k|v projection is 132 wide; q/k are key-head space (3
+    # heads), everything value-shaped is value-head space (6)
+    "deltanet_qkv": (132, None, True),
+    "deltanet_qkv_conv": (132, None, True),
+    "deltanet_query": (30, 3, True),
+    "deltanet_key": (30, 3, True),
+    "deltanet_value": (72, 6, True),
+    "deltanet_beta": (6, None, True),
+    "deltanet_decay": (6, None, True),
+    "deltanet_gate": (72, 6, True),
+    "deltanet_core_out": (72, 6, True),
+    "deltanet_gated_out": (72, 6, True),
+    # per chunk: a (k_dim x v_dim) matrix per value head — 10·12 per head
+    "deltanet_state": (6 * 10 * 12, 6, True),
     "attention_premix": (128, 8, True),
     # ⚠️ the *value's* shape: this component is derived, and hidden-wide per
     # head rather than head_dim-wide

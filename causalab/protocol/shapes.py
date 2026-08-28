@@ -75,6 +75,7 @@ __all__ = [
     "attention_pattern",
     "bds",
     "bs",
+    "bsh",
     "bs_flat_heads",
     "bs_fused_heads",
     "bshd",
@@ -100,9 +101,13 @@ AxisKind = Literal[
     "fused",
     "feature",
     "topk",
+    "state",
 ]
 
 #: Axes that make up the contract's single feature axis, in this order.
+#: ``"state"`` is deliberately absent: a recurrent state's trailing axes form a
+#: d_k × d_v **matrix** per head, and flattening a matrix into "the feature
+#: axis" would let featurizers and ``dims`` index a space that is not a basis.
 INNER_KINDS: frozenset[str] = frozenset({"head", "fused", "feature", "topk"})
 
 #: Axes that do not. ``key_position`` is here rather than among the inner kinds
@@ -217,6 +222,9 @@ class FeatureShape:
         for axis in self.inner_axes:
             if axis.width is None:
                 raise ValueError(f"inner axis {axis.label!r} needs a static width")
+        for axis in self.state_axes:
+            if axis.width is None:
+                raise ValueError(f"state axis {axis.label!r} needs a static width")
 
     # -- axis groups ------------------------------------------------------- #
 
@@ -235,6 +243,16 @@ class FeatureShape:
     @property
     def position_axes(self) -> tuple[Axis, ...]:
         return tuple(a for a in self.axes if a.kind in ("position", "key_position"))
+
+    @property
+    def state_axes(self) -> tuple[Axis, ...]:
+        """The matrix axes of a recurrent state — the second
+        ``is_feature_space == False`` citizen after the attention pattern.
+        Unlike the pattern it keeps its one position axis, so position
+        addressing works; what it lacks is a feature *vector*, so featurizers
+        and ``dims`` are refused and the tensor crosses the executor in its
+        native layout."""
+        return tuple(a for a in self.axes if a.kind == "state")
 
     @property
     def head_space(self) -> int | None:
@@ -269,14 +287,21 @@ class FeatureShape:
     @property
     def is_feature_space(self) -> bool:
         """Whether a featurizer may attach: a contract form, real values rather
-        than labels, and an axis to attach to."""
-        return self.has_contract_form and not self.integral and bool(self.feature_axes)
+        than labels, an axis to attach to — and no state matrix, whose
+        "features" are a d_k × d_v matrix rather than a vector."""
+        return (
+            self.has_contract_form
+            and not self.integral
+            and bool(self.feature_axes)
+            and not self.state_axes
+        )
 
     @property
     def width(self) -> int | None:
         """The contract's feature width, or ``None`` when there is no feature
-        axis to measure."""
-        if not self.has_contract_form or not self.feature_axes:
+        axis to measure (or when the trailing axes form a state matrix, which
+        has an element count but no basis to be wide *in*)."""
+        if not self.has_contract_form or not self.feature_axes or self.state_axes:
             return None
         return math.prod(a.width or 1 for a in self.feature_axes)
 
@@ -327,6 +352,13 @@ class FeatureShape:
             why = (
                 f"its axes are {self.describe()} — it has two position axes "
                 f"({names}), so its feature axis IS a position axis"
+            )
+        elif self.state_axes:
+            names = " × ".join(a.label for a in self.state_axes)
+            why = (
+                f"its axes are {self.describe()} — its trailing axes ({names}) "
+                "form a matrix per head, not a feature vector, so there is no "
+                "basis to fit or index"
             )
         elif not self.feature_axes:
             why = f"its axes are {self.describe()}, with no feature axis at all"
@@ -442,6 +474,16 @@ def bs_flat_heads(
     )
 
 
+def bsh(heads: int, *, note: str | None = None) -> FeatureShape:
+    """``(batch, position, heads)`` — one scalar per head per position.
+
+    The DeltaNet kernel's per-head gates (``beta``, ``g``): the feature axis
+    *is* the head axis, so ``head:`` selects a width-1 column and a featurizer
+    attaches to an 8-wide space whose basis is the fixed head list.
+    """
+    return FeatureShape(axes=(_BATCH, _POSITION, Axis("head", heads)), note=note)
+
+
 def bshd(heads: int, head_dim: int, *, note: str | None = None) -> FeatureShape:
     """``(batch, position, heads, head_dim)`` — ``q_norm``/``k_norm``'s output."""
     return FeatureShape(
@@ -496,6 +538,25 @@ def bs_fused_heads(
             Axis("feature", head_dim),
         ),
         fused_index=index,
+        note=note,
+    )
+
+
+def state_matrix(
+    heads: int, d_k: int, d_v: int, *, note: str | None = None
+) -> FeatureShape:
+    """``(batch, steps, heads, d_k, d_v)`` — the recurrent state, one matrix
+    per head per step. The position axis runs over decode/prompt *steps*, so
+    position addressing works; the trailing two axes are a matrix, so
+    featurizers and ``dims`` refuse (see ``state_axes``)."""
+    return FeatureShape(
+        axes=(
+            _BATCH,
+            Axis("position", name="steps"),
+            Axis("head", heads),
+            Axis("state", d_k),
+            Axis("state", d_v),
+        ),
         note=note,
     )
 
