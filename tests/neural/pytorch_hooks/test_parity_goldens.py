@@ -78,7 +78,7 @@ N_PROBES = 8
 SKIPPED: dict[str, str] = {
     "gqa.collect.head_value.identity.last.head": (
         "the spec's component vocabulary (§2.4) has no v_proj-output site — "
-        "'attention_value' is the o_proj input in query-head space, not the "
+        "'attention_premix' is the o_proj input in query-head space, not the "
         "old 'value' kind's KV-head slice of v_proj's output"
     ),
     "gqa.interchange.head_value.identity.last.head": (
@@ -310,10 +310,10 @@ def _run_head_case(
     """One ``gqa.<mode>.head_attention_value.identity.last.head`` case: the
     per-head o_proj-input column slice (query-head space), destination head 1,
     donor head 0 at the same layer/input — the old HeadSite semantics that
-    ``attention_value`` + ``head`` carries in the protocol vocabulary."""
+    ``attention_premix`` + ``head`` carries in the protocol vocabulary."""
     doc = _doc_skeleton()
     doc["sites"]["dst"] = {
-        "component": "attention_value",
+        "component": "attention_premix",
         "layer": DST_LAYER,
         "head": HEAD_DST,
     }
@@ -325,7 +325,7 @@ def _run_head_case(
 
     assert mode == "interchange", mode
     doc["sites"]["donor"] = {
-        "component": "attention_value",
+        "component": "attention_premix",
         "layer": DST_LAYER,
         "head": HEAD_DONOR,
     }

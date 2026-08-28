@@ -40,6 +40,7 @@ __all__ = [
     "ALL_POSITIONS",
     "ArtifactRef",
     "COMPONENTS",
+    "DEPRECATED_COMPONENTS",
     "Component",
     "DataRole",
     "Do",
@@ -101,7 +102,7 @@ Component = Literal[
     "block_input",
     "attention_input_norm",
     "attention_output",
-    "attention_value",
+    "attention_premix",
     "attention_probs",
     "block_mid",
     "mlp_input_norm",
@@ -125,6 +126,25 @@ Component = Literal[
 
 #: The site component vocabulary (§2.4), in spec order.
 COMPONENTS: tuple[Component, ...] = get_args(Component)
+
+#: Retired spellings, mapped to the name that replaced them. Applied at parse,
+#: so ``SiteSpec.component`` is always current and nothing downstream — the
+#: shape table, the rank table, the tap table — carries a second name.
+#:
+#: 🔤 ``attention_value`` named the o-projection's **input**: on a gated
+#: attention family (Qwen3.5/3.6) that is ``z · σ(gate)``, on an ungated one it
+#: is ``z``, and on neither is it the value vectors. Round 2 exposes those
+#: separately, as ``attention_value_states`` — so the old name had to move
+#: before the collision, not after it (nnterp#51 is the same mistake, made
+#: after).
+#:
+#: The replacement name is **not** reused for the new box, deliberately: a
+#: document written against the old vocabulary would then load, and silently
+#: mean a different tensor. An alias that redirects is safe; an alias that
+#: rebinds is the failure this whole rename exists to avoid.
+DEPRECATED_COMPONENTS: dict[str, Component] = {
+    "attention_value": "attention_premix",
+}
 
 #: The mixer a layer carries. A hybrid tower has both — 📐 on
 #: ``tiny-random/qwen3.5-moe`` three of four layers are Gated DeltaNet
@@ -1286,6 +1306,17 @@ def _parse_positions(
     }
 
 
+def _current_component(value: Any) -> Any:
+    """Fold a retired component spelling onto the name that replaced it.
+
+    Done here rather than in canonicalization so that *nothing* downstream ever
+    sees the old name: the canonical form, the digest and every table are in one
+    vocabulary, and the alias is a parse-time courtesy with no second code path
+    behind it.
+    """
+    return DEPRECATED_COMPONENTS.get(value, value) if isinstance(value, str) else value
+
+
 def _parse_site(raw: Any, path: str) -> SiteSpec:
     obj = _require_mapping(raw, path)
     _check_keys(obj, ("component", "layer", "head", "expert", "stream"), path)
@@ -1293,7 +1324,7 @@ def _parse_site(raw: Any, path: str) -> SiteSpec:
         raise ParseError("P2", "a site needs a 'component'", path=path)
     component = _wrapped(
         obj["component"],
-        lambda v, p: _enum(v, COMPONENTS, p),
+        lambda v, p: _enum(_current_component(v), COMPONENTS, p),
         f"{path}.component",
     )
     layer = (

@@ -45,6 +45,7 @@ from causalab.protocol.registry import (
 from causalab.protocol.resolve import ResolutionEnv
 from causalab.protocol.schema import (
     ALL_POSITIONS,
+    DEPRECATED_COMPONENTS,
     FEATURIZER_SLOTS,
     MODEL_DTYPE_DEFAULT,
     LAYERLESS_COMPONENTS,
@@ -287,7 +288,16 @@ def _canon_position_entry(entry: Any) -> Any:
 def _canon_site(
     name: str, entry: Mapping[str, Any], info: ModelInfo | None
 ) -> dict[str, Any]:
+    entry = dict(entry)
     component = entry.get("component")
+    if isinstance(component, str) and component in DEPRECATED_COMPONENTS:
+        # A retired spelling canonicalizes to its replacement, so both digest
+        # identically and the canonical form is in one vocabulary. Folding only
+        # at parse would leave the *canonical* document carrying a name no table
+        # downstream knows — `component_shape` would refuse it, which is the
+        # opposite of what an alias is for.
+        component = DEPRECATED_COMPONENTS[component]
+        entry["component"] = component
     layer = entry.get("layer")
     if (
         info is not None

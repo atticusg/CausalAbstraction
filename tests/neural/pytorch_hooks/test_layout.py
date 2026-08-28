@@ -175,7 +175,7 @@ def test_bds_moves_the_feature_axis_last() -> None:
 
 def test_head_axes_flatten_head_major() -> None:
     """Head ``h``'s block of the contract is ``[h*d, (h+1)*d)`` — the same
-    space ``attention_value``'s ``head`` slice already addressed, which is why
+    space ``attention_premix``'s ``head`` slice already addressed, which is why
     a per-head tap needs no new sub-axis in the executor."""
     native = _native("bshd")  # (batch, seq, heads, head_dim)
     contract = to_contract(native, sh.bshd(HEADS, HEAD_DIM), batch_size=BATCH)

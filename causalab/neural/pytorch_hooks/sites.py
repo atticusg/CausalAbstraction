@@ -18,7 +18,7 @@ Two semantics deliberately preserved from the oracle:
   ``act_fn``'s output (``act(gate_proj(x))``, NOT the down-projection's
   input), GPT-2 taps ``c_proj``'s input (which IS the down-projection's
   input). Inherited 1:1 from the pyvene era and pinned by the oracle.
-* ``attention_value`` with a ``head`` is the ``[H*d, (H+1)*d]`` column
+* ``attention_premix`` with a ``head`` is the ``[H*d, (H+1)*d]`` column
   slice of the o-projection's **input** — query-head space (``head_dim``
   honours a decoupled ``config.head_dim``). 📐 On a **gated** attention
   family (Qwen3.5/3.6's ``self_attn``, where the mixer multiplies by a
@@ -139,9 +139,9 @@ class ResolvedSite:
     @property
     def depth(self) -> tuple[int, int]:
         """(layer, intra-order) — matches the protocol planner's ranks."""
-        from causalab.protocol.plan import COMPONENT_RANK  # one shared table
+        from causalab.protocol.plan import COMPONENT_RANK, UNRANKED  # one table
 
-        rank = COMPONENT_RANK.get(self.component, 100)
+        rank = COMPONENT_RANK.get(self.component, UNRANKED)
         if self.component in ("ln_final", "lm_head"):
             return (1_000_000, rank)
         return (self.layer, rank)
@@ -438,7 +438,7 @@ def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
         return tap(block, "in")
     if component == "attention_output":
         return tap(_attn(bundle, layer), "out")
-    if component == "attention_value":
+    if component == "attention_premix":
         return tap(
             _o_proj(bundle, layer),
             "in",
