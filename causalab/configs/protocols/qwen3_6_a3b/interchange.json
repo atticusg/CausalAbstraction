@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "description": "Step 4 / the core test: swap the answer-slot residual stream from the counterfactual into the base at one mid-tower layer, and score IIA. This is configs/protocols/interchange.json retargeted - only model.key and sites.target.layer differ.",
+  "description": "Step 4 / the core test: swap the residual stream from the counterfactual into the base at ONE located cell, and score IIA. The cell is not a guess - locate_scan.json puts the weekday at the subject token from layer 10 onward (IIA 1.000) and at the answer slot only in the last few layers, so this tests the subject token at mid-tower. \ud83d\udcd0 Measured on the checkpoint: IIA 1.000 here, against 0.000 for the same layer at the answer slot, which is what makes 'locate first, then test' a rule rather than advice.",
   "model": {
     "key": "Qwen/Qwen3.6-35B-A3B",
     "revision": "main",
@@ -16,6 +16,11 @@
       "field": "counterfactual_inputs[0]"
     }
   },
+  "positions": {
+    "tap": {
+      "variable": "subject"
+    }
+  },
   "sites": {
     "target": {
       "component": "block_output",
@@ -28,7 +33,7 @@
   "reads": {
     "v_cf": {
       "site": "target",
-      "pos": -1,
+      "pos": "tap",
       "model": "original",
       "input": "counterfactual"
     },
@@ -42,7 +47,7 @@
   "writes": {
     "patch": {
       "site": "target",
-      "pos": -1,
+      "pos": "tap",
       "do": {
         "swap": "v_cf"
       }
