@@ -24,13 +24,14 @@ from causalab.neural.pytorch_hooks.attention_interface import (
     InterfaceTap,
     attention_interface_taps,
 )
-from causalab.neural.pytorch_hooks.attention_probs import post_softmax_value_multiply
 from causalab.neural.pytorch_hooks.backend import PytorchHooksBackend
+from causalab.neural.pytorch_hooks.loading import load_model
 from causalab.neural.pytorch_hooks.sites import resolve_site
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import SiteSpec
 
 from ._drive import base_data_section, executor_for
+from .conftest import TINY_GPT2
 
 pytestmark = pytest.mark.smoke
 
@@ -53,8 +54,7 @@ def eager_attention_writes(edits: dict) -> Any:
         return (InterfaceTap(slot="probs", edit=run),)
 
     return attention_interface_taps(
-        {module_id: as_tap(edit) for module_id, edit in edits.items()},
-        post_softmax=post_softmax_value_multiply,
+        {module_id: as_tap(edit) for module_id, edit in edits.items()}
     )
 
 
@@ -497,7 +497,9 @@ def test_the_eager_math_is_the_modules_own(qwen35moe_bundle, llama_bundle):
     so the wrapper must resolve `eager_attention_forward` from each module's
     own modeling file — borrowing one family's function would silently replace
     another's math (gemma-2's eager soft-caps the logits, for instance)."""
-    from causalab.neural.pytorch_hooks.attention_probs import module_eager_attention
+    from causalab.neural.pytorch_hooks.attention_interface import (
+        module_eager_attention,
+    )
 
     qwen_eager = module_eager_attention(qwen35moe_bundle.mixer_at(3))
     llama_eager = module_eager_attention(llama_bundle.mixer_at(0))
@@ -510,7 +512,9 @@ def test_a_family_without_eager_math_refuses_by_name():
     """A modeling file that exports no eager function cannot be wrapped, and
     approximating it with another family's math is exactly the silent drift
     this module exists to prevent — so it refuses, naming what is missing."""
-    from causalab.neural.pytorch_hooks.attention_probs import module_eager_attention
+    from causalab.neural.pytorch_hooks.attention_interface import (
+        module_eager_attention,
+    )
 
     class FakeMixer(torch.nn.Module):
         pass
@@ -520,18 +524,51 @@ def test_a_family_without_eager_math_refuses_by_name():
     assert "eager_attention_forward" in str(excinfo.value)
 
 
-def test_only_the_pattern_write_needs_repeat_kv(qwen35moe_bundle):
-    """📐 The two symbols are needed by different things, and GPT-2's modeling
-    file exports the first and not the second (no GQA, so nothing to repeat).
-    Requiring both made a plain read of the attention interior on gpt2 fail with
-    a message about pattern writes."""
+def test_the_pattern_is_writable_on_a_family_with_no_repeat_kv():
+    """The capability round 2.5's deletion bought, as a behaviour rather than a
+    grep.
+
+    📐 The recompute this module used to carry needed ``repeat_kv``, and GPT-2's
+    modeling file does not export it — it has no GQA, so it has nothing to
+    repeat. A pattern write on gpt2 therefore refused by name. Intercepting the
+    softmax's *output* hands the edited pattern back to the model's own value
+    multiply, so no second symbol is needed and the family that could not be
+    written now can.
+    """
     import transformers.models.gpt2.modeling_gpt2 as gpt2_modeling
-    from causalab.neural.pytorch_hooks.attention_probs import module_eager_attention
 
     assert hasattr(gpt2_modeling, "eager_attention_forward")
-    assert not hasattr(gpt2_modeling, "repeat_kv")
-    # ...and the tap that needs only the first resolves on qwen unchanged
-    assert module_eager_attention(qwen35moe_bundle.mixer_at(3)) is not None
+    assert not hasattr(gpt2_modeling, "repeat_kv"), "fixture assumption"
+
+    bundle = load_model(TINY_GPT2)
+    encoded = bundle.tokenizer(BASE_TEXT, return_tensors="pt")
+    attn = bundle.mixer_at(1)
+    with torch.no_grad():
+        clean = bundle.model(**encoded).logits.clone()
+
+    def wreck(probs: torch.Tensor) -> None:
+        probs.zero_()
+
+    with eager_attention_writes({id(attn): wreck}):
+        with torch.no_grad():
+            wrecked = bundle.model(**encoded).logits.clone()
+    assert float((wrecked - clean).abs().max()) > 1e-4
+
+
+def test_an_identity_edit_is_bit_identical_on_gpt2_too():
+    """And the identity pin holds there, which is what says the write landed in
+    the right place rather than merely somewhere."""
+    bundle = load_model(TINY_GPT2)
+    encoded = bundle.tokenizer(BASE_TEXT, return_tensors="pt")
+    attn = bundle.mixer_at(1)
+    with torch.no_grad():
+        clean = bundle.model(**encoded).logits.clone()
+    seen: dict[str, object] = {}
+    with eager_attention_writes({id(attn): lambda p: seen.__setitem__("ran", True)}):
+        with torch.no_grad():
+            again = bundle.model(**encoded).logits.clone()
+    assert seen.get("ran"), "the wrapper never ran"
+    assert torch.equal(again, clean)
 
 
 def test_an_identity_edit_is_bit_identical_on_llama(llama_bundle):
