@@ -104,8 +104,22 @@ class SourceAddress:
     #: ``tracer.iter`` loop machinery (N7/N6).
     fires: str = "once"
     #: Implementation switches the address is only valid under —
-    #: ``{"attn_eager"}``: the fused kernels never materialize the tensor.
+    #: ``{"attn_eager"}``: the fused kernels never materialize the tensor;
+    #: ``{"experts_grouped"}``: the grouped experts kernel is where the
+    #: per-expert interior's ops live.
     requires: frozenset[str] = frozenset()
+    #: The value's rows are expert rows — ``(batch·position·top_k, …)`` — and
+    #: the executor re-packs them token-major to the declared 2-D native
+    #: shape ``(batch·position, top_k·…)`` (N6). Pure row bookkeeping; the
+    #: declared :class:`FeatureShape` stays the semantic description.
+    expert_rows: bool = False
+    #: Op pattern (same substring rule, matched on the same drilled source as
+    #: the value) of the ``torch.sort`` whose ``output[1]`` maps sorted rows →
+    #: token-major rows. When set, the value's rows are in the kernel's
+    #: expert-sorted order and the executor un-sorts reads / re-sorts writes
+    #: through it — the sorted layout is grouped_mm bookkeeping, never the
+    #: component's meaning.
+    align: str | None = None
 
 
 _OP_SUFFIX = re.compile(r"_\d+$")
@@ -191,10 +205,72 @@ FULL_ATTENTION: dict[str, SourceAddress] = {
 #: The Gated DeltaNet interior — filled by N7.
 LINEAR_ATTENTION: dict[str, SourceAddress] = {}
 
-#: The per-expert MoE interior — filled by N6. Not a mixer stream: the ops
-#: live under ``mlp.experts``, so the executor keys into this table by
-#: component rather than by ``stream_at``.
-MOE_EXPERTS: dict[str, SourceAddress] = {}
+#: The per-expert MoE interior (N6). Not a mixer stream: the ops live under
+#: ``mlp.experts``, so the executor keys into this table by component (a
+#: ``kind="interior"`` site) rather than by ``stream_at``.
+#:
+#: All five live inside the grouped experts kernel (``experts_forward`` is the
+#: dispatch's call — the same assigned-then-called ambiguity as
+#: ``attention_interface``, resolved the same way). 📐 Measured on
+#: ``tiny-random/qwen3.5-moe`` and matching the real A3B's inventory: the
+#: kernel sorts the ``(token, slot)`` rows by expert (``torch_sort``), runs
+#: the fused gate_up projection (``_apply_gate``'s ``chunk`` splits it),
+#: down-projects, un-sorts (``inv_perm``) and weights (``weighted_out_1``,
+#: token-major again). The sorted layout is bookkeeping, so every sorted-space
+#: value carries ``align`` and is presented token-major.
+MOE_EXPERTS: dict[str, SourceAddress] = {
+    "expert_gate_proj": SourceAddress(
+        module="mlp.experts",
+        op_pattern="experts_forward",
+        peel=("self__apply_gate",),
+        field="gate_up_out_chunk",
+        tuple_index=0,
+        expert_rows=True,
+        align="torch_sort",
+        requires=frozenset({"experts_grouped"}),
+    ),
+    "expert_up_proj": SourceAddress(
+        module="mlp.experts",
+        op_pattern="experts_forward",
+        peel=("self__apply_gate",),
+        field="gate_up_out_chunk",
+        tuple_index=1,
+        expert_rows=True,
+        align="torch_sort",
+        requires=frozenset({"experts_grouped"}),
+    ),
+    "expert_activation": SourceAddress(
+        module="mlp.experts",
+        op_pattern="experts_forward",
+        # the _apply_gate call's own return: act(gate)·up, the down-projection's
+        # input — the same tensor `shared_expert_activation` names on the
+        # shared expert
+        field="self__apply_gate",
+        expert_rows=True,
+        align="torch_sort",
+        requires=frozenset({"experts_grouped"}),
+    ),
+    "expert_permutation": SourceAddress(
+        module="mlp.experts",
+        op_pattern="experts_forward",
+        # the kernel's own inverse permutation — token-major by construction,
+        # so no align. The `_1` suffix is load-bearing: `inv_perm_0` is the
+        # empty_like allocation, `_1` the filled table, and neither line is a
+        # call, so the call-op rule cannot separate them.
+        field="inv_perm_1",
+        expert_rows=True,
+        requires=frozenset({"experts_grouped"}),
+    ),
+    "expert_output": SourceAddress(
+        module="mlp.experts",
+        op_pattern="experts_forward",
+        # after the kernel's own un-sort and the router weighting: token-major
+        # weighted contributions, summing to `routed_output` over the top-k
+        field="weighted_out_1",
+        expert_rows=True,
+        requires=frozenset({"experts_grouped"}),
+    ),
+}
 
 #: Every table, keyed the way :func:`causalab.neural.shared.streams.stream_at`
 #: answers — the executor's single lookup point.

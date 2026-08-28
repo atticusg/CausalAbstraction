@@ -101,6 +101,11 @@ class PointExecutor(ExecutorBase):
             (rname): resolve_site(self.bundle, self.doc.sites[str(read.site)])
             for rname, read in taps
         }
+        for what, site in (
+            *((f"read {rname!r}", site) for rname, site in capture_sites.items()),
+            *((f"write at {site.component!r}", site) for site, _ in write_hooks),
+        ):
+            _refuse_interior(what, site)
         # A continuation read at lm_head is served from kept ln_final
         # activations (d_model, not vocab) and projected at its addressed
         # steps — the same value, without ever building the whole vocabulary
@@ -109,6 +114,8 @@ class PointExecutor(ExecutorBase):
             rname: resolve_site(self.bundle, self.doc.sites[str(read.site)])
             for rname, read in gen_taps
         }
+        for rname, site in gen_sites.items():
+            _refuse_interior(f"read {rname!r}", site)
         gen_capture_sites = {
             rname: (
                 resolve_site(self.bundle, SiteSpec(component="ln_final"))
@@ -420,6 +427,28 @@ def _interface_accumulate(
         sink.append(to_contract(native, site.shape, batch_size=batch_size))
 
     return read
+
+
+def _refuse_interior(what: str, site: ResolvedSite) -> None:
+    """Refuse a tap this engine has no mechanism for, naming the one that does.
+
+    ``kind="interior"`` marks a tensor computed *inside* a fused forward (the
+    per-expert MoE interior, N6): there is no module boundary for a hook and
+    no per-family interface registry to wrap, so the tap belongs to the
+    nnsight engine's ``.source`` addressing. Routing already keeps such
+    documents away (the component is absent from this engine's declaration);
+    this refusal is for one arriving unrouted.
+    """
+    if site.kind != "interior":
+        return
+    raise ProtocolError(
+        "P4",
+        f"{what} addresses {site.component!r}, which lives inside the fused "
+        "experts forward where no pytorch hook can reach — the nnsight engine "
+        "serves it (its `.source` address table, "
+        "neural/engines/nnsight_tracing/addresses.py). Routing sends such "
+        "documents there.",
+    )
 
 
 def _refuse_unstackable(name: str, site: ResolvedSite) -> None:

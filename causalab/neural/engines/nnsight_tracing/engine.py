@@ -53,9 +53,10 @@ class NnsightEngine(Engine):
     # underlying module (measured in the N5 probes). Read-only/swap-only
     # components and stream constraints are *protocol policy* (the shared
     # sites.py refusal tables), not capability gaps — the same argument the
-    # reference engine's declaration makes. The interiors this engine exists
-    # for (DeltaNet state, expert interiors) join the schema with N6/N7 and
-    # enter these sets there.
+    # reference engine's declaration makes. The per-expert MoE interior (N6)
+    # is the first vocabulary only this engine serves — the reference engine
+    # leaves it undeclared, so routing lands it here by name; the DeltaNet
+    # interior joins the schema with N7 and enters the same way.
     components = frozenset(COMPONENTS)
     writable_components = frozenset(COMPONENTS)
     is_local = True

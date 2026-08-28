@@ -23,8 +23,7 @@ component                            shape
 ``block_output``, ``attention_output``,   residual stream. The three norm taps
 ``mlp_input``, ``mlp_output``,       are here because an RMSNorm maps the
 ``ln_final``, ``attention_input_norm``,   residual stream to itself, so both
-``block_mid``, ``mlp_input_norm``,   its sides are hidden-wide
-``expert_output``
+``block_mid``, ``mlp_input_norm``    its sides are hidden-wide
 ``mlp_activation``                   ``(batch, position, intermediate)`` (the
                                      family caveat of *which* tensor this
                                      names lives in the backend, not here)
@@ -46,6 +45,17 @@ component                            shape
 ``expert_idx``                       ``(batch·position, top_k)``, **integral**:
                                      a routing table of integer expert ids —
                                      no featurizer, no gradient
+``expert_permutation``               ``(batch·position, top_k)``, **integral**:
+                                     the serving kernel's row bookkeeping —
+                                     for each (token, slot), the row index in
+                                     expert-sorted order
+``expert_gate_proj``,                ``(batch·position, top_k·moe_inner)`` —
+``expert_up_proj``,                  one vector per routed expert slot,
+``expert_activation``                token-major (round N6)
+``expert_output``                    ``(batch·position, top_k·hidden)`` — each
+                                     slot's weighted contribution; summing
+                                     over the top-k axis gives
+                                     ``routed_output``
 ``shared_expert_gate_proj``,         ``(batch·position, shared_inner)``
 ``shared_expert_up_proj``,
 ``shared_expert_activation``
@@ -104,6 +114,10 @@ class ModelInfo:
     #: widths (dense ``intermediate_size``, ``moe_intermediate_size`` per routed
     #: expert, and this one), and reading the wrong one is silent.
     shared_expert_intermediate_size: int | None = None
+    #: The routed experts' inner width (``moe_intermediate_size``) — the third
+    #: of the three spellings above, sizing the per-expert interior
+    #: (``expert_gate_proj`` and friends, round N6).
+    moe_intermediate_size: int | None = None
 
 
 _REGISTRY: dict[str, ModelInfo] = {}
@@ -174,6 +188,7 @@ def model_info_from_hf_config(key: str, config: Any) -> ModelInfo:
             getattr(text, "shared_expert_intermediate_size", None)
             or getattr(text, "moe_intermediate_size", None)
         ),
+        moe_intermediate_size=getattr(text, "moe_intermediate_size", None),
     )
 
 
@@ -188,11 +203,20 @@ _HIDDEN_COMPONENTS: frozenset[str] = frozenset(
         "mlp_input",
         "mlp_output",
         "ln_final",
-        "expert_output",
         "attention_input_norm",
         "block_mid",
         "mlp_input_norm",
     }
+)
+
+#: The per-expert interior (round N6): one vector per routed expert *slot*,
+#: token-major — ``(batch*position, top_k * width)``. What differs per
+#: component is only the width: the projections and the activation are
+#: ``moe_intermediate_size`` wide, ``expert_output`` is hidden-wide (each
+#: slot's weighted contribution to the residual stream, summing to
+#: ``routed_output`` over the top-k axis).
+_EXPERT_INTERIOR_INNER: frozenset[str] = frozenset(
+    {"expert_gate_proj", "expert_up_proj", "expert_activation"}
 )
 
 #: Both MoE branches write into the residual stream, so both are hidden-wide —
@@ -369,6 +393,38 @@ def component_shape(info: ModelInfo, component: str) -> FeatureShape:
                 "Read it directly, or featurize 'router_logits', whose axis is "
                 "the fixed all-experts one."
             ),
+        )
+    if component in _EXPERT_INTERIOR_INNER or component in (
+        "expert_output",
+        "expert_permutation",
+    ):
+        if info.num_experts_per_tok is None:
+            raise ValidationError(
+                4,
+                f"model {info.key!r} declares no num_experts_per_tok; "
+                f"{component} has no top-k axis",
+            )
+        if component == "expert_permutation":
+            return shapes.flat_topk(
+                info.num_experts_per_tok,
+                integral=True,
+                note=(
+                    "It is the serving kernel's row bookkeeping: for each "
+                    "(token, slot) pair, the row index in expert-sorted order. "
+                    "Read it to align raw kernel-order tensors; the per-expert "
+                    "components themselves are already presented token-major."
+                ),
+            )
+        if component == "expert_output":
+            return shapes.flat_topk_features(info.num_experts_per_tok, info.hidden_size)
+        if info.moe_intermediate_size is None:
+            raise ValidationError(
+                4,
+                f"model {info.key!r} declares no moe_intermediate_size; "
+                f"{component} has no width",
+            )
+        return shapes.flat_topk_features(
+            info.num_experts_per_tok, info.moe_intermediate_size
         )
     if component in _SHARED_EXPERT_INNER:
         if info.shared_expert_intermediate_size is None:

@@ -99,7 +99,16 @@ COMPONENT_RANK: dict[str, int] = {
     "router_logits": 510,
     "router_scores": 520,
     "expert_idx": 530,
-    "expert_output": 540,  # per-expert interior (still refused — follow-up F2)
+    # The per-expert interior (N6), ranked where its ops fire inside the fused
+    # experts forward: the gate/up projections, the activation, then — just
+    # before the weighted combine — the kernel's inverse permutation, which is
+    # what `expert_permutation` reads. Its late rank is deliberate: ranks are
+    # execution order, and the `.source` interiors refuse out-of-order taps.
+    "expert_gate_proj": 532,
+    "expert_up_proj": 534,
+    "expert_activation": 536,
+    "expert_permutation": 538,
+    "expert_output": 540,
     "routed_output": 550,
     "mlp_activation": 600,
     # the shared expert runs beside the routed ones; its gate is *consumed*
