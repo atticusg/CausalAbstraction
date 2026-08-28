@@ -36,7 +36,12 @@ import json
 from typing import Any, Mapping
 
 from causalab.protocol.errors import ValidationError
-from causalab.protocol.registry import ModelInfo, component_width
+from causalab.protocol.registry import (
+    ModelInfo,
+    component_shape,
+    component_width,
+    head_space_refusal,
+)
 from causalab.protocol.resolve import ResolutionEnv
 from causalab.protocol.schema import (
     ALL_POSITIONS,
@@ -297,14 +302,31 @@ def _canon_site(
                 path=f"sites.{name}.layer",
             )
     head = entry.get("head")
-    if info is not None and isinstance(head, int):
-        # attention_value is the per-head o-projection input — query-head space
-        space = info.num_heads
+    if info is not None and isinstance(head, int) and isinstance(component, str):
+        # 🐞 This used to read ``info.num_heads`` regardless of component, which
+        # was wrong in two directions at once. On a component with no head axis
+        # the bound *accepted* and the backend then silently dropped the field —
+        # the same class as the ``expert`` sub-axis that ``_moe_site`` refuses by
+        # name. And on a KV-space component under GQA the query-head bound is too
+        # wide, so an over-wide head yields an **empty** slice rather than an
+        # out-of-range one: python does not raise, the read saves a
+        # ``(b, n_pos, 0)`` tensor and the write changes nothing.
+        #
+        # The bound now comes from the component's own shape, which is the only
+        # thing that knows how many heads it has, or whether it has any.
+        shape = component_shape(info, component)
+        space = shape.head_space
+        if space is None:
+            raise ValidationError(
+                4,
+                f"site {name!r}: " + head_space_refusal(component, head, shape),
+                path=f"sites.{name}.head",
+            )
         if not 0 <= head < space:
             raise ValidationError(
                 4,
-                f"site {name!r}: head {head} out of range ({space} heads in this "
-                "component's head space)",
+                f"site {name!r}: head {head} out of range ({space} heads in "
+                f"{component!r}'s head space, {shape.describe()})",
                 path=f"sites.{name}.head",
             )
     return dict(entry)
@@ -338,6 +360,12 @@ def _featurizer_chains_raw(
                 if pair not in used:
                     used.append(pair)
     return used
+
+
+#: Featurizer kinds whose parameters are a **basis** over the feature axis, and
+#: which therefore need that axis to be one. The rest (identity, standardize,
+#: gate) act per column and are meaningful on any axis with a width.
+_BASIS_FITTING_KINDS: frozenset[str] = frozenset({"subspace", "pca", "sae"})
 
 
 def _raw_stage_output_width(spec: Mapping[str, Any], input_width: int) -> int | None:
@@ -421,6 +449,30 @@ def _derived_width(
             return None
         if not isinstance(component, str):
             return None
+        shape = component_shape(info, component)
+        if shape.ranking:
+            # D3: dimensionally the axis has a width, so every featurizer used
+            # to be accepted here — but column *k* is the *k*-th ranked expert,
+            # a different expert for different tokens. A basis fitted across
+            # positions is fitted across a basis that is itself shuffled per
+            # position, so the fit means nothing even though it converges. Only
+            # the kinds that *fit a basis* are refused; identity, standardize
+            # and gate act per column and stay meaningful.
+            declared = normalized.get("featurizers", {})
+            fitting = [
+                (member, declared.get(member, {}).get("kind"))
+                for member in chain
+                if declared.get(member, {}).get("kind") in _BASIS_FITTING_KINDS
+            ]
+            if fitting:
+                member, kind = fitting[0]
+                raise ValidationError(
+                    4,
+                    f"featurizer {member!r} ({kind!r}) fits a basis on site "
+                    f"{site_name!r}, whose component {component!r} is not one: "
+                    + shape.refusal(f"component {component!r}"),
+                    path=f"featurizers.{member}",
+                )
         running: int | None = component_width(
             info, component, head=head if isinstance(head, int) else None
         )

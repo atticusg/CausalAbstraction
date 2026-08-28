@@ -56,7 +56,6 @@ from causalab.neural.pytorch_hooks.sites import (
     resolve_site,
 )
 from causalab.neural.pytorch_hooks.layout import (
-    Layout,
     from_contract,
     rebuild_payload,
     tap_tensor,
@@ -66,6 +65,7 @@ from causalab.protocol.bundles import entry_selection, selector_slot
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.plan import generated_budget
 from causalab.protocol.registry import component_width
+from causalab.protocol.shapes import FeatureShape
 from causalab.protocol.schema import (
     ALL_POSITIONS,
     Document,
@@ -118,15 +118,21 @@ def _hidden_of(out: Any) -> torch.Tensor:
     return out[0] if isinstance(out, tuple) else out
 
 
-def _tap_key(site: "ResolvedSite") -> tuple[int, str, str, int | None]:
+#: What identifies a tap for capture-sink sharing — see :func:`_tap_key`.
+TapKey = tuple[int, str, FeatureShape, int | None]
+
+
+def _tap_key(site: "ResolvedSite") -> TapKey:
     """Identity of a tap for capture-sink sharing.
 
     Two sites may share a module and side yet mean different tensors — a
-    different tuple element, or the same tensor in a different layout — so the
-    layout and tuple index are part of the identity. Keying on the module alone
-    would let one tap read another's tensor.
+    different tuple element, or the same tensor read through a different shape
+    (round 2's ``attention_gate`` and ``attention_query_pre_rope`` are two
+    splits of one projection) — so the shape and tuple index are part of the
+    identity. Keying on the module alone would let one tap read another's
+    tensor.
     """
-    return (id(site.module), site.kind, site.layout, site.tuple_index)
+    return (id(site.module), site.kind, site.shape, site.tuple_index)
 
 
 class PointExecutor:
@@ -349,7 +355,7 @@ class PointExecutor:
                 depth = max(depth, budget)
 
         write_hooks = self._build_write_hooks(write_names, input_role, batch)
-        capture: dict[tuple[int, str], torch.Tensor] = {}
+        capture: dict[TapKey, torch.Tensor] = {}
         capture_sites = {
             (rname): resolve_site(self.bundle, self.doc.sites[str(read.site)])
             for rname, read in taps
@@ -375,21 +381,28 @@ class PointExecutor:
             # An attention-pattern write cannot ride a forward hook: the hook
             # fires after the pattern has been consumed, so the edit would be a
             # silent no-op. It goes through the eager attention function instead.
+            #
+            # The discriminator is the shape, not the component name: a tap
+            # with no contract form is one whose feature axis is a position
+            # axis, and the only such tap is the attention pattern — which is
+            # also the only tensor a forward hook cannot write. Round 2.3
+            # generalizes the routing when more of the mixer's interior needs
+            # the attention function.
             pattern_edits = {
                 id(module): fn
-                for module, kind, w_layout, w_tuple_index, fn in write_hooks
-                if w_layout == "native"
+                for module, kind, w_shape, w_tuple_index, fn in write_hooks
+                if not w_shape.has_contract_form
             }
             hooks.enter_context(eager_attention_writes(pattern_edits))
-            for module, kind, w_layout, w_tuple_index, fn in write_hooks:
-                if w_layout == "native":
+            for module, kind, w_shape, w_tuple_index, fn in write_hooks:
+                if not w_shape.has_contract_form:
                     continue
                 hooks.enter_context(
                     _installed(
                         module,
                         kind,
                         fn,
-                        layout=w_layout,
+                        shape=w_shape,
                         tuple_index=w_tuple_index,
                         batch_size=batch.input_ids.shape[0],
                     )
@@ -404,7 +417,7 @@ class PointExecutor:
                             site.kind,
                             capture,
                             key,
-                            layout=site.layout,
+                            shape=site.shape,
                             tuple_index=site.tuple_index,
                             batch_size=batch.input_ids.shape[0],
                         )
@@ -473,11 +486,11 @@ class PointExecutor:
         rows = int(mask.shape[0])
 
         tokens: list[torch.Tensor] = [nxt]
-        steps: dict[tuple[int, str], list[torch.Tensor]] = {}
+        steps: dict[TapKey, list[torch.Tensor]] = {}
         cache = prefill.past_key_values
         with contextlib.ExitStack() as hooks:
             for name, site in gen_capture_sites.items():
-                if site.component == "attention_probs":
+                if not site.shape.has_contract_form:
                     # 📐 Each decode step attends over the whole cache, so the
                     # pattern is (batch, heads, 1, prompt + step): the key axis
                     # GROWS by one per step while the query axis stays 1. The
@@ -488,19 +501,17 @@ class PointExecutor:
                     # single-step budget, silently returns one step's pattern
                     # shaped like a frame. Neither is a continuation read.
                     #
-                    # Saying what a correct one would mean — a ragged key axis
-                    # per step, addressed per query row — is exactly the typed
-                    # feature-shape descriptor, follow-up F1. Refuse by name
-                    # until then, as round 1 does for every other thing the
-                    # descriptor is needed for.
+                    # The condition is the shape, not the name: stacking steps
+                    # on the position axis is only meaningful for a tap that has
+                    # one position axis, and a tap with two has no
+                    # non-arbitrary answer to which one grows.
                     raise ProtocolError(
                         "P4",
-                        f"read {name!r} reads 'attention_probs' in the "
-                        "generated frame, which round 1 does not support: with "
-                        "a KV cache each step's pattern has a different key "
-                        "width, so the steps do not stack into one tensor. "
-                        "Read it in the prompt frame, or wait on the typed "
-                        "feature-shape descriptor (follow-up F1).",
+                        f"read {name!r} reads {site.component!r} in the "
+                        "generated frame, whose shape is "
+                        f"{site.shape.describe()}: with a KV cache each step's "
+                        "pattern has a different key width, so the steps do not "
+                        "stack into one tensor. Read it in the prompt frame.",
                     )
                 key = _tap_key(site)
                 if key not in steps:
@@ -510,7 +521,7 @@ class PointExecutor:
                             site.module,
                             site.kind,
                             steps[key],
-                            layout=site.layout,
+                            shape=site.shape,
                             tuple_index=site.tuple_index,
                             batch_size=batch.input_ids.shape[0],
                         )
@@ -677,8 +688,8 @@ class PointExecutor:
         served from kept ``ln_final`` activations: the vocabulary projection
         happens at the addressed positions and nowhere else.
         """
-        if site.component == "attention_probs":
-            return _whole_attention_pattern(rname, read, raw)
+        if not site.shape.has_contract_form:
+            return _whole_native_tensor(rname, read, raw, site)
         if per_row is None:
             per_row = self._positions(read.pos, batch, input_role)
         gathered = self._gather(raw, per_row, f"read {rname!r}")
@@ -744,13 +755,15 @@ class PointExecutor:
 
     def _build_write_hooks(
         self, write_names: tuple[str, ...], input_role: str, batch: EncodedBatch
-    ) -> list[tuple[Any, str, Layout, int | None, Callable[[torch.Tensor], None]]]:
+    ) -> list[
+        tuple[Any, str, FeatureShape, int | None, Callable[[torch.Tensor], None]]
+    ]:
         """One in-place hook per written-to tap, applying every write at that
         address in class order.
 
         Addresses are keyed by :func:`_tap_key`, so two components that share a
         module but mean different tensors (a different tuple element, or a
-        different layout) get their own hook rather than one overwriting the
+        different shape) get their own hook rather than one overwriting the
         other's view.
         """
         by_address: dict[Any, list[tuple[str, WriteSpec, ResolvedSite]]] = {}
@@ -782,7 +795,7 @@ class PointExecutor:
             addresses[key] = site
 
         hooks: list[
-            tuple[Any, str, Layout, int | None, Callable[[torch.Tensor], None]]
+            tuple[Any, str, FeatureShape, int | None, Callable[[torch.Tensor], None]]
         ] = []
         for key, entries in by_address.items():
             site = addresses[key]
@@ -790,7 +803,7 @@ class PointExecutor:
                 (
                     site.module,
                     site.kind,
-                    site.layout,
+                    site.shape,
                     site.tuple_index,
                     self._address_writer(entries, input_role, batch),
                 )
@@ -813,27 +826,27 @@ class PointExecutor:
 
         def apply(tensor: torch.Tensor) -> None:
             for ename, write, site in ordered:
-                if site.component == "attention_probs":
-                    # Symmetric with the read (see _whole_attention_pattern):
+                if not site.shape.has_contract_form:
+                    # Symmetric with the read (see _whole_native_tensor):
                     # the pattern's feature axis is a position axis, so the
                     # position gather below would index heads with positions.
-                    # Round 1 replaces the whole pattern — which is what only
-                    # `swap` means. Any other mechanism (a delta, a scale, a
-                    # clamp) would leave rows that no longer sum to 1, and the
+                    # A write here replaces the whole tensor — which is what
+                    # only `swap` means. Any other mechanism (a delta, a scale,
+                    # a clamp) would leave rows that no longer sum to 1, and the
                     # code below would treat its payload as a whole pattern
-                    # anyway; refuse by name rather than produce one that is
-                    # plausible and wrong.
+                    # anyway; refuse rather than produce one that is plausible
+                    # and wrong.
                     if str(write.do.mechanism) != "swap":
                         raise ProtocolError(
                             "P4",
                             f"write {ename!r} applies {str(write.do.mechanism)!r} "
-                            "to 'attention_probs' — round 1 supports only a "
-                            "whole-pattern 'swap' (an interchange). Anything "
-                            "that re-weights rows needs the typed feature-shape "
-                            "descriptor and a renormalization story "
-                            "(follow-up F1).",
+                            f"to {site.component!r}, whose shape is "
+                            f"{site.shape.describe()}: only a whole-tensor "
+                            "'swap' (an interchange) is supported, because the "
+                            "rows of a pattern must still sum to 1 and "
+                            "nothing downstream renormalizes them.",
                         )
-                    _whole_attention_pattern(ename, write, tensor)
+                    _whole_native_tensor(ename, write, tensor, site)
                     replacement = self._operand_lookup(write.do.payload)
                     if replacement.shape != tensor.shape:
                         raise ProtocolError(
@@ -914,47 +927,50 @@ class PointExecutor:
 # --------------------------------------------------------------------------- #
 
 
-def _whole_attention_pattern(
-    rname: str, read: "ReadSpec | WriteSpec", raw: torch.Tensor
+def _whole_native_tensor(
+    rname: str, read: "ReadSpec | WriteSpec", raw: torch.Tensor, site: "ResolvedSite"
 ) -> torch.Tensor:
-    """An ``attention_probs`` read: the whole (batch, heads, query, key) pattern.
+    """A read of a tap with **no contract form**: the whole native tensor.
 
-    Round-1 scope, and the reason it is a bypass rather than a gather: this
-    tensor has **two** position axes and its feature axis *is* a position axis,
-    so ``_gather`` (dim 0 batch, dim 1 position) would index the head axis with
-    position indices, and ``dims`` would slice the key axis as though it were
-    features. Both would produce plausible numbers from the wrong tensor.
+    The one such tap is the attention pattern, ``(batch, heads, query, key)``,
+    and the reason this is a bypass rather than a gather is its second position
+    axis: ``_gather`` (dim 0 batch, dim 1 position) would index the head axis
+    with position indices, and ``dims`` would slice the key axis as though it
+    were features. Both produce plausible numbers from the wrong tensor.
 
-    Rather than approximate, the two forms that need a typed feature-shape
-    descriptor are refused and named as follow-up F1. What remains — the whole
-    pattern, at ``pos: "all"`` — is exactly what an interchange on attention
-    needs, and what nnterp's own check exercises (``self[layer] = rnd``).
+    All three refusals below are *generated* from
+    :class:`~causalab.protocol.shapes.FeatureShape` — position addressing needs
+    one position axis, a featurizer needs a feature space, ``dims`` needs a
+    feature axis to index — so a later tap with the same problem is refused by
+    declaring its axes rather than by adding a branch here. What remains — the
+    whole tensor, at ``pos: "all"`` — is exactly what an interchange on
+    attention needs, and what nnterp's own check exercises
+    (``self[layer] = rnd``).
     """
+    shape = site.shape
+    what = f"{site.component!r} ({shape.describe()})"
     pos = read.pos
     whole = getattr(pos, "all", None) is True or pos == ALL_POSITIONS
     if not whole:
+        axes = ", ".join(a.label for a in shape.position_axes)
         raise ProtocolError(
             "P4",
-            f"read {rname!r} addresses positions on 'attention_probs', which "
-            "has two position axes (batch, heads, query, key) — its feature "
-            "axis IS a position axis. Round 1 exposes the whole pattern: use "
-            'pos: "all". Addressing one query row, or slicing the key axis, '
-            "needs the typed feature-shape descriptor (follow-up F1).",
+            f"read {rname!r} addresses positions on {what}, which has "
+            f"{len(shape.position_axes)} position axes ({axes}) — a position "
+            "index would be ambiguous between them. Read the whole tensor with "
+            'pos: "all".',
         )
     if read.featurizer is not None:
         raise ProtocolError(
             "P4",
-            f"read {rname!r} featurizes 'attention_probs', whose feature axis "
-            "is a position axis — a featurizer would be fitted across key "
-            "positions, which is not a feature space. Needs the typed "
-            "feature-shape descriptor (follow-up F1).",
+            f"read {rname!r} featurizes {what}: {shape.refusal('it')} A "
+            "featurizer would be fitted across an axis that is not a basis.",
         )
     if isinstance(read.dims, tuple):
         raise ProtocolError(
             "P4",
-            f"read {rname!r} slices 'dims' on 'attention_probs': that would "
-            "select key positions as though they were features. Needs the "
-            "typed feature-shape descriptor (follow-up F1).",
+            f"read {rname!r} slices 'dims' on {what}: that would select "
+            f"{shape.axes[-1].label} entries as though they were features.",
         )
     return raw
 
@@ -965,24 +981,27 @@ def _installed(
     kind: str,
     write: Callable[[torch.Tensor], None],
     *,
-    layout: Layout = "bsd",
+    shape: FeatureShape,
     tuple_index: int | None = None,
     batch_size: int = 1,
 ) -> Iterator[None]:
     """Install an in-place write hook, converting to the executor's contract.
 
     ``write`` always sees a ``(batch, position, feature)`` tensor and mutates it
-    in place; the model always gets its native shape back. For the default
-    ``"bsd"`` layout both conversions are identity, so the path is unchanged.
+    in place; the model always gets its native shape back. ``native`` is handed
+    to :func:`from_contract` because a fused tap's other splits live in it and
+    have to survive the write untouched.
     """
     if kind == "out":
 
         def out_hook(_m: Any, _i: Any, out: Any) -> Any:
             native = tap_tensor(out, tuple_index).clone()
-            contract = to_contract(native, layout, batch_size=batch_size)
+            contract = to_contract(native, shape, batch_size=batch_size)
             write(contract)
             return rebuild_payload(
-                out, tuple_index, from_contract(contract, layout, batch_size=batch_size)
+                out,
+                tuple_index,
+                from_contract(contract, shape, batch_size=batch_size, native=native),
             )
 
         handle = module.register_forward_hook(out_hook)
@@ -990,10 +1009,10 @@ def _installed(
 
         def pre_hook(_m: Any, args: tuple[Any, ...]) -> tuple[Any, ...]:
             native = args[0].clone()
-            contract = to_contract(native, layout, batch_size=batch_size)
+            contract = to_contract(native, shape, batch_size=batch_size)
             write(contract)
             return (
-                from_contract(contract, layout, batch_size=batch_size),
+                from_contract(contract, shape, batch_size=batch_size, native=native),
                 *args[1:],
             )
 
@@ -1011,7 +1030,7 @@ def _capturing(
     sink: dict[Any, torch.Tensor],
     key: Any,
     *,
-    layout: Layout = "bsd",
+    shape: FeatureShape,
     tuple_index: int | None = None,
     batch_size: int = 1,
 ) -> Iterator[None]:
@@ -1020,14 +1039,14 @@ def _capturing(
 
         def out_hook(_m: Any, _i: Any, out: Any) -> None:
             sink[key] = to_contract(
-                tap_tensor(out, tuple_index), layout, batch_size=batch_size
+                tap_tensor(out, tuple_index), shape, batch_size=batch_size
             )
 
         handle = module.register_forward_hook(out_hook)
     else:
 
         def pre_hook(_m: Any, args: tuple[Any, ...]) -> None:
-            sink[key] = to_contract(args[0], layout, batch_size=batch_size)
+            sink[key] = to_contract(args[0], shape, batch_size=batch_size)
 
         handle = module.register_forward_pre_hook(pre_hook)
     try:
@@ -1042,7 +1061,7 @@ def _accumulating(
     kind: str,
     sink: list[torch.Tensor],
     *,
-    layout: Layout = "bsd",
+    shape: FeatureShape,
     tuple_index: int | None = None,
     batch_size: int = 1,
 ) -> Iterator[None]:
@@ -1057,14 +1076,14 @@ def _accumulating(
 
         def out_hook(_m: Any, _i: Any, out: Any) -> None:
             sink.append(
-                to_contract(tap_tensor(out, tuple_index), layout, batch_size=batch_size)
+                to_contract(tap_tensor(out, tuple_index), shape, batch_size=batch_size)
             )
 
         handle = module.register_forward_hook(out_hook)
     else:
 
         def pre_hook(_m: Any, args: tuple[Any, ...]) -> None:
-            sink.append(to_contract(args[0], layout, batch_size=batch_size))
+            sink.append(to_contract(args[0], shape, batch_size=batch_size))
 
         handle = module.register_forward_pre_hook(pre_hook)
     try:

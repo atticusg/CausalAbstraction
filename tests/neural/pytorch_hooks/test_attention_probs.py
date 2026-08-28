@@ -334,14 +334,24 @@ def test_the_backend_now_declares_the_capability():
 # --------------------------------------------------------------------------- #
 
 
-def test_the_tap_is_native_layout_not_the_contract(qwen35moe_bundle):
-    """`layout="native"` claims nothing about the axes. Defaulting to `"bsd"`
-    would convert identically and *assert* something false."""
+def test_the_tap_declares_two_position_axes_and_so_has_no_contract(
+    qwen35moe_bundle,
+):
+    """The shape names all four axes, and it is that description — not a magic
+    marker — that says there is no ``(batch, position, feature)`` form. Every
+    refusal below follows from it."""
     site = resolve_site(
         qwen35moe_bundle,
         SiteSpec(component="attention_probs", layer=FULL_ATTENTION_LAYER),
     )
-    assert site.layout == "native"
+    assert [a.kind for a in site.shape.axes] == [
+        "batch",
+        "head",
+        "position",
+        "key_position",
+    ]
+    assert not site.shape.has_contract_form
+    assert not site.shape.is_feature_space
     assert site.tuple_index == 1  # (attn_output, attn_weights)
 
 
@@ -355,21 +365,27 @@ def test_the_tap_is_native_layout_not_the_contract(qwen35moe_bundle):
     ],
     ids=["pos_index", "pos_span", "featurizer", "dims"],
 )
-def test_the_forms_that_need_f1_are_refused(qwen35moe_bundle, kwargs, needle):
+def test_the_forms_the_shape_cannot_support_are_refused(
+    qwen35moe_bundle, kwargs, needle
+):
     """Each of these would silently read the wrong axis: ``_gather`` would index
     heads with positions, and ``dims`` would select key positions as features.
-    Refused, and every message names follow-up F1."""
+
+    Every message is *generated* from the tap's declared axes rather than
+    written per component, so each one quotes the shape it is refusing on
+    behalf of."""
     with pytest.raises(ProtocolError) as excinfo:
         executor_for(
             _read_doc(**kwargs), qwen35moe_bundle, base_texts=[BASE_TEXT]
         ).read_value("r")
     message = str(excinfo.value)
     assert needle in message
-    assert "F1" in message
+    # the refusal names the axes it is refusing on behalf of
+    assert "key_position[key]" in message
 
 
 def test_a_generated_frame_read_refuses(llama_bundle):
-    """The decode path needs F1 too, and used to say so in torch's words.
+    """The decode path needs the same refusal, and used to say so in torch's words.
 
     📐 Before this refusal the same document raised a bare
     ``RuntimeError: Sizes of tensors must match except in dimension 1.
@@ -379,7 +395,9 @@ def test_a_generated_frame_read_refuses(llama_bundle):
     of the document learns nothing from that message; they learn the shape of
     our sink.
 
-    Refused by name now, in the same F1 terms as the prompt-frame forms above.
+    Refused now on the same grounds as the prompt-frame forms above: stacking
+    decode steps on the position axis needs a tap that *has* one position axis,
+    and this one has two.
     """
     doc = {
         "version": "1",
@@ -409,7 +427,7 @@ def test_a_generated_frame_read_refuses(llama_bundle):
     message = str(excinfo.value)
     assert "generated frame" in message
     assert "key width" in message
-    assert "F1" in message
+    assert "key_position[key]" in message
 
 
 def test_a_deltanet_layer_refuses_on_the_architecture(qwen35moe_bundle):

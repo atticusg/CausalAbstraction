@@ -72,7 +72,9 @@ __all__ = [
     "RESERVED_NAMES",
     "SECTION_ORDER",
     "SaveEntry",
+    "STREAMS",
     "SiteSpec",
+    "Stream",
     "TOKEN_COLUMN_METRIC_KINDS",
     "TOKEN_FORMS",
     "TOP_K_RANKINGS",
@@ -123,6 +125,25 @@ Component = Literal[
 
 #: The site component vocabulary (§2.4), in spec order.
 COMPONENTS: tuple[Component, ...] = get_args(Component)
+
+#: The mixer a layer carries. A hybrid tower has both — 📐 on
+#: ``tiny-random/qwen3.5-moe`` three of four layers are Gated DeltaNet
+#: (``linear_attention``) and one is ``full_attention`` — so a site may name the
+#: stream it means and be refused at load if the layer it names carries the
+#: other one.
+#:
+#: 🐞 This parsed as an **integer** until round 2, which made the field
+#: unusable from either side: ``sites._check_stream`` only reads a *string*
+#: (``bundle.stream_at`` returns one), so an authored ``"full_attention"`` was
+#: rejected by the parser before the check could see it, and an authored ``0``
+#: parsed and was then silently ignored — precisely the failure ``_moe_site``'s
+#: ``expert`` refusal was written to avoid. Round 1's tests missed it because
+#: they construct ``SiteSpec(stream="full_attention")`` directly, exercising a
+#: path no document can reach.
+Stream = Literal["full_attention", "linear_attention"]
+
+#: Every stream a site may name.
+STREAMS: tuple[Stream, ...] = get_args(Stream)
 
 #: Components that carry no ``layer`` field.
 #: ``input_ids`` joins these because it is the model's *input* (§5.4), not an
@@ -1292,7 +1313,9 @@ def _parse_site(raw: Any, path: str) -> SiteSpec:
         expert=_wrapped(obj["expert"], _scalar_int, f"{path}.expert")
         if "expert" in obj
         else None,
-        stream=_wrapped(obj["stream"], _scalar_int, f"{path}.stream")
+        stream=_wrapped(
+            obj["stream"], lambda v, p: _enum(v, STREAMS, p), f"{path}.stream"
+        )
         if "stream" in obj
         else None,
     )

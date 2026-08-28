@@ -49,12 +49,14 @@ happens after the softmax — a different scaling, a dropout that is not a no-op
 eval, an output reshape — that test fails rather than the numbers quietly
 drifting.
 
-Round-1 scope: a write replaces the **whole** pattern, which is what an
-interchange on attention does (and what nnterp's own check does:
-``self[layer] = rnd``). Addressing a single query position, or a feature slice of
-the key axis, needs the typed feature-shape descriptor — the feature axis here
-*is* a position axis — and that is follow-up F1. Both are refused rather than
-approximated.
+Scope: a write replaces the **whole** pattern, which is what an interchange on
+attention does (and what nnterp's own check does: ``self[layer] = rnd``).
+Addressing a single query position, or a feature slice of the key axis, is
+refused rather than approximated — and the refusal is now *generated*: the tap
+declares ``(batch, head, position[query], key_position[key])``, which has two
+position axes and therefore no ``(batch, position, feature)`` contract form, and
+the executor refuses every operation that needs one. See
+:mod:`causalab.protocol.shapes`.
 """
 
 from __future__ import annotations
@@ -67,15 +69,7 @@ import torch
 
 from causalab.protocol.errors import ProtocolError
 
-__all__ = ["ATTENTION_PROBS_LAYOUT", "eager_attention_writes"]
-
-#: The layout marker an ``attention_probs`` tap carries. It is deliberately NOT
-#: a description of the tensor's axes — it is the *absence* of one, and the
-#: conversion for it is the identity in both directions. Describing (batch,
-#: heads, query, key) properly is follow-up F1; until then this marker says "this
-#: tap's shape is native and undescribed" so that nothing downstream can mistake
-#: it for the executor's contract.
-ATTENTION_PROBS_LAYOUT = "native"
+__all__ = ["eager_attention_writes"]
 
 
 @contextlib.contextmanager

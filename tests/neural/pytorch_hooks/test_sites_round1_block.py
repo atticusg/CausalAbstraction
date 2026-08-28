@@ -26,6 +26,7 @@ from causalab.neural.pytorch_hooks.loading import ModelBundle, load_model
 from causalab.neural.pytorch_hooks.sites import resolve_site
 from causalab.protocol.errors import ProtocolError, ValidationError
 from causalab.protocol.plan import COMPONENT_RANK
+from causalab.protocol import shapes
 from causalab.protocol.registry import component_width
 from causalab.protocol.schema import COMPONENTS, LAYERLESS_COMPONENTS, SiteSpec
 
@@ -64,7 +65,7 @@ def _capture(
                 payload = payload[0]
             tensor = tap_tensor(payload, _site.tuple_index)
             out[_name] = (
-                to_contract(tensor, _site.layout, batch_size=batch).detach().clone()
+                to_contract(tensor, _site.shape, batch_size=batch).detach().clone()
             )
 
         handles.append(
@@ -388,32 +389,35 @@ def test_input_ids_taps_the_embedding_input_on_both_families():
         site = resolve_site(bundle, _spec("input_ids"))
         assert site.module is getattr(bundle.model.model, attr)
         assert site.kind == "in"
-        assert site.layout == "bs"
+        assert site.shape == shapes.bs(integral=True, note=site.shape.note)
 
 
 # --------------------------------------------------------------------------- #
-# the "bs" layout
+# the shape with no feature axis
 # --------------------------------------------------------------------------- #
 
+#: ``input_ids``' shape: ``(batch, position)``, one integer per position.
+_BS = shapes.bs(integral=True)
 
-def test_bs_layout_round_trips_and_returns_a_view():
+
+def test_a_featureless_tap_round_trips_and_returns_a_view():
     """§6.2 review point 2: ``to_contract`` must return a view, so an in-place
     edit reaches native storage. ``unsqueeze`` does; ``reshape`` might not."""
     native = torch.arange(12).reshape(3, 4)
-    contract = to_contract(native, "bs", batch_size=3)
+    contract = to_contract(native, _BS, batch_size=3)
     assert contract.shape == (3, 4, 1)
     assert contract._base is native or contract.data_ptr() == native.data_ptr()
-    torch.testing.assert_close(from_contract(contract, "bs", batch_size=3), native)
+    torch.testing.assert_close(from_contract(contract, _BS, batch_size=3), native)
 
 
 @pytest.mark.parametrize(
     "bad", [torch.zeros(3), torch.zeros(2, 3, 4)], ids=["1d", "3d"]
 )
-def test_bs_layout_refuses_a_shape_it_cannot_mean(bad):
-    """A declared layout that contradicts the tensor raises rather than
+def test_a_featureless_tap_refuses_a_shape_it_cannot_mean(bad):
+    """A declared shape that contradicts the tensor raises rather than
     reinterpreting — the wrong-tap-with-plausible-numbers failure."""
     with pytest.raises(LayoutError):
-        to_contract(bad, "bs", batch_size=2)
+        to_contract(bad, _BS, batch_size=2)
 
 
 # --------------------------------------------------------------------------- #

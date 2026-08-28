@@ -264,6 +264,12 @@ the model said the row's value for `x`.
 | `layer` | depth index (where the component has one) |
 | `head` / `expert` / `stream` | optional sub-axes: attention head, MoE expert, **mixer stream** |
 
+`head` and `stream` are checked against the component, not against the model:
+`head` is refused on a component with no head axis, and bounded by *that
+component's* head count — which under GQA is narrower for a KV-space component
+than for a query-space one. `stream` is one of `full_attention` /
+`linear_attention`.
+
 Component vocabulary (per-backend `SiteResolver` maps each to a tap), in
 execution order:
 
@@ -300,8 +306,12 @@ execution order:
 - **`expert_idx` is a routing table, not a feature space** — the same rule as
   `input_ids`: integer ids, no featurizer, no width. And `router_scores` has a
   width but its axis is a per-token **ranking**, not a basis: column *k* is the
-  *k*-th ranked expert, a different expert for different tokens. A subspace fit
-  across positions there is not meaningful.
+  *k*-th ranked expert, a different expert for different tokens, so a basis
+  fitted across positions is fitted across a basis that is itself shuffled per
+  position. A **basis-fitting** featurizer there (`subspace`, `pca`, `sae`) is
+  therefore refused; `identity`, `standardize` and `gate` act per column and are
+  still accepted, because "how large is the top-ranked score, typically" is a
+  meaningful question about a ranking.
 - **`expert` is refused on every round-1 MoE component.** None of these tensors
   is indexed by expert: the router's axes are all-experts or top-k, and the
   shared expert is not one of the routed experts.
@@ -315,14 +325,18 @@ execution order:
   key)`, and round 1 exposes it whole: `pos: "all"`. Both of its trailing axes
   are positions — its *feature* axis IS a position axis — so addressing one
   query row, attaching a featurizer, or slicing `dims` is **refused** rather
-  than approximated; each needs a typed feature-shape descriptor, which is
-  follow-up work. A write replaces the whole pattern, which is what an
+  than approximated. Those three refusals are not written per component: the
+  tap declares its axes as `(batch, head, position[query], key_position[key])`,
+  which has two position axes and therefore no `(batch, position, feature)`
+  form, and each refusal follows from something that form would have provided.
+  A write replaces the whole pattern, which is what an
   interchange on attention means, and both inputs must have the same number of
   positions.
-- **`stream` names a mixer stream, and it is a per-layer fact.** A hybrid tower
-  carries a different mixer at different depths (Qwen3.6's text tower alternates
-  Gated DeltaNet with gated full attention), so a site whose declared `stream`
-  contradicts the layer it names is refused at load. `attention_probs` requires
+- **`stream` names a mixer stream, and it is a per-layer fact.** It is one of
+  `full_attention` / `linear_attention`. A hybrid tower carries a different mixer
+  at different depths (Qwen3.6's text tower alternates Gated DeltaNet with gated
+  full attention), so a site whose declared `stream` contradicts the layer it
+  names is refused at load. `attention_probs` requires
   a full-attention layer: a linear-attention block computes no attention matrix,
   so the refusal there is about the architecture and is permanent.
 - Sites are pure data — no behavior, no model handles.
