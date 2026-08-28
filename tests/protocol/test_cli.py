@@ -106,11 +106,11 @@ def test_refusal_exits_nonzero(capsys, artifacts_root):
 # --------------------------------------------------------------------------- #
 
 
-class _CapturingBackend:
-    """Stands in for the reference backend: records construction kwargs and
+class _CapturingEngine:
+    """Stands in for the reference engine: records construction kwargs and
     the ExecutionRequest, executes nothing."""
 
-    last: "_CapturingBackend | None" = None
+    last: "_CapturingEngine | None" = None
 
     name = "capture"
     capabilities = frozenset(
@@ -124,33 +124,33 @@ class _CapturingBackend:
         type(self).last = self
 
     def execute(self, request):
-        from causalab.protocol.backend import RunResult
+        from causalab.protocol.engine import RunResult
 
         self.request = request
         return RunResult(files={})
 
 
 @pytest.fixture
-def capturing_backend(monkeypatch):
-    """Swap the lazily-imported reference backend module for the stub."""
+def capturing_engine(monkeypatch):
+    """Swap the lazily-imported reference engine module for the stub."""
     import sys as _sys
     import types
 
-    stub = types.ModuleType("causalab.neural.pytorch_hooks")
-    stub.PytorchHooksBackend = _CapturingBackend
-    monkeypatch.setitem(_sys.modules, "causalab.neural.pytorch_hooks", stub)
-    _CapturingBackend.last = None
-    return _CapturingBackend
+    stub = types.ModuleType("causalab.neural.engines.pytorch_hooks")
+    stub.PytorchHooksEngine = _CapturingEngine
+    monkeypatch.setitem(_sys.modules, "causalab.neural.engines.pytorch_hooks", stub)
+    _CapturingEngine.last = None
+    return _CapturingEngine
 
 
 def _run_argv(name: str, artifacts_root, out, *extra: str) -> list[str]:
     return _argv("run", name, artifacts_root, "--out", str(out), *extra)
 
 
-def test_device_goes_to_the_backend_and_dtype_goes_to_the_document(
-    capturing_backend, artifacts_root, tmp_path
+def test_device_goes_to_the_engine_and_dtype_goes_to_the_document(
+    capturing_engine, artifacts_root, tmp_path
 ):
-    """§8: placement is the backend's, precision is the document's. ``--dtype``
+    """§8: placement is the engine's, precision is the document's. ``--dtype``
     is shorthand for ``--set model.dtype``, so an overridden run's digest is
     the overridden document's — the record cannot disagree with the numbers."""
     unoverridden = main(_argv("digest", "02_interchange_im.json", artifacts_root))
@@ -167,16 +167,16 @@ def test_device_goes_to_the_backend_and_dtype_goes_to_the_document(
         )
     )
     assert code == 0
-    assert capturing_backend.last.device == "cuda:1"
-    assert not hasattr(capturing_backend.last, "dtype")
-    request = capturing_backend.last.request
+    assert capturing_engine.last.device == "cuda:1"
+    assert not hasattr(capturing_engine.last, "dtype")
+    request = capturing_engine.last.request
     assert request.canonical[0]["model"]["dtype"] == "bf16"
 
 
-def test_run_defaults_stay_cpu_fp32(capturing_backend, artifacts_root, tmp_path):
+def test_run_defaults_stay_cpu_fp32(capturing_engine, artifacts_root, tmp_path):
     assert main(_run_argv("02_interchange_im.json", artifacts_root, tmp_path)) == 0
-    assert capturing_backend.last.device == "cpu"
-    assert capturing_backend.last.request.canonical[0]["model"]["dtype"] == "fp32"
+    assert capturing_engine.last.device == "cpu"
+    assert capturing_engine.last.request.canonical[0]["model"]["dtype"] == "fp32"
 
 
 def test_dtype_and_set_may_not_contradict(artifacts_root, tmp_path):
@@ -196,7 +196,7 @@ def test_dtype_and_set_may_not_contradict(artifacts_root, tmp_path):
 
 
 def test_points_selects_a_shard_without_moving_the_campaign_digest(
-    capturing_backend, env, artifacts_root, tmp_path
+    capturing_engine, env, artifacts_root, tmp_path
 ):
     loaded = load(CORPUS_DIR / "07_weekdays_locate_scan_im.json", env)
     code = main(
@@ -209,7 +209,7 @@ def test_points_selects_a_shard_without_moving_the_campaign_digest(
         )
     )
     assert code == 0
-    request = capturing_backend.last.request
+    request = capturing_engine.last.request
     assert len(request.points) == 4
     assert request.digests == tuple(loaded.point_digests[3:7])
     assert request.coords == tuple(p.coords for p in loaded.expansion.points[3:7])
@@ -218,7 +218,7 @@ def test_points_selects_a_shard_without_moving_the_campaign_digest(
 
 @pytest.mark.parametrize("spec", ["7", "3:3", "60:70", "-1:4", "a:b"])
 def test_points_refuses_malformed_and_out_of_range(
-    capturing_backend, artifacts_root, tmp_path, capsys, spec
+    capturing_engine, artifacts_root, tmp_path, capsys, spec
 ):
     # the = form keeps argparse from reading a leading "-" as a flag
     code = main(
@@ -234,7 +234,7 @@ def test_points_refuses_malformed_and_out_of_range(
 
 
 def test_points_refused_on_workflow_documents(
-    capturing_backend, artifacts_root, tmp_path, capsys
+    capturing_engine, artifacts_root, tmp_path, capsys
 ):
     doc = tmp_path / "wf.json"
     doc.write_text(json.dumps({"version": "1", "steps": {}}))
@@ -264,7 +264,7 @@ def test_points_refused_on_workflow_documents(
 
 def test_validate_data_flags_a_missing_position_column(env):
     """A ``{"column": …}`` position is an explicit reference, so
-    ``validate --data`` catches a typo at load instead of the backend hitting
+    ``validate --data`` catches a typo at load instead of the engine hitting
     it mid-run (§2.3)."""
     loaded = load(CORPUS_DIR / "10_task_table_iia_im.json", env)
     raw = json.loads(json.dumps(dict(loaded.raw)))
@@ -358,7 +358,7 @@ def test_explain_on_a_split_document_names_its_method(capsys, artifacts_root):
     assert "bf16" in out
 
 
-def test_run_writes_the_protocol_record(capturing_backend, artifacts_root, tmp_path):
+def test_run_writes_the_protocol_record(capturing_engine, artifacts_root, tmp_path):
     """The record a reproducer reads first: what ran, at what precision, from
     which method, with the provenance digest of every point."""
     assert (

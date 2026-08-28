@@ -1,6 +1,6 @@
 """The workflow-protocol document model (docs/workflow_protocol.md, v2).
 
-Backend-free, like the rest of this package: parsing, the workflow load-error
+Engine-free, like the rest of this package: parsing, the workflow load-error
 checklist, the derived dependency graph and schedule, and the canonical form +
 digest. Executing a loaded workflow is :mod:`causalab.workflow.runner`'s job.
 

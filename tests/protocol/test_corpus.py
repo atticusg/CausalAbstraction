@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from causalab.protocol.backend import requires
+from causalab.protocol.engine import requires
 from causalab.protocol.loader import load
 from causalab.protocol.plan import closure_digest, plan_point
 
