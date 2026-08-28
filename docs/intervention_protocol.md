@@ -274,6 +274,8 @@ Component vocabulary (per-engine `SiteResolver` maps each to a tap), in
 execution order:
 
 `input_ids` · `embeddings` · `block_input` · `attention_input_norm` ·
+`attention_query_pre_rope` · `attention_key_pre_rope` ·
+`attention_value_states` · `attention_gate` ·
 `attention_output` · `attention_premix` · `attention_probs` · `block_mid` ·
 `mlp_input_norm` · `mlp_input` · `router_logits` · `router_scores` ·
 `expert_idx` · `expert_output` · `routed_output` · `mlp_activation` ·
@@ -321,6 +323,27 @@ execution order:
   computed from them — so a write there could not reach anything. Write
   `router_scores` to reweight the chosen experts, or `expert_idx` to change
   which experts fire.
+- **The mixer's interior is four module boundaries, not four chunk ops.**
+  `attention_query_pre_rope` and `attention_key_pre_rope` are the queries and
+  keys as the mixer computes them, *before* RoPE rotates them — on a family with
+  `q_norm`/`k_norm` those norms run before RoPE, so their outputs are exactly
+  these tensors. `attention_value_states` is `v_proj`'s output: the actual value
+  vectors, in **KV-head space**, and the tap sits before the KV cache is
+  updated, so a write there reaches it. `attention_gate` is the second split of
+  the gated-attention family's fused `[q | gate]` projection.
+- **`attention_value_states` is not `attention_premix`,** and the two are the
+  reason the latter was renamed. `attention_premix` is the o-projection's
+  *input* — the mixer's output after the gate, in **query-head** space, `heads ·
+  head_dim` wide. `attention_value_states` is `v_proj`'s output, in **KV-head**
+  space, `kv_heads · head_dim` wide. Under GQA those differ by the group ratio,
+  so a `head` valid on one can be out of range on the other; the bound is the
+  component's, and naming a head the component does not have is an error.
+- **`attention_gate` exists only where the mixer computes one.** Qwen3.5/3.6's
+  attention multiplies its output by `sigmoid(gate)` before projecting out, and
+  packs the gate into the q-projection. A family without one refuses the
+  component by name rather than returning a slice of `q`. All four components
+  are refused on a fused-qkv family (GPT-2's `c_attn`), and all four require a
+  full-attention layer.
 - **`attention_probs` is the whole attention pattern**, `(batch, heads, query,
   key)`, and round 1 exposes it whole: `pos: "all"`. Both of its trailing axes
   are positions — its *feature* axis IS a position axis — so addressing one

@@ -20,6 +20,10 @@ Two semantics deliberately preserved from the oracle:
   ``act_fn``'s output (``act(gate_proj(x))``, NOT the down-projection's
   input), GPT-2 taps ``c_proj``'s input (which IS the down-projection's
   input). Inherited 1:1 from the pyvene era and pinned by the oracle.
+* the mixer's **interior** is four module boundaries, not four chunk ops
+  (``attention_query_pre_rope``, ``attention_key_pre_rope``,
+  ``attention_value_states``, ``attention_gate``) — see
+  :func:`_attention_interior_site`, which is where the family differences live;
 * ``attention_premix`` with a ``head`` is the ``[H*d, (H+1)*d]`` column
   slice of the o-projection's **input** — query-head space (``head_dim``
   honours a decoupled ``config.head_dim``). 📐 On a **gated** attention
@@ -209,11 +213,138 @@ def _head_slice(bundle: Any, component: str, head: int | None) -> slice | None:
     return slice(head * per_head, (head + 1) * per_head)
 
 
+#: The mixer's interior at module boundaries — round 2.2.
+#:
+#: 📐 The plan note assumed these needed function-level taps inside the mixer
+#: forward. Measured on ``tiny-random/qwen3.5-moe``, three of the four are
+#: ordinary ``nn.Module`` outputs: ``Qwen3_5MoeAttention`` runs ``q_norm`` and
+#: ``k_norm`` **before** RoPE, so their outputs *are* the pre-RoPE projections,
+#: and ``v_proj``'s output is ``v`` itself. Only the gate needs a descriptor
+#: trick, and only because it shares a projection with ``q``.
+_ATTENTION_INTERIOR: frozenset[str] = frozenset(
+    {
+        "attention_query_pre_rope",
+        "attention_key_pre_rope",
+        "attention_value_states",
+        "attention_gate",
+    }
+)
+
+
+def _q_projection_splits(bundle: Any, attn: Any, layer: int) -> int:
+    """How many per-head sub-tensors the q-projection emits: 1, or 2 on a
+    gated-attention family.
+
+    📐 Measured rather than matched on a model type: ``q_proj.out_features`` is
+    ``H·d`` on llama (16 for H 4, d 4) and ``H·2·d`` on qwen3.5-moe (512 for
+    H 8, d 32), because the latter packs ``[q_h | gate_h]`` per head. A family
+    that is neither is refused by name rather than chunked on a guess — the
+    tensor would split into plausible halves either way.
+    """
+    info = bundle.info
+    per_head_block = info.num_heads * info.head_dim
+    out = int(getattr(attn.q_proj, "out_features", -1))
+    if out == per_head_block:
+        return 1
+    if out == 2 * per_head_block:
+        return 2
+    raise ProtocolError(
+        "P4",
+        f"the q-projection at layer {layer} of {bundle.key!r} emits {out} "
+        f"features, which is neither {per_head_block} (heads·head_dim) nor "
+        f"{2 * per_head_block} (a gated family's [q | gate] per head). This "
+        "backend cannot say which columns are the queries — extend the "
+        "attention tap table in pytorch_hooks/sites.py for this family.",
+    )
+
+
+def _attention_interior_site(
+    bundle: Any,
+    attn: Any,
+    component: str,
+    layer: int,
+    head: int | None,
+    tap: Any,
+) -> ResolvedSite:
+    """Resolve one module-boundary tap inside the mixer.
+
+    This is the per-family attention table follow-up F5 should absorb: the
+    family differences are *here*, in one function, rather than spread as
+    ``hasattr`` chains through ``resolve_site``.
+
+    📐 The three families, measured:
+
+    =========================  ==================  =============  ============
+    ``self_attn`` children     qwen3.5-moe         tiny-llama     tiny-gpt2
+    =========================  ==================  =============  ============
+    projections                q,k,v,o_proj        q,k,v,o_proj   ``c_attn``
+    ``q_norm``/``k_norm``      ✅ (b,s,H,d)        ❌             ❌
+    ``q_proj`` width           H·2·d = 512         H·d = 16       — (fused qkv)
+    =========================  ==================  =============  ============
+    """
+    if bundle.is_gpt2_family:
+        # D4: GPT-2 fuses q, k and v into one `c_attn` projection, so every one
+        # of these components is a chunk of it rather than a module boundary.
+        # Splitting that is the declarative family table's work (follow-up F5)
+        # and buys nothing for the Qwen3.6 target, so it is refused by name
+        # rather than half-implemented.
+        raise NotImplementedError(
+            f"component {component!r} needs separate q/k/v projections, and "
+            f"this mixer fuses them into one 'c_attn' (children="
+            f"{sorted(name for name, _ in attn.named_children())}). Splitting a "
+            "fused qkv projection is the per-family tap table (follow-up F5); "
+            "'attention_premix' and 'attention_output' read on this family "
+            "today."
+        )
+    feature_slice = _head_slice(bundle, component, head)
+    if component == "attention_value_states":
+        # 📐 v_proj's output, (b, s, H_kv·d) — already flat, no head axis to
+        # keep. The tap is BEFORE `past_key_values.update`, so a write here is
+        # the one interior write that reaches the cache.
+        return tap(attn.v_proj, "out", feature_slice=feature_slice)
+    if component == "attention_gate":
+        if _q_projection_splits(bundle, attn, layer) != 2:
+            raise ProtocolError(
+                "P4",
+                f"component 'attention_gate' at layer {layer} of "
+                f"{bundle.key!r}: this mixer computes no output gate. The box "
+                "exists only on the gated-attention family (Qwen3.5/3.6), "
+                "whose q-projection emits [q | gate] per head and which "
+                "multiplies the mixer's output by sigmoid(gate) before "
+                "projecting out. On this family there is no such tensor to "
+                "read or write.",
+            )
+        return tap(attn.q_proj, "out", feature_slice=feature_slice)
+    norm_name, proj_name = (
+        ("q_norm", "q_proj")
+        if component == "attention_query_pre_rope"
+        else ("k_norm", "k_proj")
+    )
+    norm = getattr(attn, norm_name, None)
+    if norm is not None:
+        # 📐 q_norm/k_norm run before apply_rotary_pos_emb, so their output IS
+        # the pre-RoPE projection — and they emit (b, s, H, d), a kept head axis.
+        return tap(norm, "out", feature_slice=feature_slice, keeps_head_axis=True)
+    if _q_projection_splits(bundle, attn, layer) != 1:
+        raise ProtocolError(
+            "P4",
+            f"component {component!r} at layer {layer} of {bundle.key!r}: this "
+            f"mixer has no {norm_name!r}, so the projection's output would have "
+            "to be the pre-RoPE tensor — but that projection is fused "
+            "([q | gate] per head), so its output is not the queries alone. "
+            "Addressing a split of a projection with no norm to tap after it "
+            "is the per-family tap table (follow-up F5).",
+        )
+    return tap(getattr(attn, proj_name), "out", feature_slice=feature_slice)
+
+
 #: Components that only exist on a full-attention mixer. A Gated DeltaNet layer
 #: has no attention matrix at all — there is nothing to read and nothing to
 #: write — so naming one at such a layer is an error about the *architecture*,
 #: not a missing feature (§5.3).
-_FULL_ATTENTION_ONLY: frozenset[str] = frozenset({"attention_probs"})
+_FULL_ATTENTION_ONLY: frozenset[str] = frozenset(
+    {"attention_probs"} | _ATTENTION_INTERIOR
+)
 
 
 def _check_stream(bundle: Any, component: str, spec: SiteSpec, layer: int) -> None:
@@ -364,16 +495,29 @@ def resolve_site(bundle: Any, spec: SiteSpec) -> ResolvedSite:
         *,
         feature_slice: slice | None = None,
         tuple_index: int | None = None,
+        keeps_head_axis: bool = False,
     ) -> ResolvedSite:
         """One tap, with its shape read from the component table.
 
         The shape is resolved *here* rather than at each branch so that adding a
         component means adding a table entry and a module, never a third place
-        that has an opinion about the tensor's axes."""
+        that has an opinion about the tensor's axes.
+
+        ``keeps_head_axis`` is the one thing a tap may say about its own shape,
+        and it is a fact about the *module*, not the component: 📐
+        ``Qwen3_5MoeAttention.q_norm`` emits ``(b, s, H, d)`` while llama's bare
+        ``q_proj`` emits ``(b, s, H·d)``. Same component, same width, same head
+        space — only the packing differs, and packing is the half of the
+        descriptor the backend owns. Everything the protocol layer validates
+        against is family-independent and stays in the one table.
+        """
+        shape = component_shape(bundle.info, component)
+        if keeps_head_axis:
+            shape = dataclasses.replace(shape, flat_inner=False)
         return ResolvedSite(
             module=module,
             kind=kind,
-            shape=component_shape(bundle.info, component),
+            shape=shape,
             feature_slice=feature_slice,
             layer=layer,
             component=component,
@@ -443,6 +587,10 @@ def resolve_site(bundle: Any, spec: SiteSpec) -> ResolvedSite:
             _o_proj(bundle, layer),
             "in",
             feature_slice=_head_slice(bundle, component, head),
+        )
+    if component in _ATTENTION_INTERIOR:
+        return _attention_interior_site(
+            bundle, _attn(bundle, layer), component, layer, head, tap
         )
     mlp = block.mlp
     if component in _MOE_COMPONENTS:

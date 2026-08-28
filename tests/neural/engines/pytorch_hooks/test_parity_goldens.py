@@ -75,16 +75,14 @@ N_PROBES = 8
 #: Pinned case ids that cannot be expressed in the protocol vocabulary —
 #: listed explicitly so nothing is silently dropped (a coverage test below
 #: cross-checks this table against the golden files).
-SKIPPED: dict[str, str] = {
-    "gqa.collect.head_value.identity.last.head": (
-        "the spec's component vocabulary (§2.4) has no v_proj-output site — "
-        "'attention_premix' is the o_proj input in query-head space, not the "
-        "old 'value' kind's KV-head slice of v_proj's output"
-    ),
-    "gqa.interchange.head_value.identity.last.head": (
-        "same gap: no v_proj-output ('value') component in the §2.4 vocabulary"
-    ),
-}
+#:
+#: ✅ **Empty as of round 2.2**, which is the concrete discharge of PR20
+#: deviation #7. The two entries that lived here named the pyvene ``value``
+#: kind — a KV-head slice of ``v_proj``'s output — and were skipped because the
+#: §2.4 vocabulary had no such site: ``attention_premix`` is the o-projection's
+#: *input*, in query-head space, which is a different tensor in a different
+#: space. ``attention_value_states`` is that site, and both cases now replay.
+SKIPPED: dict[str, str] = {}
 
 
 # --------------------------------------------------------------------------- #
@@ -304,16 +302,31 @@ def _run_sub3_case(
     return out, clean
 
 
+#: The two pyvene head kinds, and the §2.4 component each one is.
+#:
+#: 📐 They are **different tensors in different head spaces**, which is why the
+#: second could not be replayed until round 2.2 and why reusing one name for
+#: both would have been wrong: ``head_attention_value`` is the o-projection's
+#: input, ``num_heads`` wide per head; ``head_value`` is ``v_proj``'s output,
+#: ``num_key_value_heads`` wide. On this GQA fixture (H 4, H_kv 2) that is a 2x
+#: difference in how many heads exist — and the pinned shape ``[1, 1, 4]``
+#: is one KV head's ``head_dim`` slice.
+HEAD_CASE_COMPONENTS = {
+    "head_attention_value": "attention_premix",
+    "head_value": "attention_value_states",
+}
+
+
 def _run_head_case(
-    bundle: ModelBundle, mode: str
+    bundle: ModelBundle, mode: str, component: str
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """One ``gqa.<mode>.head_attention_value.identity.last.head`` case: the
-    per-head o_proj-input column slice (query-head space), destination head 1,
-    donor head 0 at the same layer/input — the old HeadSite semantics that
-    ``attention_premix`` + ``head`` carries in the protocol vocabulary."""
+    """One ``gqa.<mode>.<kind>.identity.last.head`` case: the per-head column
+    slice, destination head 1, donor head 0 at the same layer/input — the old
+    HeadSite semantics that a component plus ``head`` carries in the protocol
+    vocabulary."""
     doc = _doc_skeleton()
     doc["sites"]["dst"] = {
-        "component": "attention_premix",
+        "component": component,
         "layer": DST_LAYER,
         "head": HEAD_DST,
     }
@@ -325,7 +338,7 @@ def _run_head_case(
 
     assert mode == "interchange", mode
     doc["sites"]["donor"] = {
-        "component": "attention_premix",
+        "component": component,
         "layer": DST_LAYER,
         "head": HEAD_DONOR,
     }
@@ -347,8 +360,9 @@ def _run_case(case_id: str) -> tuple[torch.Tensor, torch.Tensor | None]:
     bundle = _bundle(family)
     assert positions == "last", case_id  # the golden subset is last-position only
     if path == ["head"]:
-        assert (component, featurizer) == ("head_attention_value", "identity"), case_id
-        return _run_head_case(bundle, mode)
+        assert featurizer == "identity", case_id
+        assert component in HEAD_CASE_COMPONENTS, case_id
+        return _run_head_case(bundle, mode, HEAD_CASE_COMPONENTS[component])
     assert not path and (component, featurizer) == ("block_output", "sub3"), case_id
     return _run_sub3_case(bundle, mode)
 
