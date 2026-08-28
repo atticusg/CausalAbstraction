@@ -80,6 +80,7 @@ __all__ = [
     "bshd",
     "bhsd",
     "bsd",
+    "chunked_state",
     "flat_td",
     "flat_topk",
     "flat_topk_features",
@@ -399,6 +400,30 @@ def flat_topk_features(k: int, width: int, *, note: str | None = None) -> Featur
     return FeatureShape(
         axes=(_BATCH, _POSITION, Axis("topk", k), Axis("feature", width)),
         flat_batch=True,
+        note=note,
+    )
+
+
+def chunked_state(
+    heads: int, k_dim: int, v_dim: int, *, note: str | None = None
+) -> FeatureShape:
+    """``(batch, chunk, heads, k_dim·v_dim)`` — a recurrent state, once per
+    kernel chunk.
+
+    The DeltaNet state (round N7): its position axis is the **chunk index**
+    of the serving kernel (one fire per 64-token prefill chunk), not a token
+    position — the axis' name says so, and the executor resolves positions on
+    it against the fire count rather than the sequence. Each state is a
+    ``(k_dim, v_dim)`` matrix per head, flattened into the feature axis.
+    """
+    return FeatureShape(
+        axes=(
+            _BATCH,
+            Axis("position", name="chunk"),
+            Axis("head", heads),
+            Axis("feature", k_dim * v_dim),
+        ),
+        flat_inner=False,
         note=note,
     )
 
