@@ -822,6 +822,18 @@ at file level, as before.
 what it supports; `choose_engine = first b where requires ⊆ b.capabilities`;
 refusal messages generate from the missing capability.
 
+Two kinds of entry, one comparison. The **coarse verbs** below are the closed
+`CAPABILITIES` vocabulary. **Component entries** are generated, never listed:
+every site a read or write references contributes `component:<name>` (a write
+also `component:<name>:write`), and each engine declares the component sets it
+serves — so a document touching a component outside one engine's site
+vocabulary routes past it to an engine that serves it, and the generated
+refusal names the entry. The closed vocabulary behind these entries is the
+sec. 2.4 `Component` literal itself. Stream- and layer-level constraints (a
+full-attention box on a DeltaNet layer, a read-only component) stay
+engine-internal policy: they depend on the loaded model or are true of every
+engine, so routing on them would be either impossible or misleading.
+
 | capability | required when |
 |---|---|
 | `grad` | `train` present |
@@ -831,6 +843,7 @@ refusal messages generate from the missing capability.
 | `quantized_weights` | `model.quantization` present (sec. 2.1) |
 | `writable_attention_probs` | a write targets `attention_probs` |
 | `pytorch_fn_local` | any `pytorch_fn` |
+| `component:<name>`[`:write`] | generated — a read or write references a site with that component (writes add `:write`) |
 
 Reference matrix:
 
