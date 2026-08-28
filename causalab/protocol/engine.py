@@ -27,11 +27,16 @@ __all__ = [
     "ExecutionRequest",
     "RunResult",
     "choose_engine",
+    "component_capability",
     "requires",
     "requires_campaign",
 ]
 
-#: The closed capability vocabulary (§8).
+#: The closed capability vocabulary (§8). Component capabilities
+#: (``component:<name>``, ``component:<name>:write``) are *generated*, one per
+#: entry of the closed :data:`~causalab.protocol.schema.Component` vocabulary —
+#: two engines with different site surfaces route on them, and the vocabulary
+#: stays closed because ``Component`` already is.
 CAPABILITIES: tuple[str, ...] = (
     "grad",
     "paired_forward",
@@ -41,6 +46,13 @@ CAPABILITIES: tuple[str, ...] = (
     "generate",
     "quantized_weights",
 )
+
+
+def component_capability(component: str, *, write: bool = False) -> str:
+    """The generated capability entry for serving ``component`` (§8) —
+    reading it, or with ``write=True``, landing a write on it."""
+    return f"component:{component}:write" if write else f"component:{component}"
+
 
 #: Metric kinds that need the whole vocabulary materialized (§8) — but only
 #: when their read actually taps ``lm_head``. ``class_probs`` always does
@@ -72,10 +84,24 @@ def _metric_read_obliges_full_projection(doc: Document, metric: MetricSpec) -> b
 
 def requires(doc: Document) -> frozenset[str]:
     """The capability set one concrete document needs — derived, never
-    authored (§6)."""
+    authored (§6).
+
+    Component needs are part of the set: every site a read or write
+    references contributes ``component:<name>`` (writes also
+    ``component:<name>:write``), so a document is routed by *what it touches*,
+    not only by the coarse §8 verbs — the honest answer once two engines with
+    different site surfaces exist. Stream- and layer-level constraints stay
+    engine-internal: they depend on the loaded model, which routing never
+    sees."""
     needed: set[str] = set()
     if doc.train is not None:
         needed.add("grad")
+    for read in doc.reads.values():
+        needed.add(component_capability(doc.sites[str(read.site)].component))
+    for write in doc.writes.values():
+        component = doc.sites[str(write.site)].component
+        needed.add(component_capability(component))
+        needed.add(component_capability(component, write=True))
     if doc.model.quantization is not None:
         needed.add("quantized_weights")
     for im in doc.intervened_models.values():
@@ -157,8 +183,25 @@ class Engine(abc.ABC):
     name: str = "abstract"
     #: The §8 capability set this engine supports.
     capabilities: frozenset[str] = frozenset()
+    #: Components this engine's site resolver serves. The matching
+    #: ``component:<name>`` capabilities are generated (never listed in
+    #: ``capabilities`` by hand), so the closed vocabulary stays
+    #: :data:`~causalab.protocol.schema.Component`.
+    components: frozenset[str] = frozenset()
+    #: The subset of ``components`` this engine can land a write on.
+    writable_components: frozenset[str] = frozenset()
     #: Local engines may run ``pytorch_fn`` writes (§2.8).
     is_local: bool = False
+
+    @property
+    def effective_capabilities(self) -> frozenset[str]:
+        """``capabilities`` plus the generated component entries — what
+        routing actually compares against :func:`requires`."""
+        return (
+            self.capabilities
+            | {component_capability(c) for c in self.components}
+            | {component_capability(c, write=True) for c in self.writable_components}
+        )
 
     @abc.abstractmethod
     def execute(self, request: ExecutionRequest) -> RunResult:
@@ -183,7 +226,7 @@ def choose_engine(
     needed = requires(doc) if isinstance(doc, Document) else requires_campaign(doc)
     shortfalls: list[str] = []
     for engine in engines:
-        missing = needed - engine.capabilities
+        missing = needed - engine.effective_capabilities
         if not missing:
             return engine
         shortfalls.append(f"{engine.name} lacks {sorted(missing)}")

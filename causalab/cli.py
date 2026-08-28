@@ -28,7 +28,7 @@ from causalab.protocol.errors import ProtocolError
 from causalab.protocol.resolve import FileArtifacts, FileDatasets, ResolutionEnv
 from causalab.protocol.schema import PRECISION_DTYPES
 
-__all__ = ["ensure_model_registered", "main", "register_model_key"]
+__all__ = ["ensure_model_registered", "load_engines", "main", "register_model_key"]
 
 
 def _parse_set(values: Sequence[str]) -> dict[str, Any]:
@@ -120,6 +120,15 @@ def _build_parser() -> argparse.ArgumentParser:
                 "(cpu, cuda, cuda:1, mps)",
             )
             p.add_argument(
+                "--engine",
+                choices=("pytorch_hooks", "nnsight", "auto"),
+                default="pytorch_hooks",
+                help="execution engine: the reference (default), the nnsight "
+                "tracing engine (needs the 'nnsight' extra), or 'auto' — "
+                "every installed engine, reference first, routed by "
+                "choose_engine (§8)",
+            )
+            p.add_argument(
                 "--dtype",
                 choices=PRECISION_DTYPES,
                 default=None,
@@ -143,6 +152,43 @@ def _env(args: argparse.Namespace) -> ResolutionEnv:
         datasets=FileDatasets(root=args.data_root),
         artifacts=FileArtifacts(root=args.artifacts_root),
     )
+
+
+def load_engines(choice: str, device: str) -> list[Any]:
+    """Build the ``run`` verb's engine list — lazily, so the pure verbs stay
+    torch-free (importlib keeps the layering honest: ``protocol/`` never
+    links against an execution engine).
+
+    ``auto`` is every installed engine with the reference first — list order
+    is routing preference (§8), so pytorch_hooks serves what it can and the
+    nnsight engine picks up what it refuses. A missing optional engine is
+    only an error when named explicitly."""
+    import importlib
+
+    engines: list[Any] = []
+    if choice in ("pytorch_hooks", "auto"):
+        try:
+            hooks = importlib.import_module("causalab.neural.engines.pytorch_hooks")
+        except ModuleNotFoundError as err:
+            raise ProtocolError(
+                "P2",
+                f"no execution engine available ({err}) — 'run' needs the "
+                "reference engine causalab.neural.engines.pytorch_hooks",
+            ) from err
+        engines.append(hooks.PytorchHooksEngine(device=device))
+    if choice in ("nnsight", "auto"):
+        try:
+            tracing = importlib.import_module("causalab.neural.engines.nnsight_tracing")
+        except ModuleNotFoundError as err:
+            if choice == "nnsight":
+                raise ProtocolError(
+                    "P2",
+                    f"the nnsight engine is not installed ({err}) — install "
+                    "the 'nnsight' extra (pip install 'causalab[nnsight]')",
+                ) from err
+        else:
+            engines.append(tracing.NnsightEngine(device=device))
+    return engines
 
 
 def ensure_model_registered(args: argparse.Namespace) -> None:

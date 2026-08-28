@@ -9,10 +9,11 @@ from causalab.protocol.engine import (
     ExecutionRequest,
     RunResult,
     choose_engine,
+    component_capability,
     requires,
 )
 from causalab.protocol.errors import ValidationError
-from causalab.protocol.schema import parse_document
+from causalab.protocol.schema import COMPONENTS, parse_document
 
 from tests.protocol._docs import base_doc, in_order
 
@@ -20,25 +21,58 @@ pytestmark = pytest.mark.unit
 
 
 class _Stub(Engine):
-    def __init__(self, name: str, capabilities: frozenset[str], is_local: bool = False):
+    """Coarse-capability stub: serves the whole component vocabulary, so the
+    capability-routing tests below vary only the §8 verbs."""
+
+    def __init__(
+        self,
+        name: str,
+        capabilities: frozenset[str],
+        is_local: bool = False,
+        components: frozenset[str] = frozenset(COMPONENTS),
+        writable_components: frozenset[str] = frozenset(COMPONENTS),
+    ):
         self.name = name
         self.capabilities = capabilities
         self.is_local = is_local
+        self.components = components
+        self.writable_components = writable_components
 
     def execute(self, request: ExecutionRequest) -> RunResult:  # pragma: no cover
         raise NotImplementedError
 
 
+#: base_doc touches block_output (read + write) and lm_head (read).
+BASE_COMPONENTS = frozenset(
+    {
+        component_capability("block_output"),
+        component_capability("block_output", write=True),
+        component_capability("lm_head"),
+    }
+)
+
+
 def test_requires_paired_forward():
     doc = parse_document(base_doc())
-    assert requires(doc) == frozenset({"paired_forward"})
+    assert requires(doc) == frozenset({"paired_forward"}) | BASE_COMPONENTS
 
 
-def test_requires_empty_for_same_input_patching():
+def test_requires_component_entries_split_read_from_write():
+    """Every touched site contributes its component; a written site also
+    contributes the :write entry — the honest routing surface once two
+    engines with different site vocabularies exist (§8)."""
+    doc = parse_document(base_doc())
+    needed = requires(doc)
+    assert component_capability("block_output", write=True) in needed
+    assert component_capability("lm_head") in needed
+    assert component_capability("lm_head", write=True) not in needed
+
+
+def test_requires_no_coarse_verbs_for_same_input_patching():
     raw = base_doc()
     raw["reads"]["v_cf"]["input"] = "base"
     del raw["data"]["counterfactual"]
-    assert requires(parse_document(raw)) == frozenset()
+    assert requires(parse_document(raw)) == BASE_COMPONENTS
 
 
 def test_requires_full_logits_when_lm_head_read_saved():
@@ -164,3 +198,39 @@ def test_an_engine_without_generate_refuses_with_the_capability_named():
     assert "generate" in str(err.value)
     decoder = _Stub("decoder", prefill_only.capabilities | {"generate"})
     assert choose_engine(doc, [prefill_only, decoder]) is decoder
+
+
+def test_an_engine_without_the_component_refuses_by_name():
+    """A document touching a component outside an engine's site vocabulary
+    routes past it, and the generated refusal names the component entry —
+    this is how interior components an engine cannot serve route to the one
+    that can, with no hand-written case anywhere."""
+    doc = parse_document(base_doc())
+    verbs = frozenset({"paired_forward", "full_logits"})
+    no_blocks = _Stub(
+        "no_blocks",
+        verbs,
+        components=frozenset({"lm_head"}),
+        writable_components=frozenset(),
+    )
+    with pytest.raises(ValidationError) as err:
+        choose_engine(doc, [no_blocks])
+    message = str(err.value)
+    assert component_capability("block_output") in message
+    assert component_capability("block_output", write=True) in message
+    full = _Stub("full", verbs)
+    assert choose_engine(doc, [no_blocks, full]) is full
+
+
+def test_a_read_only_component_declaration_refuses_the_write():
+    """components without writable_components serves reads but routes a
+    write away."""
+    doc = parse_document(base_doc())
+    read_only = _Stub(
+        "read_only",
+        frozenset({"paired_forward", "full_logits"}),
+        writable_components=frozenset(),
+    )
+    with pytest.raises(ValidationError) as err:
+        choose_engine(doc, [read_only])
+    assert component_capability("block_output", write=True) in str(err.value)
