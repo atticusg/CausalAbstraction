@@ -91,6 +91,9 @@ EXPECTED: dict[str, tuple[int | None, int | None, bool]] = {
     "attention_scores": (None, 8, False),
     "attention_z": (128, 8, True),
     "attention_premix": (128, 8, True),
+    # ⚠️ the *value's* shape: this component is derived, and hidden-wide per
+    # head rather than head_dim-wide
+    "attention_result": (8 * 64, 8, True),
     "attention_output": (64, None, True),
     "block_mid": (64, None, True),
     "mlp_input_norm": (64, None, True),
@@ -360,19 +363,25 @@ def test_the_rank_table_is_written_in_forward_order() -> None:
     assert ranks == sorted(ranks)
 
 
-def test_the_attention_band_has_room_for_round_twos_insertions() -> None:
-    """D6: renumber once, then never again. Each reserved slot named in
-    ``plan.py`` must still be free, or a later PR is a re-pin rather than an
-    insertion."""
-    taken = set(COMPONENT_RANK.values())
-    #: The slots `plan.py` still holds open, updated as each PR claims one —
-    #: which is the point: a PR that takes a slot has to say so here.
-    still_reserved = (350,)
-    assert not taken & set(still_reserved)
-    # and each lands between the tap before it and the one after
-    assert COMPONENT_RANK["attention_input_norm"] < min(still_reserved)
-    assert max(still_reserved) < COMPONENT_RANK["attention_output"]
-    # rounds 2.2 and 2.3 claimed eight, at the numbers plan.py reserved
+def test_round_two_claimed_every_slot_plan_py_reserved() -> None:
+    """D6: renumber once, then never again.
+
+    Round 2 reserved nine numbers in ``plan.py`` and has now claimed all nine —
+    each PR an insertion rather than a re-pin, which is the whole return on
+    renumbering the band in one go. The gaps that remain are for the MoE and
+    DeltaNet interiors (follow-ups F2 and F3).
+    """
+    # the band still reads in forward order, with room left between its members
+    band = [
+        COMPONENT_RANK[c]
+        for c in COMPONENT_RANK
+        if COMPONENT_RANK["attention_input_norm"]
+        <= COMPONENT_RANK[c]
+        <= COMPONENT_RANK["attention_output"]
+    ]
+    assert band == sorted(band)
+    assert min(band) == 150 and max(band) == 400
+    # rounds 2.2, 2.3 and 2.4 claimed nine, at the numbers plan.py reserved
     assert COMPONENT_RANK["attention_query_pre_rope"] == 160
     assert COMPONENT_RANK["attention_key_pre_rope"] == 170
     assert COMPONENT_RANK["attention_value_states"] == 180
@@ -381,6 +390,7 @@ def test_the_attention_band_has_room_for_round_twos_insertions() -> None:
     assert COMPONENT_RANK["attention_key"] == 210
     assert COMPONENT_RANK["attention_scores"] == 220
     assert COMPONENT_RANK["attention_z"] == 240
+    assert COMPONENT_RANK["attention_result"] == 350
 
 
 def test_a_kv_space_head_is_refused_at_load_not_just_at_the_tap(env) -> None:

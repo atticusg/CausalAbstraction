@@ -34,9 +34,6 @@ from causalab.neural.engines.pytorch_hooks.attention_interface import (
     InterfaceTap,
     attention_interface_taps,
 )
-from causalab.neural.engines.pytorch_hooks.attention_probs import (
-    post_softmax_value_multiply,
-)
 from causalab.neural.shared.encoding import Continuation, EncodedBatch, resolve_steps
 from causalab.neural.shared.executor_base import (
     ExecutorBase,
@@ -178,8 +175,7 @@ class PointExecutor(ExecutorBase):
                 )
             hooks.enter_context(
                 attention_interface_taps(
-                    {mid: tuple(entries) for mid, entries in interface.items()},
-                    post_softmax=post_softmax_value_multiply,
+                    {mid: tuple(entries) for mid, entries in interface.items()}
                 )
             )
             with torch.enable_grad() if self.grad_enabled else torch.no_grad():
@@ -278,8 +274,7 @@ class PointExecutor(ExecutorBase):
                 )
             hooks.enter_context(
                 attention_interface_taps(
-                    {mid: tuple(entries) for mid, entries in interface.items()},
-                    post_softmax=post_softmax_value_multiply,
+                    {mid: tuple(entries) for mid, entries in interface.items()}
                 )
             )
             for _ in range(depth):
