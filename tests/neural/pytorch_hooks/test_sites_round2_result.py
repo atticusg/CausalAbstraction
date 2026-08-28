@@ -326,3 +326,38 @@ def test_the_head_bound_is_the_query_head_space(qwen35moe_bundle):
                 component="attention_result", layer=QWEN_LAYER, head=info.num_heads
             ),
         )
+
+
+def test_the_derivation_works_in_the_generated_frame_too():
+    """A continuation read of a derived component.
+
+    Worth its own test because the derivation *re-invokes the o-projection*, and
+    doing that while the capture hook was still installed would re-enter it —
+    corrupting the very tensor being read. It is safe because `_finalize_read`
+    runs after the hook scope closes on both the prefill and the decode path,
+    and this pins the decode one, which nothing else exercises.
+
+    📐 The defining identity survives: `sum_h result == attention_output` to
+    4.7e-10 across three decode steps.
+    """
+    bundle = load_model(TINY_LLAMA)
+    info = bundle.info
+
+    def generated(component: str, head: int | None = None) -> torch.Tensor:
+        doc = _read_doc(component, OTHER_LAYER, head=head)
+        doc["positions"] = {"w": {"generated": {"max_new_tokens": 3}, "all": True}}
+        doc["reads"]["r"]["pos"] = "w"
+        return executor_for(doc, bundle, base_texts=[TEXT]).read_value("r")
+
+    whole = generated("attention_result")
+    output = generated("attention_output")
+    assert tuple(whole.shape) == (1, 3, info.num_heads * info.hidden_size)
+    summed = whole.reshape(1, 3, info.num_heads, info.hidden_size).sum(dim=-2)
+    torch.testing.assert_close(summed, output, atol=1e-6, rtol=1e-5)
+    # and the cheap per-head path agrees there as well
+    torch.testing.assert_close(
+        generated("attention_result", head=1),
+        whole[..., info.hidden_size : 2 * info.hidden_size],
+        atol=0.0,
+        rtol=0.0,
+    )
