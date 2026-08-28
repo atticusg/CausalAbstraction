@@ -94,8 +94,13 @@ def _blocks(bundle: ModelBundle) -> Any:
 
 
 def _attn(bundle: ModelBundle, layer: int) -> Any:
-    block = _blocks(bundle)[layer]
-    return block.attn if bundle.is_gpt2_family else block.self_attn
+    """The mixer at ``layer`` — ``self_attn``, ``attn`` or ``linear_attn``.
+
+    Was ``block.self_attn`` for every non-GPT-2 model, which AttributeErrors on
+    a hybrid tower: 📐 on ``tiny-random/qwen3.5-moe`` three of four layers carry
+    ``linear_attn`` (Gated DeltaNet) and only one carries ``self_attn``. The
+    per-layer answer lives on the bundle (§5.2)."""
+    return bundle.mixer_at(layer)
 
 
 def _o_proj(bundle: ModelBundle, layer: int) -> Any:
@@ -107,6 +112,45 @@ def _head_dim(bundle: ModelBundle) -> int:
     return bundle.info.head_dim
 
 
+#: Components that only exist on a full-attention mixer. A Gated DeltaNet layer
+#: has no attention matrix at all — there is nothing to read and nothing to
+#: write — so naming one at such a layer is an error about the *architecture*,
+#: not a missing feature (§5.3).
+_FULL_ATTENTION_ONLY: frozenset[str] = frozenset({"attention_probs"})
+
+
+def _check_stream(
+    bundle: ModelBundle, component: str, spec: SiteSpec, layer: int
+) -> None:
+    """Refuse a site whose stream the layer does not carry, before hooking.
+
+    Two ways to get this wrong, and both are caught here rather than as an
+    AttributeError from inside a hook:
+
+    * the site *declares* a ``stream`` the layer does not have — ``stream`` has
+      parsed since ``schema.py`` gained it and nothing read it until now (§5.2);
+    * the site names a full-attention-only component at a linear-attention
+      layer, which no ``stream`` spelling can make true (§5.3).
+    """
+    actual = bundle.stream_at(layer)
+    declared = spec.stream if isinstance(spec.stream, str) else None
+    if declared is not None and declared != actual:
+        raise ProtocolError(
+            "P4",
+            f"site names stream {declared!r} at layer {layer}, but that layer "
+            f"carries {actual!r} — this is a hybrid tower ({', '.join(bundle.streams)}), "
+            "so the stream is a per-layer fact, not a model-wide one",
+        )
+    if component in _FULL_ATTENTION_ONLY and actual != "full_attention":
+        raise ProtocolError(
+            "P4",
+            f"component {component!r} needs a full-attention mixer, but layer "
+            f"{layer} of {bundle.key!r} carries {actual!r} — a Gated DeltaNet "
+            "block computes no attention matrix, so there is no such tensor at "
+            f"this layer. This tower is ({', '.join(bundle.streams)}).",
+        )
+
+
 def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
     """Resolve one site record to its tap. Refuses honestly on components
     this backend does not implement yet."""
@@ -116,6 +160,19 @@ def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
     layer = spec.layer if isinstance(spec.layer, int) else 0
     head = spec.head if isinstance(spec.head, int) else None
 
+    if component == "input_ids":
+        # the ids themselves, taken as the embedding's INPUT: that is the one
+        # module boundary they cross, and a forward pre-hook already exists for
+        # the "in" side. Read-only and layer-less (§5.4); `bs` layout because
+        # there is no feature axis, only one integer per position.
+        module = (
+            bundle.model.transformer.wte
+            if bundle.is_gpt2_family
+            else bundle.model.model.embed_tokens
+        )
+        return ResolvedSite(
+            module=module, kind="in", layer=0, component=component, layout="bs"
+        )
     if component == "embeddings":
         module = (
             bundle.model.transformer.wte
@@ -135,6 +192,13 @@ def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
         )
         return ResolvedSite(module=module, kind="out", layer=layer, component=component)
 
+    # Order matters: the stream check runs FIRST so that a full-attention-only
+    # component at a Gated DeltaNet layer refuses with the architectural reason
+    # ("there is no attention matrix here") rather than the temporary one ("this
+    # backend has not implemented it yet"). The first is permanent and true even
+    # after PR4 lands attention_probs; the second is a roadmap statement.
+    _check_stream(bundle, component, spec, layer)
+
     if component in ("attention_probs", "router_logits", "expert_output"):
         raise NotImplementedError(
             f"the pytorch_hooks backend has no tap for {component!r} yet — "
@@ -144,6 +208,28 @@ def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
         )
 
     block = _blocks(bundle)[layer]
+    if component == "attention_input_norm":
+        # input_layernorm's OUTPUT: what the mixer actually consumes
+        return ResolvedSite(
+            module=block.input_layernorm, kind="out", layer=layer, component=component
+        )
+    if component == "block_mid":
+        # post_attention_layernorm's INPUT is resid_mid — the residual stream
+        # after the mixer has been added and before the MLP branch
+        return ResolvedSite(
+            module=block.post_attention_layernorm,
+            kind="in",
+            layer=layer,
+            component=component,
+        )
+    if component == "mlp_input_norm":
+        # ...and its OUTPUT is what the MoE block consumes
+        return ResolvedSite(
+            module=block.post_attention_layernorm,
+            kind="out",
+            layer=layer,
+            component=component,
+        )
     if component == "block_output":
         return ResolvedSite(module=block, kind="out", layer=layer, component=component)
     if component == "block_input":
