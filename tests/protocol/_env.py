@@ -48,9 +48,16 @@ def write_rot_fixture(artifacts_root: Path) -> Path:
         dtype="fp32",
         trained_on="weekdays/train",
         trained_on_digest="0" * 64,
-        backend="pytorch_hooks",
+        engine="pytorch_hooks",
         commit="fixture",
     )
+    # This fixture is 09's "previously fitted" artifact, and artifacts fitted
+    # before the backend→engine rename carry the old stamp key. Keeping the old
+    # key keeps 09's content_digest (hence its pinned canonical form)
+    # byte-stable across the rename, and keeps the loader's tolerance of
+    # pre-rename bundles under test. Flip to "engine" only with a corpus
+    # re-pin.
+    identity["backend"] = identity.pop("engine")
     n_bytes = 4096 * 8 * 4
     header = {
         "__metadata__": identity,
