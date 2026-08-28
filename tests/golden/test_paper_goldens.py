@@ -133,7 +133,7 @@ def test_rome_average_total_effect(tmp_path):
     read is off the seed axis, so its per-seed rows are identical and the
     per-example mean collapses them.
 
-    One document per subject-token width (the backend refuses ragged
+    One document per subject-token width (the engine refuses ragged
     edits); pooling the per-fact effects across the width shards restores
     the loose-filter width distribution — a single-width sample biases the
     ATE (diagnosed +16pts on the width-4 bucket alone)."""
