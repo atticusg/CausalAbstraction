@@ -103,24 +103,14 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
         if args.verb == "explain":
             _explain(loaded)
             return 0
-        # run — the reference engine is an optional, lazily-imported extra
-        # so the pure verbs stay torch-free (importlib keeps the layering
-        # honest: protocol/ never links against an execution engine)
-        import importlib
+        # run — engines are optional, lazily-imported extras so the pure
+        # verbs stay torch-free; --engine picks the list, choose_engine routes
+        from causalab.cli import load_engines
 
-        try:
-            hooks = importlib.import_module("causalab.neural.engines.pytorch_hooks")
-        except ModuleNotFoundError as err:
-            print(
-                f"refused: no execution engine available ({err}) — 'run' needs "
-                "the reference engine causalab.neural.engines.pytorch_hooks",
-                file=sys.stderr,
-            )
-            return 1
         result = _run(
             loaded,
             env,
-            hooks.PytorchHooksEngine(device=args.device),
+            load_engines(getattr(args, "engine", "pytorch_hooks"), args.device),
             args.out,
             points=args.points,
         )
@@ -135,14 +125,14 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
 def _run(
     loaded: LoadedProtocol,
     env: ResolutionEnv,
-    engine: Any,
+    engines: list[Any],
     out: Path,
     *,
     points: str | None = None,
 ) -> Any:
     from causalab.protocol.engine import ExecutionRequest, choose_engine
 
-    chosen = choose_engine(list(loaded.point_documents), [engine])
+    chosen = choose_engine(list(loaded.point_documents), engines)
     # --points slices every per-point tuple in lockstep; the campaign
     # digest is untouched — a shard's artifacts still stamp and dedup as
     # members of the whole campaign, so an external scheduler can fan

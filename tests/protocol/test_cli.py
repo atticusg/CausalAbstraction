@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from causalab.cli import main
+from causalab.protocol.engine import Engine
+from causalab.protocol.schema import COMPONENTS
 from causalab.protocol.loader import check_data_columns, load
 
 from tests.protocol._env import CORPUS_DIR, FIXTURES
@@ -106,7 +108,7 @@ def test_refusal_exits_nonzero(capsys, artifacts_root):
 # --------------------------------------------------------------------------- #
 
 
-class _CapturingEngine:
+class _CapturingEngine(Engine):
     """Stands in for the reference engine: records construction kwargs and
     the ExecutionRequest, executes nothing."""
 
@@ -116,6 +118,8 @@ class _CapturingEngine:
     capabilities = frozenset(
         {"grad", "paired_forward", "full_logits", "pytorch_fn_local"}
     )
+    components = frozenset(COMPONENTS)
+    writable_components = frozenset(COMPONENTS)
     is_local = True
 
     def __init__(self, *, device: str = "cpu") -> None:
@@ -171,6 +175,31 @@ def test_device_goes_to_the_engine_and_dtype_goes_to_the_document(
     assert not hasattr(capturing_engine.last, "dtype")
     request = capturing_engine.last.request
     assert request.canonical[0]["model"]["dtype"] == "bf16"
+
+
+def test_engine_auto_tolerates_a_missing_optional_engine(
+    capturing_engine, artifacts_root, tmp_path
+):
+    """--engine auto is every *installed* engine: the nnsight extra being
+    absent must not break runs that never needed it."""
+    code = main(
+        _run_argv("01_harvest_im.json", artifacts_root, tmp_path, "--engine", "auto")
+    )
+    assert code == 0
+    assert capturing_engine.last is not None
+
+
+def test_engine_nnsight_refuses_by_name_when_not_installed(
+    capturing_engine, artifacts_root, tmp_path, capsys
+):
+    """Naming an engine that is not installed is an error that says which
+    extra provides it — unlike auto, which quietly narrows to what exists."""
+    code = main(
+        _run_argv("01_harvest_im.json", artifacts_root, tmp_path, "--engine", "nnsight")
+    )
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "nnsight" in err and "extra" in err
 
 
 def test_run_defaults_stay_cpu_fp32(capturing_engine, artifacts_root, tmp_path):
