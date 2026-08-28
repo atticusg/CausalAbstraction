@@ -106,10 +106,13 @@ EXPECTED: dict[str, tuple[int | None, int | None, bool]] = {
     "router_logits": (32, None, True),
     "router_scores": (4, None, True),
     "expert_idx": (4, None, False),
-    # token-major routed interior: top_k (4) slots of moe_intermediate_size
-    # (24) features each, on a ranking axis
+    # token-major routed interior: top_k (4) slots, on a ranking axis. The two
+    # projection halves and the activation are moe_intermediate_size (24) wide
+    # per slot; the down-projection's output is hidden (64) wide per slot.
+    "expert_gate_proj": (4 * 24, None, True),
+    "expert_up_proj": (4 * 24, None, True),
     "expert_activation": (4 * 24, None, True),
-    "expert_output": (64, None, True),
+    "expert_output": (4 * 64, None, True),
     "routed_output": (64, None, True),
     "shared_expert_gate_proj": (48, None, True),
     "shared_expert_up_proj": (48, None, True),
