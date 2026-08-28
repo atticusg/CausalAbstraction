@@ -45,13 +45,27 @@ from causalab.protocol.schema import SiteSpec
 from causalab.neural.pytorch_hooks.loading import ModelBundle
 from causalab.neural.pytorch_hooks.layout import Layout
 
-__all__ = ["READ_ONLY_COMPONENTS", "ResolvedSite", "resolve_site"]
+__all__ = [
+    "READ_ONLY_COMPONENTS",
+    "SWAP_ONLY_COMPONENTS",
+    "ResolvedSite",
+    "resolve_site",
+]
 
-#: Components a write cannot affect, mapped to what to do instead.
+#: Components a write must not target, mapped to what to do instead.
 #:
-#: A write to one of these is not merely unsupported — it is a **silent no-op**,
-#: which is the one outcome worth spending code to prevent: the run succeeds, the
-#: numbers move plausibly (they do not move at all), and the conclusion is wrong.
+#: The two entries are refused for *different* reasons, and the difference is
+#: worth keeping straight:
+#:
+#: * ``router_logits`` is a **silent no-op** — the block discards it, so the run
+#:   succeeds, the numbers do not move at all, and the conclusion is wrong. That
+#:   is the outcome most worth spending code to prevent.
+#: * ``input_ids`` is the opposite: 📐 a write there *does* land. The tap is the
+#:   embedding's pre-hook input, and mutating it in place changes the ids the
+#:   model looks up (measured: it also writes through to the caller's own
+#:   tensor). It is refused because token ids are not an activation — editing
+#:   the model's input is a change to the *dataset*, which belongs in the row's
+#:   text where it is visible in the document.
 #:
 #: 📐 ``router_logits`` earns its place by measurement, not by principle.
 #: ``Qwen3_5MoeSparseMoeBlock.forward`` reads the router as
@@ -70,6 +84,26 @@ READ_ONLY_COMPONENTS: dict[str, str] = {
         "'_') and routes on the scores and indices it computed from them, so a "
         "write here cannot reach anything — write 'router_scores' to reweight "
         "the chosen experts, or 'expert_idx' to change which experts fire"
+    ),
+}
+
+#: Components a write may only **replace**, never arithmetically adjust, mapped
+#: to why. Same philosophy as ``stream`` and as #53's ``attention_probs`` rule:
+#: refuse by name rather than compute something plausible and wrong.
+#:
+#: 📐 ``expert_idx`` measured: an ``add_scaled`` write over the int64 routing
+#: table runs to completion today with no refusal anywhere. Nothing downstream
+#: is checking that the ids it produced still name experts — they index whatever
+#: they happen to land on, and on CUDA an out-of-range id is a device-side
+#: assert far from the write that caused it.
+SWAP_ONLY_COMPONENTS: dict[str, str] = {
+    "expert_idx": (
+        "the routing table carries integer expert ids, not features: a delta, a "
+        "scale or a clamp over them yields ids chosen by arithmetic on labels, "
+        "which route to arbitrary experts where they stay in range and fail at "
+        "the gather where they do not. Swap in an index tensor read from "
+        "elsewhere to change which experts fire, or write 'router_scores' to "
+        "reweight the experts already chosen"
     ),
 }
 

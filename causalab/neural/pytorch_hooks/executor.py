@@ -50,6 +50,7 @@ from causalab.neural.pytorch_hooks.mechanisms import (
 )
 from causalab.neural.pytorch_hooks.sites import (
     READ_ONLY_COMPONENTS,
+    SWAP_ONLY_COMPONENTS,
     ResolvedSite,
     resolve_site,
 )
@@ -720,10 +721,21 @@ class PointExecutor:
             if site.component in READ_ONLY_COMPONENTS:
                 raise ProtocolError(
                     "P4",
-                    f"write {ename!r} targets {site.component!r}, which a write "
-                    "cannot affect: "
-                    f"{READ_ONLY_COMPONENTS[site.component]}. Refusing rather "
-                    "than applying a write that would silently do nothing.",
+                    f"write {ename!r} targets {site.component!r}, which no write "
+                    "may change: "
+                    f"{READ_ONLY_COMPONENTS[site.component]}. Refusing at the "
+                    "plan, before anything runs.",
+                )
+            if (
+                site.component in SWAP_ONLY_COMPONENTS
+                and str(write.do.mechanism) != "swap"
+            ):
+                raise ProtocolError(
+                    "P4",
+                    f"write {ename!r} applies {str(write.do.mechanism)!r} to "
+                    f"{site.component!r}, which only a whole-value 'swap' may "
+                    f"change: {SWAP_ONLY_COMPONENTS[site.component]}. Refusing "
+                    "rather than doing arithmetic on values that are labels.",
                 )
             key = _tap_key(site)
             by_address.setdefault(key, []).append((ename, write, site))
