@@ -157,6 +157,14 @@ class TracePointExecutor(ExecutorBase):
         #: navigated `.source` values, shared within one trace so two taps on
         #: one op (q and k are one rope call) request it once
         self._trace_sources: dict = {}
+        from nnsight.intervention.interleaver import OutOfOrderError
+
+        self._fire_checks: list[tuple[str, int, Any]] = []
+        # An exception inside a trace body does not survive the tracer's exit
+        # (measured: it is swallowed and the trace completes on the fires it
+        # reached), so a fire-index miss detected at build time is carried out
+        # by hand and raised after.
+        fire_miss: list[tuple[ResolvedTap, OutOfOrderError]] = []
         with torch.no_grad():
             with self._switched_implementations(required):
                 with self.bundle.model.trace(
@@ -165,22 +173,60 @@ class TracePointExecutor(ExecutorBase):
                         "attention_mask": batch.attention_mask,
                     },
                     position_ids=batch.position_ids(),
-                ):
+                ) as tracer:
                     for _, _, op_kind, tap, entries in operations:
-                        if op_kind == "write":
-                            self._land_writes(tap, entries, input_role, batch)
-                        else:
-                            saves[tap_key(tap.site, tap.source)] = nnsight.save(
-                                self._tap_contract(tap, batch_size)
-                            )
+                        per_fire = tap.source is not None and tap.source.fires != "once"
+                        try:
+                            if op_kind == "write" and per_fire:
+                                self._land_per_fire_writes(
+                                    tracer, tap, entries, input_role, batch
+                                )
+                            elif op_kind == "write":
+                                self._land_writes(tap, entries, input_role, batch)
+                            elif per_fire:
+                                saves[tap_key(tap.site, tap.source)] = (
+                                    self._collect_per_fire(tracer, tap)
+                                )
+                            else:
+                                saves[tap_key(tap.site, tap.source)] = nnsight.save(
+                                    self._tap_contract(tap, batch_size)
+                                )
+                        except OutOfOrderError as error:
+                            if not per_fire:
+                                raise
+                            fire_miss.append((tap, error))
+                            break
         self._trace_sources = {}
+        if fire_miss:
+            tap, error = fire_miss[0]
+            raise ProtocolError(
+                "P2",
+                f"a write or read addresses a fire of {tap.site.component!r} "
+                "past the kernel's last — a tracer.iter body there never "
+                f"runs, so it is refused rather than silently skipped ({error})",
+            )
+        for component, wanted, count in self._fire_checks:
+            if wanted >= int(count):
+                raise ProtocolError(
+                    "P2",
+                    f"a write addresses fire {wanted} of {component!r}, but the "
+                    f"kernel fired {int(count)} times on this batch — a "
+                    "tracer.iter body past the last fire never runs, so this "
+                    "is refused rather than silently skipped",
+                )
+        self._fire_checks = []
 
         for rname, read in taps:
             tap = read_taps[rname]
             raw = saves[tap_key(tap.site, tap.source)]
-            self._read_values[rname] = self._finalize_read(
-                rname, read, tap.site, raw, batch, input_role
-            )
+            if tap.source is not None and tap.source.fires != "once":
+                self._read_values[rname] = self._finalize_per_fire_read(
+                    rname, read, tap, raw, batch, input_role
+                )
+            else:
+                self._read_values[rname] = self._finalize_read(
+                    rname, read, tap.site, raw, batch, input_role
+                )
         self._groups_run.add((model, input_role))
 
     # ------------------------------------------------------------------ #
@@ -198,8 +244,12 @@ class TracePointExecutor(ExecutorBase):
         the envoy path unchanged.
         """
         if site.kind == "interior":
-            address = MOE_EXPERTS.get(site.component)
-            where = "the MOE_EXPERTS table"
+            # the expert interior lives under mlp; the DeltaNet interior on
+            # the mixer, keyed by its stream — one lookup covers both
+            address = MOE_EXPERTS.get(site.component) or ADDRESSES.get(
+                self.bundle.stream_at(site.layer), {}
+            ).get(site.component)
+            where = "the interior tables"
         elif site.interface_slot is not None:
             stream = self.bundle.stream_at(site.layer)
             address = ADDRESSES.get(stream, {}).get(site.component)
@@ -313,6 +363,178 @@ class TracePointExecutor(ExecutorBase):
                 f"{self.bundle.key!r} (transformers "
                 f"{transformers.__version__}): {error}",
             ) from error
+
+    # ------------------------------------------------------------------ #
+    # per-fire taps (N7): ops that fire once per kernel chunk
+    # ------------------------------------------------------------------ #
+
+    def _navigate_fire_ops(self, tap: ResolvedTap) -> tuple[Any, Any]:
+        """The (value op, trip-count op) of a per-fire address — both in the
+        same drilled source, memoized per trace."""
+        address, site = tap.source, tap.site
+        assert address is not None
+        assert address.field is not None and address.trip is not None, (
+            "a per-fire address names its value op and its loop's range"
+        )
+        key = (id(site.module), address.op_pattern, address.peel, "per-fire")
+        if key not in self._trace_sources:
+            op = self._drill(site.module.source, address.op_pattern, site)
+            for entry in address.peel:
+                op = self._drill(op.source, entry, site)
+            parent = op.source
+            self._trace_sources[key] = (
+                self._drill(parent, address.field, site),
+                self._drill(parent, address.trip, site),
+            )
+        return self._trace_sources[key]
+
+    def _collect_per_fire(self, tracer: Any, tap: ResolvedTap) -> Any:
+        """Every fire's tensor, as a saved list — one entry per kernel chunk.
+
+        📐 The trip count is the loop's own ``range(...)`` output (never
+        config: the kernel pads the sequence to a chunk multiple), requested
+        before the loop — its op fires first.
+        """
+        import nnsight
+
+        value_op, trip_op = self._navigate_fire_ops(tap)
+        count = len(trip_op.output)
+        sink = nnsight.save([])
+        for _ in tracer.iter[:count]:
+            sink.append(value_op.output)
+        return sink
+
+    def _land_per_fire_writes(
+        self,
+        tracer: Any,
+        tap: ResolvedTap,
+        entries: list[tuple[str, WriteSpec, ResolvedSite]],
+        input_role: str,
+        batch: EncodedBatch,
+    ) -> None:
+        """Land writes on specific fires — one ``tracer.iter[k]`` body each.
+
+        A fire index past the last fire would simply never run (the loop body
+        binds to a fire that does not happen), so the count is saved and the
+        miss refused after the trace rather than silently skipped.
+        """
+        import nnsight
+
+        value_op, trip_op = self._navigate_fire_ops(tap)
+        count = nnsight.save(len(trip_op.output))
+        batch_size = int(batch.input_ids.shape[0])
+        fires = self._write_fire_indices(tap, entries)
+        for k in fires:
+            for _ in tracer.iter[k]:
+                value = value_op.output
+                # in value-space throughout: a reshape of the traced tensor is
+                # a view, so the final fill reaches the kernel's own storage
+                site = tap.site
+                width = site.shape.width
+                heads = site.shape.head_space
+                assert width is not None and heads is not None
+                native = value.reshape(-1, 1, heads, width // heads).clone()
+                contract = to_contract(native, site.shape, batch_size=batch_size)
+                self._apply_writes_to_contract(
+                    entries,
+                    input_role,
+                    batch,
+                    contract,
+                    per_row=[[0]] * batch_size,
+                )
+                new_native = from_contract(
+                    contract, site.shape, batch_size=batch_size, native=native
+                )
+                value[:] = new_native.reshape(value.shape)
+        self._fire_checks.append((tap.site.component, max(fires), count))
+
+    def _write_fire_indices(
+        self,
+        tap: ResolvedTap,
+        entries: list[tuple[str, WriteSpec, ResolvedSite]],
+    ) -> list[int]:
+        """Which fires this address' writes target: plain non-negative
+        indices only — the fire count is a runtime fact of the kernel, so
+        nothing anchored, spanned, or counted from the end can resolve before
+        the trace runs."""
+        fires: set[int] = set()
+        for ename, write, _site in entries:
+            spec = self._spec(write.pos)
+            index = spec.index if isinstance(spec.index, int) else None
+            anchored = any(
+                getattr(spec, field) is not None
+                for field in ("span", "variable", "column", "scope", "relative_to")
+            )
+            if index is None or index < 0 or anchored:
+                raise ProtocolError(
+                    "P4",
+                    f"write {ename!r} targets {tap.site.component!r}, whose "
+                    f"position axis is the kernel's fire index "
+                    f"({tap.site.shape.describe()}): only a plain non-negative "
+                    "integer index resolves there — the fire count is the "
+                    "kernel's runtime fact, so text anchors, spans and "
+                    "negative indices have nothing to resolve against before "
+                    "the trace runs.",
+                )
+            fires.add(index)
+        return sorted(fires)
+
+    def _finalize_per_fire_read(
+        self,
+        rname: str,
+        read: Any,
+        tap: ResolvedTap,
+        sink: Any,
+        batch: EncodedBatch,
+        input_role: str,
+    ) -> torch.Tensor:
+        """One per-fire read's value: stack the fires into the declared
+        position axis, then the shared gather/featurize path with positions
+        resolved against the fire count."""
+        site = tap.site
+        fires = list(sink)
+        stacked = torch.stack(fires, dim=1)  # (b, fires, *native tail)
+        width = site.shape.width
+        heads = site.shape.head_space
+        assert width is not None and heads is not None
+        native = stacked.reshape(
+            stacked.shape[0], stacked.shape[1], heads, width // heads
+        )
+        raw = to_contract(native, site.shape, batch_size=int(batch.input_ids.shape[0]))
+        per_row = self._fire_positions(rname, read.pos, len(fires), raw.shape[0])
+        return self._finalize_read(
+            rname, read, site, raw, batch, input_role, per_row=per_row
+        )
+
+    def _fire_positions(
+        self, rname: str, pos: Any, n_fires: int, n_rows: int
+    ) -> list[list[int]]:
+        """Positions on a fire axis: ``all``, or one integer index (negative
+        counts from the last fire). Anything anchored refuses — there is no
+        text on a chunk axis."""
+        spec = self._spec(pos)
+        anchored = any(
+            getattr(spec, field) is not None
+            for field in ("span", "variable", "column", "scope", "relative_to")
+        )
+        if not anchored and getattr(spec, "all", None) is True:
+            return [list(range(n_fires))] * n_rows
+        index = spec.index if isinstance(spec.index, int) else None
+        if anchored or index is None:
+            raise ProtocolError(
+                "P4",
+                f"read {rname!r} addresses positions on a per-fire component, "
+                "whose position axis is the kernel's chunk index: only "
+                '"all" or a plain integer index resolves there — text '
+                "anchors and spans have nothing to resolve against.",
+            )
+        if not -n_fires <= index < n_fires:
+            raise ProtocolError(
+                "P2",
+                f"read {rname!r} addresses fire {index}, but the kernel fired "
+                f"{n_fires} times on this batch",
+            )
+        return [[index % n_fires]] * n_rows
 
     @contextlib.contextmanager
     def _switched_implementations(self, required: frozenset[str]) -> Iterator[None]:

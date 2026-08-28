@@ -635,10 +635,16 @@ class ExecutorBase:
         input_role: str,
         batch: EncodedBatch,
         tensor: torch.Tensor,
+        *,
+        per_row: list[list[int]] | None = None,
     ) -> None:
         """Apply every write at one address, in class order, mutating the
         contract-shaped ``tensor`` in place — absolute first, additive deltas
-        summed, renormalize last against the pre-write norm (§2.8)."""
+        summed, renormalize last against the pre-write norm (§2.8).
+
+        ``per_row`` overrides position resolution, the same override
+        :meth:`_finalize_read` takes: a caller whose position axis is not the
+        token axis (a per-chunk state) has already worked the indices out."""
 
         def class_rank(entry: tuple[str, WriteSpec, ResolvedSite]) -> int:
             do = entry[1].do
@@ -711,8 +717,12 @@ class ExecutorBase:
                         self._written_value(ename, write, site, tensor).to(tensor.dtype)
                     )
                 continue
-            per_row = self._positions(write.pos, batch, input_role)
-            widths = {len(row) for row in per_row}
+            positions = (
+                per_row
+                if per_row is not None
+                else self._positions(write.pos, batch, input_role)
+            )
+            widths = {len(row) for row in positions}
             if len(widths) != 1:
                 raise NotImplementedError(
                     f"write {ename!r}: ragged position widths {sorted(widths)} "
@@ -720,7 +730,7 @@ class ExecutorBase:
                     "all-positions or variable write needs every row to be "
                     "the same length"
                 )
-            idx = torch.tensor(per_row, dtype=torch.long, device=tensor.device)
+            idx = torch.tensor(positions, dtype=torch.long, device=tensor.device)
             rows = torch.arange(tensor.shape[0], device=tensor.device).unsqueeze(1)
             fslice = site.feature_slice or slice(None)
             v_pre = tensor[rows, idx][..., fslice]

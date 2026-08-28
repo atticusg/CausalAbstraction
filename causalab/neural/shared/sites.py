@@ -434,6 +434,26 @@ _FULL_ATTENTION_ONLY: frozenset[str] = frozenset(
     | set(ATTENTION_FUNCTION_SLOTS)
 )
 
+#: The mirror set (N7): the Gated DeltaNet interior only exists on a
+#: linear-attention mixer — a softmax-attention layer has no recurrent state,
+#: no delta kernel and no causal conv, so naming one of these there is the
+#: same architectural error in the other direction.
+_DELTANET_INTERIOR: frozenset[str] = frozenset(
+    {
+        "deltanet_qkv",
+        "deltanet_gate",
+        "deltanet_qkv_conv",
+        "deltanet_query",
+        "deltanet_key",
+        "deltanet_value",
+        "deltanet_beta",
+        "deltanet_decay",
+        "deltanet_state",
+        "deltanet_core_out",
+        "deltanet_gated_out",
+    }
+)
+
 
 def _check_stream(bundle: Any, component: str, spec: SiteSpec, layer: int) -> None:
     """Refuse a site whose stream the layer does not carry, before hooking.
@@ -462,6 +482,15 @@ def _check_stream(bundle: Any, component: str, spec: SiteSpec, layer: int) -> No
             f"{layer} of {bundle.key!r} carries {actual!r} — a Gated DeltaNet "
             "block computes no attention matrix, so there is no such tensor at "
             f"this layer. This tower is ({', '.join(bundle.streams)}).",
+        )
+    if component in _DELTANET_INTERIOR and actual != "linear_attention":
+        raise ProtocolError(
+            "P4",
+            f"component {component!r} needs a Gated DeltaNet mixer, but layer "
+            f"{layer} of {bundle.key!r} carries {actual!r} — a softmax-attention "
+            "block computes no recurrent state and runs no delta kernel, so "
+            "there is no such tensor at this layer. This tower is "
+            f"({', '.join(bundle.streams)}).",
         )
 
 
@@ -683,6 +712,12 @@ def resolve_site(bundle: Any, spec: SiteSpec) -> ResolvedSite:
         # form, which is what makes the executor refuse to gather or featurize
         # it without any component name appearing in that refusal.
         return tap(_attn(bundle, layer), "out", tuple_index=1, interface_slot="probs")
+    if component in _DELTANET_INTERIOR:
+        # inside the DeltaNet mixer's forward and its delta kernel — no module
+        # boundary anywhere; the mixer is carried because it identifies whose
+        # forward to tap. Same marker as the expert interior: the engine with
+        # `.source` addressing serves it, the reference engine refuses by name.
+        return tap(_attn(bundle, layer), "interior")
     block = _blocks(bundle)[layer]
     if component == "attention_input_norm":
         # input_layernorm's OUTPUT: what the mixer actually consumes

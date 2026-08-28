@@ -276,7 +276,10 @@ execution order:
 `input_ids` · `embeddings` · `block_input` · `attention_input_norm` ·
 `attention_query_pre_rope` · `attention_key_pre_rope` ·
 `attention_value_states` · `attention_gate` · `attention_query` ·
-`attention_key` · `attention_scores` · `attention_z` · `attention_result` ·
+`attention_key` · `attention_scores` · `attention_z` · `deltanet_qkv` ·
+`deltanet_gate` · `deltanet_qkv_conv` · `deltanet_query` · `deltanet_key` ·
+`deltanet_value` · `deltanet_beta` · `deltanet_decay` · `deltanet_state` ·
+`deltanet_core_out` · `deltanet_gated_out` · `attention_result` ·
 `attention_output` · `attention_premix` · `attention_probs` · `block_mid` ·
 `mlp_input_norm` · `mlp_input` · `router_logits` · `router_scores` ·
 `expert_idx` · `expert_gate_proj` · `expert_up_proj` · `expert_activation` ·
@@ -329,6 +332,20 @@ execution order:
   expert is not one of the routed experts, and the per-expert interior is
   indexed by routed *slot* (its top-k axis) — `expert_idx` says which expert
   fills each slot.
+- **The Gated DeltaNet interior** (`deltanet_*`) is the linear-attention
+  mixer's inside — the fused q|k|v projection pre- and post-conv (the conv tap
+  is channels-first), the q/k/v splits (q and k in *key-head* space, before
+  `repeat_interleave` — the linear-attention analogue of GQA), the per-head
+  write strength `deltanet_beta` and decay `deltanet_decay`, the output gate,
+  the delta kernel's return pre- and post-gate, and **`deltanet_state`**: the
+  recurrent state, once per 64-token prefill chunk. The state's position axis
+  is the **kernel's chunk index**, not a token position — read it whole or at
+  an integer chunk index; text anchors have nothing to resolve against there.
+  Per-token prefill state does not exist: the recurrent kernel runs only in
+  single-token decode, by the modeling code's own dispatch, so it is refused
+  by name rather than served at a granularity the kernel does not have. These
+  live inside one fused forward — the nnsight engine serves them through its
+  `.source` address table; the reference engine refuses them by name.
 - **`attention_result` is the per-head contribution to the residual stream**,
   and the only component the model never computes: the block projects the whole
   `attention_premix` at once, so what the forward pass forms is the *sum* over

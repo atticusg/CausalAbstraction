@@ -433,18 +433,18 @@ def _refuse_interior(what: str, site: ResolvedSite) -> None:
     """Refuse a tap this engine has no mechanism for, naming the one that does.
 
     ``kind="interior"`` marks a tensor computed *inside* a fused forward (the
-    per-expert MoE interior, N6): there is no module boundary for a hook and
-    no per-family interface registry to wrap, so the tap belongs to the
-    nnsight engine's ``.source`` addressing. Routing already keeps such
-    documents away (the component is absent from this engine's declaration);
-    this refusal is for one arriving unrouted.
+    per-expert MoE interior, N6; the Gated DeltaNet interior, N7): there is no
+    module boundary for a hook and no per-family interface registry to wrap,
+    so the tap belongs to the nnsight engine's ``.source`` addressing. Routing
+    already keeps such documents away (the component is absent from this
+    engine's declaration); this refusal is for one arriving unrouted.
     """
     if site.kind != "interior":
         return
     raise ProtocolError(
         "P4",
-        f"{what} addresses {site.component!r}, which lives inside the fused "
-        "experts forward where no pytorch hook can reach — the nnsight engine "
+        f"{what} addresses {site.component!r}, which lives inside a fused "
+        "forward where no pytorch hook can reach — the nnsight engine "
         "serves it (its `.source` address table, "
         "neural/engines/nnsight_tracing/addresses.py). Routing sends such "
         "documents there.",
