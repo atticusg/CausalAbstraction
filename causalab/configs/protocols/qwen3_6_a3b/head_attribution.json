@@ -1,0 +1,32 @@
+{
+  "version": "1",
+  "description": "Round 2's derived component on the real checkpoint: `attention_result` is each head's own contribution to the residual stream, which the model never forms - it projects the whole premix at once. Read whole (16 heads x 2048 hidden = 32768 wide) at the answer slot, at three full-attention layers, alongside `attention_output` at the same layers. The identity that defines the component is sum_h result == attention_output (this o-projection carries no bias), so these two files are a check as well as a measurement.",
+  "model": {"key": "Qwen/Qwen3.6-35B-A3B", "revision": "main", "dtype": "bf16"},
+  "data": {
+    "base": {"dataset": "weekdays/train", "field": "input"}
+  },
+  "sites": {
+    "result_L3":  {"component": "attention_result", "layer": 3},
+    "result_L19": {"component": "attention_result", "layer": 19},
+    "result_L39": {"component": "attention_result", "layer": 39},
+    "out_L3":     {"component": "attention_output", "layer": 3},
+    "out_L19":    {"component": "attention_output", "layer": 19},
+    "out_L39":    {"component": "attention_output", "layer": 39}
+  },
+  "reads": {
+    "r3":  {"site": "result_L3",  "pos": -1, "model": "original", "input": "base"},
+    "r19": {"site": "result_L19", "pos": -1, "model": "original", "input": "base"},
+    "r39": {"site": "result_L39", "pos": -1, "model": "original", "input": "base"},
+    "o3":  {"site": "out_L3",     "pos": -1, "model": "original", "input": "base"},
+    "o19": {"site": "out_L19",    "pos": -1, "model": "original", "input": "base"},
+    "o39": {"site": "out_L39",    "pos": -1, "model": "original", "input": "base"}
+  },
+  "save": [
+    {"value": "r3",  "model": "original", "input": "base", "file_path": "result_L3.safetensors"},
+    {"value": "r19", "model": "original", "input": "base", "file_path": "result_L19.safetensors"},
+    {"value": "r39", "model": "original", "input": "base", "file_path": "result_L39.safetensors"},
+    {"value": "o3",  "model": "original", "input": "base", "file_path": "attn_out_L3.safetensors"},
+    {"value": "o19", "model": "original", "input": "base", "file_path": "attn_out_L19.safetensors"},
+    {"value": "o39", "model": "original", "input": "base", "file_path": "attn_out_L39.safetensors"}
+  ]
+}

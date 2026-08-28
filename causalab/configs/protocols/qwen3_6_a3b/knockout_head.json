@@ -1,0 +1,103 @@
+{
+  "version": "1",
+  "description": "Step 2 / knockout, attention family: zero-ablate one attention head's contribution across the whole prompt and measure the damage. sites.attn.layer sweeps ONLY the ten full-attention layers - the other thirty carry a Gated DeltaNet mixer with no head axis at all, and naming one there is refused with the architectural reason, not a missing feature. 10 layers x 16 heads = 160 points. `swap: 0.0` is the zero reference; the on-manifold mean reference is harvest.json's `reduce: mean` output fed back as a params constant.",
+  "model": {
+    "key": "Qwen/Qwen3.6-35B-A3B",
+    "revision": "main",
+    "dtype": "bf16"
+  },
+  "data": {
+    "base": {
+      "dataset": "weekdays/train",
+      "field": "input"
+    }
+  },
+  "positions": {
+    "every": {
+      "all": true
+    }
+  },
+  "sites": {
+    "attn": {
+      "component": "attention_premix",
+      "layer": {
+        "sweep": [
+          3,
+          7,
+          11,
+          15,
+          19,
+          23,
+          27,
+          31,
+          35,
+          39
+        ]
+      },
+      "head": {
+        "sweep": {
+          "range": [
+            0,
+            16
+          ]
+        }
+      }
+    },
+    "lm_head": {
+      "component": "lm_head"
+    }
+  },
+  "reads": {
+    "logits": {
+      "site": "lm_head",
+      "pos": -1,
+      "model": "ablated",
+      "input": "base"
+    }
+  },
+  "writes": {
+    "zero": {
+      "site": "attn",
+      "pos": "every",
+      "do": {
+        "swap": 0.0
+      }
+    }
+  },
+  "intervened_models": {
+    "ablated": {
+      "input": "base",
+      "writes": [
+        "zero"
+      ]
+    }
+  },
+  "metrics": {
+    "still_correct": {
+      "kind": "match",
+      "of": "logits",
+      "expected": "base_answer",
+      "token_form": "space_prefixed"
+    },
+    "answer_logit": {
+      "kind": "token_logit",
+      "of": "logits",
+      "token": "base_answer",
+      "token_form": "space_prefixed"
+    }
+  },
+  "save": [
+    {
+      "value": "still_correct",
+      "model": "ablated",
+      "input": "base",
+      "file_path": "still_correct.json"
+    },
+    {
+      "value": "answer_logit",
+      "model": "ablated",
+      "input": "base",
+      "file_path": "answer_logit.json"
+    }
+  ]
+}

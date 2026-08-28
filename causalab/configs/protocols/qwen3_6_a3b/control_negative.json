@@ -1,0 +1,80 @@
+{
+  "version": "1",
+  "description": "Step 4 / negative control: the same interchange at a site the variable cannot be. Position 0 is the prompt's first token ('If'), which under causal attention is computed before the subject is ever read, so a mid-tower transplant there carries no weekday. A method that scores here is measuring something other than the variable.",
+  "model": {
+    "key": "Qwen/Qwen3.6-35B-A3B",
+    "revision": "main",
+    "dtype": "bf16"
+  },
+  "data": {
+    "base": {
+      "dataset": "weekdays/train",
+      "field": "input"
+    },
+    "counterfactual": {
+      "dataset": "weekdays/train",
+      "field": "counterfactual_inputs[0]"
+    }
+  },
+  "positions": {
+    "prefix": {
+      "index": 0
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layer": 20
+    },
+    "lm_head": {
+      "component": "lm_head"
+    }
+  },
+  "reads": {
+    "v_cf": {
+      "site": "target",
+      "pos": "prefix",
+      "model": "original",
+      "input": "counterfactual"
+    },
+    "logits": {
+      "site": "lm_head",
+      "pos": -1,
+      "model": "patched",
+      "input": "base"
+    }
+  },
+  "writes": {
+    "patch": {
+      "site": "target",
+      "pos": "prefix",
+      "do": {
+        "swap": "v_cf"
+      }
+    }
+  },
+  "intervened_models": {
+    "patched": {
+      "input": "base",
+      "writes": [
+        "patch"
+      ]
+    }
+  },
+  "metrics": {
+    "iia": {
+      "kind": "match",
+      "of": "logits",
+      "expected": "cf_answer",
+      "token_form": "space_prefixed"
+    }
+  },
+  "save": [
+    {
+      "value": "iia",
+      "model": "patched",
+      "input": "base",
+      "file_path": "iia.json"
+    }
+  ]
+}

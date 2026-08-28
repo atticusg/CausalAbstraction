@@ -1,0 +1,106 @@
+{
+  "version": "1",
+  "description": "Step 2 / knockout, MLP family at band width 3: layers 18-20 zeroed jointly, to read how the drop grows with width against knockout_mlp.json's width-1 curve. The band is three sites and three writes in one intervened_model because a sweep axis is a field VALUE, not a set of table entries - a swept band START is a dependent axis, which spec 3 assigns to a generator that emits the JSON rather than to the document layer. This file is the shape such a generator emits.",
+  "model": {
+    "key": "Qwen/Qwen3.6-35B-A3B",
+    "revision": "main",
+    "dtype": "bf16"
+  },
+  "data": {
+    "base": {
+      "dataset": "weekdays/train",
+      "field": "input"
+    }
+  },
+  "positions": {
+    "every": {
+      "all": true
+    }
+  },
+  "sites": {
+    "mlp_18": {
+      "component": "mlp_output",
+      "layer": 18
+    },
+    "mlp_19": {
+      "component": "mlp_output",
+      "layer": 19
+    },
+    "mlp_20": {
+      "component": "mlp_output",
+      "layer": 20
+    },
+    "lm_head": {
+      "component": "lm_head"
+    }
+  },
+  "reads": {
+    "logits": {
+      "site": "lm_head",
+      "pos": -1,
+      "model": "ablated",
+      "input": "base"
+    }
+  },
+  "writes": {
+    "zero_18": {
+      "site": "mlp_18",
+      "pos": "every",
+      "do": {
+        "swap": 0.0
+      }
+    },
+    "zero_19": {
+      "site": "mlp_19",
+      "pos": "every",
+      "do": {
+        "swap": 0.0
+      }
+    },
+    "zero_20": {
+      "site": "mlp_20",
+      "pos": "every",
+      "do": {
+        "swap": 0.0
+      }
+    }
+  },
+  "intervened_models": {
+    "ablated": {
+      "input": "base",
+      "writes": [
+        "zero_18",
+        "zero_19",
+        "zero_20"
+      ]
+    }
+  },
+  "metrics": {
+    "still_correct": {
+      "kind": "match",
+      "of": "logits",
+      "expected": "base_answer",
+      "token_form": "space_prefixed"
+    },
+    "answer_logit": {
+      "kind": "token_logit",
+      "of": "logits",
+      "token": "base_answer",
+      "token_form": "space_prefixed"
+    }
+  },
+  "save": [
+    {
+      "value": "still_correct",
+      "model": "ablated",
+      "input": "base",
+      "file_path": "still_correct.json"
+    },
+    {
+      "value": "answer_logit",
+      "model": "ablated",
+      "input": "base",
+      "file_path": "answer_logit.json"
+    }
+  ]
+}
