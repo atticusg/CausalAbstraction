@@ -101,6 +101,16 @@ def execute_request(
         summaries.append(summary)
     first_doc = parse_document(request.points[0])
     first_realization = canonical_model(first_doc.raw["model"])
+    # implementation requirements the points' addresses imposed (§7.3, e.g.
+    # "attn_eager") — execution metadata beside the engine name, never
+    # canonical form: the documents and their digests are implementation-blind
+    applied = sorted(
+        {
+            requirement
+            for summary in summaries
+            for requirement in summary.get("implementations", ())
+        }
+    )
     identity_base = {
         "produced_by": request.document_digest,
         "model_key": str(first_doc.model.key),
@@ -108,6 +118,7 @@ def execute_request(
         "model_dtype": str(first_realization["dtype"]),
         "model_quantization": first_realization.get("quantization"),
         "engine": engine_name,
+        **({"implementations": ",".join(applied)} if applied else {}),
         "commit": code_commit(Path(__file__).resolve().parents[3]),
     }
     files = write_outputs(
@@ -252,6 +263,11 @@ def _execute_point(
         "metrics": {
             name: _summary_stat(values) for name, values in metric_values.items()
         },
+        **(
+            {"implementations": sorted(getattr(executor, "applied_requirements", ()))}
+            if getattr(executor, "applied_requirements", None)
+            else {}
+        ),
     }
 
 
