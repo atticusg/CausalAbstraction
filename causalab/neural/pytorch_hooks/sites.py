@@ -45,7 +45,67 @@ from causalab.protocol.schema import SiteSpec
 from causalab.neural.pytorch_hooks.loading import ModelBundle
 from causalab.neural.pytorch_hooks.layout import Layout
 
-__all__ = ["ResolvedSite", "resolve_site"]
+__all__ = [
+    "READ_ONLY_COMPONENTS",
+    "SWAP_ONLY_COMPONENTS",
+    "ResolvedSite",
+    "resolve_site",
+]
+
+#: Components a write must not target, mapped to what to do instead.
+#:
+#: The two entries are refused for *different* reasons, and the difference is
+#: worth keeping straight:
+#:
+#: * ``router_logits`` is a **silent no-op** — the block discards it, so the run
+#:   succeeds, the numbers do not move at all, and the conclusion is wrong. That
+#:   is the outcome most worth spending code to prevent.
+#: * ``input_ids`` is the opposite: 📐 a write there *does* land. The tap is the
+#:   embedding's pre-hook input, and mutating it in place changes the ids the
+#:   model looks up (measured: it also writes through to the caller's own
+#:   tensor). It is refused because token ids are not an activation — editing
+#:   the model's input is a change to the *dataset*, which belongs in the row's
+#:   text where it is visible in the document.
+#:
+#: 📐 ``router_logits`` earns its place by measurement, not by principle.
+#: ``Qwen3_5MoeSparseMoeBlock.forward`` reads the router as
+#: ``_, routing_weights, selected_experts = self.gate(...)`` — element 0 is
+#: assigned to ``_`` and never used again, so overwriting it after the gate has
+#: returned changes a tensor nothing downstream reads. Measured: patching it and
+#: re-running moves the logits by exactly 0.0, while the same patch to
+#: ``router_scores`` or ``expert_idx`` moves them.
+READ_ONLY_COMPONENTS: dict[str, str] = {
+    "input_ids": (
+        "the model's token input is not an activation; change the row's text "
+        "instead, or write 'embeddings' to edit the vector the ids look up"
+    ),
+    "router_logits": (
+        "the MoE block discards the router's logits (it destructures them into "
+        "'_') and routes on the scores and indices it computed from them, so a "
+        "write here cannot reach anything — write 'router_scores' to reweight "
+        "the chosen experts, or 'expert_idx' to change which experts fire"
+    ),
+}
+
+#: Components a write may only **replace**, never arithmetically adjust, mapped
+#: to why. Same philosophy as ``stream`` and as #53's ``attention_probs`` rule:
+#: refuse by name rather than compute something plausible and wrong.
+#:
+#: 📐 ``expert_idx`` measured: an ``add_scaled`` write over the int64 routing
+#: table runs to completion today with no refusal anywhere. Nothing downstream
+#: is checking that the ids it produced still name experts — they index whatever
+#: they happen to land on, and on CUDA an out-of-range id is a device-side
+#: assert far from the write that caused it.
+SWAP_ONLY_COMPONENTS: dict[str, str] = {
+    "expert_idx": (
+        "the routing table carries integer expert ids, not features: a delta, a "
+        "scale or a clamp over them yields ids chosen by arithmetic on labels, "
+        "which route to arbitrary experts where they stay in range and fail at "
+        "the gather where they do not. Swap in an index tensor read from "
+        "elsewhere to change which experts fire, or write 'router_scores' to "
+        "reweight the experts already chosen"
+    ),
+}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -151,6 +211,107 @@ def _check_stream(
         )
 
 
+#: The MoE surface round 1 exposes. Every one of these is a plain module output
+#: (or input) — see §2.1 of the plan note: the router is a module returning a
+#: 3-tuple and the experts are a fused module, so none of this needs the ragged
+#: value shape that the per-expert interior (``expert_output``) does.
+_MOE_COMPONENTS: frozenset[str] = frozenset(
+    {
+        "router_logits",
+        "router_scores",
+        "expert_idx",
+        "routed_output",
+        "shared_expert_gate_proj",
+        "shared_expert_up_proj",
+        "shared_expert_activation",
+        "shared_expert_output",
+        "shared_expert_gate",
+    }
+)
+
+
+def _moe_site(
+    bundle: ModelBundle, mlp: Any, component: str, spec: SiteSpec, layer: int
+) -> ResolvedSite:
+    """Resolve one MoE tap.
+
+    📐 Every tap here is ``flat_td``: ``Qwen3_5MoeSparseMoeBlock`` reshapes to
+    ``(-1, hidden)`` before the router, so the whole interior is flattened over
+    (batch, position) and only the block's own input and output are contract
+    shaped. Measured on ``tiny-random/qwen3.5-moe`` at 1x6 tokens, hidden 8,
+    128 experts, top-10::
+
+        gate       out -> ((6,128) logits, (6,10) scores, (6,10) int64 indices)
+        experts    out -> (6, 8)
+        shared_expert.gate_proj / up_proj out -> (6, 32)
+        shared_expert.down_proj       in  -> (6, 32)
+        shared_expert                 out -> (6, 8)
+        shared_expert_gate            out -> (6, 1)
+
+    The router is the reason ``tuple_index`` exists: ``Qwen3_5MoeTopKRouter``
+    returns three tensors and the historical "element 0 of a tuple" rule would
+    have silently handed back the logits for all three.
+    """
+    if not hasattr(mlp, "gate") or not hasattr(mlp, "experts"):
+        raise NotImplementedError(
+            f"component {component!r} needs a sparse-MoE block at layer {layer}, "
+            f"but this MLP (children="
+            f"{sorted(name for name, _ in mlp.named_children())}) is not one — "
+            "extend the tap table in pytorch_hooks/sites.py."
+        )
+    # The `expert` sub-axis selects one of `num_experts` experts, which none of
+    # these tensors is indexed by: the router's axes are all-experts (logits) or
+    # top-k (scores, indices), and the shared expert is not one of the routed
+    # ones. Refusing beats silently ignoring it — the mistake `stream` made.
+    if spec.expert is not None:
+        raise ProtocolError(
+            "P4",
+            f"site names expert {spec.expert!r} on component {component!r}, "
+            "which has no per-expert axis: the router's axes are all-experts "
+            "or top-k, and the shared expert is not one of the routed experts. "
+            "The per-expert interior is 'expert_output' (follow-up F2).",
+        )
+
+    def flat(module: Any, kind: str, tuple_index: int | None = None) -> ResolvedSite:
+        return ResolvedSite(
+            module=module,
+            kind=kind,
+            layer=layer,
+            component=component,
+            layout="flat_td",
+            tuple_index=tuple_index,
+        )
+
+    if component == "router_logits":
+        return flat(mlp.gate, "out", 0)
+    if component == "router_scores":
+        return flat(mlp.gate, "out", 1)
+    if component == "expert_idx":
+        return flat(mlp.gate, "out", 2)
+    if component == "routed_output":
+        # the fused experts module, already combined over the top-k
+        return flat(mlp.experts, "out")
+    shared = getattr(mlp, "shared_expert", None)
+    if shared is None:
+        raise NotImplementedError(
+            f"component {component!r} needs a shared expert, which this MoE "
+            f"block at layer {layer} does not have."
+        )
+    if component == "shared_expert_gate_proj":
+        return flat(shared.gate_proj, "out")
+    if component == "shared_expert_up_proj":
+        return flat(shared.up_proj, "out")
+    if component == "shared_expert_activation":
+        # down_proj's INPUT: silu(gate_proj(x)) * up_proj(x), the one tensor the
+        # shared expert never exposes as a module output of its own
+        return flat(shared.down_proj, "in")
+    if component == "shared_expert_output":
+        return flat(shared, "out")
+    if component == "shared_expert_gate":
+        return flat(mlp.shared_expert_gate, "out")
+    raise ProtocolError("P4", f"unhandled MoE component {component!r}")
+
+
 def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
     """Resolve one site record to its tap. Refuses honestly on components
     this backend does not implement yet."""
@@ -199,12 +360,15 @@ def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
     # after PR4 lands attention_probs; the second is a roadmap statement.
     _check_stream(bundle, component, spec, layer)
 
-    if component in ("attention_probs", "router_logits", "expert_output"):
+    if component in ("attention_probs", "expert_output"):
         raise NotImplementedError(
             f"the pytorch_hooks backend has no tap for {component!r} yet — "
             "attention_probs needs an attention-internal surface (this backend "
-            "declares no writable_attention_probs capability), and the MoE "
-            "components await an MoE entry in the family table (sites.py)."
+            "declares no writable_attention_probs capability), and "
+            "expert_output names the per-expert loop interior, which needs the "
+            "ragged value shape (follow-up F2). The rest of the MoE surface — "
+            "the router, the combined routed output and the shared expert — "
+            "resolves; see _moe_site (sites.py)."
         )
 
     block = _blocks(bundle)[layer]
@@ -251,6 +415,8 @@ def resolve_site(bundle: ModelBundle, spec: SiteSpec) -> ResolvedSite:
             component=component,
         )
     mlp = block.mlp
+    if component in _MOE_COMPONENTS:
+        return _moe_site(bundle, mlp, component, spec, layer)
     if component == "mlp_input":
         return ResolvedSite(module=mlp, kind="in", layer=layer, component=component)
     if component == "mlp_output":

@@ -54,10 +54,25 @@ COMPONENT_RANK: dict[str, int] = {
     "block_mid": 45,
     "mlp_input_norm": 47,
     "mlp_input": 50,
+    # The MoE interior, between the block's input and its output. These were
+    # 71 and 72 — *after* ``mlp_output`` (70) — which contradicted the comment
+    # they carried and was unreachable only because ``router_logits`` refused to
+    # resolve. It resolves now, so the order is corrected: the router fires
+    # first, then the experts, then the combine.
+    "router_logits": 51,
+    "router_scores": 52,
+    "expert_idx": 53,
+    "expert_output": 54,  # per-expert interior (still refused — follow-up F2)
+    "routed_output": 55,
     "mlp_activation": 60,
+    # the shared expert runs beside the routed ones; its gate is *consumed*
+    # last, at the multiply that produces the (derived) gated output
+    "shared_expert_gate_proj": 61,
+    "shared_expert_up_proj": 62,
+    "shared_expert_activation": 63,
+    "shared_expert_output": 64,
+    "shared_expert_gate": 65,
     "mlp_output": 70,
-    "router_logits": 71,  # the router fires before the experts it routes to
-    "expert_output": 72,
     "block_output": 80,
     "ln_final": 90,
     "lm_head": 100,
