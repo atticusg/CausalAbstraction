@@ -308,20 +308,31 @@ def test_wrong_stream_refusal_is_identical(hooks_qwen, trace_qwen):
 # --------------------------------------------------------------------------- #
 
 
-def test_attention_probs_routes_to_the_reference_engine():
+def test_attention_probs_no_longer_routes_away():
+    """N5 flipped this pin: the pattern (and the whole attention interior) is
+    served here through the `.source` address table, so a document naming it
+    stays on this engine when it is first in the list."""
     doc = parse_document(in_order(_read_doc("attention_probs", 3)))
     engines = [NnsightEngine(), PytorchHooksEngine()]
     chosen = choose_engine(doc, engines)
-    assert isinstance(chosen, PytorchHooksEngine)
-    assert component_capability("attention_probs") not in (
+    assert isinstance(chosen, NnsightEngine)
+    assert component_capability("attention_probs") in (
         NnsightEngine().effective_capabilities
     )
+    assert "writable_attention_probs" in NnsightEngine().capabilities
 
 
-def test_a_generated_read_reaching_the_executor_refuses_by_phase(trace_llama):
+def test_a_generated_read_is_served_and_agrees_with_the_reference_engine(
+    hooks_llama, trace_llama
+):
+    """N8 flipped this pin from a phase refusal to the behavior itself: a
+    continuation read decodes through one generate trace here, and the value
+    matches the reference engine's hand-rolled greedy decode."""
     doc = _read_doc("block_output", 1)
     doc["positions"] = {"tail": {"generated": {"max_new_tokens": 4}, "index": -1}}
     doc["reads"]["r"]["pos"] = "tail"
-    with pytest.raises(ProtocolError) as excinfo:
-        _executor(TracePointExecutor, doc, trace_llama, with_cf=False).run_all()
-    assert "N8" in str(excinfo.value)
+    hooked = _executor(PointExecutor, doc, hooks_llama, with_cf=False).read_value("r")
+    traced = _executor(TracePointExecutor, doc, trace_llama, with_cf=False).read_value(
+        "r"
+    )
+    _assert_same(hooked, traced, "a generated block_output read")

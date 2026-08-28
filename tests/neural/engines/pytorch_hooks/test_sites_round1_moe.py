@@ -239,12 +239,18 @@ def test_an_expert_sub_axis_refuses(qwen35moe_bundle):
     assert "no per-expert axis" in str(excinfo.value)
 
 
-def test_expert_output_still_refuses_and_says_why(qwen35moe_bundle):
-    """The per-expert interior is follow-up F2, and its refusal must not read
-    like the router's (which now resolves)."""
-    with pytest.raises(NotImplementedError) as excinfo:
-        resolve_site(qwen35moe_bundle, SiteSpec(component="expert_output", layer=0))
-    assert "ragged" in str(excinfo.value)
+def test_expert_output_resolves_as_an_interior_this_engine_refuses_by_name(
+    qwen35moe_bundle,
+):
+    """N6 flipped the follow-up-F2 refusal: the per-expert interior now
+    *resolves* — to ``kind="interior"``, the marker for a tensor inside the
+    fused experts forward — and it is the executor (and routing, by the absent
+    component declaration) that keeps it off this engine, naming the one that
+    serves it. See tests/neural/engines/nnsight_tracing/test_expert_interior.py
+    for that half."""
+    site = resolve_site(qwen35moe_bundle, SiteSpec(component="expert_output", layer=0))
+    assert site.kind == "interior"
+    assert site.module is qwen35moe_bundle.model.model.layers[0].mlp.experts
 
 
 # --------------------------------------------------------------------------- #
