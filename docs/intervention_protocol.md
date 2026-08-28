@@ -343,9 +343,14 @@ execution order:
   an integer chunk index; text anchors have nothing to resolve against there.
   Per-token prefill state does not exist: the recurrent kernel runs only in
   single-token decode, by the modeling code's own dispatch, so it is refused
-  by name rather than served at a granularity the kernel does not have. These
-  live inside one fused forward — the nnsight engine serves them through its
-  `.source` address table; the reference engine refuses them by name.
+  by name rather than served at a granularity the kernel does not have. In
+  the **generated frame** the state *is* per token: each decode step runs the
+  recurrent kernel once, and a continuation read of `deltanet_state` gets one
+  state per generated position — a separate, decode-verified address, because
+  decode dispatches different kernels than prefill (interior components
+  without one refuse by name in that frame). These live inside one fused
+  forward — the nnsight engine serves them through its `.source` address
+  table; the reference engine refuses them by name.
 - **`attention_result` is the per-head contribution to the residual stream**,
   and the only component the model never computes: the block projects the whole
   `attention_premix` at once, so what the forward pass forms is the *sum* over
