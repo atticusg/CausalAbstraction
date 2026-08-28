@@ -417,16 +417,25 @@ Closed vocabulary; `of` names a read; other value fields name dataset columns.
 | `cross_entropy` | `of, target` | CE against target |
 | `kl` | `of, target` (a read) | KL between two reads' distributions |
 | `class_probs` | `of, groups` | summed probability per group |
-| `top_k` | `of, k` | top-k tokens + probs |
+| `top_k` | `of, k, by` | the k top-ranked entries of the read (see below) |
 | `match` | `of, expected` (+ optional `mode`) | match indicator |
 | `decode` | `of` | the addressed tokens as text |
+
+**Reads a kind may bind to.** Every kind but `kl` and `top_k` names *vocabulary
+entries* — an authored string resolved to a token id — so it binds to a *plain*
+`lm_head` read and a metric over anything else is a load error. Plain means no
+`featurizer` and no `dims`: a featurizer re-expresses the projection in its own
+latents and `dims` re-indexes a slice, so under either one the read's entries
+are no longer token ids even though the site says `lm_head`. `kl` compares two
+reads against each other; `top_k` reports indices along whichever axis its read
+has. Those two bind to a read at any component.
 
 **Domains.** Every kind consumes one of two things from its read, and which
 one is a property of the kind:
 
 | domain | kinds | consumes |
 |---|---|---|
-| `distribution` | everything above except `decode` | the vocabulary projection at the addressed positions |
+| `distribution` | everything above except `decode` | the read's dense value at the addressed positions — the vocabulary projection for every kind but `top_k` |
 | `ids` | `decode` | only the tokens the decode produced |
 
 An `ids` kind therefore obliges **no** vocabulary projection anywhere (§8's
@@ -434,6 +443,48 @@ materialization requirement) — a text probe is cheap by construction, not by a
 backend's cleverness. It also only means something where tokens were
 *produced*: `decode` binds to a read whose position carries `generated` (§2.3),
 and a `decode` over a prompt-frame read is a load error.
+
+#### `top_k` — one kind over any read
+
+`top_k` is the reduction for "I only want the largest few entries per row". Its
+reason to exist is that the alternative is saving the whole tensor to disk and
+argsorting it later: a 4k-wide residual stream, or a 100k-latent SAE/BSF
+featurizer output, times every example and every position. Like `reduce: mean`
+on a save entry (§2.12), it happens **where the rows are gathered**.
+
+So `top_k` binds to any read — `lm_head`, `block_output`, `mlp_activation`, a
+featurizer's output. There is deliberately no `top_dims` / `top_features`
+sibling kind: one kind, disambiguated by mandatory fields.
+
+- **`k`** (mandatory, integer) — how many entries per row. `1 ≤ k ≤ width`.
+- **`by`** (mandatory, `value` | `abs_value` | `prob`) — the ranking rule. It
+  is mandatory because only the author knows what the axis is, and the answers
+  differ: a vocabulary projection has no meaningful negative entries, while a
+  residual stream and a signed feature code do, so ranking an SAE code by
+  signed value and by magnitude return different sets.
+  - `value` — the k largest signed entries. Any read.
+  - `abs_value` — the k largest by `|x|`; the reported value stays signed. Any
+    read.
+  - `prob` — softmax the last axis, then take the k largest probabilities.
+    **Plain `lm_head` reads only** — a softmax across neurons, SAE latents, a
+    featurizer's re-expression of the projection or a `dims` re-index of it
+    normalizes over an axis that is not an event space, so its "probabilities"
+    would be probabilities of nothing; validation refuses it elsewhere. A
+    pre-`by` document that ranked logits meant `prob`.
+
+**Result columns.** Each has one fixed meaning, in every document. A column is
+*absent* when it does not apply — never reinterpreted:
+
+| column | meaning | emitted when |
+|---|---|---|
+| `indices` | index along the read's last axis (a token id on `lm_head`, a neuron on `mlp_activation`, a latent on a featurizer output) | always |
+| `tokens` | that index decoded as a token string | the read is a plain `lm_head` tap |
+| `values` | the **raw** read value at that index | always |
+| `probs` | the softmax probability over the vocabulary | `by: "prob"` |
+
+`values` is always raw — a logit under `by: "prob"`, not the probability — so a
+downstream reader never has to know the ranking rule to know what it is
+holding. The normalized number lives in its own column.
 
 **Metrics over several positions.** A read may address more than one position —
 every generated token of a row, a window of them, the tokens where the model
@@ -459,7 +510,10 @@ its table says which:
   `auto`) — how this metric's string answers become token ids. Legal on every
   kind that names token strings (`logit_diff`, `token_logit`, `cross_entropy`,
   `class_probs`, `match`); `kl` and `top_k` never resolve a string and refuse
-  the key.
+  the key. That stays true under `top_k`'s any-read semantics: it *reports*
+  indices it found and decodes them only when the read taps `lm_head` — it
+  never turns an authored string into a token id, so the knob would have
+  nothing to apply to.
   - `auto` tries `" " + s` first and falls back to `s`. That is right when the
     answer follows a space in the prompt — weekdays, names, MCQA letters — and
     it is the default so pre-`token_form` documents are unchanged.
@@ -720,7 +774,7 @@ refusal messages generate from the missing capability.
 |---|---|
 | `grad` | `train` present |
 | `paired_forward` | a write's operand read has a different `input` than the write's model |
-| `full_logits` | a full `lm_head` read is saved, or a metric needs the full vocab (`top_k`, `class_probs`) |
+| `full_logits` | a full `lm_head` read is saved, or a `class_probs` / `top_k` metric reads `lm_head` other than through a `dims` slice — a *featurized* `lm_head` read still obliges the whole projection (the featurizer consumes it) even though its value is latents. A `top_k` over any other component obliges no vocabulary projection (sec. 2.10) and must not be charged for one |
 | `generate` | any position carries `generated` (sec. 2.3) |
 | `quantized_weights` | `model.quantization` present (sec. 2.1) |
 | `writable_attention_probs` | a write targets `attention_probs` |

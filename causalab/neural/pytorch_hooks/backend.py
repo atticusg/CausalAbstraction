@@ -38,6 +38,7 @@ from causalab.protocol.schema import (
     METRIC_DOMAINS,
     WHOLE_WINDOW_METRIC_KINDS,
     Document,
+    metric_reads_vocabulary,
     parse_document,
 )
 
@@ -183,6 +184,7 @@ class PytorchHooksBackend(Backend):
                             if METRIC_DOMAINS.get(str(metric.kind)) == "ids"
                             else None
                         ),
+                        vocab_axis=metric_reads_vocabulary(doc, metric),
                     ),
                     steps=(
                         None
@@ -204,6 +206,7 @@ class PytorchHooksBackend(Backend):
                     if target_name is not None
                     else None
                 ),
+                vocab_axis=metric_reads_vocabulary(doc, metric),
             )
         for entry in doc.save:
             if entry.value in doc.metrics:
