@@ -13,7 +13,7 @@ where it moved.
 It has to run in a **subprocess**: ``tests/conftest.py`` imports torch at
 session scope, so an in-process ``"torch" not in sys.modules`` check would be
 false regardless of whether the loader behaved. The subprocess precedent is
-``tests/neural/pytorch_hooks/test_end_to_end_iia.py``.
+``tests/neural/engines/pytorch_hooks/test_end_to_end_iia.py``.
 """
 
 from __future__ import annotations

@@ -19,7 +19,7 @@ Provenance of a script-written bundle — three sources, in order:
    ``pytorch_hooks/outputs.py``) — a fit over activations from model X at site
    S really is bound to X and S;
 2. **stamped** by the runner: ``produced_by`` (the step's digest — its
-   provenance unit), ``backend`` and ``dtype``;
+   provenance unit), ``engine`` and ``dtype``;
 3. never ``commit``: the code identity of a script output is its
    ``script_sha256``, which is in the document's canonical form and therefore
    in the digest. A git sha would say less and drift more.

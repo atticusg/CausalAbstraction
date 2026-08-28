@@ -7,7 +7,7 @@ un-swept document. The other rules live where their information lives:
 * rules 1–2 (strict keys, section order) — :mod:`causalab.protocol.schema`;
 * rule 14 (sweep wrappers, point cap) — :mod:`causalab.protocol.sweep`;
 * rule 15 (artifact-valued fields) — :mod:`causalab.protocol.resolve`;
-* rule 13 needs a selected backend, so it only fires when one is passed.
+* rule 13 needs a selected engine, so it only fires when one is passed.
 
 Interpretations this module commits to (each surfaced in the PR notes):
 
@@ -69,8 +69,8 @@ _ANY_READ_METRIC_KINDS = frozenset({"kl", "top_k"})
 _TRAINABLE_KINDS = frozenset({"subspace", "gate", "sae"})
 
 
-def validate_document(doc: Document, *, backend_is_local: bool | None = None) -> None:
-    """Run checklist rules 3–13, 16 and 17 (13 only when ``backend_is_local``
+def validate_document(doc: Document, *, engine_is_local: bool | None = None) -> None:
+    """Run checklist rules 3–13, 16 and 17 (13 only when ``engine_is_local``
     is given). Raises :class:`ValidationError` on the first violation."""
     names = _check_namespace(doc)  # rule 3
     _check_references(doc, names)  # rule 4 (+ the rule-5 read bindings)
@@ -82,8 +82,8 @@ def validate_document(doc: Document, *, backend_is_local: bool | None = None) ->
     _check_trainability(doc)  # rule 12
     _check_generation(doc)  # rule 16
     _check_model_realization(doc)  # rule 17
-    if backend_is_local is not None:
-        _check_pytorch_fn(doc, backend_is_local)  # rule 13
+    if engine_is_local is not None:
+        _check_pytorch_fn(doc, engine_is_local)  # rule 13
 
 
 # --------------------------------------------------------------------------- #
@@ -1011,15 +1011,15 @@ def _check_generation(doc: Document) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _check_pytorch_fn(doc: Document, backend_is_local: bool) -> None:
-    if backend_is_local:
+def _check_pytorch_fn(doc: Document, engine_is_local: bool) -> None:
+    if engine_is_local:
         return
     for ename, write in doc.writes.items():
         if write.do.mechanism == "pytorch_fn":
             raise ValidationError(
                 13,
-                f"write {ename!r} uses pytorch_fn, which only a local backend may "
-                "run (§2.8) — the selected backend is not local",
+                f"write {ename!r} uses pytorch_fn, which only a local engine may "
+                "run (§2.8) — the selected engine is not local",
                 path=f"writes.{ename}.do",
             )
 
@@ -1037,7 +1037,7 @@ def _check_model_realization(doc: Document) -> None:
     LLM.int8() vocabulary, so any of them under the wrong scheme is a document
     that reads as if it configured something it did not.
 
-    📐 ``compute_dtype`` earns its place here by measurement: the backend
+    📐 ``compute_dtype`` earns its place here by measurement: the engine
     reads it as ``bnb_4bit_compute_dtype``, and the int8 branch of
     ``_bitsandbytes_config`` builds ``BitsAndBytesConfig(load_in_8bit=True,
     llm_int8_threshold=…)`` — nowhere for it to go. Left admissible, two int8

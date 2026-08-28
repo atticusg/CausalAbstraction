@@ -606,12 +606,12 @@ def test_rule_12_loaded_featurizer_trained():
 # rule 13 — pytorch_fn is local-only ---------------------------------------------- #
 
 
-def test_rule_13_pytorch_fn_on_non_local_backend():
+def test_rule_13_pytorch_fn_on_non_local_engine():
     doc = base_doc()
     doc["writes"]["patch"]["do"] = {"pytorch_fn": {"qualname": "torch.relu"}}
     del doc["reads"]["v_cf"]  # no longer an operand; would trip the sink rule
-    expect_rule(13, doc, backend_is_local=False)
-    parse_and_validate(doc, backend_is_local=True)  # a local backend may run it
+    expect_rule(13, doc, engine_is_local=False)
+    parse_and_validate(doc, engine_is_local=True)  # a local engine may run it
 
 
 # rule 14 — sweep wrappers + point cap --------------------------------------------- #
