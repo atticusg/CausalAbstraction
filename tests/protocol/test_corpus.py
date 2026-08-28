@@ -53,7 +53,9 @@ CORPUS_SHAPE = [
         1,
         4,
         {"paired_forward"}
-        | _touch("attention_output+w", "attention_value+w", "block_input+w", "lm_head"),
+        | _touch(
+            "attention_output+w", "attention_premix+w", "block_input+w", "lm_head"
+        ),
     ),
     (
         "04_das_im.json",

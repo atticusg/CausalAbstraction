@@ -195,7 +195,7 @@ def test_the_fixture_cannot_distinguish_the_three_inner_widths(qwen35moe_bundle)
 
 
 # --------------------------------------------------------------------------- #
-# the taps: layout and tuple index
+# the taps: shape and tuple index
 # --------------------------------------------------------------------------- #
 
 
@@ -204,7 +204,7 @@ def test_every_moe_tap_is_flat(qwen35moe_bundle, component: str):
     """📐 ``Qwen3_5MoeSparseMoeBlock`` reshapes to ``(-1, hidden)`` before the
     router, so the whole interior is flattened over (batch, position)."""
     site = resolve_site(qwen35moe_bundle, SiteSpec(component=component, layer=0))
-    assert site.layout == "flat_td"
+    assert site.shape.flat_batch
 
 
 def test_the_router_taps_declare_the_three_tuple_elements(qwen35moe_bundle):

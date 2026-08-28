@@ -1,4 +1,4 @@
-"""Tap layouts: reconciling a module's native tensor shape with the executor's.
+"""Reconciling a module's native tensor shape with the executor's.
 
 The executor works in one shape throughout — ``(batch, position, feature)``.
 ``PointExecutor._gather`` indexes ``tensor[rows, idx]`` (dim 0 batch, dim 1
@@ -6,34 +6,61 @@ position), ``_finalize_read`` slices features on dim ``-1``, and
 ``_address_writer`` mutates ``tensor[rows, idx][..., fslice]`` in place. That is
 the *contract*.
 
-Most taps already satisfy it, which is why the contract could stay implicit.
-Some do not, and the shapes are architecture facts rather than bugs:
+Most taps already satisfy it; some do not, and the shapes are architecture facts
+rather than bugs. A tap declares a
+:class:`~causalab.protocol.shapes.FeatureShape` on
+:class:`~causalab.neural.pytorch_hooks.sites.ResolvedSite` and this module
+converts in both directions — :func:`to_contract` on the way out of a hook,
+:func:`from_contract` on the way back in for writes — by **computing** the
+conversion from the declared axes.
 
-===================  ==========================  ====================================
-layout               native shape                where it shows up
-===================  ==========================  ====================================
-``"bsd"``            ``(batch, seq, feature)``    the contract; every tap so far
-``"flat_td"``        ``(batch * seq, feature)``   MoE taps — ``Qwen3_5MoeSparseMoeBlock``
-                                                  reshapes to ``(-1, hidden)`` before
-                                                  the router, so the router, experts
-                                                  and shared-expert taps are flat
-``"bds"``            ``(batch, feature, seq)``    channels-first — the Gated DeltaNet
-                                                  ``conv1d`` output
-``"bs"``             ``(batch, seq)``             no feature axis at all — ``input_ids``,
-                                                  one integer token id per position
-``"native"``         *(undescribed)*              the ABSENCE of a description —
-                                                  ``attention_probs``, whose feature
-                                                  axis is a position axis. Identity
-                                                  in both directions; see below
-===================  ==========================  ====================================
+That is the change from the five-string ``Layout`` vocabulary this replaces
+(``"bsd"``, ``"flat_td"``, ``"bds"``, ``"bs"``, ``"native"``). Those five are
+still the five shapes round 1 needed, and they survive as constructor names in
+:mod:`causalab.protocol.shapes`; what does not survive is an ``if layout == …``
+chain that a sixth shape had to be added to. Round 2's attention interior brings
+four more — a kept head axis, a head axis in front of the position axis, a fused
+``[q | gate]`` projection — and each is a different axis tuple, not a new branch.
 
-A tap declares its layout on :class:`~causalab.neural.pytorch_hooks.sites.ResolvedSite`
-and this module converts in both directions: :func:`to_contract` on the way out of
-a hook, :func:`from_contract` on the way back in for writes. Reads and writes
-therefore share one description of the shape instead of each growing a special
-case, which is the point — the general feature-shape descriptor (a typed answer
-for ``attention_probs``, whose feature axis *is* a position axis) is later work,
-and it should extend this rather than unpick per-component branches.
+The conversion, in four steps
+-----------------------------
+
+1. **unpack** each native dimension into the axes packed into it
+   (``flat_batch`` splits ``(batch*position)`` using the batch size;
+   ``flat_inner`` splits ``head·feature``), checking every static width on the
+   way. A tensor whose rank or widths contradict the declaration raises rather
+   than being silently reinterpreted — a wrong tap that still produces plausible
+   numbers is the failure mode this exists to prevent;
+2. **select** the fused split, when the component names one of several
+   sub-tensors sharing a projection;
+3. **permute** to ``(batch, position, *inner)``;
+4. **flatten** the inner axes into the contract's single feature axis — or add a
+   width-1 one when the tap has no feature axis at all (``input_ids``).
+
+A shape with no contract form — an attention pattern, whose feature axis *is* a
+position axis — converts by doing nothing, in both directions. That is what the
+``"native"`` marker used to mean; it now follows from
+``FeatureShape.has_contract_form`` rather than being asserted.
+
+Aliasing
+--------
+
+📐 **Aliasing is not load-bearing.** ``to_contract`` returns a view where the
+steps above permit one, but that is an artefact of ``view``/``permute``, not a
+guarantee, and no behaviour depends on it: writes are correct because the hook
+passes :func:`from_contract`'s result *back* to the model and
+``_address_writer`` mutates through the returned chain, so a shape that has to
+copy (a fused select, an incompatible stride) is equally correct and simply
+slower. Stated because the reverse is the tempting mistake — nothing in the
+suite fails if aliasing is lost, so a later change that relied on it would be
+silently unpinned.
+
+The one shape that *cannot* alias is the fused one, and it says so: writing back
+one split of ``[q | gate]`` has to reach the other split's storage, so
+:func:`from_contract` takes the native tensor and scatters into it.
+
+Tuple payloads
+--------------
 
 Separately, a module may return a **tuple** and the interesting tensor may not be
 element 0: ``Qwen3_5MoeTopKRouter.forward`` returns
@@ -44,154 +71,200 @@ taking element 0 of any tuple.
 
 from __future__ import annotations
 
-from typing import Any, Literal, get_args
+import math
+from typing import Any
 
 import torch
 
-#: The layouts a tap may declare. ``"bsd"`` is the executor's contract.
-#:
-#: ``"native"`` is not a layout in the sense the others are: it claims *nothing*
-#: about the tensor's axes and converts by doing nothing. It exists so that a tap
-#: whose shape this module cannot honestly describe — ``attention_probs``, which
-#: is (batch, heads, query, key) and whose feature axis IS a position axis —
-#: cannot be mistaken for the contract by defaulting to ``"bsd"``, where both
-#: conversions are also the identity but the *claim* would be false. There is no
-#: conversion case here for the typed feature-shape descriptor (follow-up F1) to
-#: unpick; F1 replaces the marker.
-#:
-#: ``"bs"`` is the degenerate case and is deliberately *here* rather than
-#: special-cased in the executor: a tensor with no feature axis still has a
-#: native shape that differs from the contract, which is exactly what this
-#: module exists to reconcile. It is not the typed feature-shape descriptor that
-#: ``attention_probs`` needs (whose feature axis *is* a position axis) — there is
-#: no feature-axis ambiguity to describe, only an absent axis to add.
-Layout = Literal["bsd", "flat_td", "bds", "bs", "native"]
+from causalab.protocol.shapes import INNER_KINDS, Axis, FeatureShape
 
-#: Every valid layout string, for validation and error messages.
-LAYOUTS: tuple[str, ...] = get_args(Layout)
+__all__ = [
+    "LayoutError",
+    "from_contract",
+    "rebuild_payload",
+    "tap_tensor",
+    "to_contract",
+]
 
 
 class LayoutError(ValueError):
-    """A tensor does not have the shape its tap's layout claims.
+    """A tensor does not have the shape its tap's descriptor claims.
 
     Deliberately *not* a :class:`~causalab.protocol.errors.ProtocolError`, and
-    so it carries no ``P``/``V`` code: ``layout`` is a field the site table
-    sets on :class:`~causalab.neural.pytorch_hooks.sites.ResolvedSite`, never
+    so it carries no ``P``/``V`` code: the shape is a field the site table sets
+    on :class:`~causalab.neural.pytorch_hooks.sites.ResolvedSite`, never
     something a document author writes, so this can only fire on a mismatch
     between our table and a model's real module — an internal invariant, and
     the protocol codes exist to name rules a *document* broke.
 
-    What would change that: making the layout authorable (a per-family
-    override in a document), at which point a bad entry becomes an author
-    error and this should either derive from ``ProtocolError`` or be wrapped
-    at the executor boundary with a code.
+    What would change that: making the shape authorable (a per-family override
+    in a document), at which point a bad entry becomes an author error and this
+    should either derive from ``ProtocolError`` or be wrapped at the executor
+    boundary with a code.
     """
 
 
+def _unpack(tensor: torch.Tensor, shape: FeatureShape, batch_size: int) -> torch.Tensor:
+    """Step 1: one tensor dimension per declared axis, in declared order."""
+    groups = shape.native_groups
+    if tensor.dim() != len(groups):
+        raise LayoutError(
+            f"shape {shape.describe()} expects a {len(groups)}-D tensor, got "
+            f"shape {tuple(tensor.shape)}"
+        )
+    sizes: list[int] = []
+    for dim, group in enumerate(groups):
+        extent = tensor.shape[dim]
+        if len(group) == 1:
+            axis = group[0]
+            if axis.width is not None and extent != axis.width:
+                raise LayoutError(
+                    f"shape {shape.describe()} declares {axis.label} of width "
+                    f"{axis.width}, but dim {dim} of {tuple(tensor.shape)} is "
+                    f"{extent}"
+                )
+            sizes.append(extent)
+        elif group[0].kind == "batch":
+            if batch_size <= 0 or extent % batch_size:
+                raise LayoutError(
+                    f"shape {shape.describe()} cannot split {extent} rows into "
+                    f"batch_size {batch_size}: the tap is flattened over "
+                    "(batch, position), so the row count must be a multiple of "
+                    "the batch size"
+                )
+            sizes.extend([batch_size, extent // batch_size])
+        else:
+            widths = [a.width or 1 for a in group]
+            if math.prod(widths) != extent:
+                raise LayoutError(
+                    f"shape {shape.describe()} packs "
+                    f"{'·'.join(str(w) for w in widths)} = {math.prod(widths)} "
+                    f"into dim {dim}, but {tuple(tensor.shape)} has {extent} there"
+                )
+            sizes.extend(widths)
+    return tensor.reshape(*sizes)
+
+
+def _contract_order(axes: list[Axis]) -> list[int]:
+    """Step 3's permutation: batch, position, then the inner axes in order."""
+    order = [i for i, a in enumerate(axes) if a.kind == "batch"]
+    order += [i for i, a in enumerate(axes) if a.kind == "position"]
+    order += [i for i, a in enumerate(axes) if a.kind in INNER_KINDS]
+    return order
+
+
 def to_contract(
-    tensor: torch.Tensor, layout: Layout, *, batch_size: int
+    tensor: torch.Tensor, shape: FeatureShape, *, batch_size: int
 ) -> torch.Tensor:
     """Reshape a tap's native tensor into ``(batch, position, feature)``.
 
     Args:
         tensor: the tensor as the module produced or consumed it.
-        layout: the tap's declared native layout.
-        batch_size: rows in the encoded batch. Needed to un-flatten
-            ``"flat_td"``, where the position count is only recoverable as
-            ``tensor.shape[0] // batch_size``.
+        shape: the tap's declared native shape.
+        batch_size: rows in the encoded batch. Needed to un-flatten a
+            ``flat_batch`` shape, where the position count is only recoverable
+            as ``tensor.shape[0] // batch_size``.
 
     Returns:
-        A ``(batch, position, feature)`` view where possible, so that an
-        in-place write through the result reaches the original storage.
-
-        📐 **That aliasing is not load-bearing** — it is an artefact of
-        ``view``/``transpose``, not a guarantee this function makes, and no
-        behaviour depends on it. Writes are correct because the hook passes
-        :func:`from_contract`'s result *back* to the model and
-        ``_address_writer`` mutates through the returned chain, so a layout
-        that had to ``copy`` (an incompatible stride, say) would be equally
-        correct and simply slower. Stated because the reverse is the tempting
-        mistake: nothing in the suite fails if aliasing is lost, so a later
-        change that relies on it would be silently unpinned.
+        A ``(batch, position, feature)`` tensor — a view where the conversion
+        permits one (see the module docstring on aliasing). A shape with no
+        contract form is returned untouched.
 
     Raises:
-        LayoutError: the tensor's rank or leading dimension contradicts the
-            declared layout. Silently reinterpreting a mismatched shape is the
-            failure mode this exists to prevent — a wrong tap that still
-            produces plausible numbers.
+        LayoutError: the tensor's rank or a static width contradicts the
+            declaration.
     """
-    if layout == "bsd":
+    if not shape.has_contract_form:
         return tensor
-    if layout == "flat_td":
-        if tensor.dim() != 2:
-            raise LayoutError(
-                f"layout 'flat_td' expects a 2-D (batch*seq, feature) tensor, "
-                f"got shape {tuple(tensor.shape)}"
-            )
-        flat, feature = tensor.shape
-        if batch_size <= 0 or flat % batch_size:
-            raise LayoutError(
-                f"layout 'flat_td' cannot split {flat} rows into batch_size "
-                f"{batch_size}: the tap is flattened over (batch, seq), so the "
-                "row count must be a multiple of the batch size"
-            )
-        return tensor.view(batch_size, flat // batch_size, feature)
-    if layout == "bds":
-        if tensor.dim() != 3:
-            raise LayoutError(
-                f"layout 'bds' expects a 3-D (batch, feature, seq) tensor, got "
-                f"shape {tuple(tensor.shape)}"
-            )
-        return tensor.transpose(1, 2)
-    if layout == "bs":
-        if tensor.dim() != 2:
-            raise LayoutError(
-                f"layout 'bs' expects a 2-D (batch, seq) tensor, got shape "
-                f"{tuple(tensor.shape)}"
-            )
-        # unsqueeze, not reshape: a view, so the aliasing the write path relies
-        # on survives (even though the only 'bs' tap today is read-only)
-        return tensor.unsqueeze(-1)
-    if layout == "native":
-        return tensor  # undescribed on purpose — nothing to convert
-    raise LayoutError(f"unknown tap layout {layout!r}; expected one of {LAYOUTS}")
+    unpacked = _unpack(tensor, shape, batch_size)
+    axes = list(shape.axes)
+    if shape.fused_index is not None:
+        which = next(i for i, a in enumerate(axes) if a.kind == "fused")
+        unpacked = unpacked.select(which, shape.fused_index)
+        axes.pop(which)
+    order = _contract_order(axes)
+    moved = unpacked.permute(*order)
+    n_inner = len(order) - 2
+    if n_inner == 0:
+        # no feature axis at all (`input_ids`): give the contract a width-1 one.
+        # unsqueeze, not reshape, so the view survives.
+        return moved.unsqueeze(-1)
+    if n_inner == 1:
+        return moved
+    return moved.reshape(moved.shape[0], moved.shape[1], -1)
 
 
 def from_contract(
-    tensor: torch.Tensor, layout: Layout, *, batch_size: int
+    tensor: torch.Tensor,
+    shape: FeatureShape,
+    *,
+    batch_size: int,
+    native: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Invert :func:`to_contract`, returning the module's native shape.
 
-    ``from_contract(to_contract(x, l), l)`` round-trips to ``x``'s shape for
-    every layout. Used on the write path, where the model must receive back the
+    ``from_contract(to_contract(x, s), s)`` round-trips to ``x``'s shape for
+    every shape. Used on the write path, where the model must receive back the
     shape it was going to produce.
+
+    Args:
+        native: the tensor :func:`to_contract` was given. Required only for a
+            **fused** shape, where the component named one split of a shared
+            projection and the other splits have to survive the write: the
+            contract tensor is scattered back into ``native``, which is then
+            returned. Ignored otherwise.
     """
-    if layout == "bsd":
+    if not shape.has_contract_form:
         return tensor
-    if layout == "flat_td":
-        if tensor.dim() != 3:
-            raise LayoutError(
-                f"layout 'flat_td' expects a 3-D contract tensor to flatten, got "
-                f"shape {tuple(tensor.shape)}"
-            )
-        return tensor.reshape(-1, tensor.shape[-1])
-    if layout == "bds":
-        if tensor.dim() != 3:
-            raise LayoutError(
-                f"layout 'bds' expects a 3-D contract tensor, got shape "
-                f"{tuple(tensor.shape)}"
-            )
-        return tensor.transpose(1, 2)
-    if layout == "bs":
+    axes = [a for a in shape.axes if a.kind != "fused"]
+    order = _contract_order(axes)
+    n_inner = len(order) - 2
+    if n_inner == 0:
         if tensor.dim() != 3 or tensor.shape[-1] != 1:
             raise LayoutError(
-                f"layout 'bs' expects a 3-D contract tensor of width 1 to drop "
-                f"back to (batch, seq), got shape {tuple(tensor.shape)}"
+                f"shape {shape.describe()} has no feature axis, so it expects a "
+                "3-D contract tensor of width 1 to drop back, got shape "
+                f"{tuple(tensor.shape)}"
             )
-        return tensor.squeeze(-1)
-    if layout == "native":
-        return tensor
-    raise LayoutError(f"unknown tap layout {layout!r}; expected one of {LAYOUTS}")
+        moved = tensor.squeeze(-1)
+    else:
+        inner = [a.width or 1 for a in shape.feature_axes]
+        if tensor.dim() != 3 or tensor.shape[-1] != math.prod(inner):
+            raise LayoutError(
+                f"shape {shape.describe()} expects a 3-D contract tensor of "
+                f"width {math.prod(inner)}, got shape {tuple(tensor.shape)}"
+            )
+        moved = (
+            tensor
+            if n_inner == 1
+            else tensor.reshape(tensor.shape[0], tensor.shape[1], *inner)
+        )
+    inverse = [0] * len(order)
+    for contract_dim, axis_dim in enumerate(order):
+        inverse[axis_dim] = contract_dim
+    unpacked = moved.permute(*inverse)
+    if shape.fused_index is not None:
+        if native is None:
+            raise LayoutError(
+                f"shape {shape.describe()} names split {shape.fused_index} of a "
+                "fused projection, so writing it back needs the native tensor "
+                "the other splits live in — pass native=..."
+            )
+        whole = _unpack(native, shape, batch_size)
+        which = next(i for i, a in enumerate(shape.axes) if a.kind == "fused")
+        whole.select(which, shape.fused_index).copy_(unpacked)
+        return native
+    return _pack(unpacked, shape, batch_size)
+
+
+def _pack(tensor: torch.Tensor, shape: FeatureShape, batch_size: int) -> torch.Tensor:
+    """Invert :func:`_unpack`: re-merge the axes each native dimension holds."""
+    sizes: list[int] = []
+    dim = 0
+    for group in shape.native_groups:
+        sizes.append(math.prod(tensor.shape[dim + k] for k in range(len(group))))
+        dim += len(group)
+    return tensor.reshape(*sizes)
 
 
 def tap_tensor(payload: Any, tuple_index: int | None) -> torch.Tensor:

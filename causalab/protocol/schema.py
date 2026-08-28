@@ -40,6 +40,7 @@ __all__ = [
     "ALL_POSITIONS",
     "ArtifactRef",
     "COMPONENTS",
+    "DEPRECATED_COMPONENTS",
     "Component",
     "DataRole",
     "Do",
@@ -72,7 +73,9 @@ __all__ = [
     "RESERVED_NAMES",
     "SECTION_ORDER",
     "SaveEntry",
+    "STREAMS",
     "SiteSpec",
+    "Stream",
     "TOKEN_COLUMN_METRIC_KINDS",
     "TOKEN_FORMS",
     "TOP_K_RANKINGS",
@@ -99,7 +102,7 @@ Component = Literal[
     "block_input",
     "attention_input_norm",
     "attention_output",
-    "attention_value",
+    "attention_premix",
     "attention_probs",
     "block_mid",
     "mlp_input_norm",
@@ -123,6 +126,44 @@ Component = Literal[
 
 #: The site component vocabulary (§2.4), in spec order.
 COMPONENTS: tuple[Component, ...] = get_args(Component)
+
+#: Retired spellings, mapped to the name that replaced them. Applied at parse,
+#: so ``SiteSpec.component`` is always current and nothing downstream — the
+#: shape table, the rank table, the tap table — carries a second name.
+#:
+#: 🔤 ``attention_value`` named the o-projection's **input**: on a gated
+#: attention family (Qwen3.5/3.6) that is ``z · σ(gate)``, on an ungated one it
+#: is ``z``, and on neither is it the value vectors. Round 2 exposes those
+#: separately, as ``attention_value_states`` — so the old name had to move
+#: before the collision, not after it (nnterp#51 is the same mistake, made
+#: after).
+#:
+#: The replacement name is **not** reused for the new box, deliberately: a
+#: document written against the old vocabulary would then load, and silently
+#: mean a different tensor. An alias that redirects is safe; an alias that
+#: rebinds is the failure this whole rename exists to avoid.
+DEPRECATED_COMPONENTS: dict[str, Component] = {
+    "attention_value": "attention_premix",
+}
+
+#: The mixer a layer carries. A hybrid tower has both — 📐 on
+#: ``tiny-random/qwen3.5-moe`` three of four layers are Gated DeltaNet
+#: (``linear_attention``) and one is ``full_attention`` — so a site may name the
+#: stream it means and be refused at load if the layer it names carries the
+#: other one.
+#:
+#: 🐞 This parsed as an **integer** until round 2, which made the field
+#: unusable from either side: ``sites._check_stream`` only reads a *string*
+#: (``bundle.stream_at`` returns one), so an authored ``"full_attention"`` was
+#: rejected by the parser before the check could see it, and an authored ``0``
+#: parsed and was then silently ignored — precisely the failure ``_moe_site``'s
+#: ``expert`` refusal was written to avoid. Round 1's tests missed it because
+#: they construct ``SiteSpec(stream="full_attention")`` directly, exercising a
+#: path no document can reach.
+Stream = Literal["full_attention", "linear_attention"]
+
+#: Every stream a site may name.
+STREAMS: tuple[Stream, ...] = get_args(Stream)
 
 #: Components that carry no ``layer`` field.
 #: ``input_ids`` joins these because it is the model's *input* (§5.4), not an
@@ -1265,6 +1306,17 @@ def _parse_positions(
     }
 
 
+def _current_component(value: Any) -> Any:
+    """Fold a retired component spelling onto the name that replaced it.
+
+    Done here rather than in canonicalization so that *nothing* downstream ever
+    sees the old name: the canonical form, the digest and every table are in one
+    vocabulary, and the alias is a parse-time courtesy with no second code path
+    behind it.
+    """
+    return DEPRECATED_COMPONENTS.get(value, value) if isinstance(value, str) else value
+
+
 def _parse_site(raw: Any, path: str) -> SiteSpec:
     obj = _require_mapping(raw, path)
     _check_keys(obj, ("component", "layer", "head", "expert", "stream"), path)
@@ -1272,7 +1324,7 @@ def _parse_site(raw: Any, path: str) -> SiteSpec:
         raise ParseError("P2", "a site needs a 'component'", path=path)
     component = _wrapped(
         obj["component"],
-        lambda v, p: _enum(v, COMPONENTS, p),
+        lambda v, p: _enum(_current_component(v), COMPONENTS, p),
         f"{path}.component",
     )
     layer = (
@@ -1292,7 +1344,9 @@ def _parse_site(raw: Any, path: str) -> SiteSpec:
         expert=_wrapped(obj["expert"], _scalar_int, f"{path}.expert")
         if "expert" in obj
         else None,
-        stream=_wrapped(obj["stream"], _scalar_int, f"{path}.stream")
+        stream=_wrapped(
+            obj["stream"], lambda v, p: _enum(v, STREAMS, p), f"{path}.stream"
+        )
         if "stream" in obj
         else None,
     )
