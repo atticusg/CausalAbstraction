@@ -17,8 +17,10 @@ _package = importlib.import_module(_NEW)
 # Alias the package and its submodules so `import causalab.neural.
 # pytorch_hooks.loading` keeps resolving without a second copy of any module.
 sys.modules[__name__] = _package
+# 'attention_probs' is deliberately absent: round 2.5 deleted it, having
+# replaced the post-softmax transcription it carried with an interception of
+# the softmax's own output. A shim cannot alias a module that no longer exists.
 for _sub in (
-    "attention_probs",
     "encoding",
     "engine",
     "executor",

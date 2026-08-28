@@ -305,6 +305,14 @@ def component_shape(info: ModelInfo, component: str) -> FeatureShape:
         # 📐 the interface's return[0]: (b, s, H, d) — already transposed back,
         # and BEFORE the gate multiply and the o-projection.
         return shapes.bshd(info.num_heads, info.head_dim)
+    if component == "attention_result":
+        # ⚠️ The shape of the component's **value**, which is not the shape of
+        # the tensor its tap captures: the model never computes this one. Each
+        # head's contribution to the residual stream is hidden-wide, so the
+        # whole thing is `heads · hidden` — `heads` times `attention_output`,
+        # which is why naming a `head` is strongly encouraged and why the read
+        # is derived after the position gather rather than before it.
+        return shapes.bs_flat_heads(info.num_heads, info.hidden_size)
     if component == "lm_head":
         return shapes.bsd(info.vocab_size)
     if component == "attention_probs":
