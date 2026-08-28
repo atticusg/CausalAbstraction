@@ -103,6 +103,12 @@ EXPECTED: dict[str, tuple[int | None, int | None, bool]] = {
     "delta_value": (72, 6, True),
     "delta_beta": (6, 6, True),
     "delta_decay": (6, 6, True),
+    # the per-step interior: the derived faces are ordinary v-head spaces; the
+    # state's trailing axes form a d_k × d_v matrix per head — a head axis to
+    # select on, but no feature vector, so no width and no featurizer
+    "delta_kv_mem": (72, 6, True),
+    "delta_state_update": (72, 6, True),
+    "delta_state": (None, 6, False),
     "delta_kernel_output": (72, 6, True),
     "attention_probs": (None, 8, False),
     "attention_query_pre_rope": (128, 8, True),

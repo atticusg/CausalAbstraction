@@ -96,6 +96,11 @@ class NnsightEngine(Engine):
             "delta_beta",
             "delta_decay",
             "delta_kernel_output",
+            # the per-step interior: produced by stepping the recurrent kernel
+            # inside the swapped globals — nothing an envoy can bind to
+            "delta_kv_mem",
+            "delta_state_update",
+            "delta_state",
         }
     )
     _UNDECLARED = _ROUND_TWO_ATTENTION | _ROUND_FOUR_DELTANET

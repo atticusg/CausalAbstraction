@@ -761,3 +761,398 @@ def test_a_continuation_read_accumulates_at_the_kernel_boundary(
     doc["reads"]["r"]["pos"] = "window"
     value = executor_for(doc, qwen35moe_bundle, base_texts=[TEXT]).read_value("r")
     assert tuple(value.shape) == (1, 3, TIER_TWO_WIDTH[component])
+
+
+# --------------------------------------------------------------------------- #
+# round 4.3 — the per-step interior: state, readout, update
+# --------------------------------------------------------------------------- #
+
+STATE_TIER = ("delta_kv_mem", "delta_state_update", "delta_state")
+
+
+def _state_write_doc(do: dict, *, pos: dict | str = "all") -> dict:
+    return {
+        "version": "1",
+        "model": {"key": "test", "revision": "main"},
+        "data": base_data_section(with_counterfactual=False),
+        "sites": {
+            "tap": {"component": "delta_state", "layer": DELTANET_LAYER},
+            "lm_head": {"component": "lm_head"},
+        },
+        "reads": {
+            "v": {"site": "tap", "pos": pos, "model": "original", "input": "base"},
+            "clean": {
+                "site": "lm_head",
+                "pos": {"index": -1},
+                "model": "original",
+                "input": "base",
+            },
+            "after": {
+                "site": "lm_head",
+                "pos": {"index": -1},
+                "model": "patched",
+                "input": "base",
+            },
+        },
+        "writes": {"patch": {"site": "tap", "pos": pos, "do": do}},
+        "intervened_models": {"patched": {"input": "base", "writes": ["patch"]}},
+        "save": [
+            {
+                "value": name,
+                "model": model,
+                "input": "base",
+                "file_path": f"{name}.safetensors",
+            }
+            for name, model in (
+                ("v", "original"),
+                ("clean", "original"),
+                ("after", "patched"),
+            )
+        ],
+    }
+
+
+def test_the_state_reads_whole_matrices_per_step(qwen35moe_bundle):
+    """The second ``is_feature_space == False`` citizen after the attention
+    pattern — but unlike the pattern it keeps its one position axis, so the
+    gather works on the steps axis and the value keeps its native layout:
+    one d_k × d_v matrix per head per step."""
+    value = executor_for(
+        _read_doc("delta_state"), qwen35moe_bundle, base_texts=[TEXT]
+    ).read_value("r")
+    assert tuple(value.shape) == (1, 5, 8, 32, 32)
+
+
+@pytest.mark.parametrize("component", ("delta_kv_mem", "delta_state_update"))
+def test_the_derived_faces_read_as_ordinary_head_spaces(
+    qwen35moe_bundle, component: str
+):
+    value = executor_for(
+        _read_doc(component), qwen35moe_bundle, base_texts=[TEXT]
+    ).read_value("r")
+    assert tuple(value.shape) == (1, 5, 256)
+
+
+def test_a_state_read_leaves_the_base_forward_bit_identical(qwen35moe_bundle):
+    """§2.3's headline: the chunked kernel still runs and the loop runs in its
+    *shadow* — reads cost O(seq) extra kernel calls at the tapped layer only,
+    and the model's own numbers do not move at all."""
+    encoded = qwen35moe_bundle.tokenizer(TEXT, return_tensors="pt")
+    with torch.no_grad():
+        clean = qwen35moe_bundle.model(**encoded).logits.clone()
+    executor_for(
+        _read_doc("delta_state"), qwen35moe_bundle, base_texts=[TEXT]
+    ).read_value("r")
+    with torch.no_grad():
+        after = qwen35moe_bundle.model(**encoded).logits.clone()
+    assert torch.equal(after, clean)
+
+
+def test_the_reconstruction_identity_pins_the_derived_faces(qwen35moe_bundle):
+    """§4 tier 3: ``S_t == S_{t-1}·exp(g_t) + k̂_t ⊗ delta_t`` at every step,
+    exactly — the #53 two-lines-pinned-by-identity pattern, with the pin
+    against the *library's own returned states* rather than a golden."""
+    import importlib
+
+    reads = _multi_read(
+        qwen35moe_bundle,
+        {
+            "S": "delta_state",
+            "du": "delta_state_update",
+            "k": "delta_key",
+            "g": "delta_decay",
+        },
+    )
+    modeling = importlib.import_module(
+        type(qwen35moe_bundle.mixer_at(DELTANET_LAYER)).__module__
+    )
+    states = reads["S"]  # (1, 5, 8, 32, 32)
+    update = reads["du"].reshape(1, 5, 8, 32)
+    k_hat = modeling.l2norm(reads["k"].reshape(1, 5, 8, 32), dim=-1, eps=1e-6)
+    decay = reads["g"]  # (1, 5, 8)
+    previous = torch.zeros(8, 32, 32)
+    for t in range(5):
+        predicted = (
+            previous * decay[0, t].exp()[:, None, None]
+            + k_hat[0, t][..., None] * update[0, t][:, None, :]
+        )
+        torch.testing.assert_close(predicted, states[0, t], atol=0.0, rtol=0.0)
+        previous = states[0, t]
+
+
+def test_stepping_the_recurrent_kernel_reproduces_the_chunked_output(
+    qwen35moe_bundle,
+):
+    """§4 tier 3: the stacked stepwise output equals the tier-2
+    ``delta_kernel_output`` to ≤ 1e-9 (📐 4.66e-10) — the two kernels compute
+    the same function in fp32, which is what makes the shadow's states faithful
+    to what the chunked path computed."""
+    import importlib
+
+    reads = _multi_read(
+        qwen35moe_bundle,
+        {
+            "q": "delta_query",
+            "k": "delta_key",
+            "v": "delta_value",
+            "beta": "delta_beta",
+            "g": "delta_decay",
+            "out": "delta_kernel_output",
+        },
+    )
+    modeling = importlib.import_module(
+        type(qwen35moe_bundle.mixer_at(DELTANET_LAYER)).__module__
+    )
+    heads = lambda t: t.reshape(1, 5, 8, 32)  # noqa: E731 — local reshape
+    state = None
+    outs = []
+    for t in range(5):
+        out_t, state = modeling.torch_recurrent_gated_delta_rule(
+            heads(reads["q"])[:, t : t + 1],
+            heads(reads["k"])[:, t : t + 1],
+            heads(reads["v"])[:, t : t + 1],
+            g=reads["g"][:, t : t + 1],
+            beta=reads["beta"][:, t : t + 1],
+            initial_state=state,
+            output_final_state=True,
+            use_qk_l2norm_in_kernel=True,
+        )
+        outs.append(out_t)
+    stacked = torch.cat(outs, dim=1).reshape(1, 5, 256)
+    assert float((stacked - reads["out"]).abs().max()) <= 1e-9
+
+
+# --------------------------------------------------------------------------- #
+# state writes: the one deliberate path-forcing in the vocabulary
+# --------------------------------------------------------------------------- #
+
+
+def test_a_state_self_swap_costs_exactly_the_substitution_drift(qwen35moe_bundle):
+    """Writing the state's own value back substitutes the stepwise loop for
+    the chunked call — path-forcing, the one place the exact-identity bar is
+    deliberately traded away — and costs 📐 ~5e-7 on the logits, pinned as a
+    bound: more would mean the loop drifted, zero would mean the substitution
+    silently did not run."""
+    executor = executor_for(
+        _state_write_doc({"swap": "v"}), qwen35moe_bundle, base_texts=[TEXT]
+    )
+    drift = float(
+        (executor.read_value("after") - executor.read_value("clean")).abs().max()
+    )
+    assert 0.0 < drift <= 1e-6
+
+
+def test_doubling_the_state_moves_the_logits(qwen35moe_bundle):
+    executor = executor_for(
+        _state_write_doc({"add_scaled": {"op": "v", "alpha": 1.0}}),
+        qwen35moe_bundle,
+        base_texts=[TEXT],
+    )
+    moved = float(
+        (executor.read_value("after") - executor.read_value("clean")).abs().max()
+    )
+    assert moved > 1e-3
+
+
+def test_a_positional_state_write_lands_on_its_step_and_feeds_forward(
+    qwen35moe_bundle,
+):
+    """Doubling the state at step 2 only: steps 0–1 are bit-identical (the
+    substitution reproduces the unedited prefix exactly), step 2 is exactly
+    doubled, and step 3 moves *causally* — the edit threads into what the next
+    step decays and writes into."""
+    doc = _state_write_doc({"add_scaled": {"op": "v", "alpha": 1.0}}, pos={"index": 2})
+    doc["reads"]["v_all"] = {
+        "site": "tap",
+        "pos": "all",
+        "model": "original",
+        "input": "base",
+    }
+    doc["reads"]["obs"] = {
+        "site": "tap",
+        "pos": "all",
+        "model": "patched",
+        "input": "base",
+    }
+    for name, model in (("v_all", "original"), ("obs", "patched")):
+        doc["save"].append(
+            {
+                "value": name,
+                "model": model,
+                "input": "base",
+                "file_path": f"{name}.safetensors",
+            }
+        )
+    executor = executor_for(doc, qwen35moe_bundle, base_texts=[TEXT])
+    v_all, obs = executor.read_value("v_all"), executor.read_value("obs")
+    assert float((obs[0, :2] - v_all[0, :2]).abs().max()) == 0.0
+    assert float((obs[0, 2] - 2 * v_all[0, 2]).abs().max()) == 0.0
+    assert float((obs[0, 3] - v_all[0, 3]).abs().max()) > 1e-4
+
+
+def test_a_misaligned_state_operand_is_refused_not_broadcast(qwen35moe_bundle):
+    """The j-th operand step lands on the j-th addressed step, so both sides
+    must cover the same steps — refused by name rather than silently applying
+    step 0's matrix to step 2."""
+    doc = _state_write_doc({"add_scaled": {"op": "v", "alpha": 1.0}}, pos={"index": 2})
+    doc["reads"]["v"]["pos"] = "all"  # 5 steps against a 1-step write
+    with pytest.raises(ProtocolError, match="same steps"):
+        executor_for(doc, qwen35moe_bundle, base_texts=[TEXT]).read_value("after")
+
+
+@pytest.mark.parametrize("component", ("delta_kv_mem", "delta_state_update"))
+def test_the_derived_faces_are_read_only_with_the_lowering_refusal(
+    qwen35moe_bundle, component: str
+):
+    """F7 wording (D6): a memory readout has no independent existence, and the
+    update's write lowers exactly onto a state edit — both refusals point at
+    'delta_state'."""
+    doc = _state_write_doc({"swap": "v"})
+    doc["sites"]["tap"]["component"] = component
+    with pytest.raises(ProtocolError, match="delta_state") as excinfo:
+        executor_for(doc, qwen35moe_bundle, base_texts=[TEXT]).read_value("after")
+    assert "no write may change" in str(excinfo.value)
+
+
+# --------------------------------------------------------------------------- #
+# the state's sub-axes and refusals
+# --------------------------------------------------------------------------- #
+
+
+def test_a_head_selects_one_matrix_stack(qwen35moe_bundle):
+    value = executor_for(
+        _read_doc("delta_state", head=2), qwen35moe_bundle, base_texts=[TEXT]
+    ).read_value("r")
+    assert tuple(value.shape) == (1, 5, 32, 32)
+
+
+def test_an_out_of_range_state_head_is_refused(qwen35moe_bundle):
+    with pytest.raises(ProtocolError, match="8 heads"):
+        resolve_site(
+            qwen35moe_bundle,
+            SiteSpec(component="delta_state", layer=DELTANET_LAYER, head=8),
+        )
+
+
+def test_featurizer_and_dims_are_refused_on_the_state(qwen35moe_bundle):
+    """Generated from the declared axes: the trailing axes form a matrix per
+    head, not a feature vector, so there is no basis to fit or index."""
+    doc = _read_doc("delta_state")
+    doc["featurizers"] = {"f": {"kind": "standardize"}}
+    doc["reads"]["r"]["featurizer"] = "f"
+    with pytest.raises(ProtocolError, match="matrix"):
+        executor_for(doc, qwen35moe_bundle, base_texts=[TEXT]).read_value("r")
+    doc = _read_doc("delta_state")
+    doc["reads"]["r"]["dims"] = [0, 1]
+    with pytest.raises(ProtocolError, match="matrix|features"):
+        executor_for(doc, qwen35moe_bundle, base_texts=[TEXT]).read_value("r")
+
+
+# --------------------------------------------------------------------------- #
+# generated frames: decode needs none of the machinery
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "component, shape",
+    [
+        ("delta_state", (1, 3, 8, 32, 32)),
+        ("delta_kv_mem", (1, 3, 256)),
+        ("delta_state_update", (1, 3, 256)),
+    ],
+)
+def test_generated_state_reads_are_plain_per_step_captures(
+    qwen35moe_bundle, component: str, shape: tuple[int, ...]
+):
+    """📐 Every cached decode step runs the recurrent kernel natively, so the
+    per-step interior in the generated frame is the stock path — the state is
+    each call's own return, the faces derive from its initial_state and
+    arguments, and nothing is substituted or shadowed."""
+    doc = _read_doc(component)
+    doc["positions"] = {"window": {"generated": {"max_new_tokens": 3}, "all": True}}
+    doc["reads"]["r"]["pos"] = "window"
+    value = executor_for(doc, qwen35moe_bundle, base_texts=[TEXT]).read_value("r")
+    assert tuple(value.shape) == shape
+
+
+def test_the_cross_path_pin_decode_states_match_test_side_stepping(
+    qwen35moe_bundle,
+):
+    """§6.4's cross-path pin: the decode's *native* recurrent path produces the
+    same per-step states as stepping the kernel over the decode's own inputs
+    from the prefill's final state — the prompt-frame shadow and the
+    decode-frame captures are two faces of one computation."""
+    import importlib
+
+    doc = {
+        "version": "1",
+        "model": {"key": "test", "revision": "main"},
+        "data": base_data_section(with_counterfactual=False),
+        "positions": {
+            "window": {"generated": {"max_new_tokens": 3}, "all": True},
+            "last": {"index": -1},
+        },
+        "sites": {
+            f"{name}_site": {"component": component, "layer": DELTANET_LAYER}
+            for name, component in {
+                "S": "delta_state",
+                "q": "delta_query",
+                "k": "delta_key",
+                "v": "delta_value",
+                "beta": "delta_beta",
+                "g": "delta_decay",
+            }.items()
+        },
+        "reads": {
+            name: {
+                "site": f"{name}_site",
+                "pos": "window",
+                "model": "original",
+                "input": "base",
+            }
+            for name in ("S", "q", "k", "v", "beta", "g")
+        },
+        "save": [],
+    }
+    doc["reads"]["S0"] = {
+        "site": "S_site",
+        "pos": "last",
+        "model": "original",
+        "input": "base",
+    }
+    doc["save"] = [
+        {
+            "value": name,
+            "model": "original",
+            "input": "base",
+            "file_path": f"{name}.safetensors",
+        }
+        for name in doc["reads"]
+    ]
+    executor = executor_for(doc, qwen35moe_bundle, base_texts=[TEXT])
+    reads = {name: executor.read_value(name) for name in doc["reads"]}
+    modeling = importlib.import_module(
+        type(qwen35moe_bundle.mixer_at(DELTANET_LAYER)).__module__
+    )
+
+    def heads(name: str) -> torch.Tensor:
+        return reads[name].reshape(1, 3, 8, 32)
+
+    state = reads["S0"][:, 0]  # the prefill's final state, (1, 8, 32, 32)
+    for t in range(3):
+        _, state = modeling.torch_recurrent_gated_delta_rule(
+            heads("q")[:, t : t + 1],
+            heads("k")[:, t : t + 1],
+            heads("v")[:, t : t + 1],
+            g=reads["g"][:, t : t + 1],
+            beta=reads["beta"][:, t : t + 1],
+            initial_state=state,
+            output_final_state=True,
+            use_qk_l2norm_in_kernel=True,
+        )
+        # ⚠️ Not exact, and honestly so: the decode's native path starts from
+        # the CHUNKED prefill's cache state, while the prompt-frame S0 read is
+        # the recurrent shadow's — the two kernels agree to 📐 4.66e-10, and
+        # three steps of drift measured 1.9e-9. The bound is the cross-path
+        # agreement, not machinery slack.
+        torch.testing.assert_close(state, reads["S"][:, t], atol=1e-8, rtol=0.0)
