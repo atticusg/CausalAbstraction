@@ -12,6 +12,7 @@ from causalab.neural.pytorch_hooks.metrics import (
     column_token_id,
     column_token_ids,
     compute_metric,
+    compute_windowed_metric,
 )
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import MetricSpec
@@ -87,13 +88,123 @@ def test_kl_of_identical_distributions_is_zero(tokenizer):
 
 
 def test_top_k_orders_by_probability(tokenizer):
-    metric = MetricSpec(kind="top_k", of="logits", fields={"k": 2})
-    values = compute_metric(
-        metric, _logits(tokenizer, " Monday", " Friday"), [{}], tokenizer
-    )
-    (entry,) = values
+    metric = MetricSpec(kind="top_k", of="logits", fields={"k": 2, "by": "prob"})
+    logits = _logits(tokenizer, " Monday", " Friday")
+    (entry,) = compute_metric(metric, logits, [{}], tokenizer)
     assert entry["tokens"][0].strip() == "Monday"
     assert entry["probs"][0] > entry["probs"][1]
+    # `values` is the raw logit even under `by: prob` — the probability lives
+    # in its own column, so neither ever changes identity (§2.10)
+    assert entry["indices"][0] == column_token_id(tokenizer, " Monday")
+    assert entry["values"] == [pytest.approx(4.0), pytest.approx(1.0)]
+
+
+# --------------------------------------------------------------------------- #
+# top_k over a read that is not a vocabulary projection (§2.10)
+# --------------------------------------------------------------------------- #
+
+#: A hand-built 1×6 "feature code": signed, with the largest magnitude on a
+#: *negative* entry, so `value` and `abs_value` cannot agree.
+_SIGNED_CODE = torch.tensor([[[0.5, -7.0, 3.0, -0.25, 6.0, -2.0]]])
+
+
+def test_top_k_by_value_takes_the_largest_signed_entries(tokenizer):
+    """Oracle: sorted descending the code is 6.0 (idx 4), 3.0 (idx 2),
+    0.5 (idx 0) — the negatives never place."""
+    metric = MetricSpec(kind="top_k", of="code", fields={"k": 3, "by": "value"})
+    (entry,) = compute_metric(metric, _SIGNED_CODE, [{}], tokenizer, vocab_axis=False)
+    assert entry["indices"] == [4, 2, 0]
+    assert entry["values"] == [
+        pytest.approx(6.0),
+        pytest.approx(3.0),
+        pytest.approx(0.5),
+    ]
+
+
+def test_top_k_by_abs_value_ranks_on_magnitude_and_reports_the_sign(tokenizer):
+    """Oracle: by |x| the code is 7.0 (idx 1, negative), 6.0 (idx 4),
+    3.0 (idx 2). The reported value stays signed — ranking by magnitude must
+    not hide that the strongest entry pushed the other way."""
+    metric = MetricSpec(kind="top_k", of="code", fields={"k": 3, "by": "abs_value"})
+    (entry,) = compute_metric(metric, _SIGNED_CODE, [{}], tokenizer, vocab_axis=False)
+    assert entry["indices"] == [1, 4, 2]
+    assert entry["values"] == [
+        pytest.approx(-7.0),
+        pytest.approx(6.0),
+        pytest.approx(3.0),
+    ]
+
+
+def test_top_k_off_lm_head_emits_no_token_or_probability_column(tokenizer):
+    """A neuron index is not a token id and a softmax across neurons is not a
+    distribution, so neither column is emitted rather than emitted wrong."""
+    metric = MetricSpec(kind="top_k", of="code", fields={"k": 2, "by": "value"})
+    (entry,) = compute_metric(metric, _SIGNED_CODE, [{}], tokenizer, vocab_axis=False)
+    assert set(entry) == {"indices", "values"}
+
+
+def test_top_k_by_value_on_lm_head_still_decodes_but_does_not_normalize(tokenizer):
+    """`tokens` follows the read (lm_head), `probs` follows `by` — the two
+    columns are gated independently."""
+    metric = MetricSpec(kind="top_k", of="logits", fields={"k": 1, "by": "value"})
+    (entry,) = compute_metric(
+        metric, _logits(tokenizer, " Monday", " Friday"), [{}], tokenizer
+    )
+    assert entry["tokens"][0].strip() == "Monday"
+    assert entry["values"] == [pytest.approx(4.0)]
+    assert "probs" not in entry
+
+
+def test_top_k_reduces_every_row_independently(tokenizer):
+    """Two rows whose maxima sit at different indices — the reduction is
+    per row, which is what makes it a drop-in for saving the tensor."""
+    metric = MetricSpec(kind="top_k", of="code", fields={"k": 1, "by": "value"})
+    batch = torch.tensor([[1.0, 9.0, 2.0], [8.0, -1.0, 3.0]])
+    got = compute_metric(metric, batch, [{}, {}], tokenizer, vocab_axis=False)
+    assert [entry["indices"] for entry in got] == [[1], [0]]
+    assert [entry["values"] for entry in got] == [[9.0], [8.0]]
+
+
+@pytest.mark.parametrize("k", [0, 7])
+def test_top_k_refuses_a_k_outside_the_read_width(tokenizer, k):
+    metric = MetricSpec(kind="top_k", of="code", fields={"k": k, "by": "value"})
+    with pytest.raises(ProtocolError, match="k must be in"):
+        compute_metric(metric, _SIGNED_CODE, [{}], tokenizer, vocab_axis=False)
+
+
+def test_windowed_top_k_carries_vocab_axis_through_to_the_reduction(tokenizer):
+    """The generated frame reduces through :func:`compute_windowed_metric`, and
+    ``vocab_axis`` has to survive that hop.
+
+    The prompt-frame cases above pin the reduction itself; this pins the
+    *plumbing*, which is the half a windowed read could silently lose — a
+    non-vocabulary read reduced with ``vocab_axis`` left at its ``True``
+    default would decode neuron indices as token ids and softmax across
+    neurons, and both wrong columns would look plausible in the saved table.
+
+    Also pins the regrouping: rows address different position counts (2, 1, 0),
+    and the flatten/cat/split round trip has to hand each row back its own.
+    """
+    windows = [
+        torch.tensor(
+            [[0.5, -7.0, 3.0, -0.25, 6.0, -2.0], [1.0, 2.0, 9.0, 0.0, -3.0, 0.5]]
+        ),
+        torch.tensor([[-8.0, 0.1, 0.2, 0.3, 0.4, 0.5]]),
+        torch.zeros(0, 6),  # addressed no positions — a result, not a misalignment
+    ]
+    metric = MetricSpec(kind="top_k", of="code", fields={"k": 2, "by": "value"})
+    got = compute_windowed_metric(
+        metric, windows, [{}, {}, {}], tokenizer, vocab_axis=False
+    )
+
+    assert [len(row) for row in got] == [2, 1, 0]
+    assert [[entry["indices"] for entry in row] for row in got] == [
+        [[4, 2], [2, 1]],
+        [[5, 4]],
+        [],
+    ]
+    # neither vocabulary column may appear anywhere in the windowed output
+    assert all(set(entry) == {"indices", "values"} for row in got for entry in row)
 
 
 def test_class_probs_sums_group_members(tokenizer):
@@ -190,6 +301,9 @@ def test_a_pinned_form_refuses_rather_than_falling_back(gpt2_tokenizer):
         column_token_id(gpt2_tokenizer, "haus", token_form="space_prefixed")
     # and the bare row it refused to fall back to is genuinely resolvable
     assert column_token_id(gpt2_tokenizer, "haus", token_form="bare") == 30404
+    # `auto` is the form that IS allowed to fall back, and it lands on that same
+    # row — the contrast is what makes the refusal above a pin, not an accident
+    assert column_token_id(gpt2_tokenizer, "haus", token_form="auto") == 30404
 
 
 def test_the_two_forms_collapse_on_sentencepiece(tokenizer):

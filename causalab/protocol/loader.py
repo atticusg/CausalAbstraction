@@ -36,6 +36,7 @@ from causalab.protocol.method import (
 from causalab.protocol.resolve import ResolutionEnv, resolve_artifact_fields
 from causalab.protocol.schema import (
     FEATURIZER_SLOTS,
+    NON_COLUMN_METRIC_FIELDS,
     OPTIONAL_METRIC_FIELDS,
     Document,
     PositionSpec,
@@ -449,7 +450,8 @@ def check_data_columns(loaded: LoadedProtocol, env: ResolutionEnv) -> list[str]:
         for field, value in metric.fields.items():
             if (
                 metric.kind == "kl"
-                or field in ("k", *OPTIONAL_METRIC_FIELDS.get(str(metric.kind), ()))
+                or field in NON_COLUMN_METRIC_FIELDS
+                or field in OPTIONAL_METRIC_FIELDS.get(str(metric.kind), ())
                 or not isinstance(value, str)
             ):
                 continue
