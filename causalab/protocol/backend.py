@@ -39,6 +39,7 @@ CAPABILITIES: tuple[str, ...] = (
     "writable_attention_probs",
     "pytorch_fn_local",
     "generate",
+    "quantized_weights",
 )
 
 #: Metric kinds that need the whole vocabulary materialized (§8).
@@ -51,6 +52,8 @@ def requires(doc: Document) -> frozenset[str]:
     needed: set[str] = set()
     if doc.train is not None:
         needed.add("grad")
+    if doc.model.quantization is not None:
+        needed.add("quantized_weights")
     for im in doc.intervened_models.values():
         if not isinstance(im.writes, tuple):
             raise AssertionError(

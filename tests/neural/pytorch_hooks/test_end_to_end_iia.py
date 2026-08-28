@@ -86,6 +86,8 @@ def _run(out: Path, layer: int) -> int:
             "--set",
             f"model.key={TINY_LLAMA}",
             "--set",
+            "model.dtype=fp32",
+            "--set",
             f"sites.target.layer={layer}",
         ]
     )

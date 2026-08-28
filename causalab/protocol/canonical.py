@@ -41,6 +41,7 @@ from causalab.protocol.resolve import ResolutionEnv
 from causalab.protocol.schema import (
     ALL_POSITIONS,
     FEATURIZER_SLOTS,
+    MODEL_DTYPE_DEFAULT,
     LAYERLESS_COMPONENTS,
     METRIC_FIELD_DEFAULTS,
     OPTIMIZER_DEFAULTS,
@@ -49,7 +50,7 @@ from causalab.protocol.schema import (
     parse_document,
 )
 
-__all__ = ["canonical_bytes", "canonicalize", "digest"]
+__all__ = ["canonical_bytes", "canonical_model", "canonicalize", "digest"]
 
 
 def canonical_bytes(canonical: Mapping[str, Any]) -> bytes:
@@ -118,11 +119,10 @@ def canonicalize(raw: Mapping[str, Any], env: ResolutionEnv) -> dict[str, Any]:
         if section not in normalized:
             continue
         value = normalized[section]
+        if section == "type":
+            continue  # authoring metadata, never content (§1.1)
         if section == "model":
-            out["model"] = {
-                "key": value["key"],
-                "revision": value.get("revision", "main"),
-            }
+            out["model"] = canonical_model(value)
         elif section == "data":
             out["data"] = _canon_data(value, env)
         elif section == "positions":
@@ -181,6 +181,40 @@ def _canon_metric(entry: Any) -> Any:
     out = dict(entry)
     for field in OPTIONAL_METRIC_FIELDS.get(kind, ()):
         out.setdefault(field, METRIC_FIELD_DEFAULTS[(kind, field)])
+    return out
+
+
+def canonical_model(value: Mapping[str, Any]) -> dict[str, Any]:
+    """§2.1 — the network *and* how it is realized numerically. ``revision``
+    and ``dtype`` are materialized here, so no canonical form is silent about
+    the precision its numbers came out of; a ``quantization`` block
+    materializes the scheme's own defaults for the same reason."""
+    out: dict[str, Any] = {
+        "key": value["key"],
+        "revision": value.get("revision", "main"),
+        "dtype": value.get("dtype", MODEL_DTYPE_DEFAULT),
+    }
+    quantization = value.get("quantization")
+    if quantization is not None:
+        quant = dict(quantization)
+        quant.setdefault("method", "bitsandbytes")
+        if quant.get("scheme") in ("nf4", "fp4"):
+            # 📐 `compute_dtype` is a 4-bit knob: BitsAndBytesConfig takes it
+            # as bnb_4bit_compute_dtype, and the int8 path
+            # (`load_in_8bit=True`) has nowhere to put it — LLM.int8()
+            # accumulates in fp16 by construction. Materializing it for every
+            # scheme gave two int8 documents that differ only there two
+            # different digests for numerically identical runs, which inverts
+            # the rule this whole function exists to keep: every field in the
+            # canonical form is one that moves a number. Rule 17 refuses an
+            # authored one, so this only has to stop inventing it.
+            quant.setdefault("compute_dtype", out["dtype"])
+            quant.setdefault("double_quant", False)
+        if quant.get("scheme") == "int8":
+            # bitsandbytes' LLM.int8() outlier threshold: a number that moves
+            # numbers, so it is materialized like any other (arXiv:2208.07339)
+            quant.setdefault("int8_threshold", 6.0)
+        out["quantization"] = quant
     return out
 
 
@@ -425,7 +459,6 @@ def _canon_train(
     precision = dict(out.get("precision", {}))
     precision.setdefault("feature", "fp32")
     precision.setdefault("loss", "fp32")
-    precision.setdefault("model", info.native_dtype if info is not None else "fp32")
     out["precision"] = precision
     out.setdefault("seed", 0)
     if "eval" in out and isinstance(out["eval"], Mapping):

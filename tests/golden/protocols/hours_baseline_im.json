@@ -3,7 +3,8 @@
   "description": "Hours baseline (Arithmetic in the Wild, arXiv:2605.01148): no-intervention accuracy on all 1,152 hours prompts (24 concepts x 48 spelled-out offsets, the paper template with a trailing space so the zero-padded hour is the single next token). Golden: paper reports 70.8%; band [0.65, 0.75] from the VeriFires arithmetic-in-the-wild-hours checklist.",
   "model": {
     "key": "meta-llama/Llama-3.1-8B",
-    "revision": "main"
+    "revision": "main",
+    "dtype": "bf16"
   },
   "data": {
     "base": {
