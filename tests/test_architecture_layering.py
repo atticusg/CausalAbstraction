@@ -5,19 +5,18 @@ Three invariants, all checked by parsing the source — no model load, no GPU:
 1. **`io/` has no upward imports.** It is the lowest application layer above
    third-party libs, and the layers above it consume it, so an upward edge
    would be a cycle.
-2. **`transform/` is torch-free at module level.** The op *records* are what
-   the pure CLI verbs read to refuse a bad document, so importing the registry
-   must not drag in numerics. Ops keep their heavy imports inside the function
-   body — the idiom the runner already uses for pandas and matplotlib.
-3. **`protocol/` keeps no module-level edge to `transform/`.** The document
-   layer links against nothing that executes; the workflow loader reaches the
-   registry through a function-local import, as `cli.py` does for the backend.
+2. **Shipped step scripts are torch-free at module level.** Numerics belong
+   inside a script's ``main``, so hashing one costs nothing but stdlib. The
+   runner already uses the same idiom for pandas and matplotlib.
+3. **`protocol/` keeps no module-level edge to the workflow layer.** That is
+   what makes the intervention protocol usable on its own; dispatch between
+   document types lives in `causalab/cli.py`, above both packages.
 
 Invariant 2 is a *static* check. Its behavioural counterpart — that a real
-``causalab validate`` of a transform workflow leaves torch out of
-``sys.modules`` — lives in ``tests/transform/test_load_is_torch_free.py``,
-because ``tests/conftest.py`` imports torch at session scope and an in-process
-check could never see the difference.
+``causalab validate`` of a script workflow leaves torch out of ``sys.modules``
+— lives in ``tests/protocol/test_load_is_torch_free.py``, because
+``tests/conftest.py`` imports torch at session scope and an in-process check
+could never see the difference.
 """
 
 from __future__ import annotations
@@ -27,9 +26,10 @@ from pathlib import Path
 
 import pytest
 
+import causalab.analysis
 import causalab.io
 import causalab.protocol
-import causalab.transform
+import causalab.workflow.scripts
 
 # Static structural guard — pure AST inspection, no model load (see docstring).
 pytestmark = pytest.mark.unit
@@ -37,13 +37,14 @@ pytestmark = pytest.mark.unit
 #: Layers `io/` must never import from. The pre-refactor entries
 #: (`causalab.methods`, `causalab.analyses`, `causalab.runner`) named packages
 #: that no longer exist, so the guard had stopped guarding anything.
-FORBIDDEN_PREFIXES = ("causalab.transform", "causalab.workflow")
+FORBIDDEN_PREFIXES = ("causalab.workflow.scripts", "causalab.workflow")
 
-#: Numerics no module under `causalab/transform/` may import at module level.
+#: Numerics no step-script module may import at module level.
 HEAVY_MODULES = ("torch", "numpy", "pandas", "scipy", "sklearn", "safetensors")
 
 IO_DIR = Path(causalab.io.__file__).parent
-TRANSFORM_DIR = Path(causalab.transform.__file__).parent
+ANALYSIS_DIR = Path(causalab.analysis.__file__).parent
+SCRIPTS_DIR = Path(causalab.workflow.scripts.__file__).parent
 PROTOCOL_DIR = Path(causalab.protocol.__file__).parent
 
 
@@ -92,25 +93,32 @@ def test_io_has_no_upward_imports():
     )
 
 
-def test_transform_is_torch_free_at_module_level():
-    """An op's numerics belong inside its function body.
+@pytest.mark.parametrize("directory", [ANALYSIS_DIR, SCRIPTS_DIR])
+def test_step_scripts_are_torch_free_at_module_level(directory):
+    """A step script's numerics belong inside its ``main``.
 
-    Without this, one stray top-level ``import torch`` in a new op would make
-    ``causalab validate`` pay for the whole numerics stack — silently, since
-    every test process has torch loaded already."""
-    offenders = _offenders(TRANSFORM_DIR, HEAVY_MODULES)
+    Without this, one stray top-level ``import torch`` in a new shipped script
+    would make ``causalab validate`` pay for the whole numerics stack —
+    silently, since every test process has torch loaded already. A script is
+    *found and hashed* at load, never imported, but a document may name any
+    module, so the discipline has to hold for every one that ships."""
+    offenders = _offenders(directory, HEAVY_MODULES)
     assert not offenders, (
-        "causalab/transform/ must stay importable without numerics — move the "
+        f"{directory.name}/ must stay importable without numerics — move the "
         "import inside the function that needs it:\n  " + "\n  ".join(offenders)
     )
 
 
-def test_protocol_does_not_link_against_transform_at_module_level():
-    """``protocol/`` is the backend-free document layer. It *reads* op records
-    at load, but through a function-local import, so ``import causalab.protocol``
-    still pulls in nothing that executes."""
-    offenders = _offenders(PROTOCOL_DIR, ("causalab.transform",))
+def test_protocol_does_not_link_against_the_workflow_layer():
+    """``protocol/`` is the intervention protocol **alone**.
+
+    This is the invariant that makes two packages worth having: someone who
+    wants only the intervention protocol imports only that. Dispatch between the
+    two document types lives in ``causalab/cli.py``, above both."""
+    offenders = _offenders(
+        PROTOCOL_DIR, ("causalab.workflow", "causalab.analysis", "causalab.io")
+    )
     assert not offenders, (
-        "protocol/ must not import causalab.transform at module level:\n  "
+        "protocol/ must not import the workflow layer at module level:\n  "
         + "\n  ".join(offenders)
     )

@@ -25,6 +25,6 @@
     "greedy": {"kind": "top_k", "of": "tail", "k": 1}
   },
   "save": [
-    {"value": "greedy", "model": "probed", "input": "base", "file_path": "probe.parquet"}
+    {"value": "greedy", "model": "probed", "input": "base", "file_path": "probe.json"}
   ]
 }

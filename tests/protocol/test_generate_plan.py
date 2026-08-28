@@ -131,3 +131,49 @@ def test_decode_depth_is_not_in_the_group_digest():
     long = group_for(probe_doc({"index": -1}, budget=32))
     assert short.decode_depth != long.decode_depth
     assert short.digest == long.digest
+
+
+def _decode_metric(raw: dict[str, Any]) -> dict[str, Any]:
+    """Replace the document's metrics with a single ids-domain one."""
+    raw["metrics"] = {"said": {"kind": "decode", "of": "logits"}}
+    raw["save"] = [
+        {
+            "value": "said",
+            "model": "patched",
+            "input": "base",
+            "file_path": "said.json",
+        }
+    ]
+    return in_order(raw)
+
+
+def test_an_ids_only_metric_obliges_no_distribution():
+    """A text probe reads the tokens the decode produced. Nothing downstream
+    wants the vocabulary, so the plan must not ask for it — this is the
+    whole reason metric kinds carry a domain."""
+    group = group_for(_decode_metric(probe_doc({"all": True})))
+    (item,) = group.materialize
+    assert item.needs_distribution is False
+
+
+def test_a_distribution_metric_still_obliges_one():
+    group = group_for(probe_doc({"all": True}))
+    (item,) = group.materialize
+    assert item.needs_distribution is True
+
+
+def test_saving_the_read_obliges_a_distribution_even_with_an_ids_metric():
+    """The save manifest is the other consumer: an ids-domain metric does not
+    excuse writing the read itself to disk."""
+    raw = _decode_metric(probe_doc({"all": True}))
+    raw["save"].append(
+        {
+            "value": "logits",
+            "model": "patched",
+            "input": "base",
+            "file_path": "logits.safetensors",
+        }
+    )
+    group = group_for(in_order(raw))
+    (item,) = group.materialize
+    assert item.needs_distribution is True

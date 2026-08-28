@@ -2,7 +2,7 @@
 
 Every kind is gather-then-reduce over the read's logits and dataset
 columns. Per-example results come back as plain floats (or small
-structures for ``top_k``), ready for a parquet table.
+structures for ``top_k``), ready for a JSON metric table.
 
 Token resolution defaults to the repo's space-prefixed-first rule
 (``token_form: "auto"``): a column value resolves to the single token of
@@ -22,6 +22,14 @@ form instead of letting the tokenizer's vocabulary decide. Under ``auto``,
 tokens and disagree — exactly the condition under which it can be silently
 wrong.
 
+📐 One limit of that warning, introduced by the transformers 5 bump: a
+sentencepiece family that has dropped the legacy dummy prefix encodes ``" X"``
+and ``"X"`` to the *same* id, so the two forms can never disagree there. On such
+a tokenizer ``token_form`` has only one row to name, the warning is structurally
+dark, and neither is a defect — but it does mean the punctuation trap above is a
+BPE-family hazard, and a document cannot be checked against it by pinning
+``token_form`` on a sentencepiece model.
+
 ``match`` is the one kind that can be told otherwise, and only explicitly
 (§2.10): its ``expected`` column may hold a **list** of equivalent surface
 forms (synonyms, casings), and ``"mode": "first_token"`` credits a form's
@@ -38,13 +46,14 @@ from typing import Any, Mapping, Sequence
 import torch
 
 from causalab.protocol.errors import ProtocolError
-from causalab.protocol.schema import MetricSpec
+from causalab.protocol.schema import WHOLE_WINDOW_METRIC_KINDS, MetricSpec
 
 __all__ = [
     "column_first_token_id",
     "column_token_id",
     "column_token_ids",
     "compute_metric",
+    "compute_windowed_metric",
 ]
 
 
@@ -158,12 +167,23 @@ def column_first_token_id(
 
     A single-token value resolves exactly as :func:`column_token_id` does, so
     ``first_token`` is a strict generalization of ``exact``. A multi-token
-    value resolves to the first piece that carries text: sentencepiece
-    families encode a leading space as its own ``▁`` piece, and crediting
-    *that* would score every space-prefixed answer alike — the first piece an
-    argmax can distinguish is the one after it (``" Thursday"`` →
-    ``▁ Th urs day`` → ``Th``, which is also what the model emits in
-    context).
+    value resolves to the first piece that carries text: a sentencepiece family
+    can encode a leading space as its own ``▁`` piece, and crediting *that*
+    would score every space-prefixed answer alike — the first piece an argmax
+    can distinguish is the one after it, which is also what the model emits in
+    context.
+
+    📐 Which values trigger that is tokenizer- *and* version-dependent, so the
+    skip is written as a property of the piece (does it decode to text?) rather
+    than of a known value. Under transformers 4.x the tiny Llama tokenizer
+    emitted the lone ``▁`` for any space-prefixed word (``" Thursday"`` →
+    ``▁ Th urs day``); 5.16.1 dropped that legacy dummy prefix, so
+    ``" Thursday"`` is now ``Th urs day`` — and the skip is what makes this
+    function return the same id, ``Th``, across the bump. It is not dead code:
+    5.16.1 still emits the lone ``▁`` whenever the first character has no
+    merged ``▁X`` piece — digits, non-Latin scripts, emoji, ligatures
+    (``" 3.14"`` → ``▁ 3 . 1 4``) — and byte-level BPE families still split a
+    whitespace run off the front (gpt2 ``"  ?"`` → ``' '`` + ``' ?'``).
 
     What this cannot know is whether the table's answer space is
     first-token-distinct — two answers sharing a first piece would both score.
@@ -312,4 +332,73 @@ def compute_metric(
             {name: float(probs[i, ids].sum()) for name, ids in group_ids.items()}
             for i in range(logits.shape[0])
         ]
+    if kind == "decode":
+        raise ProtocolError(
+            "P2",
+            "'decode' reduces the tokens a decode produced, so it binds to a "
+            "read in the continuation frame (§2.3) — validation refuses it "
+            "anywhere else",
+        )
     raise ProtocolError("P4", f"unknown metric kind {kind!r}")
+
+
+def compute_windowed_metric(
+    metric: MetricSpec,
+    windows: Sequence[torch.Tensor],
+    rows: Sequence[Mapping[str, Any]],
+    tokenizer: Any,
+    *,
+    target_windows: Sequence[torch.Tensor] | None = None,
+    generated_ids: Sequence[Sequence[int]] | None = None,
+) -> list[list[Any]]:
+    """One metric over a read that addresses **several** positions per row.
+
+    ``windows[i]`` is example ``i``'s value at the positions it addresses,
+    ``(positions_i, vocab)`` — empty when the row addressed none, which in
+    the continuation frame is a result (§2.3), not a misalignment. Returns
+    the same shape: one list of values per example.
+
+    Every ``distribution`` kind reduces **per position**, and does so
+    through :func:`compute_metric` on the flattened positions — one
+    implementation of the kinds, not two. ``ids`` kinds never look at
+    ``windows`` at all: they consume ``generated_ids``, which is why a text
+    probe obliges no vocabulary projection (§8).
+    """
+    kind = str(metric.kind)
+    if kind in WHOLE_WINDOW_METRIC_KINDS:
+        if generated_ids is None:
+            raise ProtocolError(
+                "P2", f"metric kind {kind!r} needs the decode's token ids"
+            )
+        if kind == "decode":
+            return [
+                [tokenizer.decode(list(ids))] if len(ids) else []
+                for ids in generated_ids
+            ]
+        raise ProtocolError("P4", f"unhandled whole-window metric kind {kind!r}")
+
+    counts = [int(window.shape[0]) for window in windows]
+    if not any(counts):
+        return [[] for _ in windows]
+    flat = torch.cat([w for w in windows if w.shape[0]], dim=0)
+    flat_rows = [rows[i] for i, count in enumerate(counts) for _ in range(count)]
+    flat_target = None
+    if target_windows is not None:
+        target_counts = [int(w.shape[0]) for w in target_windows]
+        if target_counts != counts:
+            raise ProtocolError(
+                "P2",
+                f"kl compares reads addressing different position counts "
+                f"({counts} vs {target_counts}) — a comparison needs a "
+                "position-for-position pairing",
+            )
+        flat_target = torch.cat([w for w in target_windows if w.shape[0]], dim=0)
+    values = compute_metric(
+        metric, flat, flat_rows, tokenizer, target_value=flat_target
+    )
+    out: list[list[Any]] = []
+    cursor = 0
+    for count in counts:
+        out.append(values[cursor : cursor + count])
+        cursor += count
+    return out

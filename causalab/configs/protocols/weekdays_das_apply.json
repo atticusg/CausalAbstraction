@@ -2,7 +2,6 @@
   "version": "1",
   "description": "Apply a previously fitted DAS rotation on the test split instead of re-computing it: the featurizer's file_path loads the artifact, and its ArtifactIdentity (model, site, k, parametrization, dtype) is checked on load - a mismatch refuses. 'entry' names which fit to apply: against this single-bundle artifact it is documentation, but the same document loaded against a swept fit's bundle (one entry per k x seed point) is how one rotation is picked out. No train section; a featurizer with file_path may not appear in train.params.",
   "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
-  "causal_model": {"key": "weekdays.causal_model"},
   "data": {
     "base":   {"dataset": "weekdays/test", "field": "input"},
     "counterfactual": {"dataset": "weekdays/test", "field": "counterfactual_inputs[0]"}
@@ -30,6 +29,6 @@
     "iia": {"kind": "logit_diff", "of": "logits", "a": "cf_answer", "b": "base_answer"}
   },
   "save": [
-    {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.parquet"}
+    {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.json"}
   ]
 }

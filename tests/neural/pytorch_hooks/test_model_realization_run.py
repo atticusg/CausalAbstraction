@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from causalab.protocol.cli import main
+from causalab.cli import main
 from causalab.protocol.resolve import read_safetensors_metadata
 
 from tests.protocol._env import CORPUS_DIR, FIXTURES

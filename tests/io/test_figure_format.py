@@ -36,7 +36,14 @@ class TestNormalizeFigureFormat:
             normalize_figure_format("svg")
 
     def test_allowed_set(self):
-        assert ALLOWED_FIGURE_FORMATS == frozenset({"png", "pdf"})
+        """`html` joined png/pdf when the workflow layer began declaring figures
+        as outputs (workflow spec §2.5) — interactive figures are a real third
+        rendering, unlike a third *record* format."""
+        assert ALLOWED_FIGURE_FORMATS == frozenset({"png", "pdf", "html"})
+
+    def test_png_is_the_default(self):
+        """The stated preference: png unless a caller asks for something else."""
+        assert normalize_figure_format(None) == "png"
 
 
 class TestPathWithFigureFormat:

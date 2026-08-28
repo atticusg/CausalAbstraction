@@ -49,11 +49,11 @@
     "de20_a":   {"kind": "token_logit", "of": "de20_abl",     "token": "ml_token"}
   },
   "save": [
-    {"value": "te_clean", "model": "original", "input": "base", "file_path": "te_clean.parquet"},
-    {"value": "te_abl", "model": "ablated", "input": "base", "file_path": "te_abl.parquet"},
-    {"value": "de14_c", "model": "with_inj14_clean", "input": "base", "file_path": "de14_clean.parquet"},
-    {"value": "de20_c", "model": "with_inj20_clean", "input": "base", "file_path": "de20_clean.parquet"},
-    {"value": "de14_a", "model": "with_inj14_abl", "input": "base", "file_path": "de14_abl.parquet"},
-    {"value": "de20_a", "model": "with_inj20_abl", "input": "base", "file_path": "de20_abl.parquet"}
+    {"value": "te_clean", "model": "original", "input": "base", "file_path": "te_clean.json"},
+    {"value": "te_abl", "model": "ablated", "input": "base", "file_path": "te_abl.json"},
+    {"value": "de14_c", "model": "with_inj14_clean", "input": "base", "file_path": "de14_clean.json"},
+    {"value": "de20_c", "model": "with_inj20_clean", "input": "base", "file_path": "de20_clean.json"},
+    {"value": "de14_a", "model": "with_inj14_abl", "input": "base", "file_path": "de14_abl.json"},
+    {"value": "de20_a", "model": "with_inj20_abl", "input": "base", "file_path": "de20_abl.json"}
   ]
 }

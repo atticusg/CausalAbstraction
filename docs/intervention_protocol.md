@@ -17,20 +17,19 @@ sections between them (§1.1):
 | 2 | `type` | –* | `protocol` \| `method` \| `workflow` — what this file is (*required in a method file, §1.1) |
 | 3 | `description` | – | free text, the file's intent |
 | 4 | `model` | ✓ | the neural network ℒ, and how it is realized numerically (alias: `neural_model`) |
-| 5 | `causal_model` | – | the high-level algorithm ℋ, provenance only |
-| 6 | `data` | ✓ | input rows: `base` (+ `counterfactual`) |
-| 7 | `positions` | – | named token-position specs |
-| 8 | `sites` | ✓ | named activation addresses — the complete tap inventory |
-| 9 | `featurizers` | – | named feature-space maps |
-| 10 | `params` | – | free/constant tensors owned by no featurizer |
-| 11 | `reads` | ✓ | value producers |
-| 12 | `writes` | – | effect definitions (inert until listed) |
-| 13 | `intervened_models` | –* | which writes are in force on which input (*required if `writes` present) |
-| 14 | `metrics` | – | closed reductions over read values |
-| 15 | `train` | – | the fit, declared |
-| 16 | `save` | ✓ | the complete output manifest — non-empty, last |
+| 5 | `data` | ✓ | input rows: `base` (+ `counterfactual`) |
+| 6 | `positions` | – | named token-position specs |
+| 7 | `sites` | ✓ | named activation addresses — the complete tap inventory |
+| 8 | `featurizers` | – | named feature-space maps |
+| 9 | `params` | – | free/constant tensors owned by no featurizer |
+| 10 | `reads` | ✓ | value producers |
+| 11 | `writes` | – | effect definitions (inert until listed) |
+| 12 | `intervened_models` | –* | which writes are in force on which input (*required if `writes` present) |
+| 13 | `metrics` | – | closed reductions over read values |
+| 14 | `train` | – | the fit, declared |
+| 15 | `save` | ✓ | the complete output manifest — non-empty, last |
 
-- **One global namespace**: every name in sections 7–14 must be unique across
+- **One global namespace**: every name in sections 6–13 must be unique across
   all of them; reserved names: `base`, `counterfactual`, `counterfactual[j]`, `original`.
 - All cross-references must resolve; references are by name, never inline
   duplication.
@@ -98,7 +97,7 @@ record, and stamped into artifacts; it is not part of the canonical bytes.
 
 ## 2. Section reference
 
-### 2.1 `model`, `causal_model`
+### 2.1 `model`
 
 | field | meaning |
 |---|---|
@@ -106,7 +105,6 @@ record, and stamped into artifacts; it is not part of the canonical bytes.
 | `model.revision` | checkpoint revision |
 | `model.dtype` | the compute dtype the weights are realized in: `fp32` (default) \| `bf16` \| `fp16` |
 | `model.quantization` | optional — load-time weight quantization (below) |
-| `causal_model.key` | name of the high-level causal model (provenance; not executed) |
 
 - `neural_model` is accepted as an alias of `model`; canonical form uses `model`.
 - **Precision is part of the experiment, not of the run.** The same protocol at
@@ -210,6 +208,17 @@ the model said the row's value for `x`.
   generated nothing contributes no positions. Unlike the prompt frame — where an
   out-of-range index is an authoring error and refused — how far a row generates
   is a *result*, and refusing on it would make a document fail on data.
+- **`variable` in the continuation** — "the tokens where the model said the
+  row's value for `x`" — differs from its prompt-side twin in two ways, both
+  because the continuation is a *result* rather than an input. It takes the
+  **first** occurrence instead of demanding exactly one, since a generation may
+  repeat itself as a matter of course; and **zero** occurrences yield zero
+  positions rather than refusing, because whether the model says the thing is
+  usually the experiment. A metric over such a read reports the miss as a null
+  value with `matched: false` (sec. 2.10), so it is data, not an exception.
+  Character spans come from the decode's own incremental detokenization, so a
+  match that starts inside a merged piece still lands on every token that
+  produced it.
 - **Reads only.** A write may not carry `generated` (rule 16): the continuation
   exists because the prefill already ran, and an intervention reaches it through
   the first token's logits and through what the prefill left in the KV cache —
@@ -410,6 +419,35 @@ Closed vocabulary; `of` names a read; other value fields name dataset columns.
 | `class_probs` | `of, groups` | summed probability per group |
 | `top_k` | `of, k` | top-k tokens + probs |
 | `match` | `of, expected` (+ optional `mode`) | match indicator |
+| `decode` | `of` | the addressed tokens as text |
+
+**Domains.** Every kind consumes one of two things from its read, and which
+one is a property of the kind:
+
+| domain | kinds | consumes |
+|---|---|---|
+| `distribution` | everything above except `decode` | the vocabulary projection at the addressed positions |
+| `ids` | `decode` | only the tokens the decode produced |
+
+An `ids` kind therefore obliges **no** vocabulary projection anywhere (§8's
+materialization requirement) — a text probe is cheap by construction, not by a
+backend's cleverness. It also only means something where tokens were
+*produced*: `decode` binds to a read whose position carries `generated` (§2.3),
+and a `decode` over a prompt-frame read is a load error.
+
+**Metrics over several positions.** A read may address more than one position —
+every generated token of a row, a window of them, the tokens where the model
+said something (§2.3). A metric over such a read reduces **per position**, and
+its table says which:
+
+- one row per (example, position), carrying the `step` it scored and a
+  `matched` flag; `decode` is the exception that reduces the whole window to
+  one string, and its `step` is null because no single step owns it;
+- an example that addressed **nothing** — it stopped generating, or never said
+  what a `variable` anchor looked for — still gets exactly one row, with a null
+  value and `matched: false`. "The model never said it" must not be
+  indistinguishable from "it said it and scored 0";
+- prompt-frame metrics are unchanged: one row per example, no `step` column.
 
 - A metric binds to exactly one read → one (model, input). Same metric in two
   models = two reads + two metrics.
@@ -482,8 +520,12 @@ everything that leaves the run. Three saveable kinds, two entry shapes:
 - `model`/`input` (resp. `site`) **restate** the binding resolved from the
   declarations and are **cross-checked** — mismatch is a load error. They are
   drift-protected documentation, never a second source of truth.
-- `file_path` is relative to the run's output directory. Tensors →
-  `.safetensors`; per-example metric tables → `.parquet`. In swept documents
+- `file_path` is relative to the run's output directory. **JSON and
+  safetensors are the only two formats**: dense numerics → `.safetensors`,
+  per-example metric tables → `.json`, an array of row objects. Row labels
+  repeat — that is the deliberate trade for a file `jq` and a human can both
+  read. One file per metric, so a document saving three metrics writes three
+  tables. In swept documents
   the path is unchanged; axis coordinates become columns / keyed entries
   (`weight[k=8,seed=0]`, one record per entry in the header's `entries`
   table — sec. 8).
@@ -551,7 +593,7 @@ A conforming loader rejects the document unless all of these hold:
 1. Strict keys: unknown fields anywhere are errors; closed enums reject with
    suggestions. Derived fields (sec. 7) may not be authored.
 2. Section order per sec. 1; `save` last.
-3. Global namespace: no duplicate names across sections 6–13; no reserved
+3. Global namespace: no duplicate names across sections 5–12; no reserved
    names (`base`, `counterfactual`, `counterfactual[j]`, `original`, `all`)
    declared.
 4. Every reference resolves: sites (declared inventory only), positions,
@@ -700,8 +742,11 @@ it is the vocabulary: at batch 32 and 16 steps, every step's distribution over a
 128k vocabulary is ~260 MB in fp32, one step is ~16 MB, a site's activations
 ~8 MB, the token ids ~2 KB. The planner therefore derives, per group, the decode
 depth and — per continuation read — whether anything downstream consumes a
-distribution (it is saved, or a metric over it reduces one). A backend **must
-not** build one where the answer is no.
+distribution: the read is saved, or a metric in the `distribution` domain
+reduces it (sec. 2.10). An `ids`-domain metric does **not** count, which is the
+point of the domain: a text probe — `decode` over a continuation read, nothing
+saved — obliges no vocabulary projection at all, and a backend **must not**
+build one where the answer is no.
 
 *How* it complies is its own business: keeping only the addressed steps,
 projecting a narrower slice (`logits_to_keep` takes an index tensor), replaying
@@ -835,7 +880,7 @@ Path patching (sender → receiver, off-path frozen; shows cross-model flow):
     "logit_diff": {"kind": "logit_diff", "of": "logits", "a": "answer", "b": "cf_answer"}
   },
   "save": [
-    {"value": "logit_diff", "model": "final", "input": "base", "file_path": "logit_diff.parquet"}
+    {"value": "logit_diff", "model": "final", "input": "base", "file_path": "logit_diff.json"}
   ]
 }
 ```
@@ -847,7 +892,6 @@ featurizer save):
 {
   "version": "1",
   "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
-  "causal_model": {"key": "weekdays.causal_model"},
   "data": {
     "base":   {"dataset": "weekdays/train", "field": "input"},
     "counterfactual": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
@@ -884,8 +928,8 @@ featurizer save):
     "seed":       {"sweep": [0, 1, 2]}
   },
   "save": [
-    {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.parquet"},
-    {"value": "ce",  "model": "patched", "input": "base", "file_path": "ce.parquet"},
+    {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.json"},
+    {"value": "ce",  "model": "patched", "input": "base", "file_path": "ce.json"},
     {"value": "rot", "site": "target", "file_path": "rot.safetensors"}
   ]
 }
@@ -895,7 +939,7 @@ featurizer save):
 
 | this spec | causal abstraction |
 |---|---|
-| `model` / `causal_model` | low-level model ℒ / high-level model ℋ |
+| `model` | the low-level model ℒ (the high-level model ℋ lives with the task's dataset, not in documents) |
 | `intervened_models.<name>` | ℒ_{b∪𝕀} — the intervened model |
 | a write's `do` | an interventional 𝕀_X |
 | `swap` from a counterfactual read | interchange intervention (`IntInv`; `DistIntInv` when featurized) |

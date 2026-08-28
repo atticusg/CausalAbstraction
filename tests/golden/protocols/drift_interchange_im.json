@@ -91,19 +91,19 @@
       "value": "acc",
       "model": "original",
       "input": "base",
-      "file_path": "acc.parquet"
+      "file_path": "acc.json"
     },
     {
       "value": "iia",
       "model": "patched",
       "input": "base",
-      "file_path": "iia.parquet"
+      "file_path": "iia.json"
     },
     {
       "value": "ld",
       "model": "patched",
       "input": "base",
-      "file_path": "ld.parquet"
+      "file_path": "ld.json"
     },
     {
       "value": "acts_mid",

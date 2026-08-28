@@ -47,7 +47,6 @@ def _baseline_document(refs: list[str]) -> dict:
         "version": "1",
         "description": "Per-relation base accuracy: the curation sweep as a document.",
         "model": {"key": MODEL, "revision": "main"},
-        "causal_model": {"key": "subject_object_relations"},
         "data": {"base": {"dataset": {"sweep": refs}, "field": "input"}},
         "positions": {"answer_tok": {"index": -1}},
         "sites": {"lm_head": {"component": "lm_head"}},
@@ -72,7 +71,7 @@ def _baseline_document(refs: list[str]) -> dict:
                 "value": "accuracy",
                 "model": "original",
                 "input": "base",
-                "file_path": "accuracy.parquet",
+                "file_path": "accuracy.json",
             }
         ],
     }

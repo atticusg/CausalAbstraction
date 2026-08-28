@@ -13,7 +13,6 @@
   },
   "method": {
     "description": "Interchange intervention: swap the answer-slot residual from the counterfactual into base; IIA scoring.",
-    "causal_model": {"key": "weekdays.causal_model"},
     "sites": {
       "target": {"component": "block_output"},
       "lm_head": {"component": "lm_head"}
@@ -33,8 +32,8 @@
       "logit_diff": {"kind": "logit_diff", "of": "logits", "a": "cf_answer", "b": "base_answer"}
     },
     "save": [
-      {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.parquet"},
-      {"value": "logit_diff", "model": "patched", "input": "base", "file_path": "logit_diff.parquet"}
+      {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.json"},
+      {"value": "logit_diff", "model": "patched", "input": "base", "file_path": "logit_diff.json"}
     ]
   }
 }
