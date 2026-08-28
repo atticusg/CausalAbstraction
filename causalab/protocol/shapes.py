@@ -268,9 +268,7 @@ class FeatureShape:
     def is_feature_space(self) -> bool:
         """Whether a featurizer may attach: a contract form, real values rather
         than labels, and an axis to attach to."""
-        return (
-            self.has_contract_form and not self.integral and bool(self.feature_axes)
-        )
+        return self.has_contract_form and not self.integral and bool(self.feature_axes)
 
     @property
     def width(self) -> int | None:

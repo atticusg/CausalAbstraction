@@ -33,7 +33,13 @@ from causalab.protocol.registry import (
     get_model_info,
     register_model,
 )
-from causalab.protocol.schema import COMPONENTS, STREAMS, parse_document
+from causalab.protocol.plan import COMPONENT_RANK
+from causalab.protocol.schema import (
+    COMPONENTS,
+    DEPRECATED_COMPONENTS,
+    STREAMS,
+    parse_document,
+)
 
 from tests.protocol._docs import base_doc, in_order
 
@@ -66,6 +72,7 @@ def _registered() -> None:
     register_model(GQA)
     register_model(dataclasses.replace(GQA, key="test/moe"))
 
+
 #: ``component -> (width, head_space, is_feature_space)``. One row per name in
 #: the vocabulary; the completeness test below fails if a component is added
 #: without one.
@@ -75,7 +82,7 @@ EXPECTED: dict[str, tuple[int | None, int | None, bool]] = {
     "block_input": (64, None, True),
     "attention_input_norm": (64, None, True),
     "attention_probs": (None, 8, False),
-    "attention_value": (128, 8, True),
+    "attention_premix": (128, 8, True),
     "attention_output": (64, None, True),
     "block_mid": (64, None, True),
     "mlp_input_norm": (64, None, True),
@@ -156,7 +163,7 @@ def test_head_is_bounded_by_the_components_own_head_space(env) -> None:
     """And the bound is quoted with the shape it came from."""
     raw = base_doc()
     raw["model"]["key"] = GQA.key
-    raw["sites"]["tgt"] = {"component": "attention_value", "layer": 3, "head": 8}
+    raw["sites"]["tgt"] = {"component": "attention_premix", "layer": 3, "head": 8}
     with pytest.raises(ValidationError, match="out of range"):
         canonicalize(raw, env)
 
@@ -164,7 +171,7 @@ def test_head_is_bounded_by_the_components_own_head_space(env) -> None:
 def test_a_head_inside_the_components_head_space_is_accepted(env) -> None:
     raw = base_doc()
     raw["model"]["key"] = GQA.key
-    raw["sites"]["tgt"] = {"component": "attention_value", "layer": 3, "head": 7}
+    raw["sites"]["tgt"] = {"component": "attention_premix", "layer": 3, "head": 7}
     assert canonicalize(raw, env)["sites"]["tgt"]["head"] == 7
 
 
@@ -176,7 +183,7 @@ def test_a_kv_space_head_bound_is_narrower_than_the_query_space_one() -> None:
     second does not raise — python slices past the end silently — it yields an
     empty slice: a read of ``(b, n_pos, 0)`` and a write that changes nothing.
     """
-    query_space = component_shape(GQA, "attention_value").head_space
+    query_space = component_shape(GQA, "attention_premix").head_space
     assert query_space == GQA.num_heads == 8
     assert GQA.num_kv_heads == 4  # what round 2's `v`, `k` and `k_pre_rope` use
     # the bound that would have been applied to them, and the one that will be
@@ -286,3 +293,66 @@ def test_gpt2s_mlp_width_comes_from_n_inner() -> None:
     ``hf-internal-testing/tiny-random-gpt2``, whose config carries that key even
     though nothing in the model reads it."""
     assert get_model_info("gpt2").intermediate_size == 4 * 768
+
+
+# --------------------------------------------------------------------------- #
+# D1/D6 — the rename, and the rank table it renumbered
+# --------------------------------------------------------------------------- #
+
+
+def test_the_retired_spelling_still_loads() -> None:
+    """The one-release alias: a document written against the old vocabulary is
+    not a hard error."""
+    raw = base_doc()
+    raw["sites"]["tgt"] = {"component": "attention_value", "layer": 3}
+    assert parse_document(raw).sites["tgt"].component == "attention_premix"
+
+
+def test_the_alias_folds_at_parse_so_nothing_downstream_sees_two_names(
+    env,
+) -> None:
+    """Both spellings canonicalize identically, and therefore digest
+    identically — the alias is a courtesy at the door, not a second vocabulary
+    the tables have to know about."""
+    old, new = base_doc(), base_doc()
+    old["sites"]["tgt"] = {"component": "attention_value", "layer": 3}
+    new["sites"]["tgt"] = {"component": "attention_premix", "layer": 3}
+    assert canonicalize(old, env) == canonicalize(new, env)
+
+
+def test_the_retired_name_is_not_reused_by_anything() -> None:
+    """The rule that makes the alias safe.
+
+    An alias that *redirects* is fine; one that *rebinds* would let a document
+    written against the old vocabulary load and silently mean a different
+    tensor. Round 2 introduces the real value vectors under their own name for
+    exactly this reason (nnterp#51 is the same mistake, made after the fact).
+    """
+    for retired in DEPRECATED_COMPONENTS:
+        assert retired not in COMPONENTS
+
+
+def test_every_component_has_a_rank() -> None:
+    """``COMPONENT_RANK`` drives group elision, and a component missing from it
+    would silently sort as the deepest tap."""
+    assert set(COMPONENT_RANK) == set(COMPONENTS)
+
+
+def test_the_rank_table_is_written_in_forward_order() -> None:
+    """It is read as a story about a block, so its source order and its values
+    must agree — a table that sorts differently than it reads is one nobody
+    checks against the architecture."""
+    ranks = list(COMPONENT_RANK.values())
+    assert ranks == sorted(ranks)
+
+
+def test_the_attention_band_has_room_for_round_twos_insertions() -> None:
+    """D6: renumber once, then never again. Each reserved slot named in
+    ``plan.py`` must still be free, or a later PR is a re-pin rather than an
+    insertion."""
+    taken = set(COMPONENT_RANK.values())
+    reserved = (160, 170, 180, 190, 200, 210, 220, 240, 350)
+    assert not taken & set(reserved)
+    # and each lands between the tap before it and the one after
+    assert COMPONENT_RANK["attention_input_norm"] < min(reserved)
+    assert max(reserved) < COMPONENT_RANK["attention_output"]

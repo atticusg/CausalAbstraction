@@ -29,6 +29,7 @@ from causalab.protocol.schema import (
 
 __all__ = [
     "COMPONENT_RANK",
+    "UNRANKED",
     "ForwardGroup",
     "Materialization",
     "PointPlan",
@@ -41,42 +42,72 @@ __all__ = [
 #: Intra-block execution order of the component vocabulary — backend-free
 #: data used only to find a group's deepest tap (elision, §4). ``ln_final``
 #: and ``lm_head`` sort after every block.
+#:
+#: **Numbered in hundreds, with the attention band deliberately spread.** The
+#: values are ordinal and nothing outside this table reads them, but changing
+#: one changes group elision and therefore every closure digest — so the point
+#: of the spacing is that inserting a component never renumbers an existing one.
+#: The attention interior is where the vocabulary is still growing (round 2 adds
+#: the pre-RoPE projections, the gate, the post-RoPE q/k, the scores, the mixer
+#: output and the per-head result), and the reserved slots below say where each
+#: goes so that each PR is an insertion rather than a re-pin.
+#:
+#: Reserved, in forward order through the mixer::
+#:
+#:     160  attention_query_pre_rope    q_norm's output (or q_proj's)
+#:     170  attention_key_pre_rope      k_norm's output (or k_proj's)
+#:     180  attention_value_states      v_proj's output — the actual `v`
+#:     190  attention_gate              the [q | gate] projection's second split
+#:     200  attention_query             post-RoPE q, at the interface
+#:     210  attention_key               post-RoPE k, at the interface
+#:     220  attention_scores            the softmax's input
+#:     240  attention_z                 the interface's return, pre-gate
+#:     350  attention_result            the per-head contribution to the stream
 COMPONENT_RANK: dict[str, int] = {
-    "input_ids": -1,  # the model's input: before every activation
+    "input_ids": -10,  # the model's input: before every activation
     "embeddings": 0,
-    "block_input": 10,
-    "attention_input_norm": 15,  # input_layernorm, between resid_pre and the mixer
-    "attention_probs": 20,
-    "attention_value": 30,
-    "attention_output": 40,
+    "block_input": 100,
+    "attention_input_norm": 150,  # input_layernorm, between resid_pre and mixer
+    "attention_probs": 230,
+    # 🔤 `attention_premix` was `attention_value` until round 2. It is the
+    # o-projection's INPUT — on a gated family `z · σ(gate)`, on an ungated one
+    # `z` — which is the mixer's output just before it is mixed back into the
+    # residual stream, and is not the value vectors that name suggested. Round 2
+    # introduces those separately, and two components a letter apart in meaning
+    # and identical in name is nnterp#51's cautionary tale happening to us.
+    "attention_premix": 300,
+    "attention_output": 400,
     # resid_mid is post_attention_layernorm's INPUT and mlp_input_norm its
     # OUTPUT, so the two straddle that one module in this order
-    "block_mid": 45,
-    "mlp_input_norm": 47,
-    "mlp_input": 50,
-    # The MoE interior, between the block's input and its output. These were
-    # 71 and 72 — *after* ``mlp_output`` (70) — which contradicted the comment
-    # they carried and was unreachable only because ``router_logits`` refused to
-    # resolve. It resolves now, so the order is corrected: the router fires
-    # first, then the experts, then the combine.
-    "router_logits": 51,
-    "router_scores": 52,
-    "expert_idx": 53,
-    "expert_output": 54,  # per-expert interior (still refused — follow-up F2)
-    "routed_output": 55,
-    "mlp_activation": 60,
+    "block_mid": 450,
+    "mlp_input_norm": 470,
+    "mlp_input": 500,
+    # The MoE interior, between the block's input and its output: the router
+    # fires first, then the experts, then the combine.
+    "router_logits": 510,
+    "router_scores": 520,
+    "expert_idx": 530,
+    "expert_output": 540,  # per-expert interior (still refused — follow-up F2)
+    "routed_output": 550,
+    "mlp_activation": 600,
     # the shared expert runs beside the routed ones; its gate is *consumed*
     # last, at the multiply that produces the (derived) gated output
-    "shared_expert_gate_proj": 61,
-    "shared_expert_up_proj": 62,
-    "shared_expert_activation": 63,
-    "shared_expert_output": 64,
-    "shared_expert_gate": 65,
-    "mlp_output": 70,
-    "block_output": 80,
-    "ln_final": 90,
-    "lm_head": 100,
+    "shared_expert_gate_proj": 610,
+    "shared_expert_up_proj": 620,
+    "shared_expert_activation": 630,
+    "shared_expert_output": 640,
+    "shared_expert_gate": 650,
+    "mlp_output": 700,
+    "block_output": 800,
+    "ln_final": 900,
+    "lm_head": 1000,
 }
+
+#: The rank of a component the table does not know. Deliberately past
+#: ``lm_head``: an unranked tap sorts last, so it is treated as the deepest and
+#: nothing is elided behind it. Being wrong in the other direction would elide a
+#: forward that a later tap still needed.
+UNRANKED = 10_000
 
 
 @dataclasses.dataclass(frozen=True)
@@ -269,7 +300,7 @@ def _depth(doc: Document, site_name: str) -> tuple[int, int]:
     site = doc.sites[site_name]
     layer = site.layer if isinstance(site.layer, int) else 0
     component = site.component if isinstance(site.component, str) else "lm_head"
-    rank = COMPONENT_RANK.get(component, 100)
+    rank = COMPONENT_RANK.get(component, UNRANKED)
     if component in ("ln_final", "lm_head"):
         return (1_000_000, rank)  # after every block
     return (layer, rank)

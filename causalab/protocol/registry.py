@@ -28,7 +28,7 @@ component                            shape
 ``mlp_activation``                   ``(batch, position, intermediate)`` (the
                                      family caveat of *which* tensor this
                                      names lives in the backend, not here)
-``attention_value``                  ``(batch, position, heads·head_dim)``,
+``attention_premix``                  ``(batch, position, heads·head_dim)``,
                                      head-major and already flattened — the
                                      o-projection's input, query-head space
 ``lm_head``                          ``(batch, position, vocab)``
@@ -252,7 +252,7 @@ def component_shape(info: ModelInfo, component: str) -> FeatureShape:
         return shapes.flat_td(info.hidden_size)
     if component == "mlp_activation":
         return shapes.bsd(info.intermediate_size)
-    if component == "attention_value":
+    if component == "attention_premix":
         # the per-head o-projection input: query-head space (num_heads *
         # head_dim = the o_proj input width), NOT the GQA KV-head space of
         # v_proj. Head-major and already flattened — `(b, s, H*d)`.
@@ -343,7 +343,7 @@ def head_space_refusal(component: str, head: int, shape: FeatureShape) -> str:
         f"component {component!r} has no head axis — its shape is "
         f"{shape.describe()} — so head {head} would be validated and then "
         "silently dropped. Name a component that has heads "
-        "('attention_value'), or drop the 'head' field."
+        "('attention_premix'), or drop the 'head' field."
     )
 
 

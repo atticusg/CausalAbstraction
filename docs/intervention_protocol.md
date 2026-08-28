@@ -274,7 +274,7 @@ Component vocabulary (per-backend `SiteResolver` maps each to a tap), in
 execution order:
 
 `input_ids` · `embeddings` · `block_input` · `attention_input_norm` ·
-`attention_output` · `attention_value` · `attention_probs` · `block_mid` ·
+`attention_output` · `attention_premix` · `attention_probs` · `block_mid` ·
 `mlp_input_norm` · `mlp_input` · `router_logits` · `router_scores` ·
 `expert_idx` · `expert_output` · `routed_output` · `mlp_activation` ·
 `shared_expert_gate_proj` · `shared_expert_up_proj` ·
@@ -973,7 +973,7 @@ Path patching (sender → receiver, off-path frozen; shows cross-model flow):
     "counterfactual": {"dataset": "ioi/test", "field": "counterfactual_inputs[0]"}
   },
   "sites": {
-    "sender":   {"component": "attention_value",  "layer": 9, "head": 9},
+    "sender":   {"component": "attention_premix",  "layer": 9, "head": 9},
     "receiver": {"component": "block_input",      "layer": 12},
     "a10":      {"component": "attention_output", "layer": 10},
     "a11":      {"component": "attention_output", "layer": 11},

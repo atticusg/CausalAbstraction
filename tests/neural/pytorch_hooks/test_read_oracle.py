@@ -132,13 +132,13 @@ def test_every_component_matches_oracle(bundle, oracle: OracleShim, component: s
 
 
 def test_head_value_read_matches_oracle(llama_bundle):
-    """attention_value head H == the oracle's o_proj-input column slice
+    """attention_premix head H == the oracle's o_proj-input column slice
     (test_collect_hook_oracle.py's head case)."""
     doc = {
         "version": "1",
         "model": {"key": "test", "revision": "main"},
         "data": base_data_section(with_counterfactual=False),
-        "sites": {"h": {"component": "attention_value", "layer": 0, "head": 1}},
+        "sites": {"h": {"component": "attention_premix", "layer": 0, "head": 1}},
         "reads": {
             "r": {
                 "site": "h",
