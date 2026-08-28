@@ -395,7 +395,21 @@ def component_shape(info: ModelInfo, component: str) -> FeatureShape:
     if component == "shared_expert_gate":
         # one scalar per token: how much of the shared expert to mix in
         return shapes.flat_td(1)
-    if component in ("delta_qkv", "delta_gate", "delta_premix"):
+    if component in (
+        "delta_qkv",
+        "delta_gate",
+        "delta_premix",
+        "delta_conv",
+        "delta_query",
+        "delta_key",
+        "delta_value",
+        "delta_beta",
+        "delta_decay",
+        "delta_kernel_output",
+        "delta_kv_mem",
+        "delta_state_update",
+        "delta_state",
+    ):
         missing = [
             name
             for name in (
@@ -431,6 +445,75 @@ def component_shape(info: ModelInfo, component: str) -> FeatureShape:
                     f"{key_dim}/{key_dim}/{value_dim} — unequal, so it has no "
                     "head axis. The per-head faces are the kernel-boundary "
                     "components ('delta_query'/'delta_key'/'delta_value')."
+                ),
+            )
+        if component == "delta_conv":
+            # 📐 causal_conv1d_fn's return: (batch, conv_dim, position) —
+            # channels-first, the existing bds layout, as #48 predicted. Same
+            # fused unequal widths as delta_qkv, so no head axis here either.
+            key_dim = info.linear_num_key_heads * info.linear_key_head_dim
+            value_dim = info.linear_num_value_heads * info.linear_value_head_dim
+            return shapes.bds(
+                2 * key_dim + value_dim,
+                note=(
+                    "It is the convolved fused [q | k | v], channels-first and "
+                    "with unequal split widths, so it has no head axis. The "
+                    "per-head faces are 'delta_query'/'delta_key'/'delta_value'."
+                ),
+            )
+        if component in ("delta_query", "delta_key"):
+            # 📐 kernel args 0/1: (b, s, heads, d_k) — already tiled to the
+            # v-head count (GVA repeat_interleave happens BEFORE the kernel)
+            # and PRE-l2norm (the kernel normalizes and scales internally).
+            return shapes.bshd(
+                info.linear_num_value_heads,
+                info.linear_key_head_dim,
+                note=(
+                    "Captured pre-l2norm: the kernel applies l2norm and the "
+                    "1/sqrt(d) scale internally, so this is the tensor a write "
+                    "can actually steer."
+                ),
+            )
+        if component in ("delta_value", "delta_kernel_output"):
+            # kernel arg 2, and return[0] — v-head space, (b, s, heads, d_v).
+            # The output is pre-norm, pre-gate core_attn_out.
+            return shapes.bshd(info.linear_num_value_heads, info.linear_value_head_dim)
+        if component == "delta_state":
+            # ⚠️ On a real checkpoint this is the expensive read: a full-seq
+            # all-layers delta_state is layers · seq · heads · d_k · d_v floats
+            # (30 · seq · 32·128·128 on the A3B). Address positions early — the
+            # gather runs on the steps axis before anything is kept.
+            return shapes.state_matrix(
+                info.linear_num_value_heads,
+                info.linear_key_head_dim,
+                info.linear_value_head_dim,
+                note=(
+                    "It is the recurrent state S_t: one d_k × d_v matrix per "
+                    "head per step. Read it whole (optionally with 'head:'); "
+                    "its per-step faces are 'delta_kv_mem' (what the decayed "
+                    "state recalls for k̂_t) and 'delta_state_update' (what is "
+                    "written in)."
+                ),
+            )
+        if component in ("delta_kv_mem", "delta_state_update"):
+            # per-step d_v vectors per head, stacked over steps — derived from
+            # adjacent states and pinned by the reconstruction identity
+            # S_t == S_{t-1}·exp(g_t) + k̂_t ⊗ delta_t (round-4 plan §2.3)
+            return shapes.bshd(info.linear_num_value_heads, info.linear_value_head_dim)
+        if component == "delta_beta":
+            return shapes.bsh(
+                info.linear_num_value_heads,
+                note=(
+                    "One scalar gate per head per position — "
+                    "sigmoid(in_proj_b), in (0, 1)."
+                ),
+            )
+        if component == "delta_decay":
+            return shapes.bsh(
+                info.linear_num_value_heads,
+                note=(
+                    "The log-decay g — negative reals (the state multiplies by "
+                    "exp(g) per step), not a probability."
                 ),
             )
         # delta_gate (in_proj_z's output) and delta_premix (out_proj's input)
