@@ -105,7 +105,7 @@ whose outputs it references (§3). `after` adds ordering without data flow.
 **Why `protocol` stays declarative.** A protocol step is not "a script that
 happens to take a document". Keeping it a type preserves, all at load time:
 inner-document validation (every IM spec §5 rule, before any step runs); sweep
-expansion, so point counts and per-point digests reach `explain`; backend
+expansion, so point counts and per-point digests reach `explain`; engine
 capability routing over the union of the points; `--points` shard dispatch; and
 the producer's **sweep axes**, which is what makes a downstream reduction
 meaningful at all (§6).
@@ -324,7 +324,7 @@ unambiguous and the loader never guesses.
 
 - Steps run in a topological order of the derived graph; each step's outputs
   land under `<step>/`.
-- A protocol step executes through the standard backend routing (IM spec §8) —
+- A protocol step executes through the standard engine routing (IM spec §8) —
   capabilities derive from the union over the inner document's points.
 - A script step is invoked **in-process by default**:
 
@@ -343,7 +343,7 @@ unambiguous and the loader never guesses.
   (`workflow.json`) — see §7.
 - **What the runner knows about execution** (IM spec §8, execution scale): only
   the step dependency graph. It may run independent steps concurrently, but it
-  owns no device, host, or job-system knowledge — those belong to the backends
+  owns no device, host, or job-system knowledge — those belong to the engines
   it is handed and to site tooling outside the repo (job dispatch, which shards
   *document* runs via the CLI's `--points`; a workflow run is never sharded as a
   unit).
@@ -480,8 +480,8 @@ the script path and hash, the `runtime` block, the step digest, and status.
 
 ## 8. Runner contract
 
-The runner is causalab-owned (there is no backend choice at the workflow level —
-backends are chosen per protocol step):
+The runner is causalab-owned (there is no engine choice at the workflow level —
+engines are chosen per protocol step):
 
 | service | contract |
 |---|---|
@@ -583,6 +583,6 @@ tracked as future work.
 - **Two reference grammars** (§3): a `set` block is where the workflow grammar
   and the IM spec's meet. Options are to align the IM spec on the simpler form,
   or to let `set` accept the workflow grammar and translate.
-- **Multi-tenant steps**: a step per backend (fit on Megatron, apply on serving)
-  needs per-step backend pinning — deferred until a second backend exists; the
-  field would be one optional `backend` per protocol step.
+- **Multi-tenant steps**: a step per engine (fit on Megatron, apply on serving)
+  needs per-step engine pinning — deferred until a second engine exists; the
+  field would be one optional `engine` per protocol step.

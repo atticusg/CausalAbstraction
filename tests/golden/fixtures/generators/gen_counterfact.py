@@ -22,7 +22,7 @@ Selection rules, all load-bearing for the golden band:
   information, not used as a filter). The only drop is an answer whose
   first token fails the repo's single-token column round-trip.
 - **One dataset per subject width, pooled proportionally**: the reference
-  backend refuses ragged edits and the noise edit targets the
+  engine refuses ragged edits and the noise edit targets the
   subject-token window, so a single document needs equal-width subjects.
   Widths 2-5 are each written as their own dataset, sized proportionally
   to the width distribution, ~200 facts total; the golden test runs one
@@ -75,7 +75,7 @@ def object_first_token(tokenizer, target: str) -> tuple[int, str] | None:
 
 def subject_width(tokenizer, prompt: str, subject: str) -> int | None:
     """Token width of the subject's character span inside the prompt, via
-    offset mapping — the same span the backend's variable resolution taps."""
+    offset mapping — the same span the engine's variable resolution taps."""
     start = prompt.find(subject)
     if start < 0:
         return None

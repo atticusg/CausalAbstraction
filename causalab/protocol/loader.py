@@ -51,7 +51,7 @@ __all__ = ["LoadedProtocol", "apply_overrides", "flatten", "load", "load_text"]
 
 @dataclasses.dataclass(frozen=True)
 class LoadedProtocol:
-    """Everything a verb or a backend needs after one load."""
+    """Everything a verb or an engine needs after one load."""
 
     document: Document
     raw: Mapping[str, Any]
@@ -158,7 +158,7 @@ def load(
     *,
     overrides: Mapping[str, Any] | None = None,
     point_cap: int | None = DEFAULT_POINT_CAP,
-    backend_is_local: bool | None = None,
+    engine_is_local: bool | None = None,
     base_dir: Path | None = None,
 ) -> LoadedProtocol:
     """Load one protocol document through the full pipeline.
@@ -200,7 +200,7 @@ def load(
     point_documents: list[Document] = []
     for point in expansion.points:
         pdoc = parse_document(point.raw)
-        validate_document(pdoc, backend_is_local=backend_is_local)
+        validate_document(pdoc, engine_is_local=engine_is_local)
         _check_loaded_featurizers(pdoc, env)
         point_documents.append(pdoc)
     canonical_document = _canonical.canonicalize(resolved, env)

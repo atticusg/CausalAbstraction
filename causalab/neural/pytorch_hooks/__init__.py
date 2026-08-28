@@ -1,30 +1,34 @@
-"""The reference protocol backend: native pytorch hooks (spec §8).
+"""Deprecated import path — the package moved to
+:mod:`causalab.neural.engines.pytorch_hooks`.
 
-The only subpackage of ``causalab/neural`` after the protocol refactor:
-site resolution over raw module hooks, position resolution against the
-padded batch frame, the closed mechanism set, featurizers with the
-error-term contract, metric lowering, the train loop, and artifact
-stamping. Everything enters through :class:`PytorchHooksBackend`.
+This shim keeps ``causalab.neural.pytorch_hooks`` (and its submodules)
+importable for one deprecation beat; new code imports the ``engines`` path.
+Delete it once nothing external references the old path.
 """
 
-from causalab.neural.pytorch_hooks.backend import PytorchHooksBackend
-from causalab.neural.pytorch_hooks.encoding import (
-    EncodedBatch,
-    encode,
-    resolve_position,
-)
-from causalab.neural.pytorch_hooks.executor import PointExecutor
-from causalab.neural.pytorch_hooks.loading import ModelBundle, load_model
-from causalab.neural.pytorch_hooks.sites import ResolvedSite, resolve_site
+from __future__ import annotations
 
-__all__ = [
-    "EncodedBatch",
-    "ModelBundle",
-    "PointExecutor",
-    "PytorchHooksBackend",
-    "ResolvedSite",
-    "encode",
-    "load_model",
-    "resolve_position",
-    "resolve_site",
-]
+import importlib
+import sys
+
+_NEW = "causalab.neural.engines.pytorch_hooks"
+
+_package = importlib.import_module(_NEW)
+# Alias the package and its submodules so `import causalab.neural.
+# pytorch_hooks.loading` keeps resolving without a second copy of any module.
+sys.modules[__name__] = _package
+for _sub in (
+    "attention_probs",
+    "encoding",
+    "engine",
+    "executor",
+    "featurizers",
+    "layout",
+    "loading",
+    "mechanisms",
+    "metrics",
+    "outputs",
+    "sites",
+    "train",
+):
+    sys.modules[f"{__name__}.{_sub}"] = importlib.import_module(f"{_NEW}.{_sub}")
