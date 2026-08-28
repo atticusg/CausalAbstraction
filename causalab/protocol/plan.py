@@ -65,12 +65,21 @@ COMPONENT_RANK: dict[str, int] = {
     # avoid every attention slot so that neither round renumbers the other.
     "delta_qkv": 152,  # in_proj_qkv's fused [q|k|v] output, pre-conv
     "delta_gate": 154,  # in_proj_z's output — the output gate, produced early
+    "delta_conv": 156,  # causal_conv1d_fn's return, channels-first
+    "delta_query": 158,  # kernel arg 0: post-conv, post-tiling, PRE-l2norm
     # The mixer's interior, in the order the forward computes it. All four are
     # module boundaries: q_norm/k_norm run BEFORE RoPE and are nn.Modules, so
     # the pre-RoPE projections are ordinary forward hooks rather than taps
     # inside the attention function.
     "attention_query_pre_rope": 160,
+    "delta_key": 162,  # kernel arg 1
+    "delta_value": 164,  # kernel arg 2
+    "delta_beta": 166,  # kernel kwarg beta — sigmoid(in_proj_b), per head
+    "delta_decay": 168,  # kernel kwarg g — the log-decay, negative reals
     "attention_key_pre_rope": 170,
+    # 172/174/176 are reserved for the per-step interior (round 4.3):
+    # delta_kv_mem, delta_state_update, delta_state — loop order
+    "delta_kernel_output": 178,  # kernel return[0]: pre-norm, pre-gate
     "attention_value_states": 180,
     # the DeltaNet post-norm, post-gate mixer input — the exact analogue of
     # attention_premix, which is why the name

@@ -75,6 +75,7 @@ __all__ = [
     "attention_pattern",
     "bds",
     "bs",
+    "bsh",
     "bs_flat_heads",
     "bs_fused_heads",
     "bshd",
@@ -397,6 +398,16 @@ def bs_flat_heads(
         axes=(_BATCH, _POSITION, Axis("head", heads), Axis("feature", head_dim)),
         note=note,
     )
+
+
+def bsh(heads: int, *, note: str | None = None) -> FeatureShape:
+    """``(batch, position, heads)`` — one scalar per head per position.
+
+    The DeltaNet kernel's per-head gates (``beta``, ``g``): the feature axis
+    *is* the head axis, so ``head:`` selects a width-1 column and a featurizer
+    attaches to an 8-wide space whose basis is the fixed head list.
+    """
+    return FeatureShape(axes=(_BATCH, _POSITION, Axis("head", heads)), note=note)
 
 
 def bshd(heads: int, head_dim: int, *, note: str | None = None) -> FeatureShape:

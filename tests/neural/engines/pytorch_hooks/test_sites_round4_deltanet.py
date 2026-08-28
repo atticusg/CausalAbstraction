@@ -385,3 +385,379 @@ def test_a_continuation_read_accumulates_one_row_per_step(
     doc["reads"]["r"]["pos"] = "window"
     value = executor_for(doc, qwen35moe_bundle, base_texts=[TEXT]).read_value("r")
     assert tuple(value.shape) == (1, 3, TIER_ONE_WIDTH[component])
+
+
+# --------------------------------------------------------------------------- #
+# round 4.2 — the kernel boundary
+# --------------------------------------------------------------------------- #
+
+TIER_TWO = (
+    "delta_conv",
+    "delta_query",
+    "delta_key",
+    "delta_value",
+    "delta_beta",
+    "delta_decay",
+    "delta_kernel_output",
+)
+
+#: 📐 contract widths on the fixture: conv_dim 512; q/k/v tiled to 8 v-heads of
+#: 32 (q/k share the key head dim, tiled BEFORE the kernel); the gates are one
+#: scalar per head.
+TIER_TWO_WIDTH = {
+    "delta_conv": 512,
+    "delta_query": 256,
+    "delta_key": 256,
+    "delta_value": 256,
+    "delta_beta": 8,
+    "delta_decay": 8,
+    "delta_kernel_output": 256,
+}
+
+
+@pytest.mark.parametrize("component", TIER_TWO)
+def test_the_kernel_tap_is_a_delta_slot_not_a_module_side(
+    qwen35moe_bundle, component: str
+):
+    """No module boundary: the tensor is an argument or return of the
+    kernel-boundary globals, and the site carries the *mixer* — what identifies
+    which forward's calls to tap."""
+    site = resolve_site(
+        qwen35moe_bundle, SiteSpec(component=component, layer=DELTANET_LAYER)
+    )
+    assert site.kind == "delta"
+    assert site.interface_slot is not None
+    assert site.module is qwen35moe_bundle.mixer_at(DELTANET_LAYER)
+
+
+@pytest.mark.parametrize("component", TIER_TWO)
+def test_the_kernel_read_has_the_measured_width(qwen35moe_bundle, component: str):
+    value = executor_for(
+        _read_doc(component), qwen35moe_bundle, base_texts=[TEXT]
+    ).read_value("r")
+    assert tuple(value.shape) == (1, 5, TIER_TWO_WIDTH[component])
+
+
+def test_reading_the_kernel_boundary_does_not_change_the_model(qwen35moe_bundle):
+    """The wrappers swap module globals while installed; observe-only must be
+    bit-identical (📐 measured 0.0 — the argument for tapping the running path
+    rather than forcing a naive one)."""
+    encoded = qwen35moe_bundle.tokenizer(TEXT, return_tensors="pt")
+    with torch.no_grad():
+        clean = qwen35moe_bundle.model(**encoded).logits.clone()
+    for component in TIER_TWO:
+        executor_for(
+            _read_doc(component), qwen35moe_bundle, base_texts=[TEXT]
+        ).read_value("r")
+        with torch.no_grad():
+            after = qwen35moe_bundle.model(**encoded).logits.clone()
+        assert torch.equal(after, clean), component
+
+
+# --------------------------------------------------------------------------- #
+# tier-2 identity pins (§4 of the round-3/4 plan)
+# --------------------------------------------------------------------------- #
+
+
+def _multi_read(
+    bundle: ModelBundle, components: dict[str, str]
+) -> dict[str, torch.Tensor]:
+    """Read several layer-0 components in one document: name -> value."""
+    doc = {
+        "version": "1",
+        "model": {"key": "test", "revision": "main"},
+        "data": base_data_section(with_counterfactual=False),
+        "sites": {
+            f"{name}_site": {"component": component, "layer": DELTANET_LAYER}
+            for name, component in components.items()
+        },
+        "reads": {
+            name: {
+                "site": f"{name}_site",
+                "pos": "all",
+                "model": "original",
+                "input": "base",
+            }
+            for name in components
+        },
+        "save": [
+            {
+                "value": name,
+                "model": "original",
+                "input": "base",
+                "file_path": f"{name}.safetensors",
+            }
+            for name in components
+        ],
+    }
+    executor = executor_for(doc, bundle, base_texts=[TEXT])
+    return {name: executor.read_value(name) for name in components}
+
+
+def test_the_conv_split_and_tile_reproduces_q_k_v_exactly(qwen35moe_bundle):
+    """§4 tier 2: ``split(delta_conv, [128, 128, 256])``, reshaped to heads and
+    GVA-tiled, IS ``(delta_query, delta_key, delta_value)`` — at exactly 0.0,
+    which is also why the untiled q/k are not components (F7: one box, one
+    address)."""
+    reads = _multi_read(
+        qwen35moe_bundle,
+        {
+            "conv": "delta_conv",
+            "q": "delta_query",
+            "k": "delta_key",
+            "v": "delta_value",
+        },
+    )
+    conv = reads["conv"]  # contract (1, 5, 512): position-major again
+    q_ref, k_ref, v_ref = torch.split(conv, [128, 128, 256], dim=-1)
+
+    def tile(t: torch.Tensor) -> torch.Tensor:
+        return t.reshape(1, 5, 4, 32).repeat_interleave(2, dim=2).reshape(1, 5, 256)
+
+    torch.testing.assert_close(tile(q_ref), reads["q"], atol=0.0, rtol=0.0)
+    torch.testing.assert_close(tile(k_ref), reads["k"], atol=0.0, rtol=0.0)
+    torch.testing.assert_close(v_ref, reads["v"], atol=0.0, rtol=0.0)
+
+
+def test_the_gates_are_the_projections_transformed_exactly(qwen35moe_bundle):
+    """§4 tier 2: ``delta_beta == sigmoid(in_proj_b(norm))`` and
+    ``delta_decay == -exp(A_log) · softplus(in_proj_a(norm) + dt_bias)`` — the
+    F7/D5 justification for keeping the raw projections out of the vocabulary:
+    both are closed-form steps from tensors that are components."""
+    reads = _multi_read(
+        qwen35moe_bundle,
+        {"n": "attention_input_norm", "beta": "delta_beta", "decay": "delta_decay"},
+    )
+    mixer = qwen35moe_bundle.mixer_at(DELTANET_LAYER)
+    with torch.no_grad():
+        beta_ref = mixer.in_proj_b(reads["n"]).sigmoid()
+        decay_ref = -mixer.A_log.float().exp() * torch.nn.functional.softplus(
+            mixer.in_proj_a(reads["n"]).float() + mixer.dt_bias
+        )
+    torch.testing.assert_close(reads["beta"], beta_ref, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(reads["decay"], decay_ref, atol=0.0, rtol=0.0)
+
+
+def test_norm_gating_the_kernel_output_reproduces_the_premix_exactly(
+    qwen35moe_bundle,
+):
+    """§4 tier 2: ``norm(delta_kernel_output, delta_gate) == delta_premix`` —
+    the kernel's return really is the pre-norm, pre-gate ``core_attn_out``."""
+    reads = _multi_read(
+        qwen35moe_bundle,
+        {
+            "out": "delta_kernel_output",
+            "gate": "delta_gate",
+            "premix": "delta_premix",
+        },
+    )
+    mixer = qwen35moe_bundle.mixer_at(DELTANET_LAYER)
+    with torch.no_grad():
+        reference = mixer.norm(
+            reads["out"].reshape(-1, 32), reads["gate"].reshape(-1, 32)
+        ).reshape(1, 5, 256)
+    torch.testing.assert_close(reads["premix"], reference, atol=0.0, rtol=0.0)
+
+
+# --------------------------------------------------------------------------- #
+# writes at the kernel boundary
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "component", ("delta_conv", "delta_value", "delta_beta", "delta_kernel_output")
+)
+def test_a_kernel_boundary_swap_moves_the_logits_and_self_swap_does_not(
+    qwen35moe_bundle, component: str
+):
+    """📐 the probe's causal spikes (kernel-arg v ×2: 0.2190, conv ×2: 0.2191),
+    with the identity payload at exactly 0.0 — both through the same wrapper."""
+    assert _moved(qwen35moe_bundle, _write_doc(component, {"swap": "v_cf"})) > 1e-4
+    doc = _write_doc(component, {"swap": "v_cf"})
+    doc["reads"]["v_cf"]["input"] = "base"
+    assert _moved(qwen35moe_bundle, doc) == 0.0, component
+
+
+def test_a_read_of_a_written_kernel_slot_sees_the_written_value(qwen35moe_bundle):
+    """Same-forward read-after-write agreement across a third tap mechanism —
+    the executor registers edits before reads at the kernel boundary too."""
+    doc = _write_doc("delta_value", {"swap": "v_cf"})
+    doc["reads"]["obs"] = {
+        "site": "tap",
+        "pos": "all",
+        "model": "patched",
+        "input": "base",
+    }
+    doc["save"].append(
+        {
+            "value": "obs",
+            "model": "patched",
+            "input": "base",
+            "file_path": "o.safetensors",
+        }
+    )
+    executor = executor_for(
+        doc, qwen35moe_bundle, base_texts=[TEXT], counterfactual_texts=[CF_TEXT]
+    )
+    assert (
+        float((executor.read_value("obs") - executor.read_value("v_cf")).abs().max())
+        == 0.0
+    )
+
+
+def test_a_tap_at_one_layer_leaves_another_linear_layers_mixer_alone(
+    qwen35moe_bundle,
+):
+    """The globals are swapped process-wide while installed and the fixture has
+    three linear layers, so this is the scoping test that can actually fail
+    (the round-2 two-layer lesson): tap layer 0, layer 1's mixer output must be
+    bit-identical."""
+    bundle = qwen35moe_bundle
+    encoded = bundle.tokenizer(TEXT, return_tensors="pt")
+    other = bundle.mixer_at(1)
+    seen: dict[str, torch.Tensor] = {}
+    handle = other.register_forward_hook(
+        lambda _m, _i, out: seen.__setitem__(
+            "t", (out[0] if isinstance(out, tuple) else out).detach().clone()
+        )
+    )
+    try:
+        with torch.no_grad():
+            bundle.model(**encoded)
+        clean = seen["t"].clone()
+        executor_for(_read_doc("delta_value"), bundle, base_texts=[TEXT]).read_value(
+            "r"
+        )
+        with torch.no_grad():
+            bundle.model(**encoded)
+        after = seen["t"]
+    finally:
+        handle.remove()
+    assert torch.equal(after, clean)
+
+
+# --------------------------------------------------------------------------- #
+# containment: the guards the design has to carry
+# --------------------------------------------------------------------------- #
+
+
+def test_all_four_globals_are_restored_on_exit(qwen35moe_bundle):
+    import importlib
+
+    from causalab.neural.engines.pytorch_hooks.delta_interface import (
+        DeltaTap,
+        delta_kernel_taps,
+    )
+
+    mixer = qwen35moe_bundle.mixer_at(DELTANET_LAYER)
+    modeling = importlib.import_module(type(mixer).__module__)
+    names = (
+        "causal_conv1d_fn",
+        "causal_conv1d_update",
+        "torch_chunk_gated_delta_rule",
+        "torch_recurrent_gated_delta_rule",
+    )
+    before = {name: getattr(modeling, name) for name in names}
+    with delta_kernel_taps({mixer: (DeltaTap(slot="value", read=lambda _t: None),)}):
+        assert (
+            getattr(modeling, "torch_chunk_gated_delta_rule")
+            is not before["torch_chunk_gated_delta_rule"]
+        )
+    for name in names:
+        assert getattr(modeling, name) is before[name], name
+
+
+def test_a_kernelized_mixer_is_refused_by_name():
+    """``kernelize()`` replaces the class forward wholesale, and no
+    module-global patch applies inside a hub kernel — detected as a forward
+    defined outside the mixer's own modeling module."""
+    from causalab.neural.engines.pytorch_hooks.delta_interface import (
+        DeltaTap,
+        delta_kernel_taps,
+    )
+
+    class Kernelized(torch.nn.Module):
+        pass
+
+    # a forward from another module, the shape kernelize() leaves behind
+    Kernelized.forward = torch.nn.functional.relu
+    with pytest.raises(ProtocolError, match="kernelize"):
+        with delta_kernel_taps(
+            {Kernelized(): (DeltaTap(slot="value", read=lambda _t: None),)}
+        ):
+            pass  # pragma: no cover — entry refuses
+
+
+def test_a_family_without_the_kernel_globals_is_refused_by_name():
+    """A modeling file that does not export the four globals cannot be tapped —
+    refused rather than served another family's kernels."""
+    from causalab.neural.engines.pytorch_hooks.delta_interface import (
+        DeltaTap,
+        delta_kernel_taps,
+    )
+
+    class NoKernels(torch.nn.Module):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:  # pragma: no cover
+            return x
+
+    with pytest.raises(ProtocolError, match="causal_conv1d_fn"):
+        with delta_kernel_taps(
+            {NoKernels(): (DeltaTap(slot="value", read=lambda _t: None),)}
+        ):
+            pass  # pragma: no cover — entry refuses
+
+
+# --------------------------------------------------------------------------- #
+# head bounds and stream refusals extend to the kernel boundary
+# --------------------------------------------------------------------------- #
+
+
+def test_the_gates_feature_axis_is_the_head_axis(qwen35moe_bundle):
+    assert component_shape(qwen35moe_bundle.info, "delta_beta").head_space == 8
+    value = executor_for(
+        _read_doc("delta_beta", head=5), qwen35moe_bundle, base_texts=[TEXT]
+    ).read_value("r")
+    assert tuple(value.shape) == (1, 5, 1)
+
+
+def test_head_on_the_conv_is_refused_like_the_qkv(qwen35moe_bundle):
+    with pytest.raises(ProtocolError, match="no head axis"):
+        resolve_site(
+            qwen35moe_bundle,
+            SiteSpec(component="delta_conv", layer=DELTANET_LAYER, head=0),
+        )
+
+
+@pytest.mark.parametrize("component", TIER_TWO)
+def test_kernel_components_refuse_on_a_full_attention_layer(
+    qwen35moe_bundle, component: str
+):
+    with pytest.raises(ProtocolError, match="delta-rule state"):
+        resolve_site(
+            qwen35moe_bundle,
+            SiteSpec(component=component, layer=FULL_ATTENTION_LAYER),
+        )
+
+
+# --------------------------------------------------------------------------- #
+# generated frames: decode natively runs the recurrent kernel and conv-update
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "component",
+    ("delta_conv", "delta_key", "delta_value", "delta_beta", "delta_kernel_output"),
+)
+def test_a_continuation_read_accumulates_at_the_kernel_boundary(
+    qwen35moe_bundle, component: str
+):
+    """📐 Every cached decode step runs the recurrent kernel and conv-update
+    natively (chunk 3 / recurrent 6 / conv_fn 3 / conv_update 6 over a 3-token
+    generate), and both are wrapped by the same taps — so per-step shapes are
+    constant and the steps stack. Note ``delta_key`` accumulates here, unlike
+    ``attention_key``: the kernel receives one step's k, not the prefix."""
+    doc = _read_doc(component)
+    doc["positions"] = {"window": {"generated": {"max_new_tokens": 3}, "all": True}}
+    doc["reads"]["r"]["pos"] = "window"
+    value = executor_for(doc, qwen35moe_bundle, base_texts=[TEXT]).read_value("r")
+    assert tuple(value.shape) == (1, 3, TIER_TWO_WIDTH[component])

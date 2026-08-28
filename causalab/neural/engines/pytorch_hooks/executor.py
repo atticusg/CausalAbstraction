@@ -34,6 +34,10 @@ from causalab.neural.engines.pytorch_hooks.attention_interface import (
     InterfaceTap,
     attention_interface_taps,
 )
+from causalab.neural.engines.pytorch_hooks.delta_interface import (
+    DeltaTap,
+    delta_kernel_taps,
+)
 from causalab.neural.shared.encoding import Continuation, EncodedBatch, resolve_steps
 from causalab.neural.shared.executor_base import (
     ExecutorBase,
@@ -127,9 +131,19 @@ class PointExecutor(ExecutorBase):
             # registry entry and nesting two of them would let the inner
             # wrapper's edits replace the outer's.
             interface: dict[int, list[InterfaceTap]] = {}
+            delta: dict[Any, list[DeltaTap]] = {}
             batch_size = batch.input_ids.shape[0]
 
             for site, fn in write_hooks:
+                if site.kind == "delta":
+                    assert site.interface_slot is not None
+                    delta.setdefault(site.module, []).append(
+                        DeltaTap(
+                            slot=site.interface_slot,
+                            edit=_interface_edit(site, fn, batch_size),
+                        )
+                    )
+                    continue
                 if site.interface_slot is not None:
                     interface.setdefault(id(site.module), []).append(
                         InterfaceTap(
@@ -153,6 +167,15 @@ class PointExecutor(ExecutorBase):
                 if key in capture:
                     continue
                 capture[key] = torch.empty(0)  # placeholder; filled by the tap
+                if site.kind == "delta":
+                    assert site.interface_slot is not None
+                    delta.setdefault(site.module, []).append(
+                        DeltaTap(
+                            slot=site.interface_slot,
+                            read=_interface_capture(capture, key, site, batch_size),
+                        )
+                    )
+                    continue
                 if site.kind == "interface":
                     assert site.interface_slot is not None
                     interface.setdefault(id(site.module), []).append(
@@ -176,6 +199,11 @@ class PointExecutor(ExecutorBase):
             hooks.enter_context(
                 attention_interface_taps(
                     {mid: tuple(entries) for mid, entries in interface.items()}
+                )
+            )
+            hooks.enter_context(
+                delta_kernel_taps(
+                    {mixer: tuple(entries) for mixer, entries in delta.items()}
                 )
             )
             with torch.enable_grad() if self.grad_enabled else torch.no_grad():
@@ -246,6 +274,7 @@ class PointExecutor(ExecutorBase):
         cache = prefill.past_key_values
         with contextlib.ExitStack() as hooks:
             interface: dict[int, list[InterfaceTap]] = {}
+            delta: dict[Any, list[DeltaTap]] = {}
             batch_size = batch.input_ids.shape[0]
             for name, site in gen_capture_sites.items():
                 _refuse_unstackable(name, site)
@@ -253,6 +282,15 @@ class PointExecutor(ExecutorBase):
                 if key in steps:
                     continue
                 steps[key] = []
+                if site.kind == "delta":
+                    assert site.interface_slot is not None
+                    delta.setdefault(site.module, []).append(
+                        DeltaTap(
+                            slot=site.interface_slot,
+                            read=_interface_accumulate(steps[key], site, batch_size),
+                        )
+                    )
+                    continue
                 if site.kind == "interface":
                     assert site.interface_slot is not None
                     interface.setdefault(id(site.module), []).append(
@@ -275,6 +313,11 @@ class PointExecutor(ExecutorBase):
             hooks.enter_context(
                 attention_interface_taps(
                     {mid: tuple(entries) for mid, entries in interface.items()}
+                )
+            )
+            hooks.enter_context(
+                delta_kernel_taps(
+                    {mixer: tuple(entries) for mixer, entries in delta.items()}
                 )
             )
             for _ in range(depth):
