@@ -58,6 +58,8 @@ def _run(name: str, roots: tuple[Path, Path], out: Path, *overrides: str) -> int
         str(out),
         "--set",
         f"model.key={TINY_LLAMA}",
+        "--set",
+        "model.dtype=fp32",  # tiny-random on CPU; 04/05/08 declare bf16
     ]
     for item in overrides:
         argv += ["--set", item]
@@ -268,7 +270,9 @@ def test_11_probe_generate_runs_and_scores(roots, tmp_path):
     assert len(probe) == 4  # one row per example
     for value in probe["value"]:
         top = json.loads(value)
-        assert len(top["tokens"]) == 1 and len(top["probs"]) == 1
+        # `by: prob` on an lm_head read emits all four columns (§2.10)
+        assert set(top) == {"indices", "tokens", "values", "probs"}
+        assert all(len(column) == 1 for column in top.values())
 
 
 def test_12_probe_variable_scores_every_step_and_reports_what_was_said(roots, tmp_path):

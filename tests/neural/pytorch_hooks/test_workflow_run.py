@@ -30,14 +30,14 @@ pytestmark = pytest.mark.smoke
 
 REPO = Path(__file__).resolve().parents[3]
 METHODS = str(
-    REPO / "causalab/configs/methods"
+    REPO / "causalab/configs/protocols"
 )  # absolute: the workflow file lives in tmp
 
 OUTPUT_DIR = "tiny_weekdays"
 
 
 def _tiny_workflow() -> dict:
-    tiny = {"model.key": TINY_LLAMA}
+    tiny = {"model.key": TINY_LLAMA, "model.dtype": "fp32"}
     return {
         "version": "1",
         "description": "the weekdays pipeline shape at tiny scale",

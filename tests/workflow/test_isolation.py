@@ -40,7 +40,7 @@ def _document(script_dir: Path, *, deps: list[str]) -> dict:
             "count": {
                 "type": "script",
                 "script": {"path": "scripts/count.py"},
-                "inputs": {"table": {"path": "causalab/configs/methods/das.json"}},
+                "inputs": {"table": {"path": "causalab/configs/protocols/das.json"}},
                 "outputs": {"out": {"file": "count.json", "columns": {"n": "int64"}}},
                 "runtime": {"isolate": True, "deps": deps},
             }
@@ -84,7 +84,7 @@ def test_a_tensor_input_cannot_cross_the_boundary(wf_dir, tmp_path, env):
     write_tensor(wf_dir / "acts.safetensors", torch.zeros(2, 2), slot="acts")
     document = _document(wf_dir, deps=["packaging"])
     document["steps"]["count"]["inputs"]["tensor"] = {
-        "path": "causalab/configs/methods/das.json",
+        "path": "causalab/configs/protocols/das.json",
     }
     # a selector forces the runner to materialize a tensor, which is the case
     # isolation cannot support

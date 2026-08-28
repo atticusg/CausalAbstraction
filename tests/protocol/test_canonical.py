@@ -19,7 +19,9 @@ def test_pos_sugar_and_alias_canonicalize(env):
     raw = base_doc()
     canonical = canonicalize(raw, env)
     assert canonical["reads"]["v_cf"]["pos"] == {"index": -1}
-    assert canonical["model"] == {"key": "gpt2", "revision": "main"}
+    # dtype materializes like every other default: an authored document may
+    # be silent about precision, a canonical one never is (§2.1)
+    assert canonical["model"] == {"key": "gpt2", "revision": "main", "dtype": "fp32"}
 
 
 def test_all_pos_sugar_canonicalizes(env):
@@ -64,7 +66,9 @@ def test_train_defaults_materialized(env):
     assert train["optimizer"]["betas"] == [0.9, 0.999]
     assert train["optimizer"]["eps"] == 1e-8
     assert train["optimizer"]["schedule"] == "constant"
-    assert train["precision"] == {"feature": "fp32", "loss": "fp32", "model": "bf16"}
+    assert train["precision"] == {"feature": "fp32", "loss": "fp32"}
+    # the model's own precision has one home, and it is the model section
+    assert loaded.canonical_document["model"]["dtype"] == "bf16"
     assert "digest" in train["eval"]  # eval.split is a dataset ref too
 
 

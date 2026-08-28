@@ -58,9 +58,15 @@ __all__ = [
     "MetricKind",
     "MetricDomain",
     "MetricSpec",
+    "DOCUMENT_TYPES",
+    "MODEL_DTYPE_DEFAULT",
     "ModelRef",
+    "NON_COLUMN_METRIC_FIELDS",
     "OPTIONAL_METRIC_FIELDS",
     "ParamSpec",
+    "QUANT_METHODS",
+    "QUANT_SCHEMES",
+    "QuantizationSpec",
     "PositionSpec",
     "ReadSpec",
     "RESERVED_NAMES",
@@ -69,10 +75,13 @@ __all__ = [
     "SiteSpec",
     "TOKEN_COLUMN_METRIC_KINDS",
     "TOKEN_FORMS",
+    "TOP_K_RANKINGS",
+    "VOCAB_TOP_K_RANKING",
     "WHOLE_WINDOW_METRIC_KINDS",
     "TokenForm",
     "concrete_int",
     "concrete_str",
+    "metric_reads_vocabulary",
     "Sweep",
     "TrainSpec",
     "parse_document",
@@ -180,21 +189,29 @@ METRIC_KINDS: tuple[MetricKind, ...] = get_args(MetricKind)
 
 #: Value fields per metric kind beyond ``of`` (§2.10). ``kl.target`` names a
 #: read; every other value field names a dataset column (checked at run time
-#: by ``validate --data``, §2.2) — except ``top_k.k``, an integer.
+#: by ``validate --data``, §2.2) — except the fields in
+#: :data:`NON_COLUMN_METRIC_FIELDS`.
 METRIC_FIELDS: dict[str, tuple[str, ...]] = {
     "logit_diff": ("a", "b"),
     "token_logit": ("token",),
     "cross_entropy": ("target",),
     "kl": ("target",),
     "class_probs": ("groups",),
-    "top_k": ("k",),
+    "top_k": ("k", "by"),
     "match": ("expected",),
     "decode": (),
 }
 
+#: Mandatory value fields that are *not* dataset column names: ``top_k.k`` is
+#: an integer and ``top_k.by`` is a closed enum. Everything else in
+#: :data:`METRIC_FIELDS` (bar ``kl.target``, a read) is checked against the
+#: resolved datasets' columns.
+NON_COLUMN_METRIC_FIELDS: frozenset[str] = frozenset({"k", "by"})
+
 #: What each metric kind consumes from its read (§2.10). ``distribution``
-#: kinds reduce the vocabulary projection at the addressed positions;
-#: ``ids`` kinds consume only the tokens the decode actually produced. The
+#: kinds reduce the read's dense value at the addressed positions (the
+#: vocabulary projection for an ``lm_head`` read, which is every kind but
+#: ``top_k``); ``ids`` kinds consume only the tokens the decode produced. The
 #: split is what lets the planner (§8) tell a text probe — which obliges no
 #: vocabulary projection at all — from a scoring one, so it is a property of
 #: the kind, never of the document.
@@ -228,7 +245,8 @@ TOKEN_FORMS: tuple[TokenForm, ...] = get_args(TokenForm)
 
 #: Metric kinds whose value fields carry string answers that must resolve to
 #: token ids — the kinds ``token_form`` applies to. ``kl`` compares two reads'
-#: distributions and ``top_k`` decodes ids it found, so neither resolves a
+#: distributions and ``top_k`` reports indices it found (decoding them only
+#: when the read happens to tap ``lm_head``), so neither resolves an authored
 #: string and neither accepts the key.
 TOKEN_COLUMN_METRIC_KINDS: frozenset[str] = frozenset(
     {"logit_diff", "token_logit", "cross_entropy", "class_probs", "match"}
@@ -253,6 +271,26 @@ METRIC_FIELD_DEFAULTS: dict[tuple[str, str], Any] = {
 #: position (a multi-token answer's first piece).
 MATCH_MODES: tuple[str, ...] = ("exact", "first_token")
 
+#: How ``top_k`` ranks the entries of its read's last axis (§2.10). Mandatory,
+#: because the right answer depends on what the axis *is* and only the author
+#: knows: a vocabulary projection has no meaningful negative entries, while a
+#: residual stream and a signed feature code do — ranking a 100k-latent SAE
+#: code by signed value and by magnitude give different top-k sets, and
+#: silently picking one for the author is how a plot ends up meaning something
+#: other than its caption.
+#:
+#: * ``value`` — the k largest signed entries. Any read.
+#: * ``abs_value`` — the k largest by ``|x|``; the reported value stays signed.
+#:   Any read.
+#: * ``prob`` — softmax the last axis, then take the k largest probabilities.
+#:   Legal **only** on an ``lm_head`` read: a softmax across neurons or SAE
+#:   latents normalizes over an axis that is not an event space, and the
+#:   resulting "probabilities" would mean nothing (validation refuses it).
+TOP_K_RANKINGS: tuple[str, ...] = ("value", "abs_value", "prob")
+
+#: The ``top_k.by`` ranking that normalizes, and so is vocabulary-only.
+VOCAB_TOP_K_RANKING: str = "prob"
+
 #: The bare-string spelling of an all-positions spec (§2.3 sugar). Reserved as
 #: a name so a ``positions`` entry can never shadow the sugar.
 ALL_POSITIONS: str = "all"
@@ -268,6 +306,7 @@ RESERVED_NAMES: frozenset[str] = frozenset(
 #: at position 3 as an alias of ``model`` and canonicalizes away.
 SECTION_ORDER: tuple[str, ...] = (
     "version",
+    "type",
     "description",
     "model",
     "data",
@@ -300,6 +339,38 @@ NAMED_SECTIONS: tuple[str, ...] = (
 )
 
 PRECISION_DTYPES: tuple[str, ...] = ("fp32", "bf16", "fp16")
+
+#: The compute dtype a document runs in when it authors none (§2.1). This is
+#: the value canonicalization materializes, so every canonical form names a
+#: dtype and every digest covers it; ``fp32`` keeps an unauthored document
+#: running exactly as it did when dtype was an execution flag.
+MODEL_DTYPE_DEFAULT: str = "fp32"
+
+#: Weight-quantization schemes (§2.1). Each names one *load-time* scheme the
+#: reference backend can realize through bitsandbytes: ``int8`` is LLM.int8()
+#: mixed-precision decomposition, ``nf4`` / ``fp4`` are the two 4-bit
+#: quantization types. There is no bare ``int4``: bitsandbytes' 4-bit is one
+#: of these two datatypes, and "int4" would not say which — the whole point
+#: of putting the field in the record is that it names one realization.
+#: Weights quantized *ahead of time* (GPTQ, AWQ) are a property of the
+#: checkpoint, so they are named by ``model.key``/``revision``, not here.
+QUANT_SCHEMES: tuple[str, ...] = ("int8", "nf4", "fp4")
+
+#: Quantizers (§2.1). One entry in v1 — the library the reference backend
+#: calls; naming it keeps a document honest when a second one appears.
+QUANT_METHODS: tuple[str, ...] = ("bitsandbytes",)
+
+#: Quantization fields that only make sense for some schemes (rule 17).
+_QUANT_4BIT_FIELDS: tuple[str, ...] = ("double_quant",)
+_QUANT_INT8_FIELDS: tuple[str, ...] = ("int8_threshold",)
+
+#: The document types (§1.1). A protocol document may be written flat or split
+#: into ``application`` + ``method`` halves — both are ``protocol``; ``method``
+#: is a reusable method *file*, the one shape structure cannot name. ``type``
+#: is authoring metadata — it declares what a file is so a typo cannot
+#: masquerade as a different kind — and canonicalization drops it: the
+#: canonical form is the experiment, not the file.
+DOCUMENT_TYPES: tuple[str, ...] = ("protocol", "method", "workflow")
 
 #: Optimizer field vocabulary and per-name defaults, materialized into the
 #: canonical form (§7: "every default (constant LR, optimizer betas, dtypes)").
@@ -387,12 +458,36 @@ def concrete_str(value: Leaf, what: str) -> str:
 
 
 @dataclasses.dataclass(frozen=True)
+class QuantizationSpec:
+    """§2.1 — how the weights are quantized at load.
+
+    Quantization changes what the network computes, so it is document
+    vocabulary, not an execution flag: two runs of the same protocol at
+    ``nf4`` and at ``bf16`` are two experiments, and their digests say so.
+    Every field that moves a number is here — the scheme, the quantizer, the
+    dtype the dequantized matmuls run in, and the scheme's own knobs.
+    """
+
+    scheme: Leaf
+    method: Leaf = "bitsandbytes"
+    compute_dtype: Leaf | None = None
+    double_quant: Leaf | None = None
+    int8_threshold: Leaf | None = None
+
+
+@dataclasses.dataclass(frozen=True)
 class ModelRef:
-    """§2.1 — the network as a name. ``revision`` defaults to ``"main"``
-    (materialized by canonicalization when unauthored)."""
+    """§2.1 — the network as a name, plus how it is realized numerically.
+
+    ``revision`` defaults to ``"main"`` and ``dtype`` to
+    :data:`MODEL_DTYPE_DEFAULT` (both materialized by canonicalization when
+    unauthored, §7).
+    """
 
     key: Leaf
     revision: Leaf = "main"
+    dtype: Leaf | None = None
+    quantization: QuantizationSpec | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -531,7 +626,10 @@ class MetricSpec:
     dataset columns. ``fields`` holds the kind's extra value fields.
     ``token_form`` says how this metric's string answers become token ids
     (``TOKEN_FORMS``); the ``auto`` default is the historical resolver, so an
-    unauthored metric behaves exactly as before."""
+    unauthored metric behaves exactly as before. ``top_k`` additionally
+    carries a mandatory ``by`` (``TOP_K_RANKINGS``) in ``fields``, because a
+    top-k over a signed feature code and one over a vocabulary projection are
+    different questions."""
 
     kind: Leaf
     of: Leaf
@@ -608,6 +706,31 @@ class Document:
             for name in table:
                 seen.setdefault(name, section)
         return seen
+
+
+def metric_reads_vocabulary(doc: Document, metric: MetricSpec) -> bool:
+    """Whether the last axis of ``metric``'s read is the vocabulary.
+
+    True exactly when the ``of`` read taps ``lm_head`` **and hands the
+    projection on unchanged**. The site alone is not enough: a ``featurizer``
+    re-expresses the value in its own latents and ``dims`` re-indexes a slice
+    of it, so under either one the read's entries are no longer token ids — a
+    softmax over them normalizes an axis that is not the vocabulary, and
+    decoding index *j* as token *j* names the wrong token.
+
+    Three places need the same answer and must not disagree: capability
+    derivation (does this document oblige ``full_logits``?, §8), validation
+    (may this ``top_k`` normalize, may a token-space kind bind here?, §2.10)
+    and the reduction itself (are these indices token ids worth decoding?). A
+    dangling ``of`` is validation's error to report, so it answers False here
+    rather than raising."""
+    read = doc.reads.get(str(metric.of))
+    if read is None:
+        return False
+    if read.featurizer is not None or read.dims is not None:
+        return False
+    site = doc.sites.get(str(read.site))
+    return site is not None and site.component == "lm_head"
 
 
 # --------------------------------------------------------------------------- #
@@ -825,6 +948,12 @@ def _scalar_number(value: Any, path: str) -> float | int:
     return value
 
 
+def _scalar_bool(value: Any, path: str) -> bool:
+    if not isinstance(value, bool):
+        raise ParseError("P2", f"expected true or false (got {value!r})", path=path)
+    return value
+
+
 def _int_list(value: Any, path: str) -> tuple[int, ...]:
     if not isinstance(value, list) or not all(
         isinstance(v, int) and not isinstance(v, bool) for v in value
@@ -850,7 +979,7 @@ def _any_leaf(value: Any, path: str) -> Any:
 
 def _parse_model(raw: Any, path: str) -> ModelRef:
     obj = _require_mapping(raw, path)
-    _check_keys(obj, ("key", "revision"), path)
+    _check_keys(obj, ("key", "revision", "dtype", "quantization"), path)
     if "key" not in obj:
         raise ParseError("P2", "model needs a 'key'", path=path)
     key = _wrapped(obj["key"], _scalar_str, f"{path}.key")
@@ -859,7 +988,61 @@ def _parse_model(raw: Any, path: str) -> ModelRef:
         if "revision" in obj
         else "main"
     )
-    return ModelRef(key=key, revision=revision)
+    dtype = (
+        _wrapped(
+            obj["dtype"],
+            lambda v, p: _enum(v, PRECISION_DTYPES, p),
+            f"{path}.dtype",
+        )
+        if "dtype" in obj
+        else None
+    )
+    quantization = (
+        _parse_quantization(obj["quantization"], f"{path}.quantization")
+        if "quantization" in obj
+        else None
+    )
+    return ModelRef(key=key, revision=revision, dtype=dtype, quantization=quantization)
+
+
+def _parse_quantization(raw: Any, path: str) -> QuantizationSpec:
+    obj = _require_mapping(raw, path)
+    _check_keys(
+        obj,
+        ("scheme", "method", "compute_dtype", *_QUANT_4BIT_FIELDS, *_QUANT_INT8_FIELDS),
+        path,
+    )
+    if "scheme" not in obj:
+        raise ParseError(
+            "P2",
+            f"quantization needs a 'scheme' — one of {list(QUANT_SCHEMES)}",
+            path=path,
+        )
+    return QuantizationSpec(
+        scheme=_wrapped(
+            obj["scheme"], lambda v, p: _enum(v, QUANT_SCHEMES, p), f"{path}.scheme"
+        ),
+        method=_wrapped(
+            obj["method"], lambda v, p: _enum(v, QUANT_METHODS, p), f"{path}.method"
+        )
+        if "method" in obj
+        else "bitsandbytes",
+        compute_dtype=_wrapped(
+            obj["compute_dtype"],
+            lambda v, p: _enum(v, PRECISION_DTYPES, p),
+            f"{path}.compute_dtype",
+        )
+        if "compute_dtype" in obj
+        else None,
+        double_quant=_wrapped(obj["double_quant"], _scalar_bool, f"{path}.double_quant")
+        if "double_quant" in obj
+        else None,
+        int8_threshold=_wrapped(
+            obj["int8_threshold"], _scalar_number, f"{path}.int8_threshold"
+        )
+        if "int8_threshold" in obj
+        else None,
+    )
 
 
 def _parse_data_role(raw: Any, path: str) -> DataRole:
@@ -1439,9 +1622,30 @@ def _parse_metric(raw: Any, path: str) -> MetricSpec:
     fields: dict[str, Any] = {}
     for field in extra:
         if field not in obj:
-            raise ParseError("P2", f"metric kind {kind!r} needs {field!r}", path=path)
+            hint = (
+                " — the ranking rule is mandatory because the read decides it: "
+                f"{VOCAB_TOP_K_RANKING!r} (softmax the vocabulary, lm_head reads "
+                "only), 'value' (largest signed entries) or 'abs_value' (largest "
+                "magnitude). A pre-'by' document that scored logits meant "
+                f"{VOCAB_TOP_K_RANKING!r}"
+                if (kind, field) == ("top_k", "by")
+                else ""
+            )
+            raise ParseError(
+                "P2", f"metric kind {kind!r} needs {field!r}{hint}", path=path
+            )
         if field == "k":
             fields[field] = _wrapped(obj[field], _scalar_int, f"{path}.{field}")
+        elif field == "by":
+            # ranking rule, not a dataset column — and not sweepable: a sweep
+            # over `by` would fork a campaign on how a plot is read rather
+            # than on a research variable (same reasoning as `token_form`).
+            fields[field] = _wrapped(
+                obj[field],
+                lambda v, p: _enum(v, TOP_K_RANKINGS, p),
+                f"{path}.{field}",
+                allow_sweep=False,
+            )
         elif field == "groups":
             fields[field] = _wrapped(obj[field], _any_leaf, f"{path}.{field}")
         else:
@@ -1583,7 +1787,7 @@ def _parse_train(raw: Any, path: str) -> TrainSpec:
     precision = None
     if "precision" in obj:
         precision_raw = _require_mapping(obj["precision"], f"{path}.precision")
-        _check_keys(precision_raw, ("feature", "loss", "model"), f"{path}.precision")
+        _check_keys(precision_raw, ("feature", "loss"), f"{path}.precision")
         precision = {
             key: _wrapped(
                 value,
@@ -1756,6 +1960,17 @@ def parse_document(raw: Mapping[str, Any]) -> Document:
     """
     normalized = _normalize_top_level(raw)
     _check_section_order(list(normalized))
+    declared_type = normalized.get("type")
+    if declared_type is not None:
+        declared_type = _enum(declared_type, DOCUMENT_TYPES, "type")
+        if declared_type != "protocol":
+            raise ParseError(
+                "P2",
+                f"this file declares type {declared_type!r}, but it is being read "
+                "as a protocol document — a method binds to an application and "
+                "the composition is what runs (§1.1)",
+                path="type",
+            )
     for section in REQUIRED_SECTIONS:
         if section not in normalized:
             raise ParseError("P2", f"missing required section {section!r}")

@@ -1,6 +1,6 @@
 """The load-error checklist (spec §5) over one concrete document.
 
-:func:`validate_document` runs rules 3–13 and 16 on a parsed, *concrete*
+:func:`validate_document` runs rules 3–13, 16 and 17 on a parsed, *concrete*
 :class:`~causalab.protocol.schema.Document` — a point protocol, or an
 un-swept document. The other rules live where their information lives:
 
@@ -47,11 +47,21 @@ from causalab.protocol.schema import (
     PositionSpec,
     RESERVED_NAMES,
     SaveEntry,
+    VOCAB_TOP_K_RANKING,
+    metric_reads_vocabulary,
 )
 
 __all__ = ["validate_document"]
 
 _COUNTERFACTUAL_INDEXED = re.compile(r"^counterfactual\[(\d+)\]$")
+
+#: Metric kinds that do **not** name vocabulary entries, and so bind to a read
+#: at any component. ``kl`` compares two reads' distributions against each
+#: other; ``top_k`` reports indices along whichever axis the read has — a
+#: token id on ``lm_head``, a neuron on ``mlp_activation``, a latent on an SAE
+#: featurizer output. Every other kind resolves an authored string to a token
+#: id, which only an ``lm_head`` read can be indexed by.
+_ANY_READ_METRIC_KINDS = frozenset({"kl", "top_k"})
 
 #: Trainable featurizer kinds — the ones with gradient-trainable slots
 #: (§5.12). ``pca`` / ``standardize`` are computed from data, ``identity``
@@ -60,8 +70,8 @@ _TRAINABLE_KINDS = frozenset({"subspace", "gate", "sae"})
 
 
 def validate_document(doc: Document, *, backend_is_local: bool | None = None) -> None:
-    """Run checklist rules 3–13 and 16 (13 only when ``backend_is_local`` is
-    given). Raises :class:`ValidationError` on the first violation."""
+    """Run checklist rules 3–13, 16 and 17 (13 only when ``backend_is_local``
+    is given). Raises :class:`ValidationError` on the first violation."""
     names = _check_namespace(doc)  # rule 3
     _check_references(doc, names)  # rule 4 (+ the rule-5 read bindings)
     _check_writes_inert(doc, names)  # rule 6
@@ -71,6 +81,7 @@ def validate_document(doc: Document, *, backend_is_local: bool | None = None) ->
     _check_sinks(doc)  # rule 11
     _check_trainability(doc)  # rule 12
     _check_generation(doc)  # rule 16
+    _check_model_realization(doc)  # rule 17
     if backend_is_local is not None:
         _check_pytorch_fn(doc, backend_is_local)  # rule 13
 
@@ -217,16 +228,49 @@ def _check_references(doc: Document, names: dict[str, str]) -> None:
             )
         of_read = doc.reads[str(metric.of)]
         of_site = doc.sites[str(of_read.site)]
-        if metric.kind != "kl" and of_site.component != "lm_head":
+        # What the read actually hands the metric. The site alone cannot
+        # answer this: a featurizer re-expresses an lm_head projection in its
+        # own latents and `dims` re-indexes a slice of it, so either one takes
+        # the value out of token-id space even though the site says lm_head.
+        is_vocabulary = metric_reads_vocabulary(doc, metric)
+        if of_site.component != "lm_head":
+            not_vocab_because = f"taps {of_site.component!r}"
+        elif of_read.featurizer is not None:
+            not_vocab_because = (
+                "taps 'lm_head' through a featurizer, whose latents are not token ids"
+            )
+        else:
+            not_vocab_because = (
+                "taps 'lm_head' through a 'dims' slice, whose re-indexed "
+                "entries are not token ids"
+            )
+        if metric.kind not in _ANY_READ_METRIC_KINDS and not is_vocabulary:
             # not in the §5 checklist: the token-space kinds name vocab
-            # entries, which only lm_head produces (an interpretation this
-            # loader commits to; surfaced in the PR notes)
+            # entries, which only a plain lm_head read produces (an
+            # interpretation this loader commits to; surfaced in the PR notes)
             raise ValidationError(
                 4,
                 f"metric {qname!r} names vocabulary tokens, but its read "
-                f"{metric.of!r} taps {of_site.component!r} — token-space metric "
-                "kinds bind to lm_head reads",
+                f"{metric.of!r} {not_vocab_because} — token-space metric "
+                "kinds bind to plain lm_head reads (no featurizer, no dims)",
                 path=f"{p}.of",
+            )
+        if (
+            metric.kind == "top_k"
+            and metric.fields.get("by") == VOCAB_TOP_K_RANKING
+            and not is_vocabulary
+        ):
+            # `top_k` itself is axis-agnostic, but its normalizing ranking is
+            # not: a softmax across neurons or SAE latents normalizes over an
+            # axis that is not an event space, so the numbers it emits would
+            # be probabilities of nothing.
+            raise ValidationError(
+                4,
+                f"metric {qname!r} ranks by {VOCAB_TOP_K_RANKING!r}, which "
+                f"softmaxes a vocabulary, but its read {metric.of!r} "
+                f"{not_vocab_because} — rank by 'value' or 'abs_value' on a "
+                "read that is not a vocabulary projection (§2.10)",
+                path=f"{p}.by",
             )
         if METRIC_DOMAINS.get(str(metric.kind)) == "ids":
             # an ids-domain kind reduces the tokens a decode produced, so its
@@ -977,4 +1021,50 @@ def _check_pytorch_fn(doc: Document, backend_is_local: bool) -> None:
                 f"write {ename!r} uses pytorch_fn, which only a local backend may "
                 "run (§2.8) — the selected backend is not local",
                 path=f"writes.{ename}.do",
+            )
+
+
+# --------------------------------------------------------------------------- #
+# rule 17 — the model's numeric realization is coherent
+# --------------------------------------------------------------------------- #
+
+
+def _check_model_realization(doc: Document) -> None:
+    """§2.1 — a ``quantization`` block only carries the knobs its own scheme
+    has. The enums are the parser's job (rule 1); what needs the whole block
+    in one place is the cross-field question: ``double_quant`` and
+    ``compute_dtype`` are 4-bit vocabulary and ``int8_threshold`` is
+    LLM.int8() vocabulary, so any of them under the wrong scheme is a document
+    that reads as if it configured something it did not.
+
+    📐 ``compute_dtype`` earns its place here by measurement: the backend
+    reads it as ``bnb_4bit_compute_dtype``, and the int8 branch of
+    ``_bitsandbytes_config`` builds ``BitsAndBytesConfig(load_in_8bit=True,
+    llm_int8_threshold=…)`` — nowhere for it to go. Left admissible, two int8
+    documents differing only in ``compute_dtype`` hashed differently while
+    producing identical numbers."""
+    quantization = doc.model.quantization
+    if quantization is None:
+        return
+    scheme = quantization.scheme
+    if not isinstance(scheme, str):
+        return  # a swept scheme is checked per point
+    wrong = {
+        "double_quant": scheme not in ("nf4", "fp4"),
+        "compute_dtype": scheme not in ("nf4", "fp4"),
+        "int8_threshold": scheme != "int8",
+    }
+    for field, is_wrong in wrong.items():
+        if getattr(quantization, field) is not None and is_wrong:
+            raise ValidationError(
+                17,
+                f"model.quantization.{field} does not apply to scheme "
+                f"{scheme!r} — it is "
+                + (
+                    "a 4-bit knob (nf4 / fp4)"
+                    if field in ("double_quant", "compute_dtype")
+                    else "an int8 knob"
+                )
+                + " (§2.1)",
+                path=f"model.quantization.{field}",
             )
