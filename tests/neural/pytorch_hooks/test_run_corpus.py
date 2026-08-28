@@ -283,13 +283,13 @@ def test_12_probe_variable_scores_every_step_and_reports_what_was_said(roots, tm
     code = _run("12_probe_variable_im.json", roots, tmp_path, "sites.target.layer=1")
     assert code == 0
 
-    per_step = pd.read_parquet(tmp_path / "per_step.parquet")
+    per_step = table_frame(tmp_path / "per_step.json")
     examples = per_step["example"].nunique()
     assert len(per_step) == examples * 8  # one row per (example, decode step)
     assert sorted(per_step["step"].unique()) == list(range(8))
     assert per_step["matched"].all()
 
-    said = pd.read_parquet(tmp_path / "said.parquet")
+    said = table_frame(tmp_path / "said.json")
     assert len(said) == examples  # decode reduces the window to one string
     assert said["step"].isna().all()  # no single step owns a joined string
     assert said["value"].notna().all()

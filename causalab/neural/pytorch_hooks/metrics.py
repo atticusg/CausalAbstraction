@@ -22,6 +22,14 @@ form instead of letting the tokenizer's vocabulary decide. Under ``auto``,
 tokens and disagree — exactly the condition under which it can be silently
 wrong.
 
+📐 One limit of that warning, introduced by the transformers 5 bump: a
+sentencepiece family that has dropped the legacy dummy prefix encodes ``" X"``
+and ``"X"`` to the *same* id, so the two forms can never disagree there. On such
+a tokenizer ``token_form`` has only one row to name, the warning is structurally
+dark, and neither is a defect — but it does mean the punctuation trap above is a
+BPE-family hazard, and a document cannot be checked against it by pinning
+``token_form`` on a sentencepiece model.
+
 ``match`` is the one kind that can be told otherwise, and only explicitly
 (§2.10): its ``expected`` column may hold a **list** of equivalent surface
 forms (synonyms, casings), and ``"mode": "first_token"`` credits a form's
@@ -159,12 +167,23 @@ def column_first_token_id(
 
     A single-token value resolves exactly as :func:`column_token_id` does, so
     ``first_token`` is a strict generalization of ``exact``. A multi-token
-    value resolves to the first piece that carries text: sentencepiece
-    families encode a leading space as its own ``▁`` piece, and crediting
-    *that* would score every space-prefixed answer alike — the first piece an
-    argmax can distinguish is the one after it (``" Thursday"`` →
-    ``▁ Th urs day`` → ``Th``, which is also what the model emits in
-    context).
+    value resolves to the first piece that carries text: a sentencepiece family
+    can encode a leading space as its own ``▁`` piece, and crediting *that*
+    would score every space-prefixed answer alike — the first piece an argmax
+    can distinguish is the one after it, which is also what the model emits in
+    context.
+
+    📐 Which values trigger that is tokenizer- *and* version-dependent, so the
+    skip is written as a property of the piece (does it decode to text?) rather
+    than of a known value. Under transformers 4.x the tiny Llama tokenizer
+    emitted the lone ``▁`` for any space-prefixed word (``" Thursday"`` →
+    ``▁ Th urs day``); 5.16.1 dropped that legacy dummy prefix, so
+    ``" Thursday"`` is now ``Th urs day`` — and the skip is what makes this
+    function return the same id, ``Th``, across the bump. It is not dead code:
+    5.16.1 still emits the lone ``▁`` whenever the first character has no
+    merged ``▁X`` piece — digits, non-Latin scripts, emoji, ligatures
+    (``" 3.14"`` → ``▁ 3 . 1 4``) — and byte-level BPE families still split a
+    whitespace run off the front (gpt2 ``"  ?"`` → ``' '`` + ``' ?'``).
 
     What this cannot know is whether the table's answer space is
     first-token-distinct — two answers sharing a first piece would both score.
