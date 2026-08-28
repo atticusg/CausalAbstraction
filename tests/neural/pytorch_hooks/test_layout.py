@@ -25,6 +25,12 @@ pytestmark = pytest.mark.unit
 
 BATCH, SEQ, FEATURE = 2, 3, 5
 
+#: The layouts that actually convert something. ``"native"`` is excluded on
+#: purpose: it is the *absence* of a description (``attention_probs``, whose
+#: feature axis is a position axis), so there is no contract shape to assert it
+#: reaches. It gets its own test below instead of a vacuous parametrized one.
+CONVERTING_LAYOUTS = tuple(layout for layout in LAYOUTS if layout != "native")
+
 
 def _feature(layout: str) -> int:
     """The feature width the contract has for this layout.
@@ -53,14 +59,14 @@ def _native(layout: str) -> torch.Tensor:
     raise AssertionError(layout)
 
 
-@pytest.mark.parametrize("layout", LAYOUTS)
+@pytest.mark.parametrize("layout", CONVERTING_LAYOUTS)
 def test_to_contract_yields_the_executor_shape(layout: str) -> None:
     """Whatever the tap's native shape, the executor sees (batch, pos, feature)."""
     got = to_contract(_native(layout), layout, batch_size=BATCH)
     assert got.shape == (BATCH, SEQ, _feature(layout))
 
 
-@pytest.mark.parametrize("layout", LAYOUTS)
+@pytest.mark.parametrize("layout", CONVERTING_LAYOUTS)
 def test_round_trip_restores_the_native_shape(layout: str) -> None:
     """The write path must hand the model back the shape it expected."""
     native = _native(layout)
@@ -70,7 +76,7 @@ def test_round_trip_restores_the_native_shape(layout: str) -> None:
     assert torch.equal(back, native)
 
 
-@pytest.mark.parametrize("layout", LAYOUTS)
+@pytest.mark.parametrize("layout", CONVERTING_LAYOUTS)
 def test_an_in_place_edit_through_the_contract_reaches_the_native_tensor(
     layout: str,
 ) -> None:
@@ -87,6 +93,21 @@ def test_an_in_place_edit_through_the_contract_reaches_the_native_tensor(
     contract[cell] = -99.0
     back = from_contract(contract, layout, batch_size=BATCH)
     assert to_contract(back, layout, batch_size=BATCH)[cell] == -99.0
+
+
+def test_native_is_the_identity_and_claims_nothing() -> None:
+    """``"native"`` passes any shape through untouched, in both directions.
+
+    It exists so a tap whose shape this module cannot honestly describe cannot
+    be mistaken for the contract by defaulting to ``"bsd"`` — where the
+    conversions are also the identity, but the *claim* would be false. There is
+    no conversion case here for the typed feature-shape descriptor to unpick.
+    """
+    probs = torch.zeros(2, 4, 3, 3)  # (batch, heads, query, key)
+    assert to_contract(probs, "native", batch_size=2) is probs
+    assert from_contract(probs, "native", batch_size=2) is probs
+    # and, unlike every other layout, it does NOT promise a 3-D contract shape
+    assert "native" not in CONVERTING_LAYOUTS
 
 
 def test_bsd_is_the_identity() -> None:

@@ -5,9 +5,11 @@ Capabilities: ``grad`` (the train loop, train.py), ``paired_forward``
 (cross-input operand flow via the lazy group executor), ``full_logits``
 (lm_head is an ordinary tap), ``generate`` (the greedy decode in
 executor.py, which interventions reach only through the prefill), and
-``pytorch_fn_local`` (this backend is local). ``writable_attention_probs``
-is deliberately absent — no attention-internal tap yet — so capability
-routing refuses those documents before anything runs.
+``pytorch_fn_local`` (this backend is local), and
+``writable_attention_probs`` — a write to the attention pattern reaches the
+output through the eager attention function rather than a forward hook,
+because the hook fires after the pattern has already been consumed (see
+``attention_probs.py``).
 """
 
 from __future__ import annotations
@@ -66,6 +68,7 @@ class PytorchHooksBackend(Backend):
             "generate",
             "pytorch_fn_local",
             "quantized_weights",
+            "writable_attention_probs",
         }
     )
     is_local = True
