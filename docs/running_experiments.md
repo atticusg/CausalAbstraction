@@ -144,31 +144,55 @@ document must not say it.
 
 ## 3. Check it before you spend a GPU
 
-Both verbs are pure — no weights, no network, no accelerator:
+Both verbs are pure — no weights, no network, no accelerator — so they cost a
+second and catch every load error.
+
+⚠️ They are also **registry-only**: they derive featurizer widths from the
+static metadata in `causalab/protocol/registry.py` rather than fetching a
+config, so a digest never depends on connectivity. The A3B is not one of the
+six built-in entries, so a document naming it refuses:
 
 ```bash
 uv run causalab validate patch.json --data-root data --data
-# OK: patch.json — 1 point, digest f6189b5a8d96b948…
-
-uv run causalab explain patch.json --data-root data
-# digest    f6189b5a8d96b948c2141119fa434646c6241a3f1daa85542d8157069c9523f6
-# points    1
-# requires  ['paired_forward']
-# forwards  2 per point
-#   original on counterfactual: v_cf
-#   patched on base: logits
-# save
-#   iia (model=patched, input=base) -> iia.json
-#   logit_diff (model=patched, input=base) -> logit_diff.json
+# refused: [V4] at model.key model 'Qwen/Qwen3.6-35B-A3B' is not in the protocol
+#          model registry — register its static config
+#          (causalab.protocol.registry.register_model, or model_info_from_hf_config
+#          on a loaded HF config)
 ```
+
+Two ways forward, and which you want depends on what you are checking:
+
+- **checking the document** — point the pure verbs at a registered key. The
+  structure, the reference graph and the save manifest are model-independent;
+  only widths and layer bounds are not:
+
+  ```bash
+  uv run causalab validate patch.json --data-root data --data \
+      --set model.key=Qwen/Qwen3-4B-Instruct-2507
+  # OK: patch.json — 1 point, digest cc2e2500fac13029…
+
+  uv run causalab explain patch.json --data-root data \
+      --set model.key=Qwen/Qwen3-4B-Instruct-2507
+  # digest    cc2e2500fac130298f0513e6f836da2d16056660147fdbd03f1e37e65427e4cf
+  # model     Qwen/Qwen3-4B-Instruct-2507@main fp32
+  # points    1
+  # requires  ['component:block_output', 'component:block_output:write',
+  #            'component:lm_head', 'paired_forward']
+  # forwards  2 per point
+  #   original on counterfactual: v_cf
+  #   patched on base: logits
+  # save
+  #   iia (model=patched, input=base) -> iia.json
+  #   logit_diff (model=patched, input=base) -> logit_diff.json
+  ```
+
+- **running it** — just run. `run` touches the model anyway, so it resolves an
+  unregistered key from its HF config and registers it before canonicalizing.
 
 `explain`'s `points` and `forwards` are what to size a job against: a sweep of
 40 layers is 40 points, and the run cost is roughly points × forwards.
-
-`validate` and `explain` are **registry-only** on purpose — they derive
-featurizer widths from static metadata in `causalab/protocol/registry.py`, so
-digests never depend on connectivity. `run`, which touches the model anyway,
-resolves an unregistered key from its HF config first.
+`requires` is the capability set routing matches engines on — every component
+the document names appears there, `:write` suffixed where a write targets it.
 
 ## 4. Run it
 
@@ -188,6 +212,12 @@ The numbers are meaningless — random weights answer nothing. What this proves 
 that the document loads, plans, executes and saves. `--set` is for exploration
 only: anything that matters about an experiment belongs in the file, where it
 enters the digest.
+
+That run also prints a warning worth reading rather than skipping: MCQA's
+answers are single letters, and ` Z` and `Z` are *different* tokens that both
+exist. `token_form="auto"` takes the space-prefixed form and says so; set the
+metric's `token_form` to `bare` or `space_prefixed` once you know which one the
+model actually emits.
 
 Then the real thing, on an accelerator:
 
@@ -429,21 +459,37 @@ select the best layer from a scan, fit a PCA, plot a curve — and the runner
 resolves the dependency graph. See
 [`workflow_protocol.md`](workflow_protocol.md).
 
-```bash
-uv run causalab explain locate_then_das.json --data-root data
-# schedule  3 levels
-#   level 0: locate
-#   level 1: best, scan_curve
-#   level 2: fit
+The shipped one, `causalab/configs/workflows/weekdays_8b.json`: scan 64 points
+for the layer that carries the variable, select it, fit a DAS rotation over a
+subspace sweep, select the best `k`, apply it — with two figures along the way.
 
-uv run causalab run locate_then_das.json --data-root data \
-    --out runs/locate_then_das --device cuda --dtype bf16
-# completed locate: iia.json, logit_diff.json
-# completed best: values.json
-# completed fit: ce.json, iia.json, rot.safetensors
-# completed scan_curve: iia_by_layer.json, iia_by_layer.png
-# manifest runs/locate_then_das/workflow.json
+```bash
+uv run causalab explain causalab/configs/workflows/weekdays_8b.json \
+    --data-root tests/protocol/fixtures/data
+# digest    2cf5fd55f79d4c97fa70993248db3734255ad137ea32903cd287d06b584d71da
+# schedule  5 levels
+#   level 0: locate
+#   level 1: best, scan_heatmap
+#   level 2: fit
+#   level 3: best_fit, iia_by_k
+#   level 4: apply
+#   locate: intervention_protocol ../protocols/weekdays_locate_scan.json — 64 point(s), campaign digest 83e27be6b471895c…
+#   best: script causalab.workflow.scripts.select -> values.json
+#   fit: intervention_protocol ../protocols/weekdays_das_sweep.json — 9 point(s), authored digest 890ba99b6ee1c860…
+#   best_fit: script causalab.workflow.scripts.select -> values.json
+#   apply: intervention_protocol ../protocols/weekdays_das_apply.json — 1 point(s), authored digest 894548f40b29ac94…
+#   scan_heatmap: script causalab.io.plots.workflow_figures -> scan_iia.json, scan_iia.png
+#   iia_by_k: script causalab.io.plots.workflow_figures -> iia_by_k.json, iia_by_k.png
+
+uv run causalab run causalab/configs/workflows/weekdays_8b.json \
+    --data-root tests/protocol/fixtures/data \
+    --out runs/weekdays --device cuda --dtype bf16
 ```
+
+`explain` on a workflow is the same pre-flight as on a document, one level up:
+the schedule is derived from the steps' references, so a level is what can run
+in parallel, and each protocol step reports its own point count — 64 + 9 + 1
+forward groups is what to size the job against.
 
 `--resume` reuses a step whose inputs *and* script content hash are unchanged;
 editing a script busts its reuse, which is why the hash is in the digest.
