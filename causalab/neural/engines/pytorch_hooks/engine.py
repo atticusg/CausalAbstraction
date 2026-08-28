@@ -10,54 +10,26 @@ executor.py, which interventions reach only through the prefill), and
 output through the eager attention function rather than a forward hook,
 because the hook fires after the pattern has already been consumed (see
 ``attention_probs.py``).
+
+The engine-neutral half of ``execute`` — metric lowering and the output
+tables — lives in :mod:`causalab.neural.shared.execution`; this module keeps
+what is genuinely this engine's: its loader, its executor, its train loop.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import functools
-import json
-from pathlib import Path
 from typing import Any, Mapping
-
 
 from causalab.neural.engines.pytorch_hooks.executor import PointExecutor
 from causalab.neural.engines.pytorch_hooks.loading import load_model
-from causalab.neural.shared.services import load_tensors, resolve_roles, site_identity
-from causalab.neural.shared.metrics import (
-    compute_metric,
-    compute_windowed_metric,
-)
-from causalab.neural.shared.outputs import (
-    MetricTable,
-    TensorFile,
-    code_commit,
-    write_outputs,
-)
-from causalab.protocol.engine import Engine, ExecutionRequest, RunResult
+from causalab.neural.shared.execution import execute_request
+from causalab.neural.shared.services import load_tensors, resolve_roles
 from causalab.protocol.canonical import canonical_model
-from causalab.protocol.errors import ProtocolError
-from causalab.protocol.schema import (
-    COMPONENTS,
-    METRIC_DOMAINS,
-    WHOLE_WINDOW_METRIC_KINDS,
-    Document,
-    metric_reads_vocabulary,
-    parse_document,
-)
+from causalab.protocol.engine import Engine, ExecutionRequest, RunResult
+from causalab.protocol.schema import COMPONENTS, Document
 
 __all__ = ["PytorchHooksEngine"]
-
-
-@dataclasses.dataclass(frozen=True)
-class _Windowed:
-    """One continuation metric's per-example results, plus what the rows need
-    to stay legible: the steps each value scored, and whether the example
-    addressed anything at all."""
-
-    values: list[list[Any]]
-    steps: list[list[int]] | None
-    matched: list[bool]
 
 
 class PytorchHooksEngine(Engine):
@@ -93,40 +65,16 @@ class PytorchHooksEngine(Engine):
     # ------------------------------------------------------------------ #
 
     def execute(self, request: ExecutionRequest) -> RunResult:
-        tensor_files: dict[str, TensorFile] = {}
-        metric_files: dict[str, MetricTable] = {}
-        summaries: list[Mapping[str, Any]] = []
-        for point_raw, coords, digest in zip(
-            request.points, request.coords, request.digests
-        ):
-            doc = parse_document(point_raw)
-            summary = self._execute_point(
-                doc,
-                request,
-                coords=coords,
-                point_digest=digest,
-                tensor_files=tensor_files,
-                metric_files=metric_files,
-            )
-            summaries.append(summary)
-        first_doc = parse_document(request.points[0])
-        first_realization = canonical_model(first_doc.raw["model"])
-        identity_base = {
-            "produced_by": request.document_digest,
-            "model_key": str(first_doc.model.key),
-            "model_revision": str(first_doc.model.revision),
-            "model_dtype": str(first_realization["dtype"]),
-            "model_quantization": first_realization.get("quantization"),
-            "engine": self.name,
-            "commit": code_commit(Path(__file__).resolve().parents[3]),
-        }
-        files = write_outputs(
-            request.output_dir,
-            tensor_files,
-            metric_files,
-            identity_base=identity_base,
+        from causalab.neural.engines.pytorch_hooks.train import run_training
+
+        return execute_request(
+            request,
+            engine_name=self.name,
+            executor_factory=lambda doc, req, coords: self._executor(
+                doc, req, coords=coords
+            ),
+            train_runner=run_training,
         )
-        return RunResult(files=files, summaries=tuple(summaries))
 
     # ------------------------------------------------------------------ #
 
@@ -156,172 +104,6 @@ class PytorchHooksEngine(Engine):
             grad_enabled=grad_enabled,
             coords=coords,
         )
-
-    def _execute_point(
-        self,
-        doc: Document,
-        request: ExecutionRequest,
-        *,
-        coords: Mapping[str, Any],
-        point_digest: str,
-        tensor_files: dict[str, TensorFile],
-        metric_files: dict[str, MetricTable],
-    ) -> Mapping[str, Any]:
-        executor = self._executor(doc, request, coords=coords)
-        trained_stages: dict[str, Any] = {}
-        if doc.train is not None:
-            from causalab.neural.engines.pytorch_hooks.train import run_training
-
-            trained_stages = run_training(doc, executor, request)
-        executor.run_all()
-        metric_values: dict[str, list[Any]] = {}
-        windowed: dict[str, _Windowed] = {}
-        for qname, metric in doc.metrics.items():
-            of_name = str(metric.of)
-            target_name = str(metric.fields["target"]) if metric.kind == "kl" else None
-            if executor.is_generated(of_name):
-                # a continuation read addresses as many positions as the row
-                # generated, so its metric reduces per step and reports which
-                # steps it saw (§2.3, §2.10)
-                windowed[qname] = _Windowed(
-                    values=compute_windowed_metric(
-                        metric,
-                        executor.windowed_value(of_name),
-                        executor.rows_for_metrics(),
-                        executor.bundle.tokenizer,
-                        target_windows=(
-                            executor.windowed_value(target_name)
-                            if target_name is not None
-                            else None
-                        ),
-                        generated_ids=(
-                            executor.generated_ids(of_name)
-                            if METRIC_DOMAINS.get(str(metric.kind)) == "ids"
-                            else None
-                        ),
-                        vocab_axis=metric_reads_vocabulary(doc, metric),
-                    ),
-                    steps=(
-                        None
-                        if str(metric.kind) in WHOLE_WINDOW_METRIC_KINDS
-                        else executor.addressed_steps(of_name)
-                    ),
-                    matched=[
-                        bool(steps) for steps in executor.addressed_steps(of_name)
-                    ],
-                )
-                continue
-            metric_values[qname] = compute_metric(
-                metric,
-                executor.dense_value(of_name),
-                executor.rows_for_metrics(),
-                executor.bundle.tokenizer,
-                target_value=(
-                    executor.dense_value(target_name)
-                    if target_name is not None
-                    else None
-                ),
-                vocab_axis=metric_reads_vocabulary(doc, metric),
-            )
-        for entry in doc.save:
-            if entry.value in doc.metrics:
-                table = metric_files.setdefault(entry.file_path, MetricTable())
-                if entry.value in windowed:
-                    window = windowed[entry.value]
-                    table.add_windowed(
-                        entry.value,
-                        window.values,
-                        coords,
-                        point_digest,
-                        steps=window.steps,
-                        matched=window.matched,
-                    )
-                else:
-                    table.add(
-                        entry.value, metric_values[entry.value], coords, point_digest
-                    )
-            elif entry.value in doc.reads:
-                # the site goes on the entry too: a harvested activation is
-                # bound to where it was read, and a consumer (a script step
-                # fitting a basis on it, then a document loading that basis)
-                # has no other way to prove the two agree
-                read_site = site_identity(doc, str(doc.reads[entry.value].site))
-                tensor_files.setdefault(entry.file_path, TensorFile()).add(
-                    entry.value,
-                    executor.read_value(entry.value),
-                    coords,
-                    reduce=entry.reduce,
-                    identity={
-                        "produced_by": point_digest,
-                        **(
-                            {"site": json.dumps(read_site, sort_keys=True)}
-                            if read_site
-                            else {}
-                        ),
-                    },
-                )
-            else:  # a trained featurizer bundle
-                stage = trained_stages.get(entry.value)
-                if stage is None:
-                    raise ProtocolError(
-                        "P2", f"featurizer {entry.value!r} was not trained this run"
-                    )
-                bundle_file = tensor_files.setdefault(entry.file_path, TensorFile())
-                identity = _featurizer_identity(
-                    doc, entry.value, entry.site, point_digest
-                )
-                for slot, param in stage.slot_params().items():
-                    # per entry, not per file: a swept fit writes one file from
-                    # many points, and only the entry table can say which point
-                    # produced which rotation (§8)
-                    bundle_file.add(
-                        slot,
-                        param.detach(),
-                        coords,
-                        label_entry=entry.value,
-                        identity=identity,
-                    )
-                bundle_file.record_common(identity)
-        return {
-            "point": point_digest,
-            "coords": dict(coords),
-            "metrics": {
-                name: _summary_stat(values) for name, values in metric_values.items()
-            },
-        }
-
-
-def _summary_stat(values: list[Any]) -> Any:
-    numeric = [v for v in values if isinstance(v, (int, float))]
-    if numeric:
-        return sum(numeric) / len(numeric)
-    return f"{len(values)} rows"
-
-
-def _featurizer_identity(
-    doc: Document, name: str, site_name: str | None, point_digest: str
-) -> dict[str, str]:
-    from causalab.protocol.resolve import build_artifact_identity
-
-    spec = doc.featurizers[name]
-    site = site_identity(doc, site_name)
-    base = doc.data["base"]
-    trained_on = base.dataset if not isinstance(base, tuple) else base[0].dataset
-    realization = canonical_model(doc.raw["model"])
-    return build_artifact_identity(
-        produced_by=point_digest,
-        model_key=str(doc.model.key),
-        model_revision=str(doc.model.revision),
-        model_dtype=str(realization["dtype"]),
-        model_quantization=realization.get("quantization"),
-        site=site,
-        k=spec.k if isinstance(spec.k, int) else None,
-        parametrization=spec.parametrization
-        if isinstance(spec.parametrization, str)
-        else None,
-        dtype=spec.dtype if isinstance(spec.dtype, str) else "fp32",
-        trained_on=str(trained_on),
-    )
 
 
 def _quantization_key(

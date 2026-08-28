@@ -14,7 +14,7 @@ from causalab.neural.shared.encoding import (
 )
 from causalab.neural.engines.pytorch_hooks.executor import PointExecutor
 from causalab.neural.engines.pytorch_hooks.loading import ModelBundle, load_model
-from causalab.neural.engines.pytorch_hooks.sites import ResolvedSite, resolve_site
+from causalab.neural.shared.sites import ResolvedSite, resolve_site
 
 __all__ = [
     "EncodedBatch",
