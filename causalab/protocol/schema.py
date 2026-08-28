@@ -633,14 +633,23 @@ class Document:
 def metric_reads_vocabulary(doc: Document, metric: MetricSpec) -> bool:
     """Whether the last axis of ``metric``'s read is the vocabulary.
 
-    True exactly when the ``of`` read taps ``lm_head``. Three places need the
-    same answer and must not disagree: capability derivation (does this
-    document oblige ``full_logits``?, §8), validation (may this ``top_k``
-    normalize?, §2.10) and the reduction itself (are these indices token ids
-    worth decoding?). A dangling ``of`` is validation's error to report, so it
-    answers False here rather than raising."""
+    True exactly when the ``of`` read taps ``lm_head`` **and hands the
+    projection on unchanged**. The site alone is not enough: a ``featurizer``
+    re-expresses the value in its own latents and ``dims`` re-indexes a slice
+    of it, so under either one the read's entries are no longer token ids — a
+    softmax over them normalizes an axis that is not the vocabulary, and
+    decoding index *j* as token *j* names the wrong token.
+
+    Three places need the same answer and must not disagree: capability
+    derivation (does this document oblige ``full_logits``?, §8), validation
+    (may this ``top_k`` normalize, may a token-space kind bind here?, §2.10)
+    and the reduction itself (are these indices token ids worth decoding?). A
+    dangling ``of`` is validation's error to report, so it answers False here
+    rather than raising."""
     read = doc.reads.get(str(metric.of))
     if read is None:
+        return False
+    if read.featurizer is not None or read.dims is not None:
         return False
     site = doc.sites.get(str(read.site))
     return site is not None and site.component == "lm_head"

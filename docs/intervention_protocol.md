@@ -328,10 +328,13 @@ Closed vocabulary; `of` names a read; other value fields name dataset columns.
 | `decode` | `of` | the addressed tokens as text |
 
 **Reads a kind may bind to.** Every kind but `kl` and `top_k` names *vocabulary
-entries* — an authored string resolved to a token id — so it binds to an
-`lm_head` read and a metric over any other component is a load error. `kl`
-compares two reads against each other; `top_k` reports indices along whichever
-axis its read has. Those two bind to a read at any component.
+entries* — an authored string resolved to a token id — so it binds to a *plain*
+`lm_head` read and a metric over anything else is a load error. Plain means no
+`featurizer` and no `dims`: a featurizer re-expresses the projection in its own
+latents and `dims` re-indexes a slice, so under either one the read's entries
+are no longer token ids even though the site says `lm_head`. `kl` compares two
+reads against each other; `top_k` reports indices along whichever axis its read
+has. Those two bind to a read at any component.
 
 **Domains.** Every kind consumes one of two things from its read, and which
 one is a property of the kind:
@@ -369,7 +372,8 @@ sibling kind: one kind, disambiguated by mandatory fields.
   - `abs_value` — the k largest by `|x|`; the reported value stays signed. Any
     read.
   - `prob` — softmax the last axis, then take the k largest probabilities.
-    **`lm_head` reads only** — a softmax across neurons or SAE latents
+    **Plain `lm_head` reads only** — a softmax across neurons, SAE latents, a
+    featurizer's re-expression of the projection or a `dims` re-index of it
     normalizes over an axis that is not an event space, so its "probabilities"
     would be probabilities of nothing; validation refuses it elsewhere. A
     pre-`by` document that ranked logits meant `prob`.
@@ -380,7 +384,7 @@ sibling kind: one kind, disambiguated by mandatory fields.
 | column | meaning | emitted when |
 |---|---|---|
 | `indices` | index along the read's last axis (a token id on `lm_head`, a neuron on `mlp_activation`, a latent on a featurizer output) | always |
-| `tokens` | that index decoded as a token string | the read taps `lm_head` |
+| `tokens` | that index decoded as a token string | the read is a plain `lm_head` tap |
 | `values` | the **raw** read value at that index | always |
 | `probs` | the softmax probability over the vocabulary | `by: "prob"` |
 
@@ -658,7 +662,7 @@ refusal messages generate from the missing capability.
 |---|---|
 | `grad` | `train` present |
 | `paired_forward` | a write's operand read has a different `input` than the write's model |
-| `full_logits` | a full `lm_head` read is saved, or a `class_probs` / `top_k` metric reads one. A `top_k` over any other read obliges no vocabulary projection (sec. 2.10) and must not be charged for one |
+| `full_logits` | a full `lm_head` read is saved, or a `class_probs` / `top_k` metric reads `lm_head` other than through a `dims` slice — a *featurized* `lm_head` read still obliges the whole projection (the featurizer consumes it) even though its value is latents. A `top_k` over any other component obliges no vocabulary projection (sec. 2.10) and must not be charged for one |
 | `generate` | any position carries `generated` (sec. 2.3) |
 | `writable_attention_probs` | a write targets `attention_probs` |
 | `pytorch_fn_local` | any `pytorch_fn` |

@@ -80,6 +80,49 @@ def test_top_k_over_a_non_vocabulary_read_needs_no_full_logits():
     assert "full_logits" not in requires(parse_document(raw))
 
 
+def test_top_k_over_a_featurized_lm_head_read_still_needs_full_logits():
+    """Capability and axis are two different questions, split on purpose.
+
+    A featurizer takes the read's *value* out of token-id space (so `prob`
+    and token decoding are refused / withheld), but serving the read still
+    means materializing the whole projection — the featurizer consumes it.
+    So the document still routes onto a full-vocab backend."""
+    raw = base_doc()
+    raw["featurizers"] = {
+        "f": {"kind": "subspace", "k": 4, "parametrization": "cayley"}
+    }
+    raw["reads"]["flogits"] = {
+        "site": "lm_head",
+        "pos": -1,
+        "model": "patched",
+        "input": "base",
+        "featurizer": "f",
+    }
+    raw["metrics"]["tk"] = {"kind": "top_k", "of": "flogits", "k": 2, "by": "value"}
+    raw["save"].append(
+        {"value": "tk", "model": "patched", "input": "base", "file_path": "tk.json"}
+    )
+    assert "full_logits" in requires(parse_document(in_order(raw)))
+
+
+def test_top_k_over_a_dims_sliced_lm_head_read_needs_no_full_logits():
+    """A `dims` slice needs only its named vocabulary rows — the same rule the
+    saved-read derivation already applies."""
+    raw = base_doc()
+    raw["reads"]["flogits"] = {
+        "site": "lm_head",
+        "pos": -1,
+        "model": "patched",
+        "input": "base",
+        "dims": [0, 1, 2],
+    }
+    raw["metrics"]["tk"] = {"kind": "top_k", "of": "flogits", "k": 2, "by": "value"}
+    raw["save"].append(
+        {"value": "tk", "model": "patched", "input": "base", "file_path": "tk.json"}
+    )
+    assert "full_logits" not in requires(parse_document(in_order(raw)))
+
+
 def test_requires_writable_attention_probs():
     raw = base_doc()
     raw["sites"]["probs"] = {"component": "attention_probs", "layer": 3}

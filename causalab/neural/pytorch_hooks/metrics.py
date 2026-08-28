@@ -259,7 +259,7 @@ def _top_k(
     column      meaning                                emitted when
     ==========  =====================================  ====================
     ``indices`` index along the read's last axis       always
-    ``tokens``  that index decoded as a token string   the read taps lm_head
+    ``tokens``  that index decoded as a token string   the read is a plain lm_head tap
     ``values``  the **raw** read value at that index   always
     ``probs``   softmax probability over the vocab     ``by == "prob"``
     ==========  =====================================  ====================
@@ -311,7 +311,8 @@ def compute_metric(
     """One metric over one read's value, per example.
 
     ``vocab_axis`` says whether the read's last axis is the vocabulary — i.e.
-    whether it taps ``lm_head`` (:func:`~causalab.protocol.schema
+    whether it is a plain ``lm_head`` tap, with no featurizer or ``dims``
+    taking the value out of token-id space (:func:`~causalab.protocol.schema
     .metric_reads_vocabulary`). Every kind but ``top_k`` is bound to a
     vocabulary projection by validation, so the default is ``True``; ``top_k``
     is the one kind that also runs over a residual stream, an MLP activation
