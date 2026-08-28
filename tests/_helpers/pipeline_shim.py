@@ -6,7 +6,7 @@ surface of it: a tokenizer, plain-text batch loading with optional offset
 mappings, and the chat-prefix facts (always zero here — the kept tests are
 plain-text). This shim satisfies
 :class:`causalab.neural.token_positions.EncodingPipeline` over the
-reference backend's loader, with the same conventions (left padding,
+reference engine's loader, with the same conventions (left padding,
 ``pad = eos``).
 """
 
@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from causalab.neural.pytorch_hooks.loading import load_model
+from causalab.neural.engines.pytorch_hooks.loading import load_model
 
 
 class PipelineShim:
