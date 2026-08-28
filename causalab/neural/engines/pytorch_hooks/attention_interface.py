@@ -10,7 +10,15 @@ so ``query`` and ``key`` are that call's *arguments* (post-RoPE, and for ``key``
 before ``repeat_kv``), the scores are the softmax's input several lines further
 in, and ``z`` is the call's return. A ``register_forward_hook`` on the mixer
 fires after all of it, which is why writing the attention pattern was already a
-special case (see :mod:`.attention_probs`): by then the tensor has been consumed.
+special case: by then the tensor has been consumed.
+
+📐 That is measured, not assumed. ``self_attn`` *returns*
+``(attn_output, attn_weights)``, so a ``register_forward_hook`` that rewrites
+element 1 looks like it should work — and changes a tensor nothing downstream
+reads. The same silent-no-op shape as writing ``router_logits``, and measured
+the same way: 0.0 change in the logits. **Reading** the pattern is still an
+ordinary module tap, because the mixer hands it back; only the write has to come
+through here.
 
 How the call is intercepted
 ---------------------------
@@ -62,6 +70,25 @@ Two guards the design has to carry, both because the mode is a blunt instrument:
 * it is entered around the ``real(...)`` call and nothing wider, so it cannot
   see another module's arithmetic even though it is process-global while active.
 
+Writing the pattern needs no recompute either
+---------------------------------------------
+
+#53 carried a pattern edit forward by calling the real eager function and then
+**redoing** the two lines that follow its softmax::
+
+    value_states = repeat_kv(value, module.num_key_value_groups)
+    attn_output = torch.matmul(edited, value_states).transpose(1, 2).contiguous()
+
+That worked, and it was pinned by an identity-edit test — but it duplicated
+library internals, and it had to resolve a second per-family symbol
+(``repeat_kv``) to do it, which GPT-2 does not even export.
+
+Intercepting the softmax's **output** removes all of it. The mode returns the
+edited pattern *into* the eager function, which then does its own value multiply
+with its own code. The identity-edit test that used to guard the transcription
+is now trivially satisfied, which is exactly the point: there is nothing left to
+drift.
+
 Why every mechanism is legal on the scores
 ------------------------------------------
 
@@ -76,6 +103,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import importlib
 from typing import Any, Callable, Iterator, Mapping
 
 import torch
@@ -87,6 +115,7 @@ __all__ = [
     "INTERFACE_SLOTS",
     "InterfaceTap",
     "attention_interface_taps",
+    "module_eager_attention",
 ]
 
 #: The points inside the attention function a component may name, in the order
@@ -191,8 +220,6 @@ def _has(taps: "tuple[InterfaceTap, ...]", slot: str) -> bool:
 @contextlib.contextmanager
 def attention_interface_taps(
     taps: Mapping[int, "tuple[InterfaceTap, ...]"],
-    *,
-    post_softmax: Callable[[Any], tuple[Any, Any]] | None = None,
 ) -> Iterator[None]:
     """Install reads and edits inside the eager attention function.
 
@@ -200,12 +227,6 @@ def attention_interface_taps(
         taps: ``id(mixer module) -> taps``. A mixer absent from the mapping is
             untouched and pays only a dict lookup, which is what keeps a tap at
             one layer from changing any other layer's arithmetic.
-        post_softmax: how to finish a ``"probs"`` edit — the pattern is consumed
-            *inside* the function, so an edit to it has to be carried forward by
-            redoing the value multiply. Supplied by :mod:`.attention_probs`,
-            which owns that duplication; ``None`` refuses a ``"probs"`` edit
-            rather than silently dropping it.
-
     The ``"eager"`` registry key is removed on exit (or restored, if something
     else had registered one), which puts ``get_interface`` back on the module
     default.
@@ -230,10 +251,6 @@ def attention_interface_taps(
         # registry entry is installed it intercepts every attention forward, so
         # borrowing one family's function would silently replace another's math
         # (gemma-2's eager soft-caps the logits, say).
-        from causalab.neural.pytorch_hooks.attention_probs import (
-            module_eager_attention,
-        )
-
         real = module_eager_attention(module)
         entries = taps.get(id(module), ())
         if not entries:
@@ -265,18 +282,14 @@ def attention_interface_taps(
             )
             return _apply(entries, "z", out), weights
 
-        edited_probs: dict[str, torch.Tensor] = {}
-
         def on_scores(scores: torch.Tensor) -> torch.Tensor:
             return _apply(entries, "scores", scores)
 
         def on_probs(probs: torch.Tensor) -> torch.Tensor:
-            if not _has(entries, "probs"):
-                return probs
-            after = _apply(entries, "probs", probs)
-            if after is not probs:
-                edited_probs["value"] = after
-            return after
+            # Returning the edited pattern is the whole write: the model's own
+            # eager function receives it and does its own value multiply, so
+            # nothing here has to know what that multiply is.
+            return _apply(entries, "probs", probs)
 
         mode = _SoftmaxTap(
             on_scores if _has(entries, "scores") else None,
@@ -294,17 +307,6 @@ def attention_interface_taps(
                 **kwargs,
             )
         _check_one_softmax(module, mode.calls)
-        if edited_probs:
-            if post_softmax is None:
-                raise ProtocolError(
-                    "P4",
-                    "an attention-pattern edit needs the post-softmax value "
-                    "multiply redone, and no way to do it was supplied — this "
-                    "is an internal wiring error, not a document error.",
-                )
-            out, weights = post_softmax(
-                (module, edited_probs["value"], value, out, weights)
-            )
         return _apply(entries, "z", out), weights
 
     had_key = "eager" in ALL_ATTENTION_FUNCTIONS
@@ -317,6 +319,37 @@ def attention_interface_taps(
             ALL_ATTENTION_FUNCTIONS["eager"] = previous
         else:
             _unregister(ALL_ATTENTION_FUNCTIONS, "eager")
+
+
+def module_eager_attention(module: Any) -> Callable[..., Any]:
+    """The mixer's own ``eager_attention_forward``.
+
+    Resolved from the modeling file the module's class was defined in, per call.
+    While the registry entry is installed it intercepts *every* attention
+    forward, so borrowing one family's function would silently replace another
+    family's math — gemma-2's eager soft-caps its logits, for instance. A family
+    whose modeling file exports no such function is refused by name rather than
+    served somebody else's.
+
+    ⚠️ Deliberately asks for **only** this symbol. Round 2.3 also needed
+    ``repeat_kv`` here, to redo the value multiply after a pattern edit; 📐 GPT-2
+    exports the first and not the second (no GQA, nothing to repeat), so asking
+    for both made a plain read of the attention interior on gpt2 fail with a
+    message about pattern writes. Round 2.5 removed the second requirement
+    entirely along with the recompute that needed it.
+    """
+    modeling = importlib.import_module(type(module).__module__)
+    found = getattr(modeling, "eager_attention_forward", None)
+    if found is None:
+        raise ProtocolError(
+            "P4",
+            f"an attention-interface tap on {type(module).__name__}: its "
+            f"modeling module {type(module).__module__!r} exports no "
+            "'eager_attention_forward'. Extend attention_interface.py for this "
+            "family — borrowing another family's version would silently change "
+            "what the model computes.",
+        )
+    return found
 
 
 def _check_one_softmax(module: Any, calls: int) -> None:

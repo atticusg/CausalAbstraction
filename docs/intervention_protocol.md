@@ -393,7 +393,10 @@ execution order:
   form, and each refusal follows from something that form would have provided.
   A write replaces the whole pattern, which is what an
   interchange on attention means, and both inputs must have the same number of
-  positions.
+  positions. The edit is handed back to the model's own value multiply — nothing
+  recomputes it — so a write here works on every family whose eager attention
+  the backend can wrap, and only `swap` is refused arithmetic because nothing
+  downstream restores rows summing to 1.
 - **`stream` names a mixer stream, and it is a per-layer fact.** It is one of
   `full_attention` / `linear_attention`. A hybrid tower carries a different mixer
   at different depths (Qwen3.6's text tower alternates Gated DeltaNet with gated
