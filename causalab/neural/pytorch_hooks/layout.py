@@ -50,7 +50,20 @@ LAYOUTS: tuple[str, ...] = get_args(Layout)
 
 
 class LayoutError(ValueError):
-    """A tensor does not have the shape its tap's layout claims."""
+    """A tensor does not have the shape its tap's layout claims.
+
+    Deliberately *not* a :class:`~causalab.protocol.errors.ProtocolError`, and
+    so it carries no ``P``/``V`` code: ``layout`` is a field the site table
+    sets on :class:`~causalab.neural.pytorch_hooks.sites.ResolvedSite`, never
+    something a document author writes, so this can only fire on a mismatch
+    between our table and a model's real module — an internal invariant, and
+    the protocol codes exist to name rules a *document* broke.
+
+    What would change that: making the layout authorable (a per-family
+    override in a document), at which point a bad entry becomes an author
+    error and this should either derive from ``ProtocolError`` or be wrapped
+    at the executor boundary with a code.
+    """
 
 
 def to_contract(
@@ -67,9 +80,17 @@ def to_contract(
 
     Returns:
         A ``(batch, position, feature)`` view where possible, so that an
-        in-place write through the result reaches the original storage. Callers
-        that mutate must still pass the result back through
-        :func:`from_contract` rather than assume aliasing.
+        in-place write through the result reaches the original storage.
+
+        📐 **That aliasing is not load-bearing** — it is an artefact of
+        ``view``/``transpose``, not a guarantee this function makes, and no
+        behaviour depends on it. Writes are correct because the hook passes
+        :func:`from_contract`'s result *back* to the model and
+        ``_address_writer`` mutates through the returned chain, so a layout
+        that had to ``copy`` (an incompatible stride, say) would be equally
+        correct and simply slower. Stated because the reverse is the tempting
+        mistake: nothing in the suite fails if aliasing is lost, so a later
+        change that relies on it would be silently unpinned.
 
     Raises:
         LayoutError: the tensor's rank or leading dimension contradicts the
