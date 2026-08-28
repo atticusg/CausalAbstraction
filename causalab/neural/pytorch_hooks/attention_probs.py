@@ -60,9 +60,12 @@ approximated.
 from __future__ import annotations
 
 import contextlib
+import importlib
 from typing import Any, Callable, Iterator, Mapping
 
 import torch
+
+from causalab.protocol.errors import ProtocolError
 
 __all__ = ["ATTENTION_PROBS_LAYOUT", "eager_attention_writes"]
 
@@ -107,12 +110,12 @@ def eager_attention_writes(
         dropout: float = 0.0,
         **kwargs: Any,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # Resolved per call rather than captured, so the wrapper always defers to
-        # the implementation belonging to the model being run.
-        from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
-            eager_attention_forward,
-            repeat_kv,
-        )
+        # Resolved from the MODULE's own modeling file, per call: while the
+        # registry entry is installed it intercepts every attention forward,
+        # so borrowing one family's function would silently replace another
+        # family's math (gemma-2's eager soft-caps the logits, say). Each
+        # module keeps its own; a family this cannot resolve refuses below.
+        eager_attention_forward, repeat_kv = _post_softmax_math(module)
 
         out, weights = eager_attention_forward(
             module,
@@ -143,6 +146,34 @@ def eager_attention_writes(
             ALL_ATTENTION_FUNCTIONS["eager"] = previous
         else:
             _unregister(ALL_ATTENTION_FUNCTIONS, "eager")
+
+
+def _post_softmax_math(module: Any) -> tuple[Callable[..., Any], Callable[..., Any]]:
+    """The mixer's own ``eager_attention_forward`` and ``repeat_kv``.
+
+    Resolved from the modeling file the module's class was defined in, so the
+    wrapper defers to the implementation that belongs to the model being run
+    — never another family's. transformers stamps both names into every
+    modeling file that uses the attention-interface pattern, so on any model
+    the backend can force to eager these resolve; a family where they do not
+    is refused by name rather than approximated with a different family's
+    math, which would be exactly the silent drift this module is built to
+    prevent.
+    """
+    modeling = importlib.import_module(type(module).__module__)
+    eager = getattr(modeling, "eager_attention_forward", None)
+    repeat = getattr(modeling, "repeat_kv", None)
+    if eager is None or repeat is None:
+        missing = "eager_attention_forward" if eager is None else "repeat_kv"
+        raise ProtocolError(
+            "P4",
+            f"attention-pattern write on {type(module).__name__}: its modeling "
+            f"module {type(module).__module__!r} exports no {missing!r} to "
+            "wrap. Extend attention_probs.py for this family — borrowing "
+            "another family's post-softmax math would silently change what "
+            "the model computes.",
+        )
+    return eager, repeat
 
 
 def _unregister(registry: Any, name: str) -> None:
