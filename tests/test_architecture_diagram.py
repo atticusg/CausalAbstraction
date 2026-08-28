@@ -1,6 +1,6 @@
 """The A3B architecture diagram says the same thing the component table does.
 
-``playground/qwen36-35b-a3b-architecture.html`` draws the forward pass with one
+``docs/qwen36-35b-a3b-architecture.html`` draws the forward pass with one
 box per tensor, and its lavender fill means exactly one thing: **some engine
 exposes this as a hookpoint**. That is a claim about the code, and a claim about
 the code drifts — the diagram this test guards shipped with the whole routed-
@@ -36,7 +36,7 @@ pytestmark = pytest.mark.unit
 
 DIAGRAM = (
     Path(__file__).resolve().parents[1]
-    / "playground"
+    / "docs"
     / "qwen36-35b-a3b-architecture.html"
 )
 
