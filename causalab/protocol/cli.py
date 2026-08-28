@@ -5,8 +5,8 @@ resolution environment built by :mod:`causalab.cli`, which also owns argument
 parsing and the dispatch between document types. This module therefore links
 against nothing in the workflow layer.
 
-``run`` needs an execution backend; the reference backend
-(:mod:`causalab.neural.pytorch_hooks`) is imported lazily so the pure verbs stay
+``run`` needs an execution engine; the reference engine
+(:mod:`causalab.neural.engines.pytorch_hooks`) is imported lazily so the pure verbs stay
 torch-free.
 """
 
@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from causalab.protocol.backend import requires_campaign
+from causalab.protocol.engine import requires_campaign
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.loader import (
     LoadedProtocol,
@@ -103,24 +103,14 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
         if args.verb == "explain":
             _explain(loaded)
             return 0
-        # run — the reference backend is an optional, lazily-imported extra
-        # so the pure verbs stay torch-free (importlib keeps the layering
-        # honest: protocol/ never links against an execution engine)
-        import importlib
+        # run — engines are optional, lazily-imported extras so the pure
+        # verbs stay torch-free; --engine picks the list, choose_engine routes
+        from causalab.cli import load_engines
 
-        try:
-            hooks = importlib.import_module("causalab.neural.pytorch_hooks")
-        except ModuleNotFoundError as err:
-            print(
-                f"refused: no execution backend available ({err}) — 'run' needs "
-                "the reference backend causalab.neural.pytorch_hooks",
-                file=sys.stderr,
-            )
-            return 1
         result = _run(
             loaded,
             env,
-            hooks.PytorchHooksBackend(device=args.device),
+            load_engines(getattr(args, "engine", "pytorch_hooks"), args.device),
             args.out,
             points=args.points,
         )
@@ -135,14 +125,14 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
 def _run(
     loaded: LoadedProtocol,
     env: ResolutionEnv,
-    backend: Any,
+    engines: list[Any],
     out: Path,
     *,
     points: str | None = None,
 ) -> Any:
-    from causalab.protocol.backend import ExecutionRequest, choose_backend
+    from causalab.protocol.engine import ExecutionRequest, choose_engine
 
-    chosen = choose_backend(list(loaded.point_documents), [backend])
+    chosen = choose_engine(list(loaded.point_documents), engines)
     # --points slices every per-point tuple in lockstep; the campaign
     # digest is untouched — a shard's artifacts still stamp and dedup as
     # members of the whole campaign, so an external scheduler can fan
@@ -263,7 +253,7 @@ def _explain(loaded: LoadedProtocol) -> None:
         print(f"  {group.model} on {group.input}: {taps}")
         if group.decode_depth:
             # print what the decode obliges, so the bill of a document is
-            # readable before it runs — the mechanism stays the backend's
+            # readable before it runs — the mechanism stays the engine's
             print(f"    decode {group.decode_depth} tokens (greedy)")
             for item in group.materialize:
                 needs = (

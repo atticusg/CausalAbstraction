@@ -125,25 +125,16 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
             for item in loaded.unchecked_paths:
                 print(f"  {item}")
         return 0
-    # run
-    import importlib
-
-    try:
-        hooks = importlib.import_module("causalab.neural.pytorch_hooks")
-    except ModuleNotFoundError as err:
-        print(
-            f"refused: no execution backend available ({err}) — 'run' needs "
-            "the reference backend causalab.neural.pytorch_hooks",
-            file=sys.stderr,
-        )
-        return 1
+    # run — engines are optional, lazily-imported extras; --engine picks
+    # the list, choose_engine routes per protocol step
+    from causalab.cli import load_engines
     from causalab.workflow import run_workflow
 
     result = run_workflow(
         loaded,
         env,
         args.out,
-        [hooks.PytorchHooksBackend(device=args.device)],
+        load_engines(getattr(args, "engine", "pytorch_hooks"), args.device),
         resume=getattr(args, "resume", False),
         reuse_nondeterministic=getattr(args, "reuse_nondeterministic", False),
     )
