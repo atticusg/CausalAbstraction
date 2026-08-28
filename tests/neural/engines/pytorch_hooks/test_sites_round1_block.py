@@ -23,7 +23,7 @@ from causalab.neural.shared.layout import (
     to_contract,
 )
 from causalab.neural.engines.pytorch_hooks.loading import ModelBundle, load_model
-from causalab.neural.engines.pytorch_hooks.sites import resolve_site
+from causalab.neural.shared.sites import resolve_site
 from causalab.protocol.errors import ProtocolError, ValidationError
 from causalab.protocol.plan import COMPONENT_RANK
 from causalab.protocol.registry import component_width

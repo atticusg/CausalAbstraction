@@ -75,7 +75,7 @@ __all__ = ["ATTENTION_PROBS_LAYOUT", "eager_attention_writes"]
 #: heads, query, key) properly is follow-up F1; until then this marker says "this
 #: tap's shape is native and undescribed" so that nothing downstream can mistake
 #: it for the executor's contract.
-ATTENTION_PROBS_LAYOUT = "native"
+from causalab.neural.shared.sites import ATTENTION_PROBS_LAYOUT  # noqa: E402,F401  (moved; re-exported)
 
 
 @contextlib.contextmanager

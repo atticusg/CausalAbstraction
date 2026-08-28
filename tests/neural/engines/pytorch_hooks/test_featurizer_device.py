@@ -24,7 +24,7 @@ from typing import Any
 import pytest
 import torch
 
-from causalab.neural.engines.pytorch_hooks.featurizers import (
+from causalab.neural.shared.featurizers import (
     Gate,
     LoadedLinear,
     Sae,

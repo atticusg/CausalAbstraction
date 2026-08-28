@@ -44,7 +44,7 @@ from typing import Any
 import pytest
 import torch
 
-from causalab.neural.engines.pytorch_hooks.featurizers import Gate
+from causalab.neural.shared.featurizers import Gate
 from causalab.neural.engines.pytorch_hooks.loading import ModelBundle
 from causalab.protocol.registry import model_info_from_hf_config
 
