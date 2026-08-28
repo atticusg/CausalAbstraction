@@ -9,7 +9,7 @@ Across the points of a swept document, the planner **content-dedups**: a
 forward group's identity is the digest of its full dependency closure
 (model + in-force writes + their operand reads' closures + input binding),
 so a harvest shared by nine fits interns to one group and the sharing falls
-out of value identity, not scheduling cleverness (§3). Backends consume
+out of value identity, not scheduling cleverness (§3). Engines consume
 this plan as data; fusion, batching and staging stay their call (§8).
 """
 
@@ -39,7 +39,7 @@ __all__ = [
     "closure_digest",
 ]
 
-#: Intra-block execution order of the component vocabulary — backend-free
+#: Intra-block execution order of the component vocabulary — engine-free
 #: data used only to find a group's deepest tap (elision, §4). ``ln_final``
 #: and ``lm_head`` sort after every block.
 #:
@@ -127,13 +127,13 @@ class Tap:
 
 @dataclasses.dataclass(frozen=True)
 class Materialization:
-    """What one continuation read obliges a backend to build.
+    """What one continuation read obliges an engine to build.
 
     ``needs_distribution`` is the expensive bit: a vocabulary-wide tensor
     per addressed position. It is false when the read is neither saved nor
     reduced by a metric that consumes distributions, in which case the
-    backend must not build one (§8). *How* it avoids building one — a
-    narrowed projection, per-step captures, a replay — is the backend's
+    engine must not build one (§8). *How* it avoids building one — a
+    narrowed projection, per-step captures, a replay — is the engine's
     choice; this is the requirement, not the mechanism."""
 
     read: str
@@ -160,7 +160,7 @@ class ForwardGroup:
 
     @property
     def stop_after(self) -> tuple[int, int] | None:
-        """The deepest tap's depth — a backend may end the forward there
+        """The deepest tap's depth — an engine may end the forward there
         (§4 elision). ``None`` when the group has no taps, and also when it
         decodes: every decode step needs the head, so there is nothing to
         elide."""

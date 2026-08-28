@@ -3,7 +3,7 @@
 The **Intervention Protocol** defines causal intervention experiments on neural networks, with some useful properties:
 
 - **Serializable JSON document that's easily shareable and reproducible**: The intervention protocol is one JSON document that fully describes an experiment: it can be hashed, diffed, shared, and re-run. It is self-contained and enables exact reproduction.
-- **Agnostic to neural network interfaces.**: The intervention protocol defines the experiment, not the implementation. The protocol is passed to a separate parser/compiler compiling the protocol into runnable code of intervention backends (like pytorch-native hooks, NNsight/NNterp, SGLang, Megatron, etc.). The protocol says *what*; backend specific parser/planner derives *how* (forward count, fusion, batching, sweep parallelization) and execute an intervention protocol.
+- **Agnostic to neural network interfaces.**: The intervention protocol defines the experiment, not the implementation. The protocol is passed to a separate parser/compiler compiling the protocol into runnable code of intervention engines (like pytorch-native hooks, NNsight/NNterp, SGLang, Megatron, etc.). The protocol says *what*; engine specific parser/planner derives *how* (forward count, fusion, batching, sweep parallelization) and execute an intervention protocol.
 
 ## 1. Document layout
 
@@ -136,7 +136,7 @@ record, and stamped into artifacts; it is not part of the canonical bytes.
   checkpoint, so `model.key`/`revision` already name them; `quantization`
   describes quantization applied *at load* to an unquantized checkpoint.
 - A document with `quantization` requires the `quantized_weights` capability
-  (§8), so a backend that cannot realize it refuses instead of quietly running
+  (§8), so an engine that cannot realize it refuses instead of quietly running
   something else.
 
 ### 2.2 `data`
@@ -186,7 +186,7 @@ Named entries; a read/write `pos` is a name here, or an inline spec.
 | + `"generated": {"max_new_tokens": n}` | resolve the anchor inside the row's greedy continuation instead of its prompt |
 
 - Positions are **never resolved to integers in the document**. Resolution is
-  a backend service against a `PositionFrame` (pad side, packing, sequence
+  an engine service against a `PositionFrame` (pad side, packing, sequence
   shard map) — sec. 8.
 
 **The continuation frame (`generated`).** A decode produces a second frame, so
@@ -270,7 +270,7 @@ component's* head count — which under GQA is narrower for a KV-space component
 than for a query-space one. `stream` is one of `full_attention` /
 `linear_attention`.
 
-Component vocabulary (per-backend `SiteResolver` maps each to a tap), in
+Component vocabulary (per-engine `SiteResolver` maps each to a tap), in
 execution order:
 
 `input_ids` · `embeddings` · `block_input` · `attention_input_norm` ·
@@ -466,13 +466,13 @@ Closed mechanism set (`do` has exactly one key):
 | `{"gaussian": {"seed": s, "scale": c, "axis": "tp_duplicated" \| "tp_split"}}` | `f ← f + c·randn(s)` | additive |
 | `{"renormalize": true}` | `f ← f·‖f₀‖/‖f‖` | absolute |
 | `{"clamp": {"lo": a, "hi": b}}` | `f ← clip(f, a, b)` | absolute |
-| `{"pytorch_fn": {"qualname": "…"}}` | arbitrary | absolute; **local-only** — refused at load by any non-local backend |
+| `{"pytorch_fn": {"qualname": "…"}}` | arbitrary | absolute; **local-only** — refused at load by any non-local engine |
 
 - Per (site, overlapping pos, model): **at most one absolute write**; any
   number of additive writes. Application order: absolute first, then additive
   deltas summed. This replaces any commutativity analysis and makes write sets
   order-free.
-- `gaussian.axis` tells a tensor-parallel backend whether the draw is
+- `gaussian.axis` tells a tensor-parallel engine whether the draw is
   replicated or sharded across ranks; `seed` is part of the hash.
 
 ### 2.9 `intervened_models`
@@ -529,7 +529,7 @@ one is a property of the kind:
 
 An `ids` kind therefore obliges **no** vocabulary projection anywhere (§8's
 materialization requirement) — a text probe is cheap by construction, not by a
-backend's cleverness. It also only means something where tokens were
+engine's cleverness. It also only means something where tokens were
 *produced*: `decode` binds to a read whose position carries `generated` (§2.3),
 and a `decode` over a prompt-frame read is a load error.
 
@@ -593,7 +593,7 @@ its table says which:
   models = two reads + two metrics.
 - Metrics are gather-then-reduce over read values and dataset columns —
   nothing else. Cross-read arithmetic (differences of saved metrics) is
-  post-hoc analysis. The vocabulary stays closed so backends can lower kinds
+  post-hoc analysis. The vocabulary stays closed so engines can lower kinds
   to fused/vocab-parallel implementations.
 - **`token_form`** (optional, `auto` | `bare` | `space_prefixed`; default
   `auto`) — how this metric's string answers become token ids. Legal on every
@@ -710,12 +710,12 @@ everything that leaves the run. Three saveable kinds, two entry shapes:
 - **Models → forwards.** For each expanded point, the models are: `original`
   on every input it is read on, plus each intervened_model. Each (model)
   is one forward group over its input rows; fusion, batching, and staging
-  across groups are the backend's choice. `num_forwards` is derived, never
+  across groups are the engine's choice. `num_forwards` is derived, never
   authored.
 - **Within a model**: apply each in-force write at its address (absolute
   first, then additive sum); reads see the fully written state.
 - **Across models**: operand values flow along the acyclic model graph;
-  the backend stages them (fused multi-pass, saved constants, or microbatch
+  the engine stages them (fused multi-pass, saved constants, or microbatch
   wiring — its call).
 - **Elision**: a model whose reads are all satisfied may stop its forward
   after the deepest tap; a full-depth pass is never owed. A group that
@@ -754,7 +754,7 @@ A conforming loader rejects the document unless all of these hold:
 11. Sink rule: every read is saved, a metric input, or an operand.
 12. Loaded featurizers (`file_path`) are not trained; trained featurizers are
     declared kinds with trainable slots.
-13. `pytorch_fn` present ⇒ refused unless the selected backend is local.
+13. `pytorch_fn` present ⇒ refused unless the selected engine is local.
 14. Sweep wrappers well-formed; the expanded point count is reported (and may
     be capped without an explicit override flag).
 15. Artifact-valued fields resolve (missing artifact = error, never a
@@ -790,7 +790,7 @@ A conforming loader rejects the document unless all of these hold:
 - **An experiment is a value, not a program.** One JSON document fully
   describes an experiment: it can be hashed, diffed, shared, and re-run.
   It never contains tensors, closures, resolved token indices, module
-  references, or anything only one backend could interpret.
+  references, or anything only one engine could interpret.
 - **The parser owns execution.** The document says *what*; the parser/planner
   derives *how* (forward count, fusion, batching, sweep parallelization) and
   `explain` reports it.
@@ -822,9 +822,9 @@ A conforming loader rejects the document unless all of these hold:
 - Any change to canonical form bumps `version` and ships a loader migration.
   Pin a golden corpus (canonical form + digest per example) in tests.
 
-## 8. Backend contract
+## 8. Engine contract
 
-A backend implements these services:
+An engine implements these services:
 
 | service | contract |
 |---|---|
@@ -835,14 +835,14 @@ A backend implements these services:
 | featurizers | kinds table with declared dtypes; error-term contract |
 | metrics | lower kinds to native ops; derive minimal logit materialization (`logits_to_keep`, vocab-parallel CE) from `save` + metric needs |
 | generation | greedy-decode a group to its derived depth; materialize a distribution only where `save` or a metric needs one (see below); writes stay in the prefill |
-| training | own the `train` loop (optimizer, accumulation, anneal, early stop, checkpoints) — the document never changes across backends |
+| training | own the `train` loop (optimizer, accumulation, anneal, early stop, checkpoints) — the document never changes across engines |
 | RNG | realize `gaussian` per declared seed + axis semantics, bit-stable across parallelism layouts |
 | stamping | write canonical point protocols + digests; `ArtifactIdentity` into every featurizer bundle's safetensors header |
 
 `ArtifactIdentity` (stamped, checked on any `file_path` load; mismatch
 refuses): `produced_by` digest · model key + revision · **model dtype +
 quantization** · tokenizer · site record · `k` · parametrization · featurizer
-dtype · trained-on data ref + digest · backend · code commit. A rotation
+dtype · trained-on data ref + digest · engine · code commit. A rotation
 fitted against bf16 weights is not the same artifact as one fitted against
 fp32 weights, and the stamp is what says so.
 
@@ -855,9 +855,21 @@ check runs against the record of the entry a document actually selects. A
 bundle with no table is a single-point or hand-made artifact and is checked
 at file level, as before.
 
-**Capabilities.** `requires` is derived from the document; a backend declares
-what it supports; `choose_backend = first b where requires ⊆ b.capabilities`;
+**Capabilities.** `requires` is derived from the document; an engine declares
+what it supports; `choose_engine = first b where requires ⊆ b.capabilities`;
 refusal messages generate from the missing capability.
+
+Two kinds of entry, one comparison. The **coarse verbs** below are the closed
+`CAPABILITIES` vocabulary. **Component entries** are generated, never listed:
+every site a read or write references contributes `component:<name>` (a write
+also `component:<name>:write`), and each engine declares the component sets it
+serves — so a document touching a component outside one engine's site
+vocabulary routes past it to an engine that serves it, and the generated
+refusal names the entry. The closed vocabulary behind these entries is the
+sec. 2.4 `Component` literal itself. Stream- and layer-level constraints (a
+full-attention box on a DeltaNet layer, a read-only component) stay
+engine-internal policy: they depend on the loaded model or are true of every
+engine, so routing on them would be either impossible or misleading.
 
 | capability | required when |
 |---|---|
@@ -868,6 +880,7 @@ refusal messages generate from the missing capability.
 | `quantized_weights` | `model.quantization` present (sec. 2.1) |
 | `writable_attention_probs` | a write targets `attention_probs` |
 | `pytorch_fn_local` | any `pytorch_fn` |
+| `component:<name>`[`:write`] | generated — a read or write references a site with that component (writes add `:write`) |
 
 Reference matrix:
 
@@ -888,13 +901,13 @@ depth and — per continuation read — whether anything downstream consumes a
 distribution: the read is saved, or a metric in the `distribution` domain
 reduces it (sec. 2.10). An `ids`-domain metric does **not** count, which is the
 point of the domain: a text probe — `decode` over a continuation read, nothing
-saved — obliges no vocabulary projection at all, and a backend **must not**
+saved — obliges no vocabulary projection at all, and an engine **must not**
 build one where the answer is no.
 
 *How* it complies is its own business: keeping only the addressed steps,
 projecting a narrower slice (`logits_to_keep` takes an index tensor), replaying
 the sequence teacher-forced, or a vocab-parallel reduction. The reference
-backend keeps `ln_final` activations across steps and projects through the head
+engine keeps `ln_final` activations across steps and projects through the head
 only at the addressed positions, which needs no second pass — an implementation
 note, not a requirement. `explain` prints the obligation so the bill is legible
 before a run.
@@ -902,13 +915,13 @@ before a run.
 **Execution scale.** Documents and workflows are scheduler-agnostic — they
 never name devices, hosts, or job systems. The division of labor:
 
-- A **backend** owns all intra-run execution: device placement, batching, and
+- A **engine** owns all intra-run execution: device placement, batching, and
   any parallelism across a campaign's points or across its own
   accelerators — declared, like everything else, through its capability set
-  and constructor. The reference backend takes `device` and runs points
-  serially; sharded and multi-device backends are backend work, not document
+  and constructor. The reference engine takes `device` and runs points
+  serially; sharded and multi-device engines are engine work, not document
   vocabulary. **Precision is not on this list**: `dtype` and `quantization`
-  change the numbers, so they are the document's (§2.1), and a backend reads
+  change the numbers, so they are the document's (§2.1), and an engine reads
   them per point rather than being told once.
 - **Job dispatch is site tooling outside this repository.** The one seam it
   needs is the CLI's `--points START:STOP` selector: an external scheduler
@@ -931,7 +944,7 @@ runs the full pipeline, a split one composing its halves first.
 | `explain <doc>` | models + forward plan, expanded point count, derived `requires`, resolved bindings, digest, what `save` produces |
 | `digest <doc>` | the campaign digest |
 | `--set path=value` | ad-hoc override — exploration only; promote anything that matters into the file |
-| `--device` (run) | reference-backend placement: any torch device string (`cpu` default, `cuda`, `cuda:1`, `mps`). Placement is execution; precision is not (§8) |
+| `--device` (run) | reference-engine placement: any torch device string (`cpu` default, `cuda`, `cuda:1`, `mps`). Placement is execution; precision is not (§8) |
 | `--dtype` (run) | shorthand for `--set model.dtype=…` — it edits the document, so the run's digest is the overridden document's and the record never lies about what produced the numbers. Refused on a workflow, whose steps each declare their own |
 | `--points START:STOP` (run) | execute one half-open point-index shard of the expanded campaign (sec. 8, execution scale); document runs only — digests and stamps are unaffected |
 

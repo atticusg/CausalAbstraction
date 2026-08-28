@@ -2,7 +2,7 @@
 
 The execution side of the intervention-protocol stack:
 
-- `pytorch_hooks/` — the reference backend (spec §8 of
+- `pytorch_hooks/` — the reference engine (spec §8 of
   `docs/intervention_protocol.md`): SiteResolver over raw module hooks,
   position resolution against the padded batch frame, the closed `do`
   mechanism set, featurizers with the error-term contract, metric
@@ -15,5 +15,5 @@ The execution side of the intervention-protocol stack:
 
 Everything else that used to live here (the Plan IR and its scheduler,
 the nnsight pipeline, spec persistence) was replaced by the protocol
-layer (`causalab/protocol`) plus the backend above — see the PR that
+layer (`causalab/protocol`) plus the engine above — see the PR that
 introduced `docs/intervention_protocol.md`.
