@@ -52,12 +52,8 @@ __all__ = [
 #: output and the per-head result), and the reserved slots below say where each
 #: goes so that each PR is an insertion rather than a re-pin.
 #:
-#: Reserved, in forward order through the mixer::
+#: Still reserved, in forward order through the mixer::
 #:
-#:     160  attention_query_pre_rope    q_norm's output (or q_proj's)
-#:     170  attention_key_pre_rope      k_norm's output (or k_proj's)
-#:     180  attention_value_states      v_proj's output — the actual `v`
-#:     190  attention_gate              the [q | gate] projection's second split
 #:     200  attention_query             post-RoPE q, at the interface
 #:     210  attention_key               post-RoPE k, at the interface
 #:     220  attention_scores            the softmax's input
@@ -68,6 +64,16 @@ COMPONENT_RANK: dict[str, int] = {
     "embeddings": 0,
     "block_input": 100,
     "attention_input_norm": 150,  # input_layernorm, between resid_pre and mixer
+    # The mixer's interior, in the order the forward computes it. All four are
+    # module boundaries: q_norm/k_norm run BEFORE RoPE and are nn.Modules, so
+    # the pre-RoPE projections are ordinary forward hooks rather than taps
+    # inside the attention function.
+    "attention_query_pre_rope": 160,
+    "attention_key_pre_rope": 170,
+    "attention_value_states": 180,
+    # produced with q (one fused projection) and consumed at the very end, at
+    # `attn_output * sigmoid(gate)` — ranked where it is produced
+    "attention_gate": 190,
     "attention_probs": 230,
     # 🔤 `attention_premix` was `attention_value` until round 2. It is the
     # o-projection's INPUT — on a gated family `z · σ(gate)`, on an ungated one

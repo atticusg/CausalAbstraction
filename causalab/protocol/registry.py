@@ -257,6 +257,28 @@ def component_shape(info: ModelInfo, component: str) -> FeatureShape:
         # head_dim = the o_proj input width), NOT the GQA KV-head space of
         # v_proj. Head-major and already flattened — `(b, s, H*d)`.
         return shapes.bs_flat_heads(info.num_heads, info.head_dim)
+    if component == "attention_query_pre_rope":
+        # q_norm's output on a family that has one, q_proj's otherwise — the
+        # queries as the mixer computes them, BEFORE RoPE rotates them. Query
+        # space, so `head` runs 0..num_heads.
+        return shapes.bs_flat_heads(info.num_heads, info.head_dim)
+    if component == "attention_key_pre_rope":
+        # ⚠️ KV-head space, which is narrower than query space by the GQA ratio.
+        # This is the component §2.2's head-bound fix exists for: bounding it by
+        # num_heads does not raise, it yields an EMPTY feature slice.
+        return shapes.bs_flat_heads(info.num_kv_heads, info.head_dim)
+    if component == "attention_value_states":
+        # v_proj's output — the actual value vectors, KV-head space, and NOT
+        # what `attention_premix` (the o_proj input, query space, post-gate)
+        # names. The tap is before `past_key_values.update`, so a write reaches
+        # the cache.
+        return shapes.bs_flat_heads(info.num_kv_heads, info.head_dim)
+    if component == "attention_gate":
+        # 📐 Qwen3.5/3.6's q-projection emits `[q_h | gate_h]` per head in one
+        # tensor of width H·2·d — measured (1, 5, 512) for H 8, d 32 on
+        # `tiny-random/qwen3.5-moe`. This component is split 1 of 2, and the
+        # fused descriptor is what keeps a write to it from disturbing q.
+        return shapes.bs_fused_heads(info.num_heads, 2, 1, info.head_dim)
     if component == "lm_head":
         return shapes.bsd(info.vocab_size)
     if component == "attention_probs":
