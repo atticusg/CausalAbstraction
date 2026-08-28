@@ -51,7 +51,14 @@ from causalab.protocol.schema import (
     WriteSpec,
 )
 
-__all__ = ["ExecutorBase", "RaggedValue", "TapKey", "document_seed", "tap_key"]
+__all__ = [
+    "ExecutorBase",
+    "RaggedValue",
+    "TapKey",
+    "document_seed",
+    "refuse_unstackable",
+    "tap_key",
+]
 
 
 def document_seed(doc: Document) -> int:
@@ -635,10 +642,16 @@ class ExecutorBase:
         input_role: str,
         batch: EncodedBatch,
         tensor: torch.Tensor,
+        *,
+        per_row: list[list[int]] | None = None,
     ) -> None:
         """Apply every write at one address, in class order, mutating the
         contract-shaped ``tensor`` in place — absolute first, additive deltas
-        summed, renormalize last against the pre-write norm (§2.8)."""
+        summed, renormalize last against the pre-write norm (§2.8).
+
+        ``per_row`` overrides position resolution, the same override
+        :meth:`_finalize_read` takes: a caller whose position axis is not the
+        token axis (a per-chunk state) has already worked the indices out."""
 
         def class_rank(entry: tuple[str, WriteSpec, ResolvedSite]) -> int:
             do = entry[1].do
@@ -711,8 +724,12 @@ class ExecutorBase:
                         self._written_value(ename, write, site, tensor).to(tensor.dtype)
                     )
                 continue
-            per_row = self._positions(write.pos, batch, input_role)
-            widths = {len(row) for row in per_row}
+            positions = (
+                per_row
+                if per_row is not None
+                else self._positions(write.pos, batch, input_role)
+            )
+            widths = {len(row) for row in positions}
             if len(widths) != 1:
                 raise NotImplementedError(
                     f"write {ename!r}: ragged position widths {sorted(widths)} "
@@ -720,7 +737,7 @@ class ExecutorBase:
                     "all-positions or variable write needs every row to be "
                     "the same length"
                 )
-            idx = torch.tensor(per_row, dtype=torch.long, device=tensor.device)
+            idx = torch.tensor(positions, dtype=torch.long, device=tensor.device)
             rows = torch.arange(tensor.shape[0], device=tensor.device).unsqueeze(1)
             fslice = site.feature_slice or slice(None)
             v_pre = tensor[rows, idx][..., fslice]
@@ -769,3 +786,45 @@ class ExecutorBase:
             else:
                 f.index_copy_(-1, dims, apply_renormalize(select(f), select(f0)))
         return stack.inverse(f, errs)
+
+
+def refuse_unstackable(name: str, site: ResolvedSite) -> None:
+    """Refuse a continuation read whose steps do not stack into a frame.
+
+    📐 A decode step attends over the whole KV cache, so a tensor indexed by the
+    positions being attended *to* is ``prompt + step`` long at step ``step``
+    while the query axis stays 1. The accumulating sink concatenates steps on
+    dim 1, which for an ordinary tap is the position axis, so such a tap either
+    raises a bare torch size error (measured: "Expected size 9 but got size 10")
+    or, for a single-step budget, silently returns one step shaped like a frame.
+    Neither is a continuation read.
+
+    Both conditions are read off the declared axes rather than a component list:
+
+    * **two position axes** — the attention pattern and the scores. There is no
+      non-arbitrary answer to which of them the steps stack along;
+    * **one position axis, over the keys** — ``attention_key``. Its own length
+      is what grows, so consecutive steps are different lengths.
+
+    ``attention_query`` and ``attention_z`` are query-axis-shaped and accumulate
+    correctly, which is why this is a property of the axes and not of "anything
+    inside the attention function".
+    """
+    shape = site.shape
+    if shape.has_contract_form and not any(
+        axis.kind == "position" and axis.name == "key" for axis in shape.axes
+    ):
+        return
+    why = (
+        "it has two position axes, so there is no single axis the decode steps "
+        "stack along"
+        if not shape.has_contract_form
+        else "its position axis runs over the positions being attended to, "
+        "which under a KV cache is the whole prefix and grows by one per step"
+    )
+    raise ProtocolError(
+        "P4",
+        f"read {name!r} reads {site.component!r} in the generated frame, whose "
+        f"shape is {shape.describe()}: {why}, so the steps do not stack into "
+        "one tensor. Read it in the prompt frame.",
+    )
