@@ -81,6 +81,7 @@ def test_the_model_dtype_has_one_home(env):
 
 
 NF4 = {"scheme": "nf4", "method": "bitsandbytes", "double_quant": True}
+INT8 = {"scheme": "int8", "method": "bitsandbytes"}
 
 
 def test_quantization_materializes_its_scheme_defaults(env):
@@ -99,6 +100,31 @@ def test_int8_materializes_its_own_knob(env):
     canonical = canonicalize(doc_with_model(quantization={"scheme": "int8"}), env)
     assert canonical["model"]["quantization"]["int8_threshold"] == 6.0
     assert "double_quant" not in canonical["model"]["quantization"]
+
+
+def test_int8_does_not_materialize_a_compute_dtype(env):
+    """The regression: `compute_dtype` was materialized for every scheme, so
+    two int8 documents differing only there hashed differently while running
+    identically.
+
+    📐 The backend reads it as `bnb_4bit_compute_dtype`; the int8 branch of
+    `_bitsandbytes_config` builds `BitsAndBytesConfig(load_in_8bit=True,
+    llm_int8_threshold=…)` and has nowhere to put it. A field in the canonical
+    form that moves no number inverts the rule the form exists to keep.
+    """
+    canonical = canonicalize(
+        doc_with_model(dtype="bf16", quantization={"scheme": "int8"}), env
+    )
+    assert "compute_dtype" not in canonical["model"]["quantization"]
+
+
+def test_two_int8_documents_differing_only_in_dtype_still_differ(env):
+    """Anti-vacuity for the test above: `model.dtype` DOES reach an int8 run
+    (it is the dtype the un-quantized parts are realized in), so removing
+    `compute_dtype` from the form must not have flattened the real axis too."""
+    a = digest(canonicalize(doc_with_model(dtype="bf16", quantization=INT8), env))
+    b = digest(canonicalize(doc_with_model(dtype="fp16", quantization=INT8), env))
+    assert a != b
 
 
 def test_quantization_moves_the_digest(env):
@@ -121,6 +147,7 @@ def test_there_is_no_bare_int4():
     "quantization,field",
     [
         ({"scheme": "int8", "double_quant": True}, "double_quant"),
+        ({"scheme": "int8", "compute_dtype": "fp16"}, "compute_dtype"),
         ({"scheme": "nf4", "int8_threshold": 6.0}, "int8_threshold"),
     ],
 )

@@ -198,8 +198,17 @@ def canonical_model(value: Mapping[str, Any]) -> dict[str, Any]:
     if quantization is not None:
         quant = dict(quantization)
         quant.setdefault("method", "bitsandbytes")
-        quant.setdefault("compute_dtype", out["dtype"])
         if quant.get("scheme") in ("nf4", "fp4"):
+            # 📐 `compute_dtype` is a 4-bit knob: BitsAndBytesConfig takes it
+            # as bnb_4bit_compute_dtype, and the int8 path
+            # (`load_in_8bit=True`) has nowhere to put it — LLM.int8()
+            # accumulates in fp16 by construction. Materializing it for every
+            # scheme gave two int8 documents that differ only there two
+            # different digests for numerically identical runs, which inverts
+            # the rule this whole function exists to keep: every field in the
+            # canonical form is one that moves a number. Rule 17 refuses an
+            # authored one, so this only has to stop inventing it.
+            quant.setdefault("compute_dtype", out["dtype"])
             quant.setdefault("double_quant", False)
         if quant.get("scheme") == "int8":
             # bitsandbytes' LLM.int8() outlier threshold: a number that moves

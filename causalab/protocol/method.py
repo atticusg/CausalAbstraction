@@ -485,7 +485,9 @@ def compose(
         elif in_app:
             merged[section] = application_raw[section]
     composed: dict[str, Any] = {"version": version}
-    joined = _join_descriptions(method.description, description)
+    joined = _join_descriptions(
+        method.description, application_raw.get("description"), description
+    )
     if joined is not None:
         composed["description"] = joined
     composed.update(merged)
@@ -540,11 +542,24 @@ def _merge(left: Any, right: Any, *, path: str) -> Any:
     )
 
 
-def _join_descriptions(method: Any, document: Any) -> str | None:
-    """The method describes itself and the document describes the run; the
-    composition keeps both, method first — one document, one ``description``,
-    nothing dropped."""
-    parts = [part for part in (method, document) if isinstance(part, str) and part]
+def _join_descriptions(method: Any, application: Any, document: Any) -> str | None:
+    """The method describes itself, the application describes the binding, and
+    the document describes the run; the composition keeps all three in that
+    order — one document, one ``description``, nothing dropped.
+
+    The application half is joined rather than refused because
+    ``_check_application_shape`` already admits ``description`` (it is in
+    ``SECTION_ORDER`` and is not ``type``). Before this it was accepted and
+    then dropped by the merge loop below, which skips
+    ``("version", "type", "description")`` — so an author who described their
+    binding watched the words disappear from the composed document with no
+    error to explain it.
+    """
+    parts = [
+        part
+        for part in (method, application, document)
+        if isinstance(part, str) and part
+    ]
     if not parts:
         return None
     return "\n\n".join(parts)

@@ -244,6 +244,39 @@ def test_descriptions_join_method_first():
     assert composed["description"] == "swap the residual\n\nat L3 in gpt2"
 
 
+def test_the_application_halfs_description_is_not_dropped():
+    """The regression: `_check_application_shape` admits `description` (it is
+    in SECTION_ORDER and is not `type`), but the merge loop skips
+    ("version", "type", "description") — so the words were accepted and then
+    silently vanished from the composed document, with no error to explain it.
+
+    All three describe different things — the method describes itself, the
+    application describes the binding, the document describes the run — so the
+    composition keeps all three, in that order.
+    """
+    raw = split_doc()
+    raw["description"] = "at L3 in gpt2"
+    raw["method"] = {"description": "swap the residual", **raw["method"]}
+    raw["application"] = {
+        "description": "bound to gpt2 over the fixture rows",
+        **raw["application"],
+    }
+    composed, _, _ = split_document(raw)
+    assert composed["description"] == (
+        "swap the residual\n\nbound to gpt2 over the fixture rows\n\nat L3 in gpt2"
+    )
+
+
+def test_an_application_description_alone_still_reaches_the_document():
+    """The half that was dropped is the only one present — so a bug that
+    merely reordered the join would still pass the test above, but not this."""
+    raw = split_doc()
+    raw.pop("description", None)
+    raw["application"] = {"description": "just the binding", **raw["application"]}
+    composed, _, _ = split_document(raw)
+    assert composed["description"] == "just the binding"
+
+
 def test_a_sweep_in_the_application_expands(env):
     """A layer scan is an edit of the application half; the method is
     untouched and keeps its digest."""
