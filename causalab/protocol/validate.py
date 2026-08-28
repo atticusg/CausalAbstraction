@@ -989,10 +989,17 @@ def _check_pytorch_fn(doc: Document, backend_is_local: bool) -> None:
 def _check_model_realization(doc: Document) -> None:
     """§2.1 — a ``quantization`` block only carries the knobs its own scheme
     has. The enums are the parser's job (rule 1); what needs the whole block
-    in one place is the cross-field question: ``double_quant`` is 4-bit
-    vocabulary and ``int8_threshold`` is LLM.int8() vocabulary, so either one
-    under the wrong scheme is a document that reads as if it configured
-    something it did not."""
+    in one place is the cross-field question: ``double_quant`` and
+    ``compute_dtype`` are 4-bit vocabulary and ``int8_threshold`` is
+    LLM.int8() vocabulary, so any of them under the wrong scheme is a document
+    that reads as if it configured something it did not.
+
+    📐 ``compute_dtype`` earns its place here by measurement: the backend
+    reads it as ``bnb_4bit_compute_dtype``, and the int8 branch of
+    ``_bitsandbytes_config`` builds ``BitsAndBytesConfig(load_in_8bit=True,
+    llm_int8_threshold=…)`` — nowhere for it to go. Left admissible, two int8
+    documents differing only in ``compute_dtype`` hashed differently while
+    producing identical numbers."""
     quantization = doc.model.quantization
     if quantization is None:
         return
@@ -1001,6 +1008,7 @@ def _check_model_realization(doc: Document) -> None:
         return  # a swept scheme is checked per point
     wrong = {
         "double_quant": scheme not in ("nf4", "fp4"),
+        "compute_dtype": scheme not in ("nf4", "fp4"),
         "int8_threshold": scheme != "int8",
     }
     for field, is_wrong in wrong.items():
@@ -1011,7 +1019,7 @@ def _check_model_realization(doc: Document) -> None:
                 f"{scheme!r} — it is "
                 + (
                     "a 4-bit knob (nf4 / fp4)"
-                    if field == "double_quant"
+                    if field in ("double_quant", "compute_dtype")
                     else "an int8 knob"
                 )
                 + " (§2.1)",

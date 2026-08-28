@@ -40,6 +40,13 @@ class ModelBundle:
     model: Any
     tokenizer: Any
     info: ModelInfo
+    #: The device that was **requested**, not necessarily where the weights
+    #: are. On a quantized load the `.to(device)` below is skipped —
+    #: bitsandbytes/accelerate place the weights themselves and moving them
+    #: afterwards is refused — so this records the ask, and the real placement
+    #: is `next(model.parameters()).device`. Kept as the request because it is
+    #: what the executor sends inputs to; a disagreement surfaces as a loud
+    #: device-mismatch at the first forward, never as quiet wrong numbers.
     device: str
     dtype: str
     quantization: dict[str, Any] | None = None
