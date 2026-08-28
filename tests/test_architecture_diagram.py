@@ -35,9 +35,7 @@ from causalab.neural.shared.sites import READ_ONLY_COMPONENTS
 pytestmark = pytest.mark.unit
 
 DIAGRAM = (
-    Path(__file__).resolve().parents[1]
-    / "docs"
-    / "qwen36-35b-a3b-architecture.html"
+    Path(__file__).resolve().parents[1] / "docs" / "qwen36-35b-a3b-architecture.html"
 )
 
 #: box id → the component it draws, or ``None`` for a box that is a real tensor
