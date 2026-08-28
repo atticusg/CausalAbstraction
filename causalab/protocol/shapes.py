@@ -80,8 +80,10 @@ __all__ = [
     "bshd",
     "bhsd",
     "bsd",
+    "chunked_state",
     "flat_td",
     "flat_topk",
+    "flat_topk_features",
 ]
 
 #: What one axis of a tapped tensor means.
@@ -381,6 +383,47 @@ def flat_topk(
         flat_batch=True,
         integral=integral,
         ranking=ranking,
+        note=note,
+    )
+
+
+def flat_topk_features(k: int, width: int, *, note: str | None = None) -> FeatureShape:
+    """``(batch*position, k*width)`` — one ``width``-wide vector per routed
+    expert slot, token-major.
+
+    The per-expert MoE interior (round N6). The serving engine presents each
+    tensor with one row per token and the ``k`` slots' vectors side by side,
+    whatever row order the kernel computed in: grouped_mm's expert-sorted
+    layout is an implementation detail the eager loop does not even share, so
+    it never reaches the vocabulary.
+    """
+    return FeatureShape(
+        axes=(_BATCH, _POSITION, Axis("topk", k), Axis("feature", width)),
+        flat_batch=True,
+        note=note,
+    )
+
+
+def chunked_state(
+    heads: int, k_dim: int, v_dim: int, *, note: str | None = None
+) -> FeatureShape:
+    """``(batch, chunk, heads, k_dim·v_dim)`` — a recurrent state, once per
+    kernel chunk.
+
+    The DeltaNet state (round N7): its position axis is the **chunk index**
+    of the serving kernel (one fire per 64-token prefill chunk), not a token
+    position — the axis' name says so, and the executor resolves positions on
+    it against the fire count rather than the sequence. Each state is a
+    ``(k_dim, v_dim)`` matrix per head, flattened into the feature axis.
+    """
+    return FeatureShape(
+        axes=(
+            _BATCH,
+            Axis("position", name="chunk"),
+            Axis("head", heads),
+            Axis("feature", k_dim * v_dim),
+        ),
+        flat_inner=False,
         note=note,
     )
 

@@ -94,7 +94,9 @@ dev = [
     "pytest>=8.4.2",
     "pytest-cov>=7.0.0",
     "pytest-xdist>=3.6.0",
-    "ruff",
+    # pinned exactly: formatting is a CI gate, and an unpinned formatter turns
+    # a green tree red on a bystander ruff release (it bit the N-stack)
+    "ruff==0.14.5",
     "pre-commit>=4.4.0",
     "basedpyright",
     "scikit-learn-stubs",
