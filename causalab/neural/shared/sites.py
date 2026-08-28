@@ -53,6 +53,7 @@ from causalab.protocol.shapes import FeatureShape
 
 __all__ = [
     "ATTENTION_FUNCTION_SLOTS",
+    "DELTA_KERNEL_SLOTS",
     "NORMALIZED_TAPS",
     "READ_ONLY_COMPONENTS",
     "SWAP_ONLY_COMPONENTS",
@@ -100,6 +101,19 @@ READ_ONLY_COMPONENTS: dict[str, str] = {
         "'_') and routes on the scores and indices it computed from them, so a "
         "write here cannot reach anything — write 'router_scores' to reweight "
         "the chosen experts, or 'expert_idx' to change which experts fire"
+    ),
+    "delta_kv_mem": (
+        "a memory readout has no independent existence: it is "
+        "(S_{t-1}·exp(g_t) · k̂_t) summed, recomputed from the state at every "
+        "step, so there is no tensor a write could persist into. Write "
+        "'delta_state' to change what the memory holds, or 'delta_value' to "
+        "change what is stored into it"
+    ),
+    "delta_state_update": (
+        "its write lowers exactly onto a state edit through the reconstruction "
+        "identity S_t = S_{t-1}·exp(g_t) + k̂_t ⊗ delta_t, and that lowering is "
+        "deferred (round-4 plan D6) until steering research asks for it — "
+        "write 'delta_state' instead"
     ),
     "expert_permutation": (
         "it is the serving kernel's row bookkeeping (where each (token, slot) "
@@ -434,6 +448,37 @@ _FULL_ATTENTION_ONLY: frozenset[str] = frozenset(
     | set(ATTENTION_FUNCTION_SLOTS)
 )
 
+#: The mirror (round 4): components that only exist on a Gated DeltaNet mixer.
+#: A full-attention layer computes no delta-rule state — its mixer has no
+#: ``in_proj_qkv``/``in_proj_z``/``out_proj`` children at all — and a family
+#: with no linear stream anywhere (llama, gpt2) hits the same refusal at every
+#: layer, which is the architectural refusal by name.
+#: The kernel boundary *inside* the DeltaNet forward — round 4.2. 📐 These are
+#: not module boundaries: the forward calls two module-global functions
+#: (``causal_conv1d_fn`` and the delta-rule kernel), so the taps swap those
+#: globals for the dynamic extent of the tapped mixer's forward. See
+#: :mod:`causalab.neural.engines.pytorch_hooks.delta_interface`.
+DELTA_KERNEL_SLOTS: dict[str, str] = {
+    "delta_conv": "conv",
+    "delta_query": "query",
+    "delta_key": "key",
+    "delta_value": "value",
+    "delta_beta": "beta",
+    "delta_decay": "decay",
+    "delta_kernel_output": "kernel_output",
+    # the per-step interior (round 4.3): at prefill these are produced by
+    # stepping the library's own recurrent kernel in the chunked call's shadow
+    # (or in its place, for a state write); at decode the model runs the
+    # recurrent kernel natively and they are plain per-step captures
+    "delta_kv_mem": "kv_mem",
+    "delta_state_update": "state_update",
+    "delta_state": "state",
+}
+
+_LINEAR_ATTENTION_ONLY: frozenset[str] = frozenset(
+    {"delta_qkv", "delta_gate", "delta_premix"} | set(DELTA_KERNEL_SLOTS)
+)
+
 #: The mirror set (N7): the Gated DeltaNet interior only exists on a
 #: linear-attention mixer — a softmax-attention layer has no recurrent state,
 #: no delta kernel and no causal conv, so naming one of these there is the
@@ -482,6 +527,15 @@ def _check_stream(bundle: Any, component: str, spec: SiteSpec, layer: int) -> No
             f"{layer} of {bundle.key!r} carries {actual!r} — a Gated DeltaNet "
             "block computes no attention matrix, so there is no such tensor at "
             f"this layer. This tower is ({', '.join(bundle.streams)}).",
+        )
+    if component in _LINEAR_ATTENTION_ONLY and actual != "linear_attention":
+        raise ProtocolError(
+            "P4",
+            f"component {component!r} needs a Gated DeltaNet (linear-attention) "
+            f"mixer, but layer {layer} of {bundle.key!r} carries {actual!r} — a "
+            "gated-attention mixer computes no delta-rule state, so there is no "
+            f"such tensor at this layer. This tower is "
+            f"({', '.join(bundle.streams)}).",
         )
     if component in _DELTANET_INTERIOR and actual != "linear_attention":
         raise ProtocolError(
@@ -759,6 +813,62 @@ def resolve_site(bundle: Any, spec: SiteSpec) -> ResolvedSite:
             "in",
             shape=component_shape(bundle.info, "attention_premix"),
             derivation="attention_result",
+        )
+    if component in _LINEAR_ATTENTION_ONLY:
+        # The DeltaNet mixer's module boundaries (round 4.1). 📐 All three are
+        # ordinary nn.Module sides: in_proj_qkv/in_proj_z fire before the conv
+        # and the kernel, out_proj's input is the post-norm post-gate mixer
+        # value — the exact analogue of attention_premix, hence the name. The
+        # conv1d MODULE never fires (measured: the forward calls the
+        # causal_conv1d_fn global instead), which is why the conv output and
+        # the kernel boundary are function taps (round 4.2), not module taps.
+        mixer = _attn(bundle, layer)
+        if component in DELTA_KERNEL_SLOTS:
+            # no module boundary: the tensor is an argument or return of the
+            # kernel-boundary globals. The mixer is carried as the module — it
+            # is what identifies *which* forward's calls to tap.
+            if component in ("delta_conv",):
+                if head is not None:
+                    _head_slice(bundle, component, head)  # refuses, by shape
+                return tap(mixer, "delta", interface_slot=DELTA_KERNEL_SLOTS[component])
+            if component == "delta_state":
+                # the state has a head axis but no feature axis to slice — the
+                # bound is checked here and the executor selects the head on
+                # the native matrix after the position gather
+                shape = component_shape(bundle.info, component)
+                space = shape.head_space
+                if head is not None:
+                    assert space is not None
+                    if not 0 <= head < space:
+                        raise ProtocolError(
+                            "P4",
+                            f"site names head {head} on component "
+                            f"{component!r}, which has {space} heads "
+                            f"({shape.describe()})",
+                        )
+                return tap(mixer, "delta", interface_slot="state")
+            return tap(
+                mixer,
+                "delta",
+                feature_slice=_head_slice(bundle, component, head),
+                interface_slot=DELTA_KERNEL_SLOTS[component],
+            )
+        if component == "delta_qkv":
+            # no head axis: the fused [q | k | v] widths are unequal (the
+            # shape's note says where the per-head faces live)
+            if head is not None:
+                _head_slice(bundle, component, head)  # refuses, by shape
+            return tap(mixer.in_proj_qkv, "out")
+        if component == "delta_gate":
+            return tap(
+                mixer.in_proj_z,
+                "out",
+                feature_slice=_head_slice(bundle, component, head),
+            )
+        return tap(
+            mixer.out_proj,
+            "in",
+            feature_slice=_head_slice(bundle, component, head),
         )
     if component in _ATTENTION_INTERIOR:
         return _attention_interior_site(

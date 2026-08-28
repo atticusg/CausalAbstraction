@@ -274,6 +274,9 @@ Component vocabulary (per-engine `SiteResolver` maps each to a tap), in
 execution order:
 
 `input_ids` · `embeddings` · `block_input` · `attention_input_norm` ·
+`delta_qkv` · `delta_gate` · `delta_conv` · `delta_query` · `delta_key` ·
+`delta_value` · `delta_beta` · `delta_decay` · `delta_kv_mem` ·
+`delta_state_update` · `delta_state` · `delta_kernel_output` · `delta_premix` ·
 `attention_query_pre_rope` · `attention_key_pre_rope` ·
 `attention_value_states` · `attention_gate` · `attention_query` ·
 `attention_key` · `attention_scores` · `attention_z` · `deltanet_qkv` ·
@@ -430,6 +433,67 @@ execution order:
   recomputes it — so a write here works on every family whose eager attention
   the backend can wrap, and only `swap` is refused arithmetic because nothing
   downstream restores rows summing to 1.
+- **The Gated DeltaNet interior begins at its module boundaries** (round 4.1):
+  `delta_qkv` is `in_proj_qkv`'s output — the fused `[q | k | v]` projection,
+  whose three widths are *unequal* (`key_dim`/`key_dim`/`value_dim`), so it has
+  no head axis and reads whole (or via `dims`); `delta_gate` is `in_proj_z`'s
+  output, the output gate, value-head space; and `delta_premix` is `out_proj`'s
+  **input** — the post-norm, post-gate mixer value, the exact analogue of
+  `attention_premix`, which is why the name. All three require a
+  `linear_attention` layer: at a full-attention layer they refuse with the
+  mirror of the DeltaNet refusal ("a gated-attention mixer computes no
+  delta-rule state"), and a family with no linear stream anywhere (llama,
+  GPT-2) hits that refusal at every layer. The conv output and the kernel
+  boundary are *function* taps (round 4.2) — the `conv1d` module never fires.
+- **Seven more DeltaNet boxes live at the kernel boundary** (round 4.2), as
+  arguments and returns of two module-global call sites the forward uses:
+  `delta_conv` is `causal_conv1d_fn`'s return (channels-first, the fused
+  unequal widths again, so no head axis); `delta_query`/`delta_key`/
+  `delta_value` are the kernel's first three arguments — post-conv,
+  GVA-**tiled** to the value-head count, and **pre**-l2norm (the kernel
+  normalizes and scales internally, so these are the tensors a write can
+  steer); `delta_beta` (`sigmoid(in_proj_b)`) and `delta_decay` (the
+  log-decay `g`, negative reals) are its per-head gates, whose feature axis
+  IS the head axis; `delta_kernel_output` is its return — the pre-norm,
+  pre-gate `core_attn_out`, pinned by
+  `norm(delta_kernel_output, delta_gate) == delta_premix` (exactly). The
+  wrappers swap the modeling file's own globals for the dynamic extent of the
+  tapped mixer's forward and call through to the originals — so whatever
+  hub/`fla` dispatch the environment resolved keeps computing, and identity
+  is bit-exact by construction. Both delta-rule kernels and both conv
+  entry points are swapped together, so cached decode steps (which natively
+  run the recurrent kernel and `causal_conv1d_update`) are tapped identically
+  to prefill — `delta_key` therefore reads in the generated frame, unlike
+  `attention_key` (the kernel receives one step's k, not the prefix). A
+  `kernelize()`d mixer (a hub-kernel class forward) is refused by name, as is
+  a family whose modeling file does not export the four globals. The untiled
+  q/k and the post-split views are not components (F7: one box, one address —
+  they are `delta_conv` rows re-viewed).
+- **The DeltaNet per-step interior is read by stepping the library's own
+  recurrent kernel** (round 4.3) — intercept, never transcribe, §2.3 of the
+  round plan. `delta_state` is the recurrent state `S_t`: one `d_k × d_v`
+  matrix per head per step, the second shape with no feature space (after the
+  attention pattern) — but unlike the pattern it keeps its one position axis,
+  so positions gather on the *steps* axis, `head:` selects a matrix stack, and
+  `featurizer`/`dims` refuse off the declared axes. `delta_kv_mem`
+  (`(S_{t-1}·exp(g_t) · k̂_t).sum`) and `delta_state_update` (`(v_t −
+  kv_mem_t)·β_t`, the diagram's `delta`) are derived from adjacent states and
+  pinned by the reconstruction identity `S_t == S_{t-1}·exp(g_t) + k̂_t ⊗
+  delta_t` against the kernel's own returned states, exactly. At **prefill** a
+  read runs the stepwise loop in the chunked call's *shadow*: the base forward
+  is bit-identical, and the cost is O(seq) extra kernel calls at the tapped
+  layer only (on a real checkpoint a full-seq all-layers `delta_state` is
+  `layers · seq · heads · d_k · d_v` floats — address positions early). At
+  **decode** the model runs the recurrent kernel natively, so generated-frame
+  reads are plain per-step captures, pinned cross-path against test-side
+  stepping. A **write** to `delta_state` substitutes the stepwise loop for the
+  chunked call so edits feed forward — the one deliberate path-forcing in the
+  vocabulary, costing ~5e-7 on the fixture's logits, pinned per layer as a
+  bound. Its tensor operand must cover exactly the write's addressed steps
+  (step-for-step, no broadcasting). `delta_kv_mem` is **read-only** (a memory
+  readout has no independent existence — write `delta_state` or `delta_value`)
+  and `delta_state_update` writes are deferred (D6: they lower exactly onto a
+  state edit via the reconstruction identity).
 - **`stream` names a mixer stream, and it is a per-layer fact.** It is one of
   `full_attention` / `linear_attention`. A hybrid tower carries a different mixer
   at different depths (Qwen3.6's text tower alternates Gated DeltaNet with gated
