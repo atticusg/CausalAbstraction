@@ -68,24 +68,34 @@ def _canary_doc(layer: int) -> dict:
 
 
 def test_every_table_entry_resolves_in_one_trace(trace_qwen):
-    """The canary proper. Navigation reuses the executor's own drill — the
-    same code path a document takes — so a green canary means real documents
-    resolve, not merely that the strings match."""
+    """The canary proper. Navigation reuses the executor's own drill and
+    presentation — the same code path a document takes — so a green canary
+    means real documents resolve, not merely that the strings match."""
     import nnsight
 
+    from causalab.neural.engines.nnsight_tracing.addresses import MOE_EXPERTS
+
+    tables: list[tuple[str, dict, int | None]] = [
+        (stream, dict(table), _layer_of(trace_qwen, stream))
+        for stream, table in ADDRESSES.items()
+    ]
+    # the per-expert interior is not a mixer stream — every fixture layer
+    # carries a sparse-MoE block, so layer 0 stands for all of them
+    tables.append(("moe_experts", dict(MOE_EXPERTS), 0))
+
     saves: dict[str, object] = {}
-    for stream, table in ADDRESSES.items():
+    for label, table, layer in tables:
         if not table:
-            continue  # N6/N7 fill these; an empty table has nothing to drift
-        layer = _layer_of(trace_qwen, stream)
-        assert layer is not None, f"no {stream!r} layer on the fixture"
+            continue  # N7 fills this; an empty table has nothing to drift
+        assert layer is not None, f"no {label!r} layer on the fixture"
         executor = _executor(
             TracePointExecutor, _canary_doc(layer), trace_qwen, with_cf=False
         )
         executor._trace_sources = {}
-        # eager pinned by the fixture, so entries requiring it resolve here too;
-        # entries are drilled in declaration order, which is forward order —
-        # the same discipline the executor's rank sort enforces
+        # eager attention pinned by the fixture and grouped_mm the experts
+        # default, so entries requiring either resolve here too; entries are
+        # drilled in declaration order, which is forward order — the same
+        # discipline the executor's rank sort enforces
         with torch.no_grad():
             with trace_qwen.model.trace(TEXT):
                 for component, address in table.items():
@@ -93,10 +103,23 @@ def test_every_table_entry_resolves_in_one_trace(trace_qwen):
                         trace_qwen, SiteSpec(component=component, layer=layer)
                     )
                     tap = ResolvedTap(site=site, source=address)
-                    saves[component] = nnsight.save(executor._source_value(tap))
+                    if address.fires != "once":
+                        # a per-fire entry resolves match + peel + field +
+                        # trip; the canary reads the count and the first fire
+                        value_op, trip_op = executor._navigate_fire_ops(tap)
+                        saves[f"{component}:trip"] = nnsight.save(len(trip_op.output))
+                        saves[component] = nnsight.save(value_op.output)
+                        continue
+                    raw, perm = executor._source_value(tap)
+                    saves[component] = nnsight.save(
+                        executor._present_native(tap, raw, perm)
+                    )
     assert saves, "the canary resolved nothing — every table is empty?"
     for component, value in saves.items():
-        assert isinstance(value, torch.Tensor) and value.numel() > 0, component
+        if component.endswith(":trip"):
+            assert int(value) >= 1, component
+        else:
+            assert isinstance(value, torch.Tensor) and value.numel() > 0, component
 
 
 def test_a_missing_pattern_refuses_with_the_inventory():

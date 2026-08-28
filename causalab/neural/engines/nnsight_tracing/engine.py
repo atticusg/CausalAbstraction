@@ -6,13 +6,12 @@ orchestration. What it does **not** declare says as much as what it does:
 
 * ``grad`` — training through traces is real design work (plan §2.5, D6);
   ``train`` documents route to the reference engine.
-* ``generate`` — step-anchored trace reads are phase N8.
 * ``quantized_weights`` — unverified through nnsight's loader; refused until
   someone needs it and proves it.
 
-Components it will serve that no other engine can — the DeltaNet state, the
-expert interiors (plan §3, N6–N7) — enter ``schema.py`` when their phases
-land, and routing carries documents here by name.
+The components only this engine serves — the fused-forward interiors of
+N6/N7, and the decode-side DeltaNet state (N8) — route here by name: the
+reference engine simply does not declare them.
 """
 
 from __future__ import annotations
@@ -44,6 +43,10 @@ class NnsightEngine(Engine):
             # the value multiply consumes it — a write to the mixer's returned
             # attn_weights would reach nothing (#53's finding)
             "writable_attention_probs",
+            # continuation reads through one model.generate trace, decode
+            # steps walked with tracer.iter (N8); writes stay in the prefill,
+            # as everywhere
+            "generate",
         }
     )
     # The whole current vocabulary, like the reference engine (N5): the
@@ -53,9 +56,10 @@ class NnsightEngine(Engine):
     # underlying module (measured in the N5 probes). Read-only/swap-only
     # components and stream constraints are *protocol policy* (the shared
     # sites.py refusal tables), not capability gaps — the same argument the
-    # reference engine's declaration makes. The interiors this engine exists
-    # for (DeltaNet state, expert interiors) join the schema with N6/N7 and
-    # enter these sets there.
+    # reference engine's declaration makes. The per-expert MoE interior (N6)
+    # is the first vocabulary only this engine serves — the reference engine
+    # leaves it undeclared, so routing lands it here by name; the DeltaNet
+    # interior joins the schema with N7 and enters the same way.
     components = frozenset(COMPONENTS)
     writable_components = frozenset(COMPONENTS)
     is_local = True
