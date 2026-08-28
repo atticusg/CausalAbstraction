@@ -69,6 +69,13 @@ component                            shape
                                      axes**, so no contract form. Every
                                      refusal the executor makes about it is
                                      derived from that
+``deltanet_*``                       the Gated DeltaNet interior (round N7),
+                                     from the mixer's four ``linear_*``
+                                     dimensions — see :func:`_deltanet_shape`.
+                                     ``deltanet_state`` is the odd one:
+                                     ``(batch, position[chunk], head,
+                                     k_dim·v_dim)``, its position axis the
+                                     kernel's 64-token chunk index
 ===================================  =======================================
 """
 
@@ -118,6 +125,14 @@ class ModelInfo:
     #: of the three spellings above, sizing the per-expert interior
     #: (``expert_gate_proj`` and friends, round N6).
     moe_intermediate_size: int | None = None
+    #: The Gated DeltaNet mixer's dimensions (round N7). Its q/k live in
+    #: *key-head* space and its v/gate/state in *value-head* space — two
+    #: different head counts, the linear-attention analogue of GQA, and the
+    #: same silent-empty-slice hazard if one bound is used for the other.
+    linear_num_key_heads: int | None = None
+    linear_num_value_heads: int | None = None
+    linear_key_head_dim: int | None = None
+    linear_value_head_dim: int | None = None
 
 
 _REGISTRY: dict[str, ModelInfo] = {}
@@ -189,6 +204,10 @@ def model_info_from_hf_config(key: str, config: Any) -> ModelInfo:
             or getattr(text, "moe_intermediate_size", None)
         ),
         moe_intermediate_size=getattr(text, "moe_intermediate_size", None),
+        linear_num_key_heads=getattr(text, "linear_num_key_heads", None),
+        linear_num_value_heads=getattr(text, "linear_num_value_heads", None),
+        linear_key_head_dim=getattr(text, "linear_key_head_dim", None),
+        linear_value_head_dim=getattr(text, "linear_value_head_dim", None),
     )
 
 
@@ -437,6 +456,76 @@ def component_shape(info: ModelInfo, component: str) -> FeatureShape:
     if component == "shared_expert_gate":
         # one scalar per token: how much of the shared expert to mix in
         return shapes.flat_td(1)
+    if component.startswith("deltanet_"):
+        return _deltanet_shape(info, component)
+    raise ValidationError(
+        4,
+        f"component {component!r} has no declared feature shape — the protocol "
+        "layer cannot size it, and featurizers cannot attach to it",
+    )
+
+
+def _deltanet_shape(info: ModelInfo, component: str) -> FeatureShape:
+    """The Gated DeltaNet interior's shapes (round N7).
+
+    All widths derive from the mixer's four ``linear_*`` dimensions: q/k live
+    in key-head space, v/gate/state/output in value-head space, and the fused
+    qkv projection is ``2·key_dim + value_dim`` wide.
+    """
+    if (
+        info.linear_num_key_heads is None
+        or info.linear_num_value_heads is None
+        or info.linear_key_head_dim is None
+        or info.linear_value_head_dim is None
+    ):
+        raise ValidationError(
+            4,
+            f"model {info.key!r} declares no linear-attention dimensions "
+            f"(linear_num_key_heads and friends); {component} has no shape",
+        )
+    h_k, h_v = info.linear_num_key_heads, info.linear_num_value_heads
+    d_k, d_v = info.linear_key_head_dim, info.linear_value_head_dim
+    key_dim, value_dim = h_k * d_k, h_v * d_v
+    if component == "deltanet_qkv":
+        # the fused q|k|v projection, pre-conv: [key | key | value]
+        return shapes.bsd(2 * key_dim + value_dim)
+    if component == "deltanet_qkv_conv":
+        # ⚠️ channels-first: the causal conv works in (batch, width, position)
+        return shapes.bds(2 * key_dim + value_dim)
+    if component == "deltanet_query":
+        # pre repeat_interleave — key-head space, like attention_key under GQA
+        return shapes.bshd(h_k, d_k)
+    if component == "deltanet_key":
+        return shapes.bshd(h_k, d_k)
+    if component == "deltanet_value":
+        return shapes.bshd(h_v, d_v)
+    if component == "deltanet_beta":
+        # one write-strength scalar per value head per token — σ(b)
+        return shapes.bsd(h_v)
+    if component == "deltanet_decay":
+        # the log-decay g the kernel consumes, one per value head per token
+        return shapes.bsd(h_v)
+    if component == "deltanet_gate":
+        # the output gate z, consumed by the gated norm after the kernel
+        return shapes.bshd(h_v, d_v)
+    if component == "deltanet_core_out":
+        # the kernel's return, pre-gate — the DeltaNet analogue of attention_z
+        return shapes.bshd(h_v, d_v)
+    if component == "deltanet_gated_out":
+        # after the gated norm, flattened — what the out-projection consumes
+        return shapes.bs_flat_heads(h_v, d_v)
+    if component == "deltanet_state":
+        return shapes.chunked_state(
+            h_v,
+            d_k,
+            d_v,
+            note=(
+                "Its position axis is the kernel's 64-token chunk index: read "
+                'it whole (pos: "all") or at an integer chunk index. Per-token '
+                "prefill state does not exist — the recurrent kernel runs only "
+                "in single-token decode (the modeling code's own dispatch)."
+            ),
+        )
     raise ValidationError(
         4,
         f"component {component!r} has no declared feature shape — the protocol "

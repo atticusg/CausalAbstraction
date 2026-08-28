@@ -54,6 +54,7 @@ from typing import Callable, Iterable, Mapping
 
 __all__ = [
     "ADDRESSES",
+    "GENERATED_ADDRESSES",
     "FULL_ATTENTION",
     "LINEAR_ATTENTION",
     "MOE_EXPERTS",
@@ -120,6 +121,12 @@ class SourceAddress:
     #: through it — the sorted layout is grouped_mm bookkeeping, never the
     #: component's meaning.
     align: str | None = None
+    #: For a per-fire address (``fires != "once"``): op pattern, in the same
+    #: drilled source as ``field``, of the loop's own ``range(...)`` — the
+    #: length of its output is the fire count. 📐 Read off the loop itself,
+    #: never off config (the kernel pads to a chunk multiple, so the count is
+    #: the kernel's fact, not the sequence length's).
+    trip: str | None = None
 
 
 _OP_SUFFIX = re.compile(r"_\d+$")
@@ -202,8 +209,86 @@ FULL_ATTENTION: dict[str, SourceAddress] = {
     ),
 }
 
-#: The Gated DeltaNet interior — filled by N7.
-LINEAR_ATTENTION: dict[str, SourceAddress] = {}
+#: The Gated DeltaNet interior (N7) — 30 of the 40 target layers, and the
+#: engine-plan payoff: none of these tensors crosses a module boundary.
+#:
+#: 📐 Measured on ``tiny-random/qwen3.5-moe`` and the real A3B (transformers
+#: 5.16.1): the mixer projects ``mixed_qkv`` and the gate ``z`` first, runs the
+#: causal conv (channels-first), splits into q/k/v (pre ``repeat_interleave``,
+#: so q and k are in *key-head* space), computes ``beta = σ(b)`` and the decay
+#: ``g``, and hands everything to the chunked delta kernel — whose own
+#: ``.source`` needs the ``implementation_0`` peel (the hub-kernel-with-
+#: fallback wrapper), the first real use of the peel chain. In prefill the
+#: kernel advances the recurrent state once per 64-token chunk
+#: (``last_recurrent_state_1``; ``_0`` is the zero init), so the state fires
+#: ``per_chunk`` with the trip count read off the loop's own ``range_1``
+#: (``range_0`` is the intra-chunk loop). The *recurrent* kernel — per-token
+#: states — runs only at ``seq_len == 1`` under a cache: decode-only by the
+#: modeling code's own dispatch, with no switch to force it in prefill
+#: (modeling_qwen3_5_moe.py:507), so per-token prefill state is refused by
+#: name rather than served at a granularity the kernel does not have (D12).
+#:
+#: Two suffixed patterns are load-bearing: ``z_reshape_0`` (the gate's
+#: ``(b, s, H_v, d_v)`` view; ``_1`` is the flatten before the norm) and
+#: ``core_attn_out_reshape_1`` (the post-norm, post-gate flatten; ``_0`` is
+#: the 2-D view the norm consumes). Neither pair is a call, so the call-op
+#: rule cannot separate them — the canary is what guards the suffixes.
+LINEAR_ATTENTION: dict[str, SourceAddress] = {
+    "deltanet_qkv": SourceAddress(
+        module="linear_attn",
+        op_pattern="self_in_proj_qkv",
+    ),
+    "deltanet_gate": SourceAddress(
+        module="linear_attn",
+        op_pattern="z_reshape_0",
+    ),
+    "deltanet_qkv_conv": SourceAddress(
+        module="linear_attn",
+        # ⚠️ channels-first (b, width, s) — the declared shape carries it
+        op_pattern="causal_conv1d_fn",
+    ),
+    "deltanet_query": SourceAddress(
+        module="linear_attn",
+        op_pattern="query_reshape",
+    ),
+    "deltanet_key": SourceAddress(
+        module="linear_attn",
+        op_pattern="key_reshape",
+    ),
+    "deltanet_value": SourceAddress(
+        module="linear_attn",
+        op_pattern="value_reshape",
+    ),
+    "deltanet_beta": SourceAddress(
+        module="linear_attn",
+        op_pattern="b_sigmoid",
+    ),
+    "deltanet_decay": SourceAddress(
+        module="linear_attn",
+        # the kernel's own `g=` argument. An op's inputs must be requested
+        # before anything drills into its source (measured: OutOfOrderError
+        # otherwise), which the rank table's order guarantees.
+        op_pattern="chunk_gated_delta_rule",
+        arg=(1, "g"),
+    ),
+    "deltanet_state": SourceAddress(
+        module="linear_attn",
+        op_pattern="chunk_gated_delta_rule",
+        peel=("implementation_0",),
+        field="last_recurrent_state_1",
+        fires="per_chunk",
+        trip="range_1",
+    ),
+    "deltanet_core_out": SourceAddress(
+        module="linear_attn",
+        op_pattern="chunk_gated_delta_rule",
+        tuple_index=0,
+    ),
+    "deltanet_gated_out": SourceAddress(
+        module="linear_attn",
+        op_pattern="core_attn_out_reshape_1",
+    ),
+}
 
 #: The per-expert MoE interior (N6). Not a mixer stream: the ops live under
 #: ``mlp.experts``, so the executor keys into this table by component (a
@@ -277,4 +362,26 @@ MOE_EXPERTS: dict[str, SourceAddress] = {
 ADDRESSES: Mapping[str, Mapping[str, SourceAddress]] = {
     "full_attention": FULL_ATTENTION,
     "linear_attention": LINEAR_ATTENTION,
+}
+
+#: Interior addresses in the **generated frame** (N8), where decode dispatches
+#: different code than prefill. 📐 The one entry so far is the reason the table
+#: exists: at ``seq_len == 1`` under a cache the DeltaNet mixer runs the
+#: *recurrent* kernel (``modeling_qwen3_5_moe.py:507``) — a different function
+#: from the chunked one the prompt-frame address drills — and its state
+#: assignment fires once per decode step (``last_recurrent_state_2``; ``_0``
+#: is the zeros fallback, ``_1`` the untaken no-cache branch). An interior
+#: component absent here does not exist in the decode path (the chunk kernel,
+#: the conv's prefill branch, the grouped experts' sort are prefill facts) or
+#: has not been verified there — refused by name either way.
+GENERATED_ADDRESSES: Mapping[str, Mapping[str, SourceAddress]] = {
+    "linear_attention": {
+        "deltanet_state": SourceAddress(
+            module="linear_attn",
+            op_pattern="recurrent_gated_delta_rule",
+            peel=("implementation_0",),
+            field="last_recurrent_state_2",
+            fires="per_step",
+        ),
+    },
 }

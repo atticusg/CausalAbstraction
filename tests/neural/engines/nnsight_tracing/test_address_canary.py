@@ -103,13 +103,23 @@ def test_every_table_entry_resolves_in_one_trace(trace_qwen):
                         trace_qwen, SiteSpec(component=component, layer=layer)
                     )
                     tap = ResolvedTap(site=site, source=address)
+                    if address.fires != "once":
+                        # a per-fire entry resolves match + peel + field +
+                        # trip; the canary reads the count and the first fire
+                        value_op, trip_op = executor._navigate_fire_ops(tap)
+                        saves[f"{component}:trip"] = nnsight.save(len(trip_op.output))
+                        saves[component] = nnsight.save(value_op.output)
+                        continue
                     raw, perm = executor._source_value(tap)
                     saves[component] = nnsight.save(
                         executor._present_native(tap, raw, perm)
                     )
     assert saves, "the canary resolved nothing — every table is empty?"
     for component, value in saves.items():
-        assert isinstance(value, torch.Tensor) and value.numel() > 0, component
+        if component.endswith(":trip"):
+            assert int(value) >= 1, component
+        else:
+            assert isinstance(value, torch.Tensor) and value.numel() > 0, component
 
 
 def test_a_missing_pattern_refuses_with_the_inventory():

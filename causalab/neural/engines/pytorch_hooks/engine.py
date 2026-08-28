@@ -51,12 +51,13 @@ class PytorchHooksEngine(Engine):
     # across engines), not capability gaps: declaring router_logits unwritable
     # here would turn "a write here reaches nothing, write router_scores
     # instead" into "try another engine", which is the wrong answer for every
-    # engine. The per-expert MoE interior (N6) is the first vocabulary another
-    # engine owns: those tensors live inside the fused experts forward, where
-    # no hook can reach — absent from these sets, so routing names the nnsight
-    # engine for free, and a document arriving here unrouted refuses by name
-    # in the executor.
-    _EXPERT_INTERIOR = frozenset(
+    # engine. The fused-forward interiors (the per-expert MoE interior, N6;
+    # the Gated DeltaNet interior, N7) are the vocabulary another engine owns:
+    # those tensors live inside one fused forward — the experts kernel, the
+    # delta kernel — where no hook can reach. Absent from these sets, so
+    # routing names the nnsight engine for free, and a document arriving here
+    # unrouted refuses by name in the executor.
+    _INTERIOR_COMPONENTS = frozenset(
         {
             "expert_gate_proj",
             "expert_up_proj",
@@ -64,9 +65,9 @@ class PytorchHooksEngine(Engine):
             "expert_permutation",
             "expert_output",
         }
-    )
-    components = frozenset(COMPONENTS) - _EXPERT_INTERIOR
-    writable_components = frozenset(COMPONENTS) - _EXPERT_INTERIOR
+    ) | frozenset(c for c in COMPONENTS if c.startswith("deltanet_"))
+    components = frozenset(COMPONENTS) - _INTERIOR_COMPONENTS
+    writable_components = frozenset(COMPONENTS) - _INTERIOR_COMPONENTS
     is_local = True
 
     def __init__(self, *, device: str = "cpu") -> None:
