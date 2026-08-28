@@ -176,6 +176,11 @@ def to_contract(
     """
     if not shape.has_contract_form:
         return tensor
+    if shape.state_axes:
+        # a state matrix crosses the executor in its native layout — there is
+        # no feature vector to flatten to — but its rank and static widths are
+        # still checked, so a wrong tap raises rather than being reinterpreted
+        return _unpack(tensor, shape, batch_size)
     unpacked = _unpack(tensor, shape, batch_size)
     axes = list(shape.axes)
     if shape.fused_index is not None:
@@ -215,6 +220,8 @@ def from_contract(
             returned. Ignored otherwise.
     """
     if not shape.has_contract_form:
+        return tensor
+    if shape.state_axes:
         return tensor
     axes = [a for a in shape.axes if a.kind != "fused"]
     order = _contract_order(axes)

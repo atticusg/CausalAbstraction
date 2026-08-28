@@ -102,6 +102,19 @@ READ_ONLY_COMPONENTS: dict[str, str] = {
         "write here cannot reach anything — write 'router_scores' to reweight "
         "the chosen experts, or 'expert_idx' to change which experts fire"
     ),
+    "delta_kv_mem": (
+        "a memory readout has no independent existence: it is "
+        "(S_{t-1}·exp(g_t) · k̂_t) summed, recomputed from the state at every "
+        "step, so there is no tensor a write could persist into. Write "
+        "'delta_state' to change what the memory holds, or 'delta_value' to "
+        "change what is stored into it"
+    ),
+    "delta_state_update": (
+        "its write lowers exactly onto a state edit through the reconstruction "
+        "identity S_t = S_{t-1}·exp(g_t) + k̂_t ⊗ delta_t, and that lowering is "
+        "deferred (round-4 plan D6) until steering research asks for it — "
+        "write 'delta_state' instead"
+    ),
 }
 
 #: Components a write may only **replace**, never arithmetically adjust, mapped
@@ -446,6 +459,13 @@ DELTA_KERNEL_SLOTS: dict[str, str] = {
     "delta_beta": "beta",
     "delta_decay": "decay",
     "delta_kernel_output": "kernel_output",
+    # the per-step interior (round 4.3): at prefill these are produced by
+    # stepping the library's own recurrent kernel in the chunked call's shadow
+    # (or in its place, for a state write); at decode the model runs the
+    # recurrent kernel natively and they are plain per-step captures
+    "delta_kv_mem": "kv_mem",
+    "delta_state_update": "state_update",
+    "delta_state": "state",
 }
 
 _LINEAR_ATTENTION_ONLY: frozenset[str] = frozenset(
@@ -748,6 +768,22 @@ def resolve_site(bundle: Any, spec: SiteSpec) -> ResolvedSite:
                 if head is not None:
                     _head_slice(bundle, component, head)  # refuses, by shape
                 return tap(mixer, "delta", interface_slot=DELTA_KERNEL_SLOTS[component])
+            if component == "delta_state":
+                # the state has a head axis but no feature axis to slice — the
+                # bound is checked here and the executor selects the head on
+                # the native matrix after the position gather
+                shape = component_shape(bundle.info, component)
+                space = shape.head_space
+                if head is not None:
+                    assert space is not None
+                    if not 0 <= head < space:
+                        raise ProtocolError(
+                            "P4",
+                            f"site names head {head} on component "
+                            f"{component!r}, which has {space} heads "
+                            f"({shape.describe()})",
+                        )
+                return tap(mixer, "delta", interface_slot="state")
             return tap(
                 mixer,
                 "delta",

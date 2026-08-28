@@ -76,8 +76,20 @@ DELTA_SLOTS: tuple[str, ...] = (
     "value",
     "beta",
     "decay",
+    "kv_mem",
+    "state_update",
+    "state",
     "kernel_output",
 )
+
+#: The per-step interior (round 4.3). At prefill these exist only inside the
+#: recurrent formulation, which the chunked kernel never materializes — so a
+#: read **steps the library's own recurrent kernel** in the chunked call's
+#: shadow (nothing transcribed: every number is the library's), and a state
+#: write substitutes that stepwise loop for the chunked call (path-forcing,
+#: measured 5.4e-7 on the logits, pinned per layer). At decode the model runs
+#: the recurrent kernel natively and all three are plain per-step captures.
+_STATE_SLOTS: frozenset[str] = frozenset({"kv_mem", "state_update", "state"})
 
 #: The four module globals swapped together, per modeling module.
 _GLOBALS: tuple[str, ...] = (
@@ -95,17 +107,30 @@ class DeltaTap:
     Same contract as :class:`.attention_interface.InterfaceTap`: ``read`` is
     handed the tensor as the function sees it, ``edit`` is handed a **clone**
     and returns the replacement.
+
+    ``edit_state`` is the state write's own surface — ``(step, S_t) -> S_t`` —
+    because a state edit must **feed forward**: step ``t``'s replacement is
+    what step ``t+1`` decays and writes into, so the whole-tensor ``edit``
+    contract cannot express it. Only the ``"state"`` slot may carry one, and
+    carrying one is what switches the chunked call to the stepwise
+    substitution.
     """
 
     slot: str
     read: Callable[[torch.Tensor], None] | None = None
     edit: Callable[[torch.Tensor], torch.Tensor] | None = None
+    edit_state: Callable[[int, torch.Tensor], torch.Tensor] | None = None
 
     def __post_init__(self) -> None:
         if self.slot not in DELTA_SLOTS:
             raise ValueError(
                 f"unknown delta-kernel slot {self.slot!r}; expected one of "
                 f"{DELTA_SLOTS}"
+            )
+        if self.edit_state is not None and self.slot != "state":
+            raise ValueError(
+                f"edit_state is the state write's surface; slot {self.slot!r} "
+                "cannot carry one"
             )
 
 
@@ -199,7 +224,9 @@ def delta_kernel_taps(taps: Mapping[Any, tuple[DeltaTap, ...]]) -> Iterator[None
 
         return wrapped
 
-    def kernel_wrapper(real: Callable[..., Any]) -> Callable[..., Any]:
+    def kernel_wrapper(
+        real: Callable[..., Any], originals: dict[str, Any], modeling: Any
+    ) -> Callable[..., Any]:
         def wrapped(
             query: torch.Tensor,
             key: torch.Tensor,
@@ -218,7 +245,21 @@ def delta_kernel_taps(taps: Mapping[Any, tuple[DeltaTap, ...]]) -> Iterator[None
                 beta = _apply(current, "beta", beta)
             if g is not None:
                 g = _apply(current, "decay", g)
-            out, state = real(query, key, value, g=g, beta=beta, **kwargs)
+            if any(tap.slot in _STATE_SLOTS for tap in current):
+                out, state = _with_state_taps(
+                    current,
+                    real,
+                    originals,
+                    modeling,
+                    query,
+                    key,
+                    value,
+                    g,
+                    beta,
+                    kwargs,
+                )
+            else:
+                out, state = real(query, key, value, g=g, beta=beta, **kwargs)
             return _apply(current, "kernel_output", out), state
 
         return wrapped
@@ -238,12 +279,16 @@ def delta_kernel_taps(taps: Mapping[Any, tuple[DeltaTap, ...]]) -> Iterator[None
             setattr(
                 modeling,
                 "torch_chunk_gated_delta_rule",
-                kernel_wrapper(originals["torch_chunk_gated_delta_rule"]),
+                kernel_wrapper(
+                    originals["torch_chunk_gated_delta_rule"], originals, modeling
+                ),
             )
             setattr(
                 modeling,
                 "torch_recurrent_gated_delta_rule",
-                kernel_wrapper(originals["torch_recurrent_gated_delta_rule"]),
+                kernel_wrapper(
+                    originals["torch_recurrent_gated_delta_rule"], originals, modeling
+                ),
             )
             stack.callback(_restore, modeling, originals)
         for mixer in taps:
@@ -252,6 +297,210 @@ def delta_kernel_taps(taps: Mapping[Any, tuple[DeltaTap, ...]]) -> Iterator[None
             stack.callback(pre.remove)
             stack.callback(post.remove)
         yield
+
+
+def _l2norm_of(modeling: Any) -> Callable[..., torch.Tensor]:
+    """The modeling file's own ``l2norm`` — needed to form k̂ for the derived
+    per-step faces, resolved per family like everything else here."""
+    found = getattr(modeling, "l2norm", None)
+    if found is None:
+        raise ProtocolError(
+            "P4",
+            f"a per-step state tap needs the modeling module "
+            f"{modeling.__name__!r} to export 'l2norm' (the normalization its "
+            "own kernel applies to k), and it does not — extend "
+            "delta_interface.py for this family.",
+        )
+    return found
+
+
+def _state_faces(
+    k_t: torch.Tensor,
+    v_t: torch.Tensor,
+    g_t: torch.Tensor,
+    beta_t: torch.Tensor,
+    s_prev: torch.Tensor,
+    l2norm: Callable[..., torch.Tensor],
+    use_l2: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """The two derived per-step faces, from adjacent states (round-4 plan
+    §2.3): ``kv_mem_t = (S_{t-1}·exp(g_t) · k̂_t).sum(-2)`` and
+    ``delta_t = (v_t − kv_mem_t)·β_t`` — the recurrent kernel's own lines
+    (``modeling:369-374``), computed in float32 exactly as it computes them,
+    and pinned by the reconstruction identity
+    ``S_t == S_{t-1}·exp(g_t) + k̂_t ⊗ delta_t`` against the kernel's returned
+    states.
+
+    Args are one step's slices: ``k_t/v_t (b, h, d)``, ``g_t/beta_t (b, h)``,
+    ``s_prev (b, h, d_k, d_v)`` in float32.
+    """
+    k_hat = l2norm(k_t, dim=-1, eps=1e-6) if use_l2 else k_t
+    decayed = s_prev * g_t.to(torch.float32).exp()[..., None, None]
+    kv_mem = (decayed * k_hat.to(torch.float32).unsqueeze(-1)).sum(dim=-2)
+    delta = (v_t.to(torch.float32) - kv_mem) * beta_t.to(torch.float32).unsqueeze(-1)
+    return kv_mem, delta
+
+
+def _stepwise(
+    real_recurrent: Callable[..., Any],
+    l2norm: Callable[..., torch.Tensor],
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    g: torch.Tensor,
+    beta: torch.Tensor,
+    initial_state: torch.Tensor | None,
+    use_l2: bool,
+    edit_state: Callable[[int, torch.Tensor], torch.Tensor] | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Drive the library's own recurrent kernel one timestep at a time.
+
+    No transcription: every state is the kernel's own return, threaded back in
+    as the next step's ``initial_state``. ``edit_state`` (a state write) is
+    applied to each step's state *before* it threads forward, which is the
+    whole reason a write substitutes this loop for the chunked call.
+
+    Returns ``(out, final_state, states, kv_mems, deltas)`` with the per-step
+    tensors stacked on a steps axis: ``states (b, s, h, d_k, d_v)``,
+    ``kv_mems/deltas (b, s, h, d_v)``.
+    """
+    batch, seq_len, heads, d_k = key.shape
+    d_v = value.shape[-1]
+    state = initial_state
+    state_fp = (
+        torch.zeros(batch, heads, d_k, d_v, dtype=torch.float32, device=value.device)
+        if state is None
+        else state.to(torch.float32)
+    )
+    outs: list[torch.Tensor] = []
+    states: list[torch.Tensor] = []
+    kv_mems: list[torch.Tensor] = []
+    deltas: list[torch.Tensor] = []
+    for t in range(seq_len):
+        kv_mem, delta = _state_faces(
+            key[:, t], value[:, t], g[:, t], beta[:, t], state_fp, l2norm, use_l2
+        )
+        out_t, new_state = real_recurrent(
+            query[:, t : t + 1],
+            key[:, t : t + 1],
+            value[:, t : t + 1],
+            g=g[:, t : t + 1],
+            beta=beta[:, t : t + 1],
+            initial_state=state,
+            output_final_state=True,
+            use_qk_l2norm_in_kernel=use_l2,
+        )
+        if edit_state is not None:
+            new_state = edit_state(t, new_state)
+        outs.append(out_t)
+        states.append(new_state)
+        kv_mems.append(kv_mem)
+        deltas.append(delta)
+        state = new_state
+        state_fp = new_state.to(torch.float32)
+    return (
+        torch.cat(outs, dim=1),
+        state,
+        torch.stack(states, dim=1),
+        torch.stack(kv_mems, dim=1),
+        torch.stack(deltas, dim=1),
+    )
+
+
+def _with_state_taps(
+    current: tuple[DeltaTap, ...],
+    real: Callable[..., Any],
+    originals: dict[str, Any],
+    modeling: Any,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    g: torch.Tensor | None,
+    beta: torch.Tensor | None,
+    kwargs: dict[str, Any],
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Serve the per-step slots around one kernel call.
+
+    Three cases, in the order they are checked:
+
+    * a **single cached decode step** (the recurrent kernel, one token): the
+      per-step interior is the stock path — the state is the call's own
+      return, the faces derive from its ``initial_state`` and arguments,
+      nothing extra runs;
+    * a **state write** at prefill: the stepwise loop *substitutes* for the
+      chunked call, so edits feed forward. That is path-forcing and carries
+      the measured cost (📐 logits 5.4e-7, pinned as a per-layer test bound) —
+      paid only when a write targets the state, only at this layer;
+    * **reads** at prefill: the chunked kernel still runs untouched (the
+      forward's numbers are bit-identical) and the loop runs in its shadow,
+      costing O(seq) extra kernel calls at this layer only.
+    """
+    assert g is not None and beta is not None  # the modeling call always passes both
+    l2norm = _l2norm_of(modeling)
+    use_l2 = bool(kwargs.get("use_qk_l2norm_in_kernel", False))
+    initial_state = kwargs.get("initial_state")
+    real_recurrent = originals["torch_recurrent_gated_delta_rule"]
+    wants_final = bool(kwargs.get("output_final_state", False))
+    edits = [tap.edit_state for tap in current if tap.edit_state is not None]
+
+    def edit_state(step: int, state: torch.Tensor) -> torch.Tensor:
+        for edit in edits:
+            state = edit(step, state)
+        return state
+
+    if real is real_recurrent and key.shape[1] == 1 and not edits:
+        # a native decode step: state = the call's own return, faces derived
+        out, new_state = real(query, key, value, g=g, beta=beta, **kwargs)
+        state_fp = (
+            torch.zeros(
+                key.shape[0],
+                key.shape[2],
+                key.shape[-1],
+                value.shape[-1],
+                dtype=torch.float32,
+                device=value.device,
+            )
+            if initial_state is None
+            else initial_state.to(torch.float32)
+        )
+        kv_mem, delta = _state_faces(
+            key[:, 0], value[:, 0], g[:, 0], beta[:, 0], state_fp, l2norm, use_l2
+        )
+        _apply(current, "kv_mem", kv_mem.unsqueeze(1))
+        _apply(current, "state_update", delta.unsqueeze(1))
+        if new_state is not None:
+            _apply(current, "state", new_state.unsqueeze(1))
+        return out, new_state
+
+    if edits:
+        # substitution: the loop IS the forward for this layer
+        out, final_state, states, kv_mems, deltas = _stepwise(
+            real_recurrent,
+            l2norm,
+            query,
+            key,
+            value,
+            g,
+            beta,
+            initial_state,
+            use_l2,
+            edit_state=edit_state,
+        )
+        _apply(current, "kv_mem", kv_mems)
+        _apply(current, "state_update", deltas)
+        _apply(current, "state", states)
+        return out, (final_state if wants_final else None)
+
+    # reads only: the base forward is untouched — the chunked kernel still
+    # runs and the logits are bit-identical; the loop runs in its shadow
+    out, state = real(query, key, value, g=g, beta=beta, **kwargs)
+    _, _, states, kv_mems, deltas = _stepwise(
+        real_recurrent, l2norm, query, key, value, g, beta, initial_state, use_l2
+    )
+    _apply(current, "kv_mem", kv_mems)
+    _apply(current, "state_update", deltas)
+    _apply(current, "state", states)
+    return out, state
 
 
 def _by_identity(
