@@ -15,14 +15,15 @@ at once. Instead each engine captures the whole sweep in turn and is then freed
 One model resident at a time, which is what makes this fit on a single
 accelerator.
 
-**Tolerance.** The smoke tier's 1e-5 is an fp32 number. Here both engines run
-the same eager kernels over the same bf16 weights, so the reads should be
-*bit-identical* — the two engines differ in how they capture a tensor, not in
-what the model computes. :data:`ATOL` is nonetheless a bf16-scaled band rather
-than zero, because a capture that forces a different kernel selection is a
-legitimate difference and not the bug this tier is looking for. The run writes
-the measured maxima to ``$A3B_PARITY_REPORT`` when that is set, which is how
-the band was chosen.
+**Tolerance.** The smoke tier's 1e-5 is an fp32 number. 📐 Here the measurement
+is stronger than any band: on the real checkpoint in bf16, all 111 compared
+cases agree at max abs diff **exactly 0.0** — the two engines differ in how they
+capture a tensor, not in what the model computes, and the same eager kernels
+over the same weights produce the same bits. :data:`ATOL` is kept as a band
+rather than zero only to absorb a future release that dispatches a different
+kernel; at 1e-2 it is well under one bf16 ulp at the logit magnitude this model
+produces (|max| ~18, ulp ~0.06), so it cannot admit a real disagreement. The run
+writes the measured maxima to ``$A3B_PARITY_REPORT`` when that is set.
 """
 
 from __future__ import annotations
@@ -50,14 +51,23 @@ DTYPE = "bf16"
 ATOL = 1e-2
 
 #: Two rows, so the batch axis is exercised at real width.
+#:
+#: ⚠️ The base and its counterfactual must differ **at the patched position**.
+#: The sweep patches the last position, and `embeddings`, `block_input@L0` and
+#: `attention_input_norm@L0` there are functions of the last token alone — so a
+#: pair ending in the same token makes those three interchanges swap a tensor
+#: for itself. Both engines then agree on a result that means nothing, which is
+#: exactly what the anti-vacuity assertion exists to catch (it did:
+#: :func:`test_the_counterfactual_differs_at_the_patched_position` is the guard
+#: that keeps it from coming back as a data artifact rather than a code bug).
 ROWS = [
     {
-        "input": "The Eiffel Tower is located in the city of",
-        "counterfactual_inputs": ["The Colosseum is located in the city of"],
+        "input": "The Eiffel Tower stands in the city of Paris",
+        "counterfactual_inputs": ["The Colosseum stands in the city of Rome"],
     },
     {
-        "input": "The capital of Japan is the city of",
-        "counterfactual_inputs": ["The capital of Norway is the city of"],
+        "input": "The capital city of Japan is Tokyo",
+        "counterfactual_inputs": ["The capital city of Norway is Oslo"],
     },
 ]
 
@@ -131,6 +141,21 @@ def _capture(executor_cls, bundle, cases, *, want_writes: bool) -> dict:
             executor_cls, doc, bundle, rows=ROWS, with_cf=False
         ).read_value("r")
         out[f"read/{_case_id(kind, component, layer)}"] = value.detach().to("cpu")
+    # the counterfactual's token at the patched position — the precondition
+    # every write case rests on, captured rather than assumed
+    cf_ids = sweep.read_doc("input_ids", None)
+    cf_ids["data"]["counterfactual"] = {
+        "dataset": "inline",
+        "field": "counterfactual_inputs[0]",
+    }
+    cf_ids["reads"]["r"]["input"] = "counterfactual"
+    cf_ids["save"][0]["input"] = "counterfactual"
+    out["cf_input_ids"] = (
+        sweep.make_executor(executor_cls, cf_ids, bundle, rows=ROWS, with_cf=True)
+        .read_value("r")
+        .detach()
+        .to("cpu")
+    )
     clean = sweep.read_doc("lm_head", None)
     out["unpatched"] = (
         sweep.make_executor(executor_cls, clean, bundle, rows=ROWS, with_cf=False)
@@ -220,6 +245,7 @@ def captures():
         "streams": streams,
         "hooks": hooks,
         "trace": trace,
+        "cf_input_ids": hooks["cf_input_ids"],
         "hooks_delta": hooks_delta,
         "trace_delta": trace_delta,
         # kept from the first bundle: `align_delta_pair` needs the declared
@@ -342,6 +368,23 @@ def test_delta_family_cross_engine_agreement(
         right,
         f"{hooks_component!r} (pytorch_hooks) vs {trace_component!r} (nnsight)",
         atol=ATOL,
+    )
+
+
+def test_the_counterfactual_differs_at_the_patched_position(captures):
+    """The precondition every write case rests on.
+
+    `input_ids` is read at the same position the sweep patches, so this asks
+    the captures directly: if the base and counterfactual carry the same token
+    there, an interchange at any component that is a function of that token
+    alone swaps a tensor for itself, and "both engines agree" becomes true for
+    the wrong reason.
+    """
+    ids = captures["hooks"]["read/layerless:input_ids"]
+    cf_ids = captures["cf_input_ids"]
+    assert not torch.equal(ids, cf_ids), (
+        "every row's base and counterfactual end in the same token, so a "
+        f"last-position interchange is a no-op: {ids.tolist()} == {cf_ids.tolist()}"
     )
 
 
