@@ -84,7 +84,10 @@ class NnsightEngine(Engine):
     # bind to; the experts module's only child is one shared act_fn).
     _ROUND_THREE_MOE_INTERIOR = frozenset(
         {
+            "expert_gate_proj",
+            "expert_up_proj",
             "expert_activation",
+            "expert_output",
         }
     )
     _UNDECLARED = _ROUND_TWO_ATTENTION | _ROUND_THREE_MOE_INTERIOR

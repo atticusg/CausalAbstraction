@@ -101,6 +101,9 @@ class PointExecutor(ExecutorBase):
 
         write_hooks = self._build_write_hooks(write_names, input_role, batch)
         capture: dict[tuple[int, str], torch.Tensor] = {}
+        # the routing table alongside each experts-interface capture — what the
+        # `expert:` sub-axis joins on (executor_base._expert_selected)
+        idx_capture: dict[TapKey, torch.Tensor] = {}
         capture_sites = {
             (rname): resolve_site(self.bundle, self.doc.sites[str(read.site)])
             for rname, read in taps
@@ -172,7 +175,9 @@ class PointExecutor(ExecutorBase):
                     experts.setdefault(id(site.module), []).append(
                         ExpertsTap(
                             slot=site.interface_slot,
-                            read=_experts_capture(capture, key, site, batch_size),
+                            read=_experts_capture(
+                                capture, idx_capture, key, site, batch_size
+                            ),
                         )
                     )
                     continue
@@ -218,7 +223,13 @@ class PointExecutor(ExecutorBase):
             site = capture_sites[rname]
             raw = capture[tap_key(site)]
             self._read_values[rname] = self._finalize_read(
-                rname, read, site, raw, batch, input_role
+                rname,
+                read,
+                site,
+                raw,
+                batch,
+                input_role,
+                expert_idx=idx_capture.get(tap_key(site)),
             )
 
         if depth:
@@ -271,6 +282,7 @@ class PointExecutor(ExecutorBase):
 
         tokens: list[torch.Tensor] = [nxt]
         steps: dict[TapKey, list[torch.Tensor]] = {}
+        idx_steps: dict[TapKey, list[torch.Tensor]] = {}
         cache = prefill.past_key_values
         with contextlib.ExitStack() as hooks:
             interface: dict[int, list[InterfaceTap]] = {}
@@ -284,10 +296,13 @@ class PointExecutor(ExecutorBase):
                 steps[key] = []
                 if site.kind == "experts":
                     assert site.interface_slot is not None
+                    idx_steps[key] = []
                     experts.setdefault(id(site.module), []).append(
                         ExpertsTap(
                             slot=site.interface_slot,
-                            read=_experts_accumulate(steps[key], site, batch_size),
+                            read=_experts_accumulate(
+                                steps[key], idx_steps[key], site, batch_size
+                            ),
                         )
                     )
                     continue
@@ -356,6 +371,11 @@ class PointExecutor(ExecutorBase):
             site = gen_sites[rname]
             capture_site = gen_capture_sites[rname]
             stacked = torch.cat(steps[tap_key(capture_site)], 1)
+            stacked_idx = (
+                torch.cat(idx_steps[tap_key(capture_site)], 1)
+                if idx_steps.get(tap_key(capture_site))
+                else None
+            )
             dataset_rows = self.role_rows[input_role]
             field = self.role_fields[input_role]
             per_row = [
@@ -385,6 +405,7 @@ class PointExecutor(ExecutorBase):
                 input_role,
                 per_row=per_row,
                 project=project,
+                expert_idx=stacked_idx,
             )
 
     # ------------------------------------------------------------------ #
@@ -465,6 +486,12 @@ def _interface_accumulate(
     return read
 
 
+def _contract_idx(idx: torch.Tensor, batch_size: int) -> torch.Tensor:
+    """The routing table in contract form: ``(tokens, top_k)`` token-major →
+    ``(batch, position, top_k)`` — the same split every flat_batch shape uses."""
+    return idx.reshape(batch_size, -1, idx.shape[-1])
+
+
 def _experts_edit(
     site: ResolvedSite, write: Callable[[torch.Tensor], None], batch_size: int
 ) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
@@ -472,46 +499,74 @@ def _experts_edit(
 
     Same contract as :func:`_interface_edit`: the manager hands out a clone in
     the taps' token-major form, this converts it to ``(batch, position,
-    feature)``, lets the shared write math mutate it, and converts back. The
-    routing table rides along unused here — round 3.2's ``expert`` sub-axis is
-    what consumes it.
+    feature)``, lets the shared write math mutate it, and converts back.
+
+    A site naming an ``expert`` writes only that expert's rows: the write math
+    runs over the whole contract tensor as usual, and the merge keeps its
+    result exactly where the routing table names that expert — an expert no
+    token chose therefore receives a write that lands nowhere, the data-fact
+    twin of the width-0 read.
     """
 
-    def edit(native: torch.Tensor, _idx: torch.Tensor) -> torch.Tensor:
+    def edit(native: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
         contract = to_contract(native, site.shape, batch_size=batch_size)
+        if site.expert is None:
+            write(contract)
+            return from_contract(
+                contract, site.shape, batch_size=batch_size, native=native
+            )
+        original = contract.clone()
         write(contract)
-        return from_contract(contract, site.shape, batch_size=batch_size, native=native)
+        idx_c = _contract_idx(idx, batch_size)  # (b, s, top_k)
+        top_k = idx_c.shape[-1]
+        per_slot = contract.shape[-1] // top_k
+        mask = (
+            (idx_c == site.expert)
+            .unsqueeze(-1)
+            .expand(*idx_c.shape, per_slot)
+            .reshape(contract.shape)
+        )
+        merged = torch.where(mask, contract, original)
+        return from_contract(merged, site.shape, batch_size=batch_size, native=native)
 
     return edit
 
 
 def _experts_capture(
     sink: dict[Any, torch.Tensor],
+    idx_sink: dict[Any, torch.Tensor],
     key: Any,
     site: ResolvedSite,
     batch_size: int,
 ) -> Callable[[torch.Tensor, torch.Tensor], None]:
-    """The read half — the same contract shape ``_capturing`` produces."""
+    """The read half — the same contract shape ``_capturing`` produces, plus
+    the routing table the ``expert:`` sub-axis joins on."""
 
-    def read(native: torch.Tensor, _idx: torch.Tensor) -> None:
+    def read(native: torch.Tensor, idx: torch.Tensor) -> None:
         sink[key] = to_contract(native, site.shape, batch_size=batch_size)
+        idx_sink[key] = _contract_idx(idx, batch_size)
 
     return read
 
 
 def _experts_accumulate(
-    sink: list[torch.Tensor], site: ResolvedSite, batch_size: int
+    sink: list[torch.Tensor],
+    idx_sink: list[torch.Tensor],
+    site: ResolvedSite,
+    batch_size: int,
 ) -> Callable[[torch.Tensor, torch.Tensor], None]:
     """The read half for a decode: append per step, as ``_accumulating`` does.
 
     Safe for every experts-interface shape: the interior is token-indexed, so a
     decode step is exactly one position per row and the steps stack on the
     position axis (unlike ``attention_key``, nothing here grows with the
-    prefix).
+    prefix). The routing table accumulates in lockstep — which experts each
+    *generated* token was sent to.
     """
 
-    def read(native: torch.Tensor, _idx: torch.Tensor) -> None:
+    def read(native: torch.Tensor, idx: torch.Tensor) -> None:
         sink.append(to_contract(native, site.shape, batch_size=batch_size))
+        idx_sink.append(_contract_idx(idx, batch_size))
 
     return read
 

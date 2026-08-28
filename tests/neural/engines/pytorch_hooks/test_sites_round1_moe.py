@@ -3,7 +3,7 @@
 PR3 of the hookpoint-vocabulary stack. Nine components, every one a plain module
 output or input (§2.1) — the router is a module returning a 3-tuple and the
 experts are a fused module, so nothing here needs the ragged value shape that
-the per-expert interior does (that is ``expert_output``, follow-up F2).
+the per-expert interior does (that is round 3's ``expert_output``).
 
 Two kinds of assertion, as in PR2. Shapes are 📐 measurements against a real
 ``qwen3_5_moe`` checkpoint, so a mismatch is a finding. Identities are stronger:
@@ -237,14 +237,6 @@ def test_an_expert_sub_axis_refuses(qwen35moe_bundle):
             SiteSpec(component="router_scores", layer=0, expert=3),
         )
     assert "no per-expert axis" in str(excinfo.value)
-
-
-def test_expert_output_still_refuses_and_says_why(qwen35moe_bundle):
-    """The per-expert interior is follow-up F2, and its refusal must not read
-    like the router's (which now resolves)."""
-    with pytest.raises(NotImplementedError) as excinfo:
-        resolve_site(qwen35moe_bundle, SiteSpec(component="expert_output", layer=0))
-    assert "ragged" in str(excinfo.value)
 
 
 # --------------------------------------------------------------------------- #

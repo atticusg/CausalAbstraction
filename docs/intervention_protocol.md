@@ -279,8 +279,8 @@ execution order:
 `attention_key` · `attention_scores` · `attention_z` · `attention_result` ·
 `attention_output` · `attention_premix` · `attention_probs` · `block_mid` ·
 `mlp_input_norm` · `mlp_input` · `router_logits` · `router_scores` ·
-`expert_idx` · `expert_activation` · `expert_output` · `routed_output` ·
-`mlp_activation` ·
+`expert_idx` · `expert_gate_proj` · `expert_up_proj` · `expert_activation` ·
+`expert_output` · `routed_output` · `mlp_activation` ·
 `shared_expert_gate_proj` · `shared_expert_up_proj` ·
 `shared_expert_activation` · `shared_expert_output` · `shared_expert_gate` ·
 `mlp_output` · `block_output` · `ln_final` · `lm_head`
@@ -318,9 +318,21 @@ execution order:
   family — represented **token-major**: `(batch·position, top_k · d_expert)`,
   slot *k* the *k*-th ranked expert, joined to experts through `expert_idx`.
   Its slot axis is a ranking, like `router_scores`, with the same
-  basis-fitting refusal. The remaining interior slots (`expert_gate_proj`,
-  `expert_up_proj`, `expert_output`) and the ragged `expert:` sub-axis land
-  with round 3.2.
+  basis-fitting refusal — and so are the other interior slots:
+  `expert_gate_proj` and `expert_up_proj` are the two halves of the fused
+  `[gate_e | up_e]` projection (one capture, two addresses — the
+  `attention_gate` precedent), and `expert_output` is the down-projection's
+  output **before** the routing weight, pinned by the identity
+  `routed_output == Σ_slot expert_output · router_scores` (exactly, 0.0).
+- **`expert: e` is the ragged face of the routed interior.** On the four
+  interior components it selects the (position, slot) pairs the router sent to
+  expert *e* and returns flat rows plus per-example widths (a ragged value);
+  an expert no token chose returns width-0 rows — a data fact, not an error.
+  A write under `expert: e` lands only on that expert's rows (and therefore
+  lands nowhere when no addressed token chose it). `featurizer`/`dims` are
+  refused on this face: they are sized against the token-major `top_k · d`
+  axis and these rows are `d`-wide. On every other MoE component `expert`
+  is still refused — those tensors have no per-expert axis.
 - **`expert_idx` is a routing table, not a feature space** — the same rule as
   `input_ids`: integer ids, no featurizer, no width. And `router_scores` has a
   width but its axis is a per-token **ranking**, not a basis: column *k* is the
