@@ -476,7 +476,32 @@ class PointExecutor:
         steps: dict[tuple[int, str], list[torch.Tensor]] = {}
         cache = prefill.past_key_values
         with contextlib.ExitStack() as hooks:
-            for site in gen_capture_sites.values():
+            for name, site in gen_capture_sites.items():
+                if site.component == "attention_probs":
+                    # 📐 Each decode step attends over the whole cache, so the
+                    # pattern is (batch, heads, 1, prompt + step): the key axis
+                    # GROWS by one per step while the query axis stays 1. The
+                    # accumulating sink stacks steps on dim 1, which for every
+                    # other component is the position axis and here is heads —
+                    # so the concat either raises a bare torch size error
+                    # (measured: "Expected size 9 but got size 10") or, for a
+                    # single-step budget, silently returns one step's pattern
+                    # shaped like a frame. Neither is a continuation read.
+                    #
+                    # Saying what a correct one would mean — a ragged key axis
+                    # per step, addressed per query row — is exactly the typed
+                    # feature-shape descriptor, follow-up F1. Refuse by name
+                    # until then, as round 1 does for every other thing the
+                    # descriptor is needed for.
+                    raise ProtocolError(
+                        "P4",
+                        f"read {name!r} reads 'attention_probs' in the "
+                        "generated frame, which round 1 does not support: with "
+                        "a KV cache each step's pattern has a different key "
+                        "width, so the steps do not stack into one tensor. "
+                        "Read it in the prompt frame, or wait on the typed "
+                        "feature-shape descriptor (follow-up F1).",
+                    )
                 key = _tap_key(site)
                 if key not in steps:
                     steps[key] = []
