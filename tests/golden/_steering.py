@@ -7,7 +7,7 @@ would need an unauthorable 4096x4096 matrix param. It is exactly what the
 spec's local-only ``pytorch_fn`` mechanism exists for: the generated
 steering documents carry ``{"pytorch_fn": {"qualname":
 "tests.golden._steering.apply_target_<n>"}}`` and route only to local
-backends (``pytorch_fn_local``).
+engines (``pytorch_fn_local``).
 
 The probe weights are process-local state set by the golden test after it
 fits the probes (``configure``); the documents are generated per run and

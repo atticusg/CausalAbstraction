@@ -4,7 +4,7 @@
 
 A framework for **mechanistic interpretability** — reverse-engineering the algorithms language models use internally using **causal abstraction**.
 
-You write a high-level causal model describing *how you think* an LM solves a task, then run experiments to test whether the LM's internal components actually implement that algorithm. Every experiment is a serializable **intervention protocol** — a JSON document naming sites, reads, edits, intervened models, and metrics — validated, digested, and executed by a backend. The document is the seam: backends (pytorch hooks today; tensor-parallel engines tomorrow) implement against the same format.
+You write a high-level causal model describing *how you think* an LM solves a task, then run experiments to test whether the LM's internal components actually implement that algorithm. Every experiment is a serializable **intervention protocol** — a JSON document naming sites, reads, edits, intervened models, and metrics — validated, digested, and executed by an engine. The document is the seam: engines (pytorch hooks today; tensor-parallel engines tomorrow) implement against the same format.
 
 ## Quick Start
 
@@ -14,7 +14,7 @@ You write a high-level causal model describing *how you think* an LM solves a ta
    cd causalab
    uv sync
    ```
-2. **Read the two specs.** [`docs/intervention_protocol.md`](docs/intervention_protocol.md) — the document format (sections, the `do` algebra, sweeps, validation, digests, the backend contract). [`docs/workflow_protocol.md`](docs/workflow_protocol.md) — chaining protocol runs with script steps: inputs, one Python script, declared outputs.
+2. **Read the two specs.** [`docs/intervention_protocol.md`](docs/intervention_protocol.md) — the document format (sections, the `do` algebra, sweeps, validation, digests, the engine contract). [`docs/workflow_protocol.md`](docs/workflow_protocol.md) — chaining protocol runs with script steps: inputs, one Python script, declared outputs.
 3. **Run a shipped protocol:**
    ```bash
    uv run causalab explain  causalab/configs/protocols/interchange.json --data-root <data>
@@ -39,11 +39,11 @@ You write a high-level causal model describing *how you think* an LM solves a ta
 | `explain <doc>` | models, forward plan, point count, derived `requires`, digest, save products |
 | `digest <doc>` | the campaign digest |
 
-Common flags: `--set path=value` (ad-hoc override — exploration only), `--data-root` / `--artifacts-root` (resolution roots), `--device` (reference-backend placement, `run` only), `--dtype` (shorthand for `--set model.dtype=…`: precision is a document fact, so it enters the digest), `--points START:STOP` (execute one shard of a swept campaign — the seam external schedulers dispatch on; digests are unaffected). The same verbs dispatch on workflow documents (they carry a `steps` section).
+Common flags: `--set path=value` (ad-hoc override — exploration only), `--data-root` / `--artifacts-root` (resolution roots), `--device` (reference-engine placement, `run` only), `--dtype` (shorthand for `--set model.dtype=…`: precision is a document fact, so it enters the digest), `--points START:STOP` (execute one shard of a swept campaign — the seam external schedulers dispatch on; digests are unaffected). The same verbs dispatch on workflow documents (they carry a `steps` section).
 
 `run` also writes `<out>/protocol.json`: the canonical document (every default materialized — dtype and quantization included), its digest, the per-point provenance digests, and the method it was composed from. That file is what someone reproducing the run reads first.
 
-**Execution scale is not document vocabulary.** Documents and workflows never name devices, hosts, or job systems: backends own intra-run execution, and job dispatch is site tooling outside this repository (spec §8, "Execution scale").
+**Execution scale is not document vocabulary.** Documents and workflows never name devices, hosts, or job systems: engines own intra-run execution, and job dispatch is site tooling outside this repository (spec §8, "Execution scale").
 
 ## Shipped documents
 
@@ -67,11 +67,14 @@ The golden-corpus documents ship as user-facing presets in [`causalab/configs/pr
 
 ```
 causalab/
-├── protocol/        # backend-free document layer: load, validate, canonicalize,
-│                    #   digest, sweep expansion, backend routing, workflow model, CLI
+├── protocol/        # engine-free document layer: load, validate, canonicalize,
+│                    #   digest, sweep expansion, engine routing, workflow model, CLI
 ├── neural/
-│   ├── pytorch_hooks/  # the reference backend: sites, positions, mechanisms,
-│   │                   #   featurizers, metrics, train loop, stamping
+│   ├── shared/      # what every engine uses: sites, encoding, layouts,
+│   │                #   mechanisms, featurizers, metrics, outputs, executor base
+│   ├── engines/
+│   │   ├── pytorch_hooks/    # the reference engine: hooks, decode, train loop
+│   │   └── nnsight_tracing/  # the nnsight engine: traces (the 'nnsight' extra)
 │   └── token_positions.py
 ├── analysis/        # numerical analysis a script step runs (fits, statistics, operands)
 ├── workflow/        # the workflow runner: run-tree overlay, script invocation, manifest
