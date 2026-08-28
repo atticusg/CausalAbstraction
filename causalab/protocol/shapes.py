@@ -82,6 +82,7 @@ __all__ = [
     "bsd",
     "flat_td",
     "flat_topk",
+    "flat_topk_features",
 ]
 
 #: What one axis of a tapped tensor means.
@@ -381,6 +382,23 @@ def flat_topk(
         flat_batch=True,
         integral=integral,
         ranking=ranking,
+        note=note,
+    )
+
+
+def flat_topk_features(k: int, width: int, *, note: str | None = None) -> FeatureShape:
+    """``(batch*position, k*width)`` — one ``width``-wide vector per routed
+    expert slot, token-major.
+
+    The per-expert MoE interior (round N6). The serving engine presents each
+    tensor with one row per token and the ``k`` slots' vectors side by side,
+    whatever row order the kernel computed in: grouped_mm's expert-sorted
+    layout is an implementation detail the eager loop does not even share, so
+    it never reaches the vocabulary.
+    """
+    return FeatureShape(
+        axes=(_BATCH, _POSITION, Axis("topk", k), Axis("feature", width)),
+        flat_batch=True,
         note=note,
     )
 

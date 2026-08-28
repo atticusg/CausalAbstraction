@@ -45,16 +45,28 @@ class PytorchHooksEngine(Engine):
             "writable_attention_probs",
         }
     )
-    # The reference engine serves the whole current vocabulary, writes
-    # included. Read-only/swap-only components and stream constraints are
-    # *protocol policy* (the sites.py refusal tables, shared across engines),
-    # not capability gaps: declaring router_logits unwritable here would turn
-    # "a write here reaches nothing, write router_scores instead" into
-    # "try another engine", which is the wrong answer for every engine. A
-    # component this engine cannot serve (a future interior another engine
-    # owns) is simply absent from these sets and routes away by name.
-    components = frozenset(COMPONENTS)
-    writable_components = frozenset(COMPONENTS)
+    # The reference engine serves the module-boundary and attention-interface
+    # vocabulary, writes included. Read-only/swap-only components and stream
+    # constraints are *protocol policy* (the sites.py refusal tables, shared
+    # across engines), not capability gaps: declaring router_logits unwritable
+    # here would turn "a write here reaches nothing, write router_scores
+    # instead" into "try another engine", which is the wrong answer for every
+    # engine. The per-expert MoE interior (N6) is the first vocabulary another
+    # engine owns: those tensors live inside the fused experts forward, where
+    # no hook can reach — absent from these sets, so routing names the nnsight
+    # engine for free, and a document arriving here unrouted refuses by name
+    # in the executor.
+    _EXPERT_INTERIOR = frozenset(
+        {
+            "expert_gate_proj",
+            "expert_up_proj",
+            "expert_activation",
+            "expert_permutation",
+            "expert_output",
+        }
+    )
+    components = frozenset(COMPONENTS) - _EXPERT_INTERIOR
+    writable_components = frozenset(COMPONENTS) - _EXPERT_INTERIOR
     is_local = True
 
     def __init__(self, *, device: str = "cpu") -> None:

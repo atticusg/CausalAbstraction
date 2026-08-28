@@ -44,6 +44,7 @@ import torch
 
 from causalab.neural.engines.nnsight_tracing.addresses import (
     ADDRESSES,
+    MOE_EXPERTS,
     AddressResolutionError,
     SourceAddress,
     match_op,
@@ -191,31 +192,40 @@ class TracePointExecutor(ExecutorBase):
 
         An ``interface_slot`` marks a component with no module boundary (the
         four function-interior slots, and the pattern — whose *write* has no
-        boundary; this engine serves its read from the same op). Those are
-        looked up in the per-stream address table; everything else is the
-        envoy path unchanged.
+        boundary; this engine serves its read from the same op); those are
+        looked up in the per-stream address table. ``kind="interior"`` marks
+        the per-expert MoE interior, keyed by component. Everything else is
+        the envoy path unchanged.
         """
-        if site.interface_slot is None:
+        if site.kind == "interior":
+            address = MOE_EXPERTS.get(site.component)
+            where = "the MOE_EXPERTS table"
+        elif site.interface_slot is not None:
+            stream = self.bundle.stream_at(site.layer)
+            address = ADDRESSES.get(stream, {}).get(site.component)
+            where = f"the {stream!r} table"
+        else:
             return ResolvedTap(site=site)
-        stream = self.bundle.stream_at(site.layer)
-        address = ADDRESSES.get(stream, {}).get(site.component)
         if address is None:
             raise ProtocolError(
                 "P4",
-                f"component {site.component!r} has no interior address for a "
-                f"{stream!r} layer in the nnsight engine's table "
+                f"component {site.component!r} has no interior address in "
+                f"{where} of the nnsight engine "
                 "(neural/engines/nnsight_tracing/addresses.py) — extend the "
                 "table, or route to the reference engine.",
             )
         return ResolvedTap(site=site, source=address)
 
-    def _source_value(self, tap: ResolvedTap) -> Any:
-        """The traced tensor an interior address names, navigated in-trace.
+    def _source_value(self, tap: ResolvedTap) -> tuple[Any, Any]:
+        """The traced tensor an interior address names, navigated in-trace —
+        plus, for an ``align`` address, the kernel's sorted→token permutation.
 
         Memoized per trace by the address' op identity (before
         ``tuple_index``), so two components on one op — q and k are the two
-        elements of one rope call — request its value once; ``.source`` ops
-        refuse a second request after the model has run past them.
+        elements of one rope call — request it once; ``.source`` ops refuse a
+        second request after the model has run past them. The permutation is
+        requested *first*, matching op order (the sort fires before anything
+        it sorted for).
         """
         address = tap.source
         assert address is not None
@@ -228,20 +238,59 @@ class TracePointExecutor(ExecutorBase):
             address.arg,
         )
         if key not in self._trace_sources:
-            op = self._drill(site.module.source, address.op_pattern, site)
+            root = self._drill(site.module.source, address.op_pattern, site)
+            perm = None
+            if address.align is not None:
+                # its own cache slot: several addresses share one sort op, and
+                # the permutation must be requested exactly once per trace
+                perm_key = (id(site.module), address.op_pattern, "align", address.align)
+                if perm_key not in self._trace_sources:
+                    self._trace_sources[perm_key] = self._drill(
+                        root.source, address.align, site
+                    ).output[1]
+                perm = self._trace_sources[perm_key]
+            op = root
             for entry in address.peel:
                 op = self._drill(op.source, entry, site)
             if address.field is not None:
                 op = self._drill(op.source, address.field, site)
             if address.arg is not None:
                 index, keyword = address.arg
-                self._trace_sources[key] = op.inputs[index][keyword]
+                self._trace_sources[key] = (op.inputs[index][keyword], perm)
             else:
-                self._trace_sources[key] = op.output
-        value = self._trace_sources[key]
+                self._trace_sources[key] = (op.output, perm)
+        value, perm = self._trace_sources[key]
         if address.tuple_index is not None:
             value = value[address.tuple_index]
+        return value, perm
+
+    def _present_native(self, tap: ResolvedTap, value: Any, perm: Any) -> Any:
+        """The value as the declared shape describes it — semantic order.
+
+        An ``align`` address' rows are in the kernel's expert-sorted order:
+        un-sort them (a gather, so the result is a copy — writes go back
+        through :meth:`_land_writes`' restore path, never through this).
+        ``expert_rows`` re-packs ``(batch·position·top_k, …)`` rows into the
+        declared 2-D native ``(batch·position, top_k·…)``.
+        """
+        address = tap.source
+        assert address is not None
+        if address.align is not None:
+            value = value[torch.argsort(perm)]
+        if address.expert_rows:
+            # (batch·position·top_k, d) → (batch·position, top_k·d); an
+            # integral tap has no feature axis, so its row is the top-k itself
+            row_width = tap.site.shape.width or self._topk_width(tap.site)
+            value = value.reshape(-1, row_width)
         return value
+
+    @staticmethod
+    def _topk_width(site: ResolvedSite) -> int:
+        width = next(
+            (axis.width for axis in site.shape.axes if axis.kind == "topk"), None
+        )
+        assert width is not None  # expert_rows implies a top-k axis
+        return width
 
     def _drill(self, source: Any, pattern: str, site: ResolvedSite) -> Any:
         """One matched op on one ``.source``, with the refusal made legible."""
@@ -275,22 +324,32 @@ class TracePointExecutor(ExecutorBase):
         keeps whatever the checkpoint prefers (sdpa) — D5, decided: on demand.
         """
         model = self.bundle.model
-        previous: str | None = None
-        if "attn_eager" in required:
+        previous_attn: str | None = None
+        previous_experts: str | None = None
+        if required:
             # 📐 nnsight dispatches the real model on first trace, and dispatch
             # rebuilds the config — a switch applied before it is silently
             # reset (measured: eager set pre-dispatch, sdpa ran). Dispatch
             # first, so the switch lands on the model that will run.
             if not getattr(model, "dispatched", True):
                 model.dispatch()
-            if model.config._attn_implementation != "eager":
-                previous = model.config._attn_implementation
-                model.set_attn_implementation("eager")
+        if "attn_eager" in required and model.config._attn_implementation != "eager":
+            previous_attn = model.config._attn_implementation
+            model.set_attn_implementation("eager")
+        if "experts_grouped" in required:
+            # grouped_mm is the checkpoint default (an unset value means it),
+            # so this only ever switches back from an explicit "eager"
+            current = getattr(model.config, "_experts_implementation", None)
+            if current is not None and current != "grouped_mm":
+                previous_experts = current
+                model.set_experts_implementation("grouped_mm")
         try:
             yield
         finally:
-            if previous is not None:
-                model.set_attn_implementation(previous)
+            if previous_attn is not None:
+                model.set_attn_implementation(previous_attn)
+            if previous_experts is not None:
+                model.set_experts_implementation(previous_experts)
 
     # ------------------------------------------------------------------ #
     # in-trace plumbing
@@ -301,7 +360,8 @@ class TracePointExecutor(ExecutorBase):
         off the op its interior address names."""
         site = tap.site
         if tap.source is not None:
-            native = self._source_value(tap)
+            raw, perm = self._source_value(tap)
+            native = self._present_native(tap, raw, perm)
             return to_contract(native, site.shape, batch_size=batch_size)
         envoy = site.module
         if site.kind == "out":
@@ -331,14 +391,27 @@ class TracePointExecutor(ExecutorBase):
         site = tap.site
         batch_size = int(batch.input_ids.shape[0])
         if tap.source is not None:
-            value = self._source_value(tap)
-            native = value.clone()
+            address = tap.source
+            raw, perm = self._source_value(tap)
+            native = self._present_native(tap, raw, perm).clone()
             contract = to_contract(native, site.shape, batch_size=batch_size)
             self._apply_writes_to_contract(entries, input_role, batch, contract)
             new_native = from_contract(
                 contract, site.shape, batch_size=batch_size, native=native
             )
-            value[:] = new_native
+            if address.expert_rows:
+                # back to one row per (token, slot), then to the kernel's own
+                # order — the exact inverse of _present_native. (The integral
+                # expert tap is read-only policy, so a writable one always has
+                # a feature axis to size the row by.)
+                width = site.shape.width
+                assert width is not None
+                rows = new_native.reshape(-1, width // self._topk_width(site))
+                if address.align is not None:
+                    rows = rows[perm]
+                raw[:] = rows
+            else:
+                raw[:] = new_native
             return
         envoy = site.module
         if site.kind == "out":

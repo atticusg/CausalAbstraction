@@ -101,6 +101,13 @@ READ_ONLY_COMPONENTS: dict[str, str] = {
         "write here cannot reach anything — write 'router_scores' to reweight "
         "the chosen experts, or 'expert_idx' to change which experts fire"
     ),
+    "expert_permutation": (
+        "it is the serving kernel's row bookkeeping (where each (token, slot) "
+        "row sits in expert-sorted order), not routing: the kernel derives it "
+        "from the routing table, and an edited copy would describe rows that "
+        "were never sorted that way. Write 'expert_idx' to change which "
+        "experts fire, or 'router_scores' to reweight them"
+    ),
 }
 
 #: Components a write may only **replace**, never arithmetically adjust, mapped
@@ -460,8 +467,8 @@ def _check_stream(bundle: Any, component: str, spec: SiteSpec, layer: int) -> No
 
 #: The MoE surface round 1 exposes. Every one of these is a plain module output
 #: (or input) — see §2.1 of the plan note: the router is a module returning a
-#: 3-tuple and the experts are a fused module, so none of this needs the ragged
-#: value shape that the per-expert interior (``expert_output``) does.
+#: 3-tuple and the experts are a fused module, so none of this needs anything
+#: beyond a module boundary.
 _MOE_COMPONENTS: frozenset[str] = frozenset(
     {
         "router_logits",
@@ -473,6 +480,22 @@ _MOE_COMPONENTS: frozenset[str] = frozenset(
         "shared_expert_activation",
         "shared_expert_output",
         "shared_expert_gate",
+    }
+)
+
+#: The per-expert interior (N6): tensors the fused experts module computes
+#: *inside* its forward, one vector per routed (token, slot) pair. No module
+#: boundary exists for any of them, so they resolve to ``kind="interior"`` —
+#: the analogue of ``"interface"`` for the attention function — and the
+#: engine that serves interiors (the nnsight engine, through its `.source`
+#: address table) lands them; the reference engine refuses by name.
+_EXPERT_INTERIOR: frozenset[str] = frozenset(
+    {
+        "expert_gate_proj",
+        "expert_up_proj",
+        "expert_activation",
+        "expert_permutation",
+        "expert_output",
     }
 )
 
@@ -508,18 +531,32 @@ def _moe_site(
         )
     # The `expert` sub-axis selects one of `num_experts` experts, which none of
     # these tensors is indexed by: the router's axes are all-experts (logits) or
-    # top-k (scores, indices), and the shared expert is not one of the routed
-    # ones. Refusing beats silently ignoring it — the mistake `stream` made.
+    # top-k (scores, indices), the shared expert is not one of the routed ones,
+    # and the per-expert interior is indexed by routed *slot* (its top-k axis;
+    # which expert fills a slot is `expert_idx`'s answer). Refusing beats
+    # silently ignoring it — the mistake `stream` made.
     if spec.expert is not None:
         raise ProtocolError(
             "P4",
             f"site names expert {spec.expert!r} on component {component!r}, "
             "which has no per-expert axis: the router's axes are all-experts "
-            "or top-k, and the shared expert is not one of the routed experts. "
-            "The per-expert interior is 'expert_output' (follow-up F2).",
+            "or top-k, the shared expert is not one of the routed experts, and "
+            "the per-expert interior is indexed by routed slot — read "
+            "'expert_idx' for which expert fills each slot.",
         )
 
     shape = component_shape(bundle.info, component)
+
+    if component in _EXPERT_INTERIOR:
+        # inside the fused experts forward — no module boundary anywhere; the
+        # experts module is carried because it identifies whose forward to tap
+        return ResolvedSite(
+            module=mlp.experts,
+            kind="interior",
+            layer=layer,
+            component=component,
+            shape=shape,
+        )
 
     def flat(module: Any, kind: str, tuple_index: int | None = None) -> ResolvedSite:
         return ResolvedSite(
@@ -646,15 +683,6 @@ def resolve_site(bundle: Any, spec: SiteSpec) -> ResolvedSite:
         # form, which is what makes the executor refuse to gather or featurize
         # it without any component name appearing in that refusal.
         return tap(_attn(bundle, layer), "out", tuple_index=1, interface_slot="probs")
-    if component == "expert_output":
-        raise NotImplementedError(
-            f"the pytorch_hooks engine has no tap for {component!r} yet — "
-            "expert_output names the per-expert loop interior, which needs the "
-            "ragged value shape (follow-up F2). The rest of the MoE surface — "
-            "the router, the combined routed output and the shared expert — "
-            "resolves; see _moe_site (sites.py)."
-        )
-
     block = _blocks(bundle)[layer]
     if component == "attention_input_norm":
         # input_layernorm's OUTPUT: what the mixer actually consumes
@@ -712,7 +740,7 @@ def resolve_site(bundle: Any, spec: SiteSpec) -> ResolvedSite:
             interface_slot=ATTENTION_FUNCTION_SLOTS[component],
         )
     mlp = block.mlp
-    if component in _MOE_COMPONENTS:
+    if component in _MOE_COMPONENTS or component in _EXPERT_INTERIOR:
         return _moe_site(bundle, mlp, component, spec, layer)
     if component == "mlp_input":
         return tap(mlp, "in")
