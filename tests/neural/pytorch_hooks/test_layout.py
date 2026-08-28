@@ -26,6 +26,15 @@ pytestmark = pytest.mark.unit
 BATCH, SEQ, FEATURE = 2, 3, 5
 
 
+def _feature(layout: str) -> int:
+    """The feature width the contract has for this layout.
+
+    ``"bs"`` has no native feature axis, so its contract width is 1 by
+    definition rather than by choice — the generic assertions below are
+    parametrized on this instead of on the module-level ``FEATURE``."""
+    return 1 if layout == "bs" else FEATURE
+
+
 def _native(layout: str) -> torch.Tensor:
     if layout == "bsd":
         return torch.arange(BATCH * SEQ * FEATURE, dtype=torch.float32).reshape(
@@ -39,6 +48,8 @@ def _native(layout: str) -> torch.Tensor:
         return torch.arange(BATCH * FEATURE * SEQ, dtype=torch.float32).reshape(
             BATCH, FEATURE, SEQ
         )
+    if layout == "bs":
+        return torch.arange(BATCH * SEQ, dtype=torch.float32).reshape(BATCH, SEQ)
     raise AssertionError(layout)
 
 
@@ -46,7 +57,7 @@ def _native(layout: str) -> torch.Tensor:
 def test_to_contract_yields_the_executor_shape(layout: str) -> None:
     """Whatever the tap's native shape, the executor sees (batch, pos, feature)."""
     got = to_contract(_native(layout), layout, batch_size=BATCH)
-    assert got.shape == (BATCH, SEQ, FEATURE)
+    assert got.shape == (BATCH, SEQ, _feature(layout))
 
 
 @pytest.mark.parametrize("layout", LAYOUTS)
@@ -72,9 +83,10 @@ def test_an_in_place_edit_through_the_contract_reaches_the_native_tensor(
     """
     native = _native(layout)
     contract = to_contract(native, layout, batch_size=BATCH)
-    contract[0, 1, 2] = -99.0
+    cell = (0, 1, _feature(layout) - 1)
+    contract[cell] = -99.0
     back = from_contract(contract, layout, batch_size=BATCH)
-    assert to_contract(back, layout, batch_size=BATCH)[0, 1, 2] == -99.0
+    assert to_contract(back, layout, batch_size=BATCH)[cell] == -99.0
 
 
 def test_bsd_is_the_identity() -> None:

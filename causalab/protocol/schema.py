@@ -94,17 +94,21 @@ __all__ = [
 # --------------------------------------------------------------------------- #
 
 Component = Literal[
+    "input_ids",
     "embeddings",
     "block_input",
-    "block_output",
+    "attention_input_norm",
     "attention_output",
     "attention_value",
     "attention_probs",
+    "block_mid",
+    "mlp_input_norm",
     "mlp_input",
     "mlp_output",
     "mlp_activation",
     "router_logits",
     "expert_output",
+    "block_output",
     "ln_final",
     "lm_head",
 ]
@@ -113,7 +117,11 @@ Component = Literal[
 COMPONENTS: tuple[Component, ...] = get_args(Component)
 
 #: Components that carry no ``layer`` field.
-LAYERLESS_COMPONENTS: frozenset[str] = frozenset({"embeddings", "ln_final", "lm_head"})
+#: ``input_ids`` joins these because it is the model's *input* (§5.4), not an
+#: activation inside a block — there is no layer at which to read it.
+LAYERLESS_COMPONENTS: frozenset[str] = frozenset(
+    {"input_ids", "embeddings", "ln_final", "lm_head"}
+)
 
 FeaturizerKind = Literal["identity", "subspace", "pca", "sae", "standardize", "gate"]
 FEATURIZER_KINDS: tuple[FeaturizerKind, ...] = get_args(FeaturizerKind)
