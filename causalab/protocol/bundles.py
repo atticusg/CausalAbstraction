@@ -1,7 +1,7 @@
 """Addressing one entry inside a ``.safetensors`` bundle (§2.5, §2.6).
 
 A run writes **one file per ``save`` entry**, across every point of a swept
-document: the backend suffixes each tensor key with the point's coordinate
+document: the engine suffixes each tensor key with the point's coordinate
 label (``weight[k=8,seed=0]``, ``v_mean[target.layer=12]`` —
 :func:`causalab.protocol.sweep.coordinate_label`). Consumers, on the other
 side, name a *slot* (``weight`` for a subspace/pca bundle, ``value`` for a

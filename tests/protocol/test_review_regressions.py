@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from causalab.protocol.backend import requires_campaign
+from causalab.protocol.engine import requires_campaign
 from causalab.protocol.canonical import canonicalize, digest
 from causalab.protocol.errors import ParseError, ProtocolError, ValidationError
 from causalab.protocol.loader import load, load_text
