@@ -792,7 +792,22 @@ class PointExecutor:
                     # Symmetric with the read (see _whole_attention_pattern):
                     # the pattern's feature axis is a position axis, so the
                     # position gather below would index heads with positions.
-                    # Round 1 replaces the whole pattern.
+                    # Round 1 replaces the whole pattern — which is what only
+                    # `swap` means. Any other mechanism (a delta, a scale, a
+                    # clamp) would leave rows that no longer sum to 1, and the
+                    # code below would treat its payload as a whole pattern
+                    # anyway; refuse by name rather than produce one that is
+                    # plausible and wrong.
+                    if str(write.do.mechanism) != "swap":
+                        raise ProtocolError(
+                            "P4",
+                            f"write {ename!r} applies {str(write.do.mechanism)!r} "
+                            "to 'attention_probs' — round 1 supports only a "
+                            "whole-pattern 'swap' (an interchange). Anything "
+                            "that re-weights rows needs the typed feature-shape "
+                            "descriptor and a renormalization story "
+                            "(follow-up F1).",
+                        )
                     _whole_attention_pattern(ename, write, tensor)
                     replacement = self._operand_lookup(write.do.payload)
                     if replacement.shape != tensor.shape:

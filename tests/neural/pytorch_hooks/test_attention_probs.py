@@ -325,3 +325,104 @@ def test_an_interchange_across_different_lengths_refuses(qwen35moe_bundle):
             counterfactual_texts=["a slow green turtle sleeps very deeply indeed"],
         ).read_value("after")
     assert "same" in str(excinfo.value)
+
+
+# --------------------------------------------------------------------------- #
+# the wrapper's math belongs to the module's own family
+# --------------------------------------------------------------------------- #
+
+
+def test_the_post_softmax_math_is_the_modules_own(qwen35moe_bundle, llama_bundle):
+    """The registry entry intercepts every attention forward while installed,
+    so the wrapper must resolve `eager_attention_forward` from each module's
+    own modeling file — borrowing one family's function would silently replace
+    another's math (gemma-2's eager soft-caps the logits, for instance)."""
+    from causalab.neural.pytorch_hooks.attention_probs import _post_softmax_math
+
+    qwen_eager, qwen_repeat = _post_softmax_math(qwen35moe_bundle.mixer_at(3))
+    llama_eager, llama_repeat = _post_softmax_math(llama_bundle.mixer_at(0))
+    assert "qwen3_5" in qwen_eager.__module__
+    assert "llama" in llama_eager.__module__
+    assert qwen_eager is not llama_eager
+    assert qwen_repeat is not llama_repeat
+
+
+def test_a_family_without_eager_math_refuses_by_name():
+    """A modeling file that exports no eager function cannot be wrapped, and
+    approximating it with another family's math is exactly the silent drift
+    this module exists to prevent — so it refuses, naming what is missing."""
+    from causalab.neural.pytorch_hooks.attention_probs import _post_softmax_math
+
+    class FakeMixer(torch.nn.Module):
+        pass
+
+    with pytest.raises(ProtocolError) as excinfo:
+        _post_softmax_math(FakeMixer())
+    assert "eager_attention_forward" in str(excinfo.value)
+
+
+def test_an_identity_edit_is_bit_identical_on_llama(llama_bundle):
+    """The identity pin, on a second family: this exercises the per-module
+    resolution end to end — the wrapper must find and defer to *llama's*
+    modeling file, not the qwen one the fixture above uses."""
+    encoded = llama_bundle.tokenizer(BASE_TEXT, return_tensors="pt")
+    attn = llama_bundle.mixer_at(0)
+
+    with torch.no_grad():
+        clean = llama_bundle.model(**encoded).logits.clone()
+
+    seen: dict[str, object] = {}
+
+    def identity(probs: torch.Tensor) -> None:
+        seen["shape"] = tuple(probs.shape)
+
+    with eager_attention_writes({id(attn): identity}):
+        with torch.no_grad():
+            recomputed = llama_bundle.model(**encoded).logits.clone()
+
+    assert seen["shape"], "the wrapper never ran — the registry was not consulted"
+    assert torch.equal(recomputed, clean)
+
+
+def test_writing_the_pattern_changes_the_logits_on_llama(llama_bundle):
+    """nnterp check 3 on the second family, through a real document.
+
+    The counterfactual is 8 tokens under *llama's* tokenizer, matching
+    BASE_TEXT — the module-level CF_TEXT is length-matched for the qwen
+    fixture and comes out one token long here."""
+    executor = executor_for(
+        _swap_doc(layer=0),
+        llama_bundle,
+        base_texts=[BASE_TEXT],
+        counterfactual_texts=["a big red dog barks loud"],
+    )
+    clean = executor.read_value("clean")
+    after = executor.read_value("after")
+    assert float((after - clean).abs().max()) > 0.0
+
+
+# --------------------------------------------------------------------------- #
+# round 1 writes are interchanges: only `swap` means "replace the pattern"
+# --------------------------------------------------------------------------- #
+
+
+def test_a_non_swap_pattern_write_is_refused(qwen35moe_bundle):
+    """A delta or clamp on the pattern would leave rows that no longer sum
+    to 1, and the whole-pattern branch would misread its payload as a
+    replacement anyway — refused by name, pointing at F1."""
+    doc = _swap_doc()
+    doc["writes"]["patch"] = {
+        "site": "tap",
+        "pos": "all",
+        "do": {"clamp": {"lo": 0.0, "hi": 0.0}},
+    }
+    del doc["reads"]["v_cf"]
+    with pytest.raises(ProtocolError) as excinfo:
+        executor_for(
+            doc,
+            qwen35moe_bundle,
+            base_texts=[BASE_TEXT],
+            counterfactual_texts=[CF_TEXT],
+        ).read_value("after")
+    message = str(excinfo.value)
+    assert "clamp" in message and "swap" in message
