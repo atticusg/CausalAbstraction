@@ -311,16 +311,42 @@ execution order:
   `router_probs` is *derived* — `softmax(router_logits)` — and is not a
   component. `routed_output` is the combined expert output, and the **shared
   expert** exposes its SwiGLU interior plus `shared_expert_gate`, the scalar
-  that mixes it in. The **per-expert interior** — `expert_gate_proj`,
-  `expert_up_proj`, `expert_activation` (the routed experts' SwiGLU, one
-  vector per routed slot) and `expert_output` (each slot's weighted
-  contribution, summing to `routed_output` over the top-k axis) — is
-  presented **token-major**, `(batch·position, top_k·width)`, whatever row
-  order the serving kernel computed in; `expert_permutation` (integral,
-  read-only) is that kernel's row bookkeeping for anyone aligning raw
-  kernel-order tensors. These live inside the fused experts forward, where no
-  module boundary exists — the nnsight engine serves them through its
-  `.source` address table, and the reference engine refuses them by name.
+  that mixes it in. The *routed* per-expert interior (round 3) has no module
+  boundaries at all — the experts module stores its weights as 3-D parameters
+  and computes the whole interior inside one dispatched
+  `ALL_EXPERTS_FUNCTIONS["grouped_mm"]` call — so its components are reached by
+  wrapping that dispatch entry, and they carry a **dispatch pin**: a model
+  loaded with any other `experts_implementation` (the `"eager"` per-expert
+  loop, `"batched_mm"`) is refused by name, because a different factorization
+  computes different intermediates even where the block's output agrees (to
+  4.2e-7 on the fixture). `expert_activation` is the activated gate half,
+  `act_fn(gate_e)` — the same tensor `mlp_activation` names on the llama
+  family — represented **token-major**: `(batch·position, top_k · d_expert)`,
+  slot *k* the *k*-th ranked expert, joined to experts through `expert_idx`.
+  Its slot axis is a ranking, like `router_scores`, with the same
+  basis-fitting refusal — and so are the other interior slots:
+  `expert_gate_proj` and `expert_up_proj` are the two halves of the fused
+  `[gate_e | up_e]` projection (one capture, two addresses — the
+  `attention_gate` precedent), and `expert_output` is the down-projection's
+  output **before** the routing weight, pinned by the identity
+  `routed_output == Σ_slot expert_output · router_scores` (exactly, 0.0).
+- **`expert: e` is the ragged face of the routed interior.** On the four
+  interior components it selects the (position, slot) pairs the router sent to
+  expert *e* and returns flat rows plus per-example widths (a ragged value);
+  an expert no token chose returns width-0 rows — a data fact, not an error.
+  A write under `expert: e` lands only on that expert's rows (and therefore
+  lands nowhere when no addressed token chose it). `featurizer`/`dims` are
+  refused on this face: they are sized against the token-major `top_k · d`
+  axis and these rows are `d`-wide. On every other MoE component `expert`
+  is still refused — those tensors have no per-expert axis.
+  `expert_permutation` (integral, read-only) is the serving kernel's row
+  bookkeeping for anyone aligning raw kernel-order tensors; it lives inside
+  the fused forward where no module boundary exists, so only the nnsight
+  engine's `.source` address table serves it. The other interior components
+  are served by both engines — the reference engine through the dispatch
+  wrapper above, the nnsight engine through its `.source` addresses — with
+  the same token-major presentation and the same pre-routing-weight
+  `expert_output`.
 - **`expert_idx` is a routing table, not a feature space** — the same rule as
   `input_ids`: integer ids, no featurizer, no width. And `router_scores` has a
   width but its axis is a per-token **ranking**, not a basis: column *k* is the

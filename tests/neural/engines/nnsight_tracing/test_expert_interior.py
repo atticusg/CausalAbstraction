@@ -7,14 +7,16 @@ on three legs instead:
 * **two implementations of the same math**: the grouped_mm kernel this engine
   serves from, against transformers' own eager per-expert loop, reconstructed
   through ``tracer.iter`` (the clq §2 cross-check, as a test);
-* **identities**: each slot's weighted contribution sums to ``routed_output``
-  exactly; the activation is ``act(gate)·up`` exactly; the permutation is a
+* **identities**: the slot-sum of ``expert_output · router_scores`` is
+  ``routed_output`` exactly (the registry's pre-routing-weight identity,
+  round 3); the activation is ``act(gate)`` exactly; the permutation is a
   permutation;
 * **causal writes**: a swap moves the logits, a same-value swap moves nothing,
   a written slot reads back written.
 
-Plus the ownership seams: the reference engine refuses these by name, and
-routing chooses this engine without being asked.
+Plus the ownership seam that survives round 3 (which taught the reference
+engine to serve the four slot components through its dispatch wrapper):
+``expert_permutation`` is still this engine's alone, and routing knows it.
 """
 
 from __future__ import annotations
@@ -160,43 +162,44 @@ def test_the_interior_reads_with_the_declared_widths(trace_qwen):
             assert not value.dtype.is_floating_point
 
 
-def test_the_activation_is_act_of_gate_times_up_exactly(trace_qwen):
-    """The identity that says all three taps sit inside one _apply_gate call:
-    same rows, same order, no kernel in between."""
+def test_the_activation_is_act_of_gate_exactly(trace_qwen):
+    """The identity that says the three taps share one fused capture and its
+    gate: ``expert_activation`` is ``act_fn(gate)`` alone (the registry's
+    round-3 semantics, the llama ``mlp_activation`` precedent) — same rows,
+    same order, before the ``· up`` multiply."""
     doc = _read_doc(
         "expert_gate_proj",
         extra={
-            "up": {"component": "expert_up_proj", "layer": LAYER},
             "act": {"component": "expert_activation", "layer": LAYER},
         },
     )
     executor = _executor(TracePointExecutor, doc, trace_qwen, with_cf=False)
-    gate, up, act = (
-        executor.read_value("r"),
-        executor.read_value("up"),
-        executor.read_value("act"),
-    )
-    torch.testing.assert_close(
-        torch.nn.functional.silu(gate) * up, act, atol=0.0, rtol=0.0
-    )
+    gate, act = executor.read_value("r"), executor.read_value("act")
+    torch.testing.assert_close(torch.nn.functional.silu(gate), act, atol=0.0, rtol=0.0)
 
 
-def test_expert_output_sums_to_routed_output(trace_qwen):
-    """Each slot's weighted contribution, summed over the top-k axis, is the
-    combined expert output — pinned against the module-boundary tap, which the
-    parity suite already proves against the reference engine."""
+def test_expert_output_weighted_sums_to_routed_output(trace_qwen):
+    """The registry identity, on this engine: ``routed_output == Σ_slot
+    expert_output · router_scores`` — ``expert_output`` is the down-projection
+    output BEFORE the routing weight (round 3), so the scores re-enter here —
+    pinned against the module-boundary tap, which the parity suite already
+    proves against the reference engine."""
     info = trace_qwen.info
     doc = _read_doc(
         "expert_output",
-        extra={"routed": {"component": "routed_output", "layer": LAYER}},
+        extra={
+            "routed": {"component": "routed_output", "layer": LAYER},
+            "scores": {"component": "router_scores", "layer": LAYER},
+        },
     )
     executor = _executor(TracePointExecutor, doc, trace_qwen, with_cf=False)
     per_slot = executor.read_value("r")
     routed = executor.read_value("routed")
-    summed = per_slot.reshape(
+    scores = executor.read_value("scores")
+    weighted = per_slot.reshape(
         *per_slot.shape[:-1], info.num_experts_per_tok, info.hidden_size
-    ).sum(-2)
-    torch.testing.assert_close(summed, routed, atol=ATOL, rtol=0)
+    ) * scores.unsqueeze(-1)
+    torch.testing.assert_close(weighted.sum(-2), routed, atol=ATOL, rtol=0)
 
 
 def test_the_permutation_is_a_permutation(trace_qwen):
@@ -237,15 +240,18 @@ def test_grouped_and_eager_implementations_agree(trace_qwen):
                 per_expert = nnsight.save([])
                 for _ in tracer.iter[:n_hit]:
                     top_k_pos, token_idx = loop.torch_where_0.output
+                    # `_1` is the down-projection's output, BEFORE the routing
+                    # weight — the round-3 semantics `expert_output` names
+                    # (`_2` is the weighted value one line later)
                     per_expert.append(
-                        (top_k_pos, token_idx, loop.current_hidden_states_2.output)
+                        (top_k_pos, token_idx, loop.current_hidden_states_1.output)
                     )
     finally:
         model.set_experts_implementation("grouped_mm")
 
     rebuilt = torch.zeros(rows, k, hidden)
-    for top_k_pos, token_idx, weighted in per_expert:
-        rebuilt[token_idx, top_k_pos] = weighted.to(rebuilt.dtype)
+    for top_k_pos, token_idx, unweighted in per_expert:
+        rebuilt[token_idx, top_k_pos] = unweighted.to(rebuilt.dtype)
     torch.testing.assert_close(rebuilt, served, atol=1e-5, rtol=0)
 
 
@@ -306,27 +312,28 @@ def test_the_permutation_refuses_writes_as_kernel_bookkeeping(trace_qwen):
 
 
 # --------------------------------------------------------------------------- #
-# ownership: the reference engine refuses by name, routing knows the owner
+# ownership: round 3 taught the reference engine the four slot components
+# (its dispatch wrapper), so only the kernel's own bookkeeping is left to
+# refuse by name — and routing still knows this engine owns it.
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("component", EXPERT_COMPONENTS)
-def test_the_reference_engine_refuses_by_name(hooks_qwen, component):
-    doc = _read_doc(component)
+def test_the_reference_engine_refuses_the_permutation_by_name(hooks_qwen):
+    doc = _read_doc("expert_permutation")
     with pytest.raises(ProtocolError, match="nnsight engine"):
         _executor(PointExecutor, doc, hooks_qwen, with_cf=False).run_all()
 
 
 def test_routing_chooses_this_engine_even_listed_second():
-    doc = parse_document(in_order(_read_doc("expert_gate_proj")))
+    doc = parse_document(in_order(_read_doc("expert_permutation")))
     chosen = choose_engine(doc, [PytorchHooksEngine(), NnsightEngine()])
     assert isinstance(chosen, NnsightEngine)
-    assert component_capability("expert_gate_proj") not in (
+    assert component_capability("expert_permutation") not in (
         PytorchHooksEngine().effective_capabilities
     )
 
 
 def test_the_generated_refusal_names_the_missing_component():
-    doc = parse_document(in_order(_read_doc("expert_output")))
-    with pytest.raises(ValidationError, match="component:expert_output"):
+    doc = parse_document(in_order(_read_doc("expert_permutation")))
+    with pytest.raises(ValidationError, match="component:expert_permutation"):
         choose_engine(doc, [PytorchHooksEngine()])

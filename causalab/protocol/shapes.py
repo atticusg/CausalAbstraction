@@ -85,6 +85,7 @@ __all__ = [
     "flat_td",
     "flat_topk",
     "flat_topk_features",
+    "flat_topk_fused_features",
 ]
 
 #: What one axis of a tapped tensor means.
@@ -419,19 +420,61 @@ def flat_topk(
     )
 
 
-def flat_topk_features(k: int, width: int, *, note: str | None = None) -> FeatureShape:
-    """``(batch*position, k*width)`` — one ``width``-wide vector per routed
-    expert slot, token-major.
+def flat_topk_features(
+    k: int,
+    width: int,
+    *,
+    ranking: bool = False,
+    note: str | None = None,
+) -> FeatureShape:
+    """``(batch*position, k·width)`` — the routed-expert interior, token-major.
 
-    The per-expert MoE interior (round N6). The serving engine presents each
-    tensor with one row per token and the ``k`` slots' vectors side by side,
-    whatever row order the kernel computed in: grouped_mm's expert-sorted
-    layout is an implementation detail the eager loop does not even share, so
-    it never reaches the vocabulary.
+    One row per token, ``k`` slots of ``width`` features each, in ranking
+    order: slot *j* holds the value the token's *j*-th ranked expert computed.
+    That is ``router_scores``' situation exactly, which is what ``ranking``
+    says — a basis fitted across positions is fitted across a shuffled basis.
+    Consumers join slots to experts through ``expert_idx``, whose
+    ``(batch·position, k)`` rows are the same slots. The serving engine
+    presents each tensor in this token-major layout whatever row order the
+    kernel computed in: grouped_mm's expert-sorted layout is an
+    implementation detail the eager loop does not even share, so it never
+    reaches the vocabulary.
     """
     return FeatureShape(
         axes=(_BATCH, _POSITION, Axis("topk", k), Axis("feature", width)),
         flat_batch=True,
+        ranking=ranking,
+        note=note,
+    )
+
+
+def flat_topk_fused_features(
+    k: int,
+    splits: int,
+    index: int,
+    width: int,
+    *,
+    ranking: bool = False,
+    note: str | None = None,
+) -> FeatureShape:
+    """``(batch*position, k·splits·width)``, naming one split per slot.
+
+    The routed experts' up-projection emits ``[gate_e | up_e]`` per (token,
+    slot) pair in one tensor; ``expert_gate_proj`` is split 0 and
+    ``expert_up_proj`` split 1 — one capture, two addresses, the
+    ``attention_gate`` precedent with a top-k axis in front.
+    """
+    return FeatureShape(
+        axes=(
+            _BATCH,
+            _POSITION,
+            Axis("topk", k),
+            Axis("fused", splits),
+            Axis("feature", width),
+        ),
+        flat_batch=True,
+        fused_index=index,
+        ranking=ranking,
         note=note,
     )
 

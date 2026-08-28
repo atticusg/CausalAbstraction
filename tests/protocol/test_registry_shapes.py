@@ -65,6 +65,9 @@ GQA = ModelInfo(
     # 24): the tiny fixture checkpoint carries all three equal, so this table
     # is the one place a wrong-spelling pick is distinguishable at all
     shared_expert_intermediate_size=48,
+    # ⚠️ deliberately different from shared_expert_intermediate_size (48) and
+    # intermediate_size (128): on the fixture all three are 32, so only a table
+    # like this one can catch a wrong-field read (§1.1 of the round-3 plan).
     moe_intermediate_size=24,
     # ⚠️ the DeltaNet mixer's four dimensions, deliberately uncoupled: v-heads
     # is not 2·k-heads and the two head dims differ — the fixture's couplings
@@ -152,9 +155,9 @@ EXPECTED: dict[str, tuple[int | None, int | None, bool]] = {
     "router_logits": (32, None, True),
     "router_scores": (4, None, True),
     "expert_idx": (4, None, False),
-    # the per-expert interior (N6): one vector per routed slot, token-major —
-    # top_k · width, with the projections in the routed experts' own inner
-    # width and the output hidden-wide
+    # token-major routed interior: top_k (4) slots, on a ranking axis. The two
+    # projection halves and the activation are moe_intermediate_size (24) wide
+    # per slot; the down-projection's output is hidden (64) wide per slot.
     "expert_gate_proj": (4 * 24, None, True),
     "expert_up_proj": (4 * 24, None, True),
     "expert_activation": (4 * 24, None, True),
@@ -340,6 +343,18 @@ def test_a_plain_read_of_a_ranking_axis_is_untouched(env) -> None:
     raw["model"]["key"] = "test/moe"
     raw["sites"]["tgt"] = {"component": "router_scores", "layer": 3}
     assert canonicalize(raw, env)["sites"]["tgt"]["component"] == "router_scores"
+
+
+def test_the_routed_interior_is_a_ranking_axis_too(env) -> None:
+    """Round 3's token-major representation puts slot *k* of `expert_activation`
+    on the *k*-th ranked expert — `router_scores`' situation exactly, so the
+    same basis-fitting refusal applies and the same per-column reads do not."""
+    shape = component_shape(GQA, "expert_activation")
+    assert shape.ranking is True
+    raw = _moe_doc_with_featurizer("subspace")
+    raw["sites"]["tgt"] = {"component": "expert_activation", "layer": 3}
+    with pytest.raises(ValidationError, match="per-token ranking"):
+        canonicalize(in_order(raw), env)
 
 
 # --------------------------------------------------------------------------- #
