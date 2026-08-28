@@ -19,16 +19,16 @@ import json
 import shutil
 from pathlib import Path
 
-import pandas as pd
 import pytest
 import torch
 from safetensors.torch import load_file
 
-from causalab.protocol.cli import main
+from causalab.cli import main
 from causalab.protocol.resolve import read_safetensors_metadata
 
 from tests.neural.pytorch_hooks.conftest import TINY_LLAMA
 from tests.protocol._env import FIXTURES
+from tests.tables import frame as table_frame
 
 pytestmark = pytest.mark.smoke
 
@@ -64,7 +64,8 @@ def _run_workflow(base: Path, document: dict) -> Path:
         ]
     )
     assert code == 0
-    return out
+    # the document names its own directory under the CLI-supplied root (§1.1)
+    return out / document["output_dir"]
 
 
 # --------------------------------------------------------------------------- #
@@ -76,9 +77,10 @@ def _swept_pipeline() -> dict:
     return {
         "version": "1",
         "description": "fit k x seed at one cell, then apply the winning fit",
+        "output_dir": "swept",
         "steps": {
             "fit": {
-                "type": "protocol",
+                "type": "intervention_protocol",
                 "document": f"{METHODS}/weekdays_das_sweep.json",
                 "set": {
                     **TINY,
@@ -91,14 +93,25 @@ def _swept_pipeline() -> dict:
                 },
             },
             "best_fit": {
-                "type": "select",
-                "from": "fit",
-                "table": "iia.parquet",
-                "choose": "max",
-                "emit": {"best_k": "featurizers.rot.k", "best_seed": "train.seed"},
+                "type": "script",
+                "script": {"module": "causalab.workflow.scripts.select"},
+                "inputs": {
+                    "table": {"step": "fit", "file": "iia.json"},
+                    "choose": "max",
+                    "emit": {
+                        "best_k": "featurizers.rot.k",
+                        "best_seed": "train.seed",
+                    },
+                },
+                "outputs": {
+                    "values": {
+                        "file": "values.json",
+                        "keys": {"best_k": 2, "best_seed": 0},
+                    }
+                },
             },
             "apply": {
-                "type": "protocol",
+                "type": "intervention_protocol",
                 "document": f"{METHODS}/weekdays_das_apply.json",
                 "set": {
                     **TINY,
@@ -112,10 +125,6 @@ def _swept_pipeline() -> dict:
                 },
             },
         },
-        "save": [
-            {"step": "best_fit", "value": "values.json", "file_path": "best_fit.json"},
-            {"step": "apply", "value": "iia.parquet", "file_path": "apply_iia.parquet"},
-        ],
     }
 
 
@@ -159,12 +168,12 @@ def test_every_entry_carries_its_own_provenance(swept_run):
 
 
 def test_apply_consumed_the_selected_entry(swept_run):
-    chosen = json.loads((swept_run / "best_fit.json").read_text())
+    chosen = json.loads((swept_run / "best_fit/values.json").read_text())
     assert chosen["best_k"] in (2, 4)
     assert chosen["best_seed"] in (0, 1)
     manifest = json.loads((swept_run / "workflow.json").read_text())
     assert manifest["steps"]["apply"]["status"] == "completed"
-    iia = pd.read_parquet(swept_run / "apply/iia.parquet")
+    iia = table_frame(swept_run / "apply/iia.json")
     assert len(iia) == 2  # the weekdays/test fixture rows
     assert iia["value"].dtype.kind == "f"
 
@@ -268,7 +277,7 @@ def _ablate_doc() -> dict:
                 "value": "ld",
                 "model": "ablated",
                 "input": "base",
-                "file_path": "ld.parquet",
+                "file_path": "ld.json",
             }
         ],
     }
@@ -285,31 +294,25 @@ def ablation_run(tmp_path_factory: pytest.TempPathFactory) -> Path:
     document = {
         "version": "1",
         "description": "harvest a corpus mean, then mean-ablate with it",
+        "output_dir": "ablate",
         "steps": {
-            "harvest": {"type": "protocol", "document": "../docs/harvest.json"},
-            "rows": {"type": "protocol", "document": "../docs/rows.json"},
-            "ablate": {"type": "protocol", "document": "../docs/ablate.json"},
+            "harvest": {
+                "type": "intervention_protocol",
+                "document": "../docs/harvest.json",
+            },
+            "rows": {"type": "intervention_protocol", "document": "../docs/rows.json"},
+            "ablate": {
+                "type": "intervention_protocol",
+                "document": "../docs/ablate.json",
+            },
         },
-        "save": [
-            {
-                "step": "harvest",
-                "value": "acts.safetensors",
-                "file_path": "mean.safetensors",
-            },
-            {
-                "step": "rows",
-                "value": "acts.safetensors",
-                "file_path": "rows.safetensors",
-            },
-            {"step": "ablate", "value": "ld.parquet", "file_path": "ld.parquet"},
-        ],
     }
     return _run_workflow(base, document)
 
 
 def test_a_reduced_read_saves_one_vector(ablation_run):
-    mean = load_file(str(ablation_run / "mean.safetensors"))["acts"]
-    rows = load_file(str(ablation_run / "rows.safetensors"))["acts"]
+    mean = load_file(str(ablation_run / "harvest/acts.safetensors"))["acts"]
+    rows = load_file(str(ablation_run / "rows/acts.safetensors"))["acts"]
     assert mean.ndim == 1
     assert mean.shape[0] == rows.shape[-1]
     assert rows.numel() > mean.numel()  # what never has to reach disk
@@ -317,14 +320,14 @@ def test_a_reduced_read_saves_one_vector(ablation_run):
 
 def test_the_reduction_is_the_mean_of_the_rows(ablation_run):
     """Sanity check against the un-reduced save of the same read."""
-    mean = load_file(str(ablation_run / "mean.safetensors"))["acts"]
-    rows = load_file(str(ablation_run / "rows.safetensors"))["acts"]
+    mean = load_file(str(ablation_run / "harvest/acts.safetensors"))["acts"]
+    rows = load_file(str(ablation_run / "rows/acts.safetensors"))["acts"]
     expected = rows.to(torch.float32).reshape(-1, rows.shape[-1]).mean(dim=0)
     assert torch.allclose(mean, expected, atol=1e-6)
 
 
 def test_the_ablation_consumed_the_harvested_mean(ablation_run):
-    ld = pd.read_parquet(ablation_run / "ld.parquet")
+    ld = table_frame(ablation_run / "ablate/ld.json")
     assert len(ld) == 2
     assert ld["value"].notna().all()
     manifest = json.loads((ablation_run / "workflow.json").read_text())

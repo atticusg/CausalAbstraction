@@ -37,7 +37,7 @@
       "value": "acc",
       "model": "original",
       "input": "base",
-      "file_path": "acc.parquet"
+      "file_path": "acc.json"
     }
   ]
 }

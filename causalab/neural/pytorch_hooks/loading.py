@@ -78,7 +78,7 @@ def load_model(
     model = AutoModelForCausalLM.from_pretrained(
         key,
         revision=revision,
-        torch_dtype=_DTYPES[dtype],
+        dtype=_DTYPES[dtype],
         attn_implementation="eager",
         **(
             {"quantization_config": quantization_config}

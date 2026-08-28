@@ -52,9 +52,11 @@ __all__ = [
     "MATCH_MODES",
     "MECHANISMS",
     "METRIC_FIELD_DEFAULTS",
+    "METRIC_DOMAINS",
     "METRIC_KINDS",
     "Mechanism",
     "MetricKind",
+    "MetricDomain",
     "MetricSpec",
     "DOCUMENT_TYPES",
     "MODEL_DTYPE_DEFAULT",
@@ -72,6 +74,7 @@ __all__ = [
     "SiteSpec",
     "TOKEN_COLUMN_METRIC_KINDS",
     "TOKEN_FORMS",
+    "WHOLE_WINDOW_METRIC_KINDS",
     "TokenForm",
     "concrete_int",
     "concrete_str",
@@ -160,6 +163,7 @@ MetricKind = Literal[
     "class_probs",
     "top_k",
     "match",
+    "decode",
 ]
 METRIC_KINDS: tuple[MetricKind, ...] = get_args(MetricKind)
 
@@ -174,7 +178,32 @@ METRIC_FIELDS: dict[str, tuple[str, ...]] = {
     "class_probs": ("groups",),
     "top_k": ("k",),
     "match": ("expected",),
+    "decode": (),
 }
+
+#: What each metric kind consumes from its read (§2.10). ``distribution``
+#: kinds reduce the vocabulary projection at the addressed positions;
+#: ``ids`` kinds consume only the tokens the decode actually produced. The
+#: split is what lets the planner (§8) tell a text probe — which obliges no
+#: vocabulary projection at all — from a scoring one, so it is a property of
+#: the kind, never of the document.
+MetricDomain = Literal["distribution", "ids"]
+METRIC_DOMAINS: dict[str, MetricDomain] = {
+    "logit_diff": "distribution",
+    "token_logit": "distribution",
+    "cross_entropy": "distribution",
+    "kl": "distribution",
+    "class_probs": "distribution",
+    "top_k": "distribution",
+    "match": "distribution",
+    "decode": "ids",
+}
+
+#: Metric kinds that reduce the whole addressed window to one value per
+#: example rather than one per position: ``decode`` joins its tokens into a
+#: string, so a per-step row would be a per-character-ish lie.
+WHOLE_WINDOW_METRIC_KINDS: frozenset[str] = frozenset({"decode"})
+
 
 TokenForm = Literal["auto", "bare", "space_prefixed"]
 
@@ -231,7 +260,6 @@ SECTION_ORDER: tuple[str, ...] = (
     "type",
     "description",
     "model",
-    "causal_model",
     "data",
     "positions",
     "sites",
@@ -606,7 +634,6 @@ class Document:
     reads: Mapping[str, ReadSpec]
     save: tuple[SaveEntry, ...]
     description: str | None = None
-    causal_model: Mapping[str, Any] | None = None
     positions: Mapping[str, PositionSpec | Sweep | ArtifactRef] = dataclasses.field(
         default_factory=dict
     )
@@ -1857,15 +1884,6 @@ def parse_document(raw: Mapping[str, Any]) -> Document:
     description = normalized.get("description")
     if description is not None and not isinstance(description, str):
         raise ParseError("P2", "description is free text", path="description")
-    causal_model = None
-    if "causal_model" in normalized:
-        cm = _require_mapping(normalized["causal_model"], "causal_model")
-        _check_keys(cm, ("key",), "causal_model")
-        if "key" not in cm or not isinstance(cm["key"], str):
-            raise ParseError(
-                "P2", "causal_model needs a string 'key'", path="causal_model"
-            )
-        causal_model = dict(cm)
     save = _parse_save(normalized["save"], "save")
     if not save:
         raise ValidationError(10, "save must be non-empty", path="save")
@@ -1873,7 +1891,6 @@ def parse_document(raw: Mapping[str, Any]) -> Document:
         version=version,
         description=description,
         model=_parse_model(normalized["model"], "model"),
-        causal_model=causal_model,
         data=_parse_data(normalized["data"], "data"),
         positions=_parse_positions(normalized.get("positions", {}), "positions"),
         sites=_parse_sites(normalized["sites"], "sites"),

@@ -14,7 +14,7 @@ You write a high-level causal model describing *how you think* an LM solves a ta
    cd causalab
    uv sync
    ```
-2. **Read the two specs.** [`docs/intervention_protocol.md`](docs/intervention_protocol.md) — the document format (sections, the `do` algebra, sweeps, validation, digests, the backend contract). [`docs/workflow_protocol.md`](docs/workflow_protocol.md) — chaining protocol runs with select/plot steps and a save manifest.
+2. **Read the two specs.** [`docs/intervention_protocol.md`](docs/intervention_protocol.md) — the document format (sections, the `do` algebra, sweeps, validation, digests, the backend contract). [`docs/workflow_protocol.md`](docs/workflow_protocol.md) — chaining protocol runs with script steps: inputs, one Python script, declared outputs.
 3. **Run a shipped protocol:**
    ```bash
    uv run causalab explain  causalab/configs/protocols/interchange.json --data-root <data>
@@ -61,7 +61,7 @@ The golden-corpus documents ship as user-facing presets in [`causalab/configs/pr
 | `weekdays_das_sweep` | k × seed DAS fits at a located cell |
 | `weekdays_das_apply` | apply a fitted rotation (ArtifactIdentity-checked) |
 
-[`causalab/configs/runs/`](causalab/configs/runs/) holds the same experiment as a **split run document** (`application` + `method` in one file, spec §1.1), and [`causalab/configs/methods/`](causalab/configs/methods/) the reusable method on its own — the network- and data-independent half. [`causalab/configs/workflows/weekdays_8b.json`](causalab/configs/workflows/weekdays_8b.json) chains locate → select → fit → apply → plots as one workflow document.
+[`causalab/configs/runs/`](causalab/configs/runs/) holds the same experiment as a **split run document** (`application` + `method` in one file, spec §1.1), and [`causalab/configs/methods/`](causalab/configs/methods/) the reusable method on its own — the network- and data-independent half. [`causalab/configs/workflows/weekdays_8b.json`](causalab/configs/workflows/weekdays_8b.json) chains locate → select → fit → apply → plots as one workflow document (two step types: `intervention_protocol` and `script`).
 
 ## Repository layout
 
@@ -73,7 +73,8 @@ causalab/
 │   ├── pytorch_hooks/  # the reference backend: sites, positions, mechanisms,
 │   │                   #   featurizers, metrics, train loop, stamping
 │   └── token_positions.py
-├── workflow/        # the workflow runner: run-tree overlay, select/plot, manifest
+├── analysis/        # numerical analysis a script step runs (fits, statistics, operands)
+├── workflow/        # the workflow runner: run-tree overlay, script invocation, manifest
 ├── causal/          # causal model primitives
 ├── tasks/           # task definitions (causal models + counterfactual generators)
 ├── io/              # disk I/O + plotting primitives
@@ -89,7 +90,7 @@ tests/               # tiered suite — see docs/TESTS.md
 - **Task**: a prompt distribution plus a causal model and counterfactual generators (`causalab/tasks/`).
 - **Method / application**: the two halves one document may be written in — the method is what transfers (hypothesis, reads, writes, metrics, save), the application is what cannot (which network, which data, which addresses, which precision). One file is still one run: the halves compose into an ordinary protocol document, digest for digest.
 - **Intervention protocol**: one experiment as data — which activations are read, which are edited (`swap`, `add_scaled`, `gaussian`, …), in which intervened models, scored by which metrics. Sweeps expand a document into a campaign of points with content-deduped shared work.
-- **Workflow**: a chain of protocol executions plus select/plot/save steps, with dependencies derived from references — never authored ordering.
+- **Workflow**: a chain of protocol executions plus script steps, with dependencies derived from references — never authored ordering. Everything a step declares is published where it lands; there is no save manifest.
 
 ## Tests
 

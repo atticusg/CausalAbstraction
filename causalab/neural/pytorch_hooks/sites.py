@@ -20,7 +20,13 @@ Two semantics deliberately preserved from the oracle:
   input). Inherited 1:1 from the pyvene era and pinned by the oracle.
 * ``attention_value`` with a ``head`` is the ``[H*d, (H+1)*d]`` column
   slice of the o-projection's **input** — query-head space (``head_dim``
-  honours a decoupled ``config.head_dim``).
+  honours a decoupled ``config.head_dim``). 📐 On a **gated** attention
+  family (Qwen3.5/3.6's ``self_attn``, where the mixer multiplies by a
+  learned gate before projecting out) that input is therefore
+  **post-gate**: it is ``gate * z``, not the attention output ``z``. The
+  tap is unchanged and correct — this note exists because "value" reads
+  like the pre-gate tensor, and the two differ by an elementwise factor
+  that a subspace fit will happily absorb without complaining.
 
 Unsupported components refuse with the registry-extension message style —
 ``attention_probs`` needs an attention-internal tap this backend does not

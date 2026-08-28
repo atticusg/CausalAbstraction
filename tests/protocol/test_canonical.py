@@ -133,7 +133,7 @@ def test_match_mode_default_materialized(env):
     omitted = base_doc()
     omitted["metrics"]["m"] = {"kind": "match", "of": "logits", "expected": "label"}
     omitted["save"].append(
-        {"value": "m", "model": "patched", "input": "base", "file_path": "m.parquet"}
+        {"value": "m", "model": "patched", "input": "base", "file_path": "m.json"}
     )
     spelled = {
         **omitted,
@@ -151,7 +151,7 @@ def test_first_token_mode_is_a_different_document(env):
     exact = base_doc()
     exact["metrics"]["m"] = {"kind": "match", "of": "logits", "expected": "label"}
     exact["save"].append(
-        {"value": "m", "model": "patched", "input": "base", "file_path": "m.parquet"}
+        {"value": "m", "model": "patched", "input": "base", "file_path": "m.json"}
     )
     first = {
         **exact,

@@ -12,10 +12,11 @@ import json
 import shutil
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
-from causalab.protocol.cli import main
+from causalab.cli import main
+
+from tests.tables import frame as table_frame
 
 from tests.protocol._env import FIXTURES
 from tests.neural.pytorch_hooks.conftest import TINY_LLAMA
@@ -55,7 +56,7 @@ def test_the_shipped_run_document_runs_and_records_its_method(artifacts_root, tm
     )
     assert code == 0
 
-    iia = pd.read_parquet(out / "iia.parquet")["value"]
+    iia = table_frame(out / "iia.json")["value"]
     assert len(iia) == 4  # the fixture table's rows
     assert set(iia.unique()) <= {0.0, 1.0}
 

@@ -34,6 +34,6 @@
     "logit_diff": {"kind": "logit_diff", "of": "logits", "a": "answer", "b": "cf_answer"}
   },
   "save": [
-    {"value": "logit_diff", "model": "final", "input": "base", "file_path": "logit_diff.parquet"}
+    {"value": "logit_diff", "model": "final", "input": "base", "file_path": "logit_diff.json"}
   ]
 }

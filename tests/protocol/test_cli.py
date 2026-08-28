@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from causalab.protocol.cli import main
+from causalab.cli import main
 from causalab.protocol.loader import check_data_columns, load
 
 from tests.protocol._env import CORPUS_DIR, FIXTURES

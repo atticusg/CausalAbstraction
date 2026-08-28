@@ -453,7 +453,7 @@ def test_rule_12_loaded_featurizer_trained():
         "batch": {"pairs": 2},
     }
     doc["save"].append(
-        {"value": "ce", "model": "patched", "input": "base", "file_path": "ce.parquet"}
+        {"value": "ce", "model": "patched", "input": "base", "file_path": "ce.json"}
     )
     doc["save"].append({"value": "rot", "site": "tgt", "file_path": "rot.safetensors"})
     expect_rule(12, doc)
@@ -575,7 +575,7 @@ def test_unknown_match_mode_is_a_closed_enum_error():
             "value": "m",
             "model": "patched",
             "input": "base",
-            "file_path": "m.parquet",
+            "file_path": "m.json",
         }
     )
     with pytest.raises(ParseError) as err:
@@ -664,3 +664,34 @@ def test_the_checklist_and_the_spec_agree_on_how_many_rules_there_are():
     section = spec.read_text().split("## 5. Validation")[1].split("\n## ")[0]
     numbered = {int(m) for m in re.findall(r"^(\d+)\. ", section, flags=re.M)}
     assert numbered == set(range(1, CHECKLIST_RULES + 1))
+
+
+def test_rule_4_decode_over_a_prompt_frame_read():
+    """``decode`` reduces tokens a decode produced; in the prompt frame there
+    are none — only tokens that were given."""
+    doc = base_doc()
+    doc["metrics"] = {"said": {"kind": "decode", "of": "logits"}}
+    doc["save"] = [
+        {
+            "value": "said",
+            "model": "patched",
+            "input": "base",
+            "file_path": "said.json",
+        }
+    ]
+    err = expect_rule(4, doc)
+    assert "generated" in str(err)
+
+
+def test_decode_over_a_continuation_read_is_legal():
+    doc = _reads_the_continuation(base_doc())
+    doc["metrics"] = {"said": {"kind": "decode", "of": "logits"}}
+    doc["save"] = [
+        {
+            "value": "said",
+            "model": "patched",
+            "input": "base",
+            "file_path": "said.json",
+        }
+    ]
+    parse_and_validate(doc)

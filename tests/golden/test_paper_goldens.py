@@ -26,9 +26,16 @@ import pandas as pd
 import pytest
 import torch
 
-from causalab.protocol.cli import main
+from causalab.cli import main
 
+from causalab.protocol.tables import read_table
 from tests.golden._env import FIXTURES, GOLDEN_PROTOCOLS, GOLDENS_FILE
+
+
+def _frame(path: Path) -> pd.DataFrame:
+    """One JSON metric table as a DataFrame — tables are JSON on disk."""
+    return pd.DataFrame(read_table(path))
+
 
 pytestmark = pytest.mark.golden
 
@@ -105,22 +112,24 @@ def run_document(name: str, out: Path, **extra: str) -> None:
 
 def test_ioi_clean_logit_diff(tmp_path):
     run_document("ioi_clean_logit_diff_im.json", tmp_path)
-    ld = pd.read_parquet(tmp_path / "logit_diff.parquet")["value"]
+    ld = _frame(tmp_path / "logit_diff.json")["value"]
     assert len(ld) == 512
     assert_golden("ioi.clean_logit_diff", float(ld.mean()))
     assert_golden("ioi.io_over_s_rate", float((ld > 0).mean()))
 
 
 def test_hours_baseline_accuracy(tmp_path):
+    # precision is the document's own now (§2.1) — hours_baseline_im.json
+    # declares bf16, and the pinned digest covers it
     run_document("hours_baseline_im.json", tmp_path)
-    acc = pd.read_parquet(tmp_path / "acc.parquet")["value"]
+    acc = _frame(tmp_path / "acc.json")["value"]
     assert len(acc) == 1152
     assert_golden("arithmetic.hours_baseline_acc", float(acc.mean()))
 
 
 def test_rome_average_total_effect(tmp_path):
     """ATE = mean over facts and noise seeds of P_clean - P_corrupted,
-    recovered from the cross_entropy parquets (p = exp(-ce)); the clean
+    recovered from the cross_entropy tables (p = exp(-ce)); the clean
     read is off the seed axis, so its per-seed rows are identical and the
     per-example mean collapses them.
 
@@ -135,8 +144,8 @@ def test_rome_average_total_effect(tmp_path):
     for width in (2, 3, 4, 5):
         out = tmp_path / f"w{width}"
         run_document(f"rome_ate_w{width}_im.json", out)
-        ce_clean = pd.read_parquet(out / "ce_clean.parquet")
-        ce_corr = pd.read_parquet(out / "ce_corr.parquet")
+        ce_clean = _frame(out / "ce_clean.json")
+        ce_corr = _frame(out / "ce_corr.json")
         p_clean = np.exp(-ce_clean.groupby("example")["value"].mean())
         p_corr = (
             ce_corr.assign(p=np.exp(-ce_corr["value"])).groupby("example")["p"].mean()
@@ -167,8 +176,8 @@ def test_rome_hidden_state_aie_peak(tmp_path):
     for width in (2, 3, 4, 5):
         out = tmp_path / f"w{width}"
         run_document(f"rome_aie_w{width}_im.json", out)
-        ce_corr = pd.read_parquet(out / "ce_corr.parquet")
-        ce_rest = pd.read_parquet(out / "ce_rest.parquet")
+        ce_corr = _frame(out / "ce_corr.json")
+        ce_rest = _frame(out / "ce_rest.json")
         p_corr = (
             ce_corr.assign(p=np.exp(-ce_corr["value"])).groupby("example")["p"].mean()
         )
@@ -288,13 +297,13 @@ def test_rome_mlp_window_aie_peak(tmp_path):
                         "value": "ce_corr",
                         "model": "corrupted",
                         "input": "base",
-                        "file_path": "ce_corr.parquet",
+                        "file_path": "ce_corr.json",
                     },
                     {
                         "value": "ce_rest",
                         "model": "restored",
                         "input": "base",
-                        "file_path": "ce_rest.parquet",
+                        "file_path": "ce_rest.json",
                     },
                 ],
             }
@@ -314,8 +323,8 @@ def test_rome_mlp_window_aie_peak(tmp_path):
                 _device(),
             ]
             assert main(argv) == 0
-            ce_corr = pd.read_parquet(out / "ce_corr.parquet")
-            ce_rest = pd.read_parquet(out / "ce_rest.parquet")
+            ce_corr = _frame(out / "ce_corr.json")
+            ce_rest = _frame(out / "ce_rest.json")
             diff = np.exp(-ce_rest["value"].to_numpy()) - np.exp(
                 -ce_corr["value"].to_numpy()
             )
@@ -345,14 +354,14 @@ def test_mixing_positional_shares(tmp_path):
     L16 edges 100/74% vs middle 28%; L18 90/65% vs 17%; L22+ ref≈100%).
     One document per bucket keeps the single-batch lm_head forward within
     GPU memory; the scan stays in the document so the retrieval
-    transition remains visible in the parquets."""
+    transition remains visible in the saved tables."""
     merged_parts = []
     for bucket in ("first", "middle", "last"):
         out = tmp_path / bucket
         run_document(f"mixing_scan_{bucket}_im.json", out)
         frames = {}
         for mech in ("pos", "lex", "ref"):
-            frame = pd.read_parquet(out / f"ld_{mech}.parquet")
+            frame = _frame(out / f"ld_{mech}.json")
             layer_col = _axis_column(frame, "target.layer")
             frames[mech] = frame.rename(columns={layer_col: "layer"})
         part = frames["pos"][["example", "layer"]].copy()
@@ -414,7 +423,7 @@ def test_arithmetic_steering_diagonal(tmp_path):
     # 1. baseline: keep the prompts the model answers correctly
     base_out = tmp_path / "baseline"
     run_document("hours_baseline_im.json", base_out)
-    acc = pd.read_parquet(base_out / "acc.parquet")
+    acc = _frame(base_out / "acc.json")
     rows = json_lib.loads((FIXTURES / "data" / "hours" / "all.json").read_text())
     correct = [rows[int(e)] for e, v in zip(acc["example"], acc["value"]) if v == 1.0]
     print(f"baseline-correct prompts: {len(correct)}/1152")
@@ -504,7 +513,7 @@ def test_arithmetic_steering_diagonal(tmp_path):
                     "value": "hour_probs",
                     "model": "steered",
                     "input": "base",
-                    "file_path": "hour_probs.parquet",
+                    "file_path": "hour_probs.json",
                 }
             ],
         }
@@ -524,7 +533,7 @@ def test_arithmetic_steering_diagonal(tmp_path):
             _device(),
         ]
         assert main(argv) == 0
-        table = pd.read_parquet(out / "hour_probs.parquet")
+        table = _frame(out / "hour_probs.json")
         means = {
             name: float(
                 np.mean(

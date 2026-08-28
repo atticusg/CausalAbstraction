@@ -8,12 +8,12 @@
 | `tasks/` | task definitions (causal models + counterfactual generators) + `serialize.py`, which writes them out as dataset tables |
 | `protocol/` | the backend-free document layer |
 | `neural/pytorch_hooks/` | the reference execution backend |
-| `transform/` | the registry of deterministic, versioned ops a workflow `transform` step runs |
-| `workflow/` | the workflow runner |
+| `analysis/` | numerical analysis a workflow `script` step runs: fits, statistics, intervention operands |
+| `workflow/` | the workflow document model, runner, and CLI verbs |
 | `io/` | disk I/O + shared plotting primitives |
 | `configs/` | shipped documents: `protocols/` (flat), `runs/` (split into `application` + `method`, §1.1), `methods/` (reusable halves), `workflows/` — JSON, not code |
 
-**Dependency flow:** `tasks/` and `causal/` are independent. `protocol/` is torch-free and links against no execution engine — the CLI imports the reference backend lazily. `neural/pytorch_hooks/` implements `protocol.backend.Backend`. `transform/` depends only on `protocol/` and is torch-free at module level: its op *records* are what load-time validation reads, so an op's numerics are imported inside its function body. `workflow/` depends on `protocol/`, drives whichever backends it is handed, and reaches `transform/` lazily when it runs a transform step; the workflow loader likewise reaches the op registry through a function-local import, so `protocol/` keeps no module-level edge to anything that executes. `io/` depends only on `neural/`, `tasks/`, `causal/`. `tests/test_architecture_layering.py` enforces the static half of all this; `tests/transform/test_load_is_torch_free.py` the behavioural half.
+**Dependency flow:** `tasks/` and `causal/` are independent. `protocol/` is torch-free and links against no execution engine — the CLI imports the reference backend lazily. `neural/pytorch_hooks/` implements `protocol.backend.Backend`. `steps/` depends only on `protocol/` and is torch-free at module level: a step script's numerics are imported inside its `main`, so listing the shipped scripts and hashing one cost nothing but stdlib. `workflow/` depends on `protocol/`, drives whichever backends it is handed, and reaches `steps/` lazily when it runs a script step; the workflow loader likewise reaches the shipped-script directory through a function-local import, so `protocol/` keeps no module-level edge to anything that executes. `io/` depends only on `neural/`, `tasks/`, `causal/`. `tests/test_architecture_layering.py` enforces the static half of all this; `tests/protocol/test_load_is_torch_free.py` the behavioural half.
 
 ## 2. The protocol layer (`causalab/protocol/`)
 
@@ -26,12 +26,13 @@ The normative spec is [`docs/intervention_protocol.md`](intervention_protocol.md
 | `canonical.py` | canonical form + digests (§7) |
 | `sweep.py` | axis expansion, point cap, coordinate labels (§3) |
 | `bundles.py` | addressing one entry inside a saved `.safetensors` bundle: key grammar, coordinate selection (§2.5, §2.6) |
+| `tables.py` | metric tables on disk — native JSON, an array of row objects. Torch-free and pandas-free, so the backend writes through it and step scripts read through it |
 | `plan.py` | model graph → forward groups, content dedup (§4) |
 | `backend.py` | `Backend` ABC, `ExecutionRequest`/`RunResult`, capability routing (§8) |
 | `resolve.py` | `ResolutionEnv`: the `DatasetResolver` contract (digest / columns / rows) with `FileDatasets` (JSON tables), `FileArtifacts`, `ArtifactIdentity` build/check |
 | `registry.py` | static model metadata (widths per component); built-in entries for the models the corpus and goldens name |
-| `workflow.py` | the workflow *document* model: parse, checklist, derived schedule, digests |
-| `cli.py` | `causalab run/validate/explain/digest`, dispatching on document type; `--device/--dtype/--points` on `run` |
+| `workflow.py` | the workflow *document* model: parse, the 11-rule checklist, the locator+selector reference grammar, derived schedule, script hashing, digests |
+| `cli.py` | `causalab run/validate/explain/digest`, dispatching on document type; `--device/--dtype/--points/--resume` on `run` |
 
 Documents are pure data. Sweeps expand at load into point protocols; the campaign digest names the document, each point's digest is the provenance unit.
 
@@ -49,25 +50,42 @@ Implements the §8 services with raw pytorch hooks, CPU or a single accelerator 
 | `metrics.py` | metric lowering over one lm_head read; single-token column resolution |
 | `executor.py` | one forward group per (model, input), whole batch at once; edit/read hook wiring |
 | `train.py` | the `train` loop for trainable featurizers |
-| `outputs.py` | parquet metric tables and safetensors tensor files, coordinate-keyed, identity-stamped |
+| `outputs.py` | JSON metric tables and safetensors tensor files, coordinate-keyed, identity-stamped |
 | `backend.py` | `PytorchHooksBackend`: capabilities `{grad, paired_forward, full_logits, pytorch_fn_local}` |
 
 Known limits (tracked in the intervention-protocol epic): one device per run (no `device_map` sharding), one batch per forward group (no microbatching), no `attention_probs`, no chat-template path.
 
 ## 4. The workflow runner (`causalab/workflow/`)
 
-Executes workflow documents: topological step order from derived references, per-step output dirs under the run tree, an artifact overlay so later steps resolve earlier steps' products, transform/select/plot steps, save publication, and a `workflow.json` manifest. The runner knows only the step graph — device/dtype live in the backends it is handed, and job dispatch is site tooling outside the repo (spec §8, "Execution scale").
+Executes workflow documents: topological step order from derived references, per-step output dirs under `<out-root>/<output_dir>/`, an artifact overlay so later steps resolve earlier steps' products, protocol and script steps, a `_step.json` record per step and a `workflow.json` run manifest. There is no publication step — the run tree *is* the publication (spec §0). The runner knows only the step graph: device/dtype live in the backends it is handed, and job dispatch is site tooling outside the repo (spec §8, "Execution scale").
 
-**Transform ops (`causalab/transform/`)** are what a `transform` step runs (workflow spec §2.4):
+**Step scripts.** A `script` step names its code with a locator —
+`{"module": "causalab.analysis.fit_pca"}` or `{"path": "scripts/probe.py"}` — so
+the shipped ones are filed **by subject** rather than in one namespace:
 
-| module | owns |
+| module | what it holds |
 |---|---|
-| `schema.py` | the slot kinds (`Table` with declared columns, `Tensor`) and the parameter primitives, plus `TransformError` |
-| `registry.py` | the `TransformOp` record, the `@register` decorator, and `lookup("name@version")` with suggestions |
-| `io.py` | reading inputs and writing outputs — parquet tables, `.safetensors` bundles, and the identity a tensor output is stamped with |
-| `ops/` | the registered ops, one module each, numerics imported inside the function body |
+| `causalab/analysis/` | numerical analysis: `fit_pca`, `harvest_difference`, `head_stats`, `paired_ttest`. Fits, statistics, and the operands an intervention consumes. Importable and testable without the workflow layer |
+| `causalab/io/plots/workflow_figures.py` | the heatmap/lines renderer, beside the other 17 plot modules and reusing `figure_format` for the png-over-pdf default |
+| `causalab/workflow/scripts/select.py` | the one script whose purpose *is* wiring: reduce a table to the values a later document's `set` reads |
+| `causalab/io/step_io.py` | what a script uses for IO: JSON tables and values objects, safetensors with `slot`/`entry` addressing, the identity a tensor output inherits |
+| `causalab/io/step_record.py` | the `_step.json` format — its writer (used by the runner), its reader, and the shared aggregation rule `select` and `workflow_figures` both call, so a figure and a chosen value never disagree about what a row is |
+| `causalab/workflow/isolate.py` | the entry point for an isolated (subprocess) step |
 
-An op is a pure `(inputs, params) -> {slot: value}` function; the runner owns paths, formats and provenance so an op's unit test needs no filesystem. Adding one means adding a record, a body and an oracle test — a document can never introduce an op, which is what keeps a workflow run a pure function of the document.
+A script is one function, `main(inputs, outputs) -> None`, that creates every
+output it declares. The runner verifies they arrived, checks a declared table's
+columns, and stamps ArtifactIdentity on safetensors outputs — so a script cannot
+forget provenance, which is what a later protocol step's identity check depends
+on. A script is **found and hashed, never imported** at load
+(`importlib.util.find_spec` resolves a module to a file without executing it):
+`validate`/`digest` stay torch-free, and the hash in the digest is what makes
+`--resume` correct.
+
+**Why two packages.** `protocol/` is the intervention protocol alone and must
+not import the workflow layer — that is what lets someone use it on its own, and
+`tests/test_architecture_layering.py` enforces it. The dependency runs
+`workflow/` → `io/` → `protocol/`, one way, and `causalab/cli.py` sits above
+both, dispatching on the document's `steps` section.
 
 ## 5. Datasets are build products
 

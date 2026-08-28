@@ -1,17 +1,34 @@
-"""Shared figure output format for static matplotlib figures (PNG / PDF)."""
+"""Shared figure output format for rendered figures.
+
+``png`` is the default and is **preferred over ``pdf`` unless a caller asks for
+pdf explicitly** — it is what a reviewer can open inline, in a PR, or in a
+notebook without a viewer. ``pdf`` is for print or when a vector figure is
+actually needed; ``html`` for interactive figures (plotly and friends).
+
+These are the *visualization* formats of the workflow layer's output rule
+(``docs/workflow_protocol.md`` §2.5): unlike JSON and safetensors they carry no
+record, so a declared figure is a rendering of an artifact rather than one
+itself.
+"""
 
 from __future__ import annotations
 
 import os
 from typing import Literal
 
-FigureFormat = Literal["png", "pdf"]
+FigureFormat = Literal["png", "pdf", "html"]
 
-ALLOWED_FIGURE_FORMATS: frozenset[str] = frozenset({"png", "pdf"})
+#: png first: it is the one a reviewer can open anywhere (module docstring).
+ALLOWED_FIGURE_FORMATS: frozenset[str] = frozenset({"png", "pdf", "html"})
+
+#: The same set as file suffixes, for the workflow output-format check.
+VISUALIZATION_SUFFIXES: tuple[str, ...] = (".png", ".pdf", ".html")
 
 
 def normalize_figure_format(value: str | None, *, default: str = "png") -> str:
-    """Return ``png`` or ``pdf``; validate input."""
+    """Return one of :data:`ALLOWED_FIGURE_FORMATS`; validate input.
+
+    ``default`` is ``png`` deliberately — see the module docstring."""
     raw = default if value is None else str(value)
     fmt = raw.lower().lstrip(".")
     if fmt not in ALLOWED_FIGURE_FORMATS:

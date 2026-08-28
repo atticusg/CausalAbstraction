@@ -36,7 +36,14 @@ def _logits(tokenizer, favored: str, disfavored: str) -> torch.Tensor:
 
 
 def test_space_prefixed_first_resolution(tokenizer):
-    # sentencepiece: " Monday" is two pieces, "Monday" is the ▁Monday piece
+    # 📐 transformers 5.16.1: this sentencepiece tokenizer dropped the legacy
+    # dummy prefix, so " Monday" and "Monday" BOTH encode to the single ▁Monday
+    # piece. The two forms agree because they are now the same id — not, as
+    # under transformers 4.x, because the spaced form was ▁+▁Monday and `auto`
+    # fell back. Pinned so the reason cannot drift silently again.
+    assert tokenizer.encode(" Monday", add_special_tokens=False) == tokenizer.encode(
+        "Monday", add_special_tokens=False
+    )
     assert column_token_id(tokenizer, " Monday") == column_token_id(tokenizer, "Monday")
     with pytest.raises(ProtocolError):
         column_token_id(tokenizer, " Tuesday")  # 3 pieces either way — refuse
@@ -165,11 +172,39 @@ def test_space_prefixed_form_is_pinnable(gpt2_tokenizer):
     )
 
 
-def test_a_pinned_form_refuses_rather_than_falling_back(tokenizer):
-    """Pinning a form means it: sentencepiece makes " Monday" two pieces, and
-    `space_prefixed` must refuse instead of quietly using the bare piece."""
+def test_a_pinned_form_refuses_rather_than_falling_back(gpt2_tokenizer):
+    """Pinning a form means it: `space_prefixed` must refuse rather than quietly
+    hand back the bare row it was told not to use.
+
+    The witness moved to gpt2 in the transformers 5 bump. This contract needs a
+    value whose bare form is ONE token while its space-prefixed form is several
+    — 📐 under 5.16.1 the sentencepiece tokenizer no longer has one, because it
+    dropped the legacy dummy prefix and now encodes both forms identically (see
+    ``test_the_two_forms_collapse_on_sentencepiece``). gpt2's byte-level BPE
+    still separates them and is unchanged across the bump: "haus" is [30404],
+    " haus" is [387, 385]."""
+    assert len(gpt2_tokenizer.encode("haus", add_special_tokens=False)) == 1
+    assert len(gpt2_tokenizer.encode(" haus", add_special_tokens=False)) == 2
+
     with pytest.raises(ProtocolError):
-        column_token_id(tokenizer, "Monday", token_form="space_prefixed")
+        column_token_id(gpt2_tokenizer, "haus", token_form="space_prefixed")
+    # and the bare row it refused to fall back to is genuinely resolvable
+    assert column_token_id(gpt2_tokenizer, "haus", token_form="bare") == 30404
+
+
+def test_the_two_forms_collapse_on_sentencepiece(tokenizer):
+    """📐 The hazard the transformers 5 bump introduced, recorded as a test.
+
+    Dropping the legacy dummy prefix means " X" and "X" encode identically on
+    this family, so `token_form` cannot separate the two rows here and
+    `_ambiguous_under_auto` can never fire — the once-per-column warning that
+    exists because a punctuation `match` read a flat 0.000 across all 48 layers
+    of a gpt2-xl scan is structurally dark on sentencepiece. Nothing to fix in
+    the resolver (there is only one row to name); pinned so that the day a
+    tokenizer separates them again, this test says so out loud."""
+    assert column_token_id(tokenizer, "Monday", token_form="bare") == column_token_id(
+        tokenizer, "Monday", token_form="space_prefixed"
+    )
 
 
 def test_match_scores_a_punctuation_answer_only_under_bare(gpt2_tokenizer):
@@ -194,8 +229,10 @@ def test_auto_warns_once_per_column_when_the_forms_disagree(gpt2_tokenizer):
 
 
 def test_auto_is_silent_when_there_is_nothing_to_disambiguate(tokenizer, recwarn):
-    """Sentencepiece " Monday" is two pieces, so only the bare form resolves —
-    no choice was made and no warning is owed."""
+    """📐 Under transformers 5.16.1 this tokenizer encodes " Monday" and "Monday"
+    to the SAME id, so the two forms cannot disagree — no choice was made and no
+    warning is owed. (Under 4.x the same silence held for the opposite reason:
+    the spaced form was two pieces, so only the bare form resolved.)"""
     column_token_ids(tokenizer, [" Monday", "Monday"])
     assert [w for w in recwarn if issubclass(w.category, UserWarning)] == []
 
@@ -256,17 +293,49 @@ def test_first_token_mode_credits_a_multi_token_answer(tokenizer):
     assert compute_metric(first, logits, [{"ans": " Thursday"}], tokenizer) == [1.0]
 
 
-def test_first_token_skips_the_lone_space_piece(tokenizer):
-    """The sentencepiece trap: " Thursday" encodes as ▁ + Th + urs + day, so
-    crediting the *first* id would credit the bare-space piece — which every
-    space-prefixed answer shares, making every answer match."""
-    space_piece = tokenizer.encode(" Thursday", add_special_tokens=False)[0]
-    assert tokenizer.decode([space_piece]).strip() == ""
-    assert column_first_token_id(tokenizer, " Thursday") != space_piece
-    assert (
-        column_first_token_id(tokenizer, " Thursday")
-        == tokenizer.encode("Thursday", add_special_tokens=False)[0]
+class _LoneSpacePieceTokenizer:
+    """A tokenizer whose leading space is its own piece — the trap, distilled.
+
+    Which *values* trigger the trap is a property of a released tokenizer and it
+    moved under transformers 5; the rule that `first_token` must never credit a
+    whitespace-only piece is a property of :func:`column_first_token_id`. Pinning
+    the rule against a stub keeps it honest across bumps, and
+    :func:`test_first_token_skips_a_real_lone_space_piece` keeps a live witness."""
+
+    _PIECES = {0: " ", 1: "Th", 2: "urs", 3: "day"}
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        return [0, 1, 2, 3] if text.startswith(" ") else [1, 2, 3]
+
+    def decode(self, ids) -> str:
+        return "".join(self._PIECES[int(i)] for i in ids)
+
+
+def test_first_token_skips_the_lone_space_piece():
+    """The trap: crediting the *first* id would credit the bare-space piece —
+    which every space-prefixed answer shares, making every answer match."""
+    tok = _LoneSpacePieceTokenizer()
+    assert tok.decode([tok.encode(" Thursday")[0]]).strip() == ""  # the premise
+    assert column_first_token_id(tok, " Thursday") == 1  # "Th", not the space
+
+
+def test_first_token_skips_a_real_lone_space_piece(tokenizer):
+    """The live witness on a real sentencepiece tokenizer.
+
+    📐 Under transformers 5.16.1 this tokenizer stopped emitting a lone ▁ for an
+    ordinary space-prefixed word — " Thursday" is now [Th, urs, day] — but still
+    emits one whenever the first character has no merged ▁X piece: digits,
+    non-Latin scripts, emoji, ligatures. Measured: encode(" 3.14") is
+    [29871, 29941, 29889, 29896, 29946] and 29871 decodes to "". So the skip is
+    load-bearing, not dead code. A failure of the premise below means the
+    witness moved, not that the behaviour broke — the behaviour is pinned in
+    :func:`test_first_token_skips_the_lone_space_piece`."""
+    ids = tokenizer.encode(" 3.14", add_special_tokens=False)
+    assert len(ids) > 1, "witness moved: ' 3.14' is a single token now"
+    assert tokenizer.decode([ids[0]]).strip() == "", (
+        "witness moved: ' 3.14' no longer leads with a whitespace-only piece"
     )
+    assert column_first_token_id(tokenizer, "3.14") == ids[1]
 
 
 def test_first_token_agrees_with_exact_on_single_token_answers(tokenizer):

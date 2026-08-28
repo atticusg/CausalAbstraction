@@ -86,7 +86,7 @@ def das_doc(*, seed: int = 0, epochs: int = 2) -> dict:
                 "value": "ce",
                 "model": "patched",
                 "input": "base",
-                "file_path": "ce.parquet",
+                "file_path": "ce.json",
             },
             {"value": "rot", "site": "tgt", "file_path": "rot.safetensors"},
         ],
@@ -201,7 +201,7 @@ def dbm_doc() -> dict:
     doc["train"]["objective"] = [[1.0, "ce"], [0.01, {"l1": "gate"}]]
     doc["train"]["anneal"] = {"gate.theta.temperature": [1.0, 0.01, 0.5]}
     doc["save"] = [
-        {"value": "ce", "model": "patched", "input": "base", "file_path": "ce.parquet"},
+        {"value": "ce", "model": "patched", "input": "base", "file_path": "ce.json"},
         {"value": "gate", "site": "tgt", "file_path": "gate.safetensors"},
     ]
     return doc

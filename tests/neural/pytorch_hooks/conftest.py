@@ -16,6 +16,12 @@ from causalab.neural.pytorch_hooks.loading import ModelBundle, load_model
 
 TINY_LLAMA = "hf-internal-testing/tiny-random-LlamaForCausalLM"
 TINY_GPT2 = "hf-internal-testing/tiny-random-gpt2"
+#: The hookpoint-vocabulary target architecture in miniature: a real hybrid
+#: stack (layers 0-2 Gated DeltaNet, layer 3 full attention) with a sparse MoE
+#: in every layer. Deliberately *not* in the parametrized ``bundle`` fixture —
+#: the site resolver cannot address a DeltaNet layer yet, so the oracle suites
+#: would fail on it. Ask for ``qwen35moe_bundle`` explicitly.
+TINY_QWEN35_MOE = "tiny-random/qwen3.5-moe"
 
 BASE_TEXT = "the quick brown fox jumps"
 COUNTERFACTUAL_TEXT = "a slow green turtle sleeps deeply"
@@ -37,6 +43,11 @@ def bundle(request: pytest.FixtureRequest) -> ModelBundle:
 @pytest.fixture(scope="session")
 def llama_bundle() -> ModelBundle:
     return load_model(TINY_LLAMA)
+
+
+@pytest.fixture(scope="session")
+def qwen35moe_bundle() -> ModelBundle:
+    return load_model(TINY_QWEN35_MOE)
 
 
 @pytest.fixture()
