@@ -24,13 +24,6 @@ component                            shape
 ``mlp_input``, ``mlp_output``,       are here because an RMSNorm maps the
 ``ln_final``, ``attention_input_norm``,   residual stream to itself, so both
 ``block_mid``, ``mlp_input_norm``    its sides are hidden-wide
-``expert_gate_proj``,                ``(batch·position, top_k·moe_inner)``,
-``expert_up_proj``,                  token-major and **ranking**: slot *k* is
-``expert_activation``                the *k*-th ranked expert (the two proj
-                                     halves share one fused capture)
-``expert_output``                    ``(batch·position, top_k·hidden)``,
-                                     token-major, ranking; the value is
-                                     pre-routing-weight
 ``mlp_activation``                   ``(batch, position, intermediate)`` (the
                                      family caveat of *which* tensor this
                                      names lives in the backend, not here)
@@ -52,6 +45,20 @@ component                            shape
 ``expert_idx``                       ``(batch·position, top_k)``, **integral**:
                                      a routing table of integer expert ids —
                                      no featurizer, no gradient
+``expert_permutation``               ``(batch·position, top_k)``, **integral**:
+                                     the serving kernel's row bookkeeping —
+                                     for each (token, slot), the row index in
+                                     expert-sorted order
+``expert_gate_proj``,                ``(batch·position, top_k·moe_inner)`` —
+``expert_up_proj``,                  one vector per routed expert slot,
+``expert_activation``                token-major and **ranking**: slot *k* is
+                                     the *k*-th ranked expert (the two proj
+                                     halves share one fused capture)
+``expert_output``                    ``(batch·position, top_k·hidden)``,
+                                     token-major, ranking; the value is
+                                     **pre-routing-weight**: summing
+                                     ``expert_output · router_scores`` over
+                                     the top-k axis gives ``routed_output``
 ``shared_expert_gate_proj``,         ``(batch·position, shared_inner)``
 ``shared_expert_up_proj``,
 ``shared_expert_activation``
@@ -65,6 +72,13 @@ component                            shape
                                      axes**, so no contract form. Every
                                      refusal the executor makes about it is
                                      derived from that
+``deltanet_*``                       the Gated DeltaNet interior (round N7),
+                                     from the mixer's four ``linear_*``
+                                     dimensions — see :func:`_deltanet_shape`.
+                                     ``deltanet_state`` is the odd one:
+                                     ``(batch, position[chunk], head,
+                                     k_dim·v_dim)``, its position axis the
+                                     kernel's 64-token chunk index
 ===================================  =======================================
 """
 
@@ -112,11 +126,23 @@ class ModelInfo:
     shared_expert_intermediate_size: int | None = None
     #: The *routed* experts' inner width (``moe_intermediate_size``) — the third
     #: of those three inner widths, and the feature width of the per-expert
-    #: interior (``expert_activation``). ⚠️ On ``tiny-random/qwen3.5-moe`` all
-    #: three widths are 32, so the fixture cannot tell a wrong choice from a
-    #: right one — which is exactly why this is its own field rather than a
-    #: fallback through one of the others.
+    #: interior (``expert_gate_proj`` and friends). ⚠️ On
+    #: ``tiny-random/qwen3.5-moe`` all three widths are 32, so the fixture
+    #: cannot tell a wrong choice from a right one — which is exactly why this
+    #: is its own field rather than a fallback through one of the others.
     moe_intermediate_size: int | None = None
+    #: The Gated DeltaNet mixer's dimensions (rounds 4 / N7). Its q/k live in
+    #: *key-head* space and its v/gate/state in *value-head* space — two
+    #: different head counts, the linear-attention analogue of GQA, and the
+    #: same silent-empty-slice hazard if one bound is used for the other.
+    #: ⚠️ Four independent numbers, deliberately not derived from each other:
+    #: the fixture has 2× GVA tiling (``num_value_heads == 2 · num_key_heads``)
+    #: and equal head dims, and a table that assumed either coupling would be
+    #: silently wrong on a family that breaks it.
+    linear_num_key_heads: int | None = None
+    linear_num_value_heads: int | None = None
+    linear_key_head_dim: int | None = None
+    linear_value_head_dim: int | None = None
 
 
 _REGISTRY: dict[str, ModelInfo] = {}
@@ -188,6 +214,10 @@ def model_info_from_hf_config(key: str, config: Any) -> ModelInfo:
             or getattr(text, "moe_intermediate_size", None)
         ),
         moe_intermediate_size=getattr(text, "moe_intermediate_size", None),
+        linear_num_key_heads=getattr(text, "linear_num_key_heads", None),
+        linear_num_value_heads=getattr(text, "linear_num_value_heads", None),
+        linear_key_head_dim=getattr(text, "linear_key_head_dim", None),
+        linear_value_head_dim=getattr(text, "linear_value_head_dim", None),
     )
 
 
@@ -404,6 +434,23 @@ def component_shape(info: ModelInfo, component: str) -> FeatureShape:
                 "join slots to experts through 'expert_idx'."
             ),
         )
+    if component == "expert_permutation":
+        if info.num_experts_per_tok is None:
+            raise ValidationError(
+                4,
+                f"model {info.key!r} declares no num_experts_per_tok; "
+                f"{component} has no top-k axis",
+            )
+        return shapes.flat_topk(
+            info.num_experts_per_tok,
+            integral=True,
+            note=(
+                "It is the serving kernel's row bookkeeping: for each "
+                "(token, slot) pair, the row index in expert-sorted order. "
+                "Read it to align raw kernel-order tensors; the per-expert "
+                "components themselves are already presented token-major."
+            ),
+        )
     if component == "expert_output":
         # the down-projection's output BEFORE the routing weight — hidden-wide
         # per (token, slot), token-major. The registry identity:
@@ -460,6 +507,202 @@ def component_shape(info: ModelInfo, component: str) -> FeatureShape:
     if component == "shared_expert_gate":
         # one scalar per token: how much of the shared expert to mix in
         return shapes.flat_td(1)
+    if component in (
+        "delta_qkv",
+        "delta_gate",
+        "delta_premix",
+        "delta_conv",
+        "delta_query",
+        "delta_key",
+        "delta_value",
+        "delta_beta",
+        "delta_decay",
+        "delta_kernel_output",
+        "delta_kv_mem",
+        "delta_state_update",
+        "delta_state",
+    ):
+        missing = [
+            name
+            for name in (
+                "linear_num_value_heads",
+                "linear_num_key_heads",
+                "linear_key_head_dim",
+                "linear_value_head_dim",
+            )
+            if getattr(info, name) is None
+        ]
+        if missing:
+            raise ValidationError(
+                4,
+                f"model {info.key!r} declares no linear-attention stream "
+                f"(missing {', '.join(missing)}); {component} has no width",
+            )
+        assert info.linear_num_value_heads is not None  # for the type-checker
+        assert info.linear_num_key_heads is not None
+        assert info.linear_key_head_dim is not None
+        assert info.linear_value_head_dim is not None
+        if component == "delta_qkv":
+            # 📐 in_proj_qkv's fused [q | k | v] output: widths key_dim,
+            # key_dim, value_dim — UNEQUAL (128/128/256 on the fixture), so
+            # there is no head packing to declare and no `head:` here;
+            # whole-tensor and `dims` only. The kernel-boundary components
+            # (round 4.2) are the per-head faces of the same information.
+            key_dim = info.linear_num_key_heads * info.linear_key_head_dim
+            value_dim = info.linear_num_value_heads * info.linear_value_head_dim
+            return shapes.bsd(
+                2 * key_dim + value_dim,
+                note=(
+                    "It is the fused [q | k | v] projection, widths "
+                    f"{key_dim}/{key_dim}/{value_dim} — unequal, so it has no "
+                    "head axis. The per-head faces are the kernel-boundary "
+                    "components ('delta_query'/'delta_key'/'delta_value')."
+                ),
+            )
+        if component == "delta_conv":
+            # 📐 causal_conv1d_fn's return: (batch, conv_dim, position) —
+            # channels-first, the existing bds layout, as #48 predicted. Same
+            # fused unequal widths as delta_qkv, so no head axis here either.
+            key_dim = info.linear_num_key_heads * info.linear_key_head_dim
+            value_dim = info.linear_num_value_heads * info.linear_value_head_dim
+            return shapes.bds(
+                2 * key_dim + value_dim,
+                note=(
+                    "It is the convolved fused [q | k | v], channels-first and "
+                    "with unequal split widths, so it has no head axis. The "
+                    "per-head faces are 'delta_query'/'delta_key'/'delta_value'."
+                ),
+            )
+        if component in ("delta_query", "delta_key"):
+            # 📐 kernel args 0/1: (b, s, heads, d_k) — already tiled to the
+            # v-head count (GVA repeat_interleave happens BEFORE the kernel)
+            # and PRE-l2norm (the kernel normalizes and scales internally).
+            return shapes.bshd(
+                info.linear_num_value_heads,
+                info.linear_key_head_dim,
+                note=(
+                    "Captured pre-l2norm: the kernel applies l2norm and the "
+                    "1/sqrt(d) scale internally, so this is the tensor a write "
+                    "can actually steer."
+                ),
+            )
+        if component in ("delta_value", "delta_kernel_output"):
+            # kernel arg 2, and return[0] — v-head space, (b, s, heads, d_v).
+            # The output is pre-norm, pre-gate core_attn_out.
+            return shapes.bshd(info.linear_num_value_heads, info.linear_value_head_dim)
+        if component == "delta_state":
+            # ⚠️ On a real checkpoint this is the expensive read: a full-seq
+            # all-layers delta_state is layers · seq · heads · d_k · d_v floats
+            # (30 · seq · 32·128·128 on the A3B). Address positions early — the
+            # gather runs on the steps axis before anything is kept.
+            return shapes.state_matrix(
+                info.linear_num_value_heads,
+                info.linear_key_head_dim,
+                info.linear_value_head_dim,
+                note=(
+                    "It is the recurrent state S_t: one d_k × d_v matrix per "
+                    "head per step. Read it whole (optionally with 'head:'); "
+                    "its per-step faces are 'delta_kv_mem' (what the decayed "
+                    "state recalls for k̂_t) and 'delta_state_update' (what is "
+                    "written in)."
+                ),
+            )
+        if component in ("delta_kv_mem", "delta_state_update"):
+            # per-step d_v vectors per head, stacked over steps — derived from
+            # adjacent states and pinned by the reconstruction identity
+            # S_t == S_{t-1}·exp(g_t) + k̂_t ⊗ delta_t (round-4 plan §2.3)
+            return shapes.bshd(info.linear_num_value_heads, info.linear_value_head_dim)
+        if component == "delta_beta":
+            return shapes.bsh(
+                info.linear_num_value_heads,
+                note=(
+                    "One scalar gate per head per position — "
+                    "sigmoid(in_proj_b), in (0, 1)."
+                ),
+            )
+        if component == "delta_decay":
+            return shapes.bsh(
+                info.linear_num_value_heads,
+                note=(
+                    "The log-decay g — negative reals (the state multiplies by "
+                    "exp(g) per step), not a probability."
+                ),
+            )
+        # delta_gate (in_proj_z's output) and delta_premix (out_proj's input)
+        # are both value-head space: v-heads · v-head-dim, head-major, flat.
+        return shapes.bs_flat_heads(
+            info.linear_num_value_heads, info.linear_value_head_dim
+        )
+    if component.startswith("deltanet_"):
+        return _deltanet_shape(info, component)
+    raise ValidationError(
+        4,
+        f"component {component!r} has no declared feature shape — the protocol "
+        "layer cannot size it, and featurizers cannot attach to it",
+    )
+
+
+def _deltanet_shape(info: ModelInfo, component: str) -> FeatureShape:
+    """The Gated DeltaNet interior's shapes (round N7).
+
+    All widths derive from the mixer's four ``linear_*`` dimensions: q/k live
+    in key-head space, v/gate/state/output in value-head space, and the fused
+    qkv projection is ``2·key_dim + value_dim`` wide.
+    """
+    if (
+        info.linear_num_key_heads is None
+        or info.linear_num_value_heads is None
+        or info.linear_key_head_dim is None
+        or info.linear_value_head_dim is None
+    ):
+        raise ValidationError(
+            4,
+            f"model {info.key!r} declares no linear-attention dimensions "
+            f"(linear_num_key_heads and friends); {component} has no shape",
+        )
+    h_k, h_v = info.linear_num_key_heads, info.linear_num_value_heads
+    d_k, d_v = info.linear_key_head_dim, info.linear_value_head_dim
+    key_dim, value_dim = h_k * d_k, h_v * d_v
+    if component == "deltanet_qkv":
+        # the fused q|k|v projection, pre-conv: [key | key | value]
+        return shapes.bsd(2 * key_dim + value_dim)
+    if component == "deltanet_qkv_conv":
+        # ⚠️ channels-first: the causal conv works in (batch, width, position)
+        return shapes.bds(2 * key_dim + value_dim)
+    if component == "deltanet_query":
+        # pre repeat_interleave — key-head space, like attention_key under GQA
+        return shapes.bshd(h_k, d_k)
+    if component == "deltanet_key":
+        return shapes.bshd(h_k, d_k)
+    if component == "deltanet_value":
+        return shapes.bshd(h_v, d_v)
+    if component == "deltanet_beta":
+        # one write-strength scalar per value head per token — σ(b)
+        return shapes.bsd(h_v)
+    if component == "deltanet_decay":
+        # the log-decay g the kernel consumes, one per value head per token
+        return shapes.bsd(h_v)
+    if component == "deltanet_gate":
+        # the output gate z, consumed by the gated norm after the kernel
+        return shapes.bshd(h_v, d_v)
+    if component == "deltanet_core_out":
+        # the kernel's return, pre-gate — the DeltaNet analogue of attention_z
+        return shapes.bshd(h_v, d_v)
+    if component == "deltanet_gated_out":
+        # after the gated norm, flattened — what the out-projection consumes
+        return shapes.bs_flat_heads(h_v, d_v)
+    if component == "deltanet_state":
+        return shapes.chunked_state(
+            h_v,
+            d_k,
+            d_v,
+            note=(
+                "Its position axis is the kernel's 64-token chunk index: read "
+                'it whole (pos: "all") or at an integer chunk index. Per-token '
+                "prefill state does not exist — the recurrent kernel runs only "
+                "in single-token decode (the modeling code's own dispatch)."
+            ),
+        )
     raise ValidationError(
         4,
         f"component {component!r} has no declared feature shape — the protocol "
@@ -474,12 +717,15 @@ def head_space_refusal(component: str, head: int, shape: FeatureShape) -> str:
     :func:`component_width` (which refuses if anything reaches it another way),
     so the two cannot drift into disagreeing about what a head means.
     """
-    return (
+    message = (
         f"component {component!r} has no head axis — its shape is "
         f"{shape.describe()} — so head {head} would be validated and then "
         "silently dropped. Name a component that has heads "
         "('attention_premix'), or drop the 'head' field."
     )
+    # the shape's note is the "…so do this instead" half a refusal cannot
+    # generate — delta_qkv's names the per-head faces of the same information
+    return f"{message} {shape.note}" if shape.note else message
 
 
 def component_width(info: ModelInfo, component: str, *, head: int | None = None) -> int:

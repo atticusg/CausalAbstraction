@@ -6,15 +6,12 @@ orchestration. What it does **not** declare says as much as what it does:
 
 * ``grad`` — training through traces is real design work (plan §2.5, D6);
   ``train`` documents route to the reference engine.
-* ``generate`` — step-anchored trace reads are phase N8.
-* ``writable_attention_probs`` / the ``attention_probs`` component — the
-  attention-interior taps (eager interface source) are phase N5.
 * ``quantized_weights`` — unverified through nnsight's loader; refused until
   someone needs it and proves it.
 
-Components it will serve that no other engine can — the DeltaNet state, the
-expert interiors (plan §3, N6–N7) — enter ``schema.py`` when their phases
-land, and routing carries documents here by name.
+The components only this engine serves — the fused-forward interiors of
+N6/N7, and the decode-side DeltaNet state (N8) — route here by name: the
+reference engine simply does not declare them.
 """
 
 from __future__ import annotations
@@ -41,58 +38,42 @@ class NnsightEngine(Engine):
             "paired_forward",
             "full_logits",
             "pytorch_fn_local",
+            # the pattern write lands on the softmax's output *inside* the
+            # eager function ('attn_weights_2' in the N5 address table), where
+            # the value multiply consumes it — a write to the mixer's returned
+            # attn_weights would reach nothing (#53's finding)
+            "writable_attention_probs",
+            # continuation reads through one model.generate trace, decode
+            # steps walked with tracer.iter (N8); writes stay in the prefill,
+            # as everywhere
+            "generate",
         }
     )
-    # The module-boundary vocabulary (N4). The attention interior joins with
-    # N5; the interiors this engine exists for (DeltaNet state, expert
-    # interiors) join the schema with their phases.
+    # The whole current vocabulary, like the reference engine (N5): the
+    # module boundaries land on envoys, the attention interior through the
+    # `.source` address table, and 'attention_result' — derived by re-invoking
+    # the o-projection — works because an envoy outside a trace calls its
+    # underlying module (measured in the N5 probes). Read-only/swap-only
+    # components and stream constraints are *protocol policy* (the shared
+    # sites.py refusal tables), not capability gaps — the same argument the
+    # reference engine's declaration makes. The per-expert MoE interior (N6)
+    # is the first vocabulary only this engine serves — the reference engine
+    # leaves it undeclared, so routing lands it here by name; the DeltaNet
+    # interior joins the schema with N7 and enters the same way.
     #
-    # ⚠️ Round 2's nine attention components are excluded here, for two
-    # different reasons and neither of them "not implemented yet":
-    #
-    # * the four *function-interior* taps and 'attention_probs' live inside one
-    #   `attention_interface(...)` call and are reached by registering an eager
-    #   wrapper — a pytorch_hooks mechanism with no nnsight equivalent, which is
-    #   exactly what N5 is for;
-    # * 'attention_result' is *derived*: computing it re-invokes the
-    #   o-projection, and this engine's `site.module` is an nnsight envoy rather
-    #   than a callable module.
-    #
-    # The four module-boundary taps (v, the pre-RoPE projections, the gate)
-    # would very likely work here unchanged — they are ordinary envoy reads —
-    # but nothing exercises them on this engine, and declaring support this
-    # engine has never been tested for is the claim worth not making.
-    _ROUND_TWO_ATTENTION = frozenset(
-        {
-            "attention_probs",
-            "attention_query",
-            "attention_key",
-            "attention_scores",
-            "attention_z",
-            "attention_result",
-            "attention_value_states",
-            "attention_query_pre_rope",
-            "attention_key_pre_rope",
-            "attention_gate",
-        }
-    )
-    # Round 3's routed-expert interior is excluded for the first of those two
-    # reasons: every one of its components is reached by replacing the
-    # `ALL_EXPERTS_FUNCTIONS["grouped_mm"]` dispatch entry and patching
-    # `_grouped_linear` inside it — a pytorch_hooks mechanism the tracing
-    # engine cannot express (there is no per-expert module for an envoy to
-    # bind to; the experts module's only child is one shared act_fn).
-    _ROUND_THREE_MOE_INTERIOR = frozenset(
-        {
-            "expert_gate_proj",
-            "expert_up_proj",
-            "expert_activation",
-            "expert_output",
-        }
-    )
-    _UNDECLARED = _ROUND_TWO_ATTENTION | _ROUND_THREE_MOE_INTERIOR
-    components = frozenset(COMPONENTS) - _UNDECLARED
-    writable_components = frozenset(COMPONENTS) - _UNDECLARED
+    # Round 4's `delta_*` vocabulary is the *reference engine's* DeltaNet
+    # interior: the kernel boundary is reached by swapping the modeling
+    # file's module globals for the dynamic extent of one mixer forward, and
+    # the per-step interior by stepping the recurrent kernel inside the
+    # swapped globals — pytorch_hooks mechanisms with no nnsight equivalent
+    # (this engine's DeltaNet interior is the `deltanet_*` set, N7). The
+    # `delta_*` module-boundary taps (qkv, gate, premix) are ordinary envoy
+    # reads and would very likely work here unchanged — but nothing exercises
+    # them on this engine, and declaring support this engine has never been
+    # tested for is the claim worth not making.
+    _ROUND_FOUR_DELTA = frozenset(c for c in COMPONENTS if c.startswith("delta_"))
+    components = frozenset(COMPONENTS) - _ROUND_FOUR_DELTA
+    writable_components = frozenset(COMPONENTS) - _ROUND_FOUR_DELTA
     is_local = True
 
     def __init__(self, *, device: str = "cpu") -> None:
