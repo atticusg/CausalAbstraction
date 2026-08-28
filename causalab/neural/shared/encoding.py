@@ -76,6 +76,7 @@ from causalab.protocol.schema import PositionSpec, concrete_int, concrete_str
 __all__ = [
     "Continuation",
     "EncodedBatch",
+    "continuation_frame",
     "encode",
     "resolve_position",
     "resolve_steps",
@@ -442,3 +443,34 @@ def resolve_position(
     if a < 0 or b <= a:
         raise ProtocolError("P2", f"span [{a}, {b}) is not a forward window")
     return check(list(range(start + a, start + b)))
+
+
+def continuation_frame(
+    tokenizer: Any, generated: torch.Tensor, widths: tuple[int, ...]
+) -> Continuation:
+    """Build the frame the decode produced, characters included.
+
+    Token spans come from incremental detokenization — decode the row's
+    first ``k`` tokens, then ``k + 1``, and the growth is token ``k``'s
+    span. Re-encoding the finished text would not do: a tokenizer is free
+    to merge across a boundary the decode never saw, and the spans have to
+    describe the tokens the model actually emitted.
+    """
+    texts: list[str] = []
+    offsets: list[tuple[tuple[int, int], ...]] = []
+    for row, width in enumerate(widths):
+        ids = [int(t) for t in generated[row, :width]]
+        spans: list[tuple[int, int]] = []
+        text = ""
+        for k in range(width):
+            grown = tokenizer.decode(ids[: k + 1], skip_special_tokens=True)
+            spans.append((len(text), len(grown)))
+            text = grown
+        texts.append(text)
+        offsets.append(tuple(spans))
+    return Continuation(
+        token_ids=generated.detach().cpu(),
+        widths=widths,
+        texts=tuple(texts),
+        offsets=tuple(offsets),
+    )

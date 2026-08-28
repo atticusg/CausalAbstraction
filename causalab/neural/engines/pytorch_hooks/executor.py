@@ -34,16 +34,25 @@ from causalab.neural.engines.pytorch_hooks.attention_interface import (
     InterfaceTap,
     attention_interface_taps,
 )
+from causalab.neural.engines.pytorch_hooks.delta_interface import (
+    DeltaTap,
+    delta_kernel_taps,
+)
 from causalab.neural.engines.pytorch_hooks.experts_interface import (
     ExpertsTap,
     experts_interface_taps,
 )
-from causalab.neural.shared.encoding import Continuation, EncodedBatch, resolve_steps
+from causalab.neural.shared.encoding import (
+    EncodedBatch,
+    continuation_frame,
+    resolve_steps,
+)
 from causalab.neural.shared.executor_base import (
     ExecutorBase,
     RaggedValue,
     TapKey,
     document_seed,
+    refuse_unstackable,
     tap_key,
 )
 from causalab.protocol.shapes import FeatureShape
@@ -108,6 +117,11 @@ class PointExecutor(ExecutorBase):
             (rname): resolve_site(self.bundle, self.doc.sites[str(read.site)])
             for rname, read in taps
         }
+        for what, site in (
+            *((f"read {rname!r}", site) for rname, site in capture_sites.items()),
+            *((f"write at {site.component!r}", site) for site, _ in write_hooks),
+        ):
+            _refuse_interior(what, site)
         # A continuation read at lm_head is served from kept ln_final
         # activations (d_model, not vocab) and projected at its addressed
         # steps — the same value, without ever building the whole vocabulary
@@ -116,6 +130,8 @@ class PointExecutor(ExecutorBase):
             rname: resolve_site(self.bundle, self.doc.sites[str(read.site)])
             for rname, read in gen_taps
         }
+        for rname, site in gen_sites.items():
+            _refuse_interior(f"read {rname!r}", site)
         gen_capture_sites = {
             rname: (
                 resolve_site(self.bundle, SiteSpec(component="ln_final"))
@@ -135,6 +151,7 @@ class PointExecutor(ExecutorBase):
             # wrapper's edits replace the outer's.
             interface: dict[int, list[InterfaceTap]] = {}
             experts: dict[int, list[ExpertsTap]] = {}
+            delta: dict[Any, list[DeltaTap]] = {}
             batch_size = batch.input_ids.shape[0]
 
             for site, fn in write_hooks:
@@ -144,6 +161,23 @@ class PointExecutor(ExecutorBase):
                         ExpertsTap(
                             slot=site.interface_slot,
                             edit=_experts_edit(site, fn, batch_size),
+                        )
+                    )
+                    continue
+                if site.kind == "delta":
+                    assert site.interface_slot is not None
+                    if site.interface_slot == "state":
+                        # a state write must feed forward, so it rides the
+                        # stepwise substitution's own surface — `fn` here IS
+                        # the per-step writer (_build_write_hooks)
+                        delta.setdefault(site.module, []).append(
+                            DeltaTap(slot="state", edit_state=fn)
+                        )
+                        continue
+                    delta.setdefault(site.module, []).append(
+                        DeltaTap(
+                            slot=site.interface_slot,
+                            edit=_interface_edit(site, fn, batch_size),
                         )
                     )
                     continue
@@ -181,6 +215,15 @@ class PointExecutor(ExecutorBase):
                         )
                     )
                     continue
+                if site.kind == "delta":
+                    assert site.interface_slot is not None
+                    delta.setdefault(site.module, []).append(
+                        DeltaTap(
+                            slot=site.interface_slot,
+                            read=_interface_capture(capture, key, site, batch_size),
+                        )
+                    )
+                    continue
                 if site.kind == "interface":
                     assert site.interface_slot is not None
                     interface.setdefault(id(site.module), []).append(
@@ -209,6 +252,11 @@ class PointExecutor(ExecutorBase):
             hooks.enter_context(
                 experts_interface_taps(
                     {mid: tuple(entries) for mid, entries in experts.items()}
+                )
+            )
+            hooks.enter_context(
+                delta_kernel_taps(
+                    {mixer: tuple(entries) for mixer, entries in delta.items()}
                 )
             )
             with torch.enable_grad() if self.grad_enabled else torch.no_grad():
@@ -287,9 +335,10 @@ class PointExecutor(ExecutorBase):
         with contextlib.ExitStack() as hooks:
             interface: dict[int, list[InterfaceTap]] = {}
             experts: dict[int, list[ExpertsTap]] = {}
+            delta: dict[Any, list[DeltaTap]] = {}
             batch_size = batch.input_ids.shape[0]
             for name, site in gen_capture_sites.items():
-                _refuse_unstackable(name, site)
+                refuse_unstackable(name, site)
                 key = tap_key(site)
                 if key in steps:
                     continue
@@ -303,6 +352,15 @@ class PointExecutor(ExecutorBase):
                             read=_experts_accumulate(
                                 steps[key], idx_steps[key], site, batch_size
                             ),
+                        )
+                    )
+                    continue
+                if site.kind == "delta":
+                    assert site.interface_slot is not None
+                    delta.setdefault(site.module, []).append(
+                        DeltaTap(
+                            slot=site.interface_slot,
+                            read=_interface_accumulate(steps[key], site, batch_size),
                         )
                     )
                     continue
@@ -335,6 +393,11 @@ class PointExecutor(ExecutorBase):
                     {mid: tuple(entries) for mid, entries in experts.items()}
                 )
             )
+            hooks.enter_context(
+                delta_kernel_taps(
+                    {mixer: tuple(entries) for mixer, entries in delta.items()}
+                )
+            )
             for _ in range(depth):
                 mask = torch.cat([mask, torch.ones_like(nxt)], dim=1)
                 next_pos = next_pos + 1
@@ -361,7 +424,7 @@ class PointExecutor(ExecutorBase):
                 if hit.numel():
                     width = int(hit[0].item())
             widths.append(width)
-        continuation = _continuation_frame(
+        continuation = continuation_frame(
             self.bundle.tokenizer, generated, tuple(widths)
         )
         self._continuations[(model, input_role)] = continuation
@@ -414,15 +477,23 @@ class PointExecutor(ExecutorBase):
 
     def _build_write_hooks(
         self, write_names: tuple[str, ...], input_role: str, batch: EncodedBatch
-    ) -> list[tuple[ResolvedSite, Callable[[torch.Tensor], None]]]:
+    ) -> list[tuple[ResolvedSite, Callable[..., Any]]]:
         """One in-place writer per written-to tap, applying every write at that
         address in class order (the shared write math, executor_base).
 
         Returns the *site* rather than its parts: a tap may be a module
         boundary or an attention-interface slot, and only the site knows which.
         """
-        hooks: list[tuple[ResolvedSite, Callable[[torch.Tensor], None]]] = []
+        hooks: list[tuple[ResolvedSite, Callable[..., Any]]] = []
         for site, entries in self._resolve_write_addresses(write_names).values():
+            if site.kind == "delta" and site.interface_slot == "state":
+                # the one address whose writer is per-step (step, S) -> S:
+                # a state edit feeds forward, so the whole-tensor contract
+                # cannot express it (executor_base._state_step_writer)
+                hooks.append(
+                    (site, self._state_step_writer(entries, input_role, batch))
+                )
+                continue
             hooks.append((site, self._address_writer(entries, input_role, batch)))
         return hooks
 
@@ -571,45 +642,25 @@ def _experts_accumulate(
     return read
 
 
-def _refuse_unstackable(name: str, site: ResolvedSite) -> None:
-    """Refuse a continuation read whose steps do not stack into a frame.
+def _refuse_interior(what: str, site: ResolvedSite) -> None:
+    """Refuse a tap this engine has no mechanism for, naming the one that does.
 
-    📐 A decode step attends over the whole KV cache, so a tensor indexed by the
-    positions being attended *to* is ``prompt + step`` long at step ``step``
-    while the query axis stays 1. The accumulating sink concatenates steps on
-    dim 1, which for an ordinary tap is the position axis, so such a tap either
-    raises a bare torch size error (measured: "Expected size 9 but got size 10")
-    or, for a single-step budget, silently returns one step shaped like a frame.
-    Neither is a continuation read.
-
-    Both conditions are read off the declared axes rather than a component list:
-
-    * **two position axes** — the attention pattern and the scores. There is no
-      non-arbitrary answer to which of them the steps stack along;
-    * **one position axis, over the keys** — ``attention_key``. Its own length
-      is what grows, so consecutive steps are different lengths.
-
-    ``attention_query`` and ``attention_z`` are query-axis-shaped and accumulate
-    correctly, which is why this is a property of the axes and not of "anything
-    inside the attention function".
+    ``kind="interior"`` marks a tensor computed *inside* a fused forward (the
+    per-expert MoE interior, N6; the Gated DeltaNet interior, N7): there is no
+    module boundary for a hook and no per-family interface registry to wrap,
+    so the tap belongs to the nnsight engine's ``.source`` addressing. Routing
+    already keeps such documents away (the component is absent from this
+    engine's declaration); this refusal is for one arriving unrouted.
     """
-    shape = site.shape
-    if shape.has_contract_form and not any(
-        axis.kind == "position" and axis.name == "key" for axis in shape.axes
-    ):
+    if site.kind != "interior":
         return
-    why = (
-        "it has two position axes, so there is no single axis the decode steps "
-        "stack along"
-        if not shape.has_contract_form
-        else "its position axis runs over the positions being attended to, "
-        "which under a KV cache is the whole prefix and grows by one per step"
-    )
     raise ProtocolError(
         "P4",
-        f"read {name!r} reads {site.component!r} in the generated frame, whose "
-        f"shape is {shape.describe()}: {why}, so the steps do not stack into "
-        "one tensor. Read it in the prompt frame.",
+        f"{what} addresses {site.component!r}, which lives inside a fused "
+        "forward where no pytorch hook can reach — the nnsight engine "
+        "serves it (its `.source` address table, "
+        "neural/engines/nnsight_tracing/addresses.py). Routing sends such "
+        "documents there.",
     )
 
 
@@ -728,34 +779,3 @@ def _accumulating(
         yield
     finally:
         handle.remove()
-
-
-def _continuation_frame(
-    tokenizer: Any, generated: torch.Tensor, widths: tuple[int, ...]
-) -> Continuation:
-    """Build the frame the decode produced, characters included.
-
-    Token spans come from incremental detokenization — decode the row's
-    first ``k`` tokens, then ``k + 1``, and the growth is token ``k``'s
-    span. Re-encoding the finished text would not do: a tokenizer is free
-    to merge across a boundary the decode never saw, and the spans have to
-    describe the tokens the model actually emitted.
-    """
-    texts: list[str] = []
-    offsets: list[tuple[tuple[int, int], ...]] = []
-    for row, width in enumerate(widths):
-        ids = [int(t) for t in generated[row, :width]]
-        spans: list[tuple[int, int]] = []
-        text = ""
-        for k in range(width):
-            grown = tokenizer.decode(ids[: k + 1], skip_special_tokens=True)
-            spans.append((len(text), len(grown)))
-            text = grown
-        texts.append(text)
-        offsets.append(tuple(spans))
-    return Continuation(
-        token_ids=generated.detach().cpu(),
-        widths=widths,
-        texts=tuple(texts),
-        offsets=tuple(offsets),
-    )

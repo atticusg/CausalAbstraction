@@ -51,7 +51,14 @@ from causalab.protocol.schema import (
     WriteSpec,
 )
 
-__all__ = ["ExecutorBase", "RaggedValue", "TapKey", "document_seed", "tap_key"]
+__all__ = [
+    "ExecutorBase",
+    "RaggedValue",
+    "TapKey",
+    "document_seed",
+    "refuse_unstackable",
+    "tap_key",
+]
 
 
 def document_seed(doc: Document) -> int:
@@ -87,10 +94,10 @@ class RaggedValue:
 
 
 #: What identifies a tap for capture-sink sharing — see :func:`tap_key`.
-TapKey = tuple[int, str, FeatureShape, int | None, str | None, int | None]
+TapKey = tuple[int, str, FeatureShape, int | None, str | None, int | None, tuple | None]
 
 
-def tap_key(site: ResolvedSite) -> TapKey:
+def tap_key(site: ResolvedSite, source: Any = None) -> TapKey:
     """Identity of a tap for capture-sink sharing.
 
     Two sites may share a module and side yet mean different tensors — a
@@ -101,6 +108,12 @@ def tap_key(site: ResolvedSite) -> TapKey:
     ``expert`` is part of the identity for the write path's sake: two writes
     at the same interior slot naming *different* experts must land as two
     separately masked applications, and the address grouping keys on this.
+
+    ``source`` is an engine-specific *interior* address (the nnsight engine's
+    :class:`~causalab.neural.engines.nnsight_tracing.addresses.SourceAddress`):
+    two interior taps may share the module, side and even shape while meaning
+    different ops inside its forward, so its identity joins the key. It
+    defaults to ``None`` so a hook-engine tap's key is unchanged.
     """
     return (
         id(site.module),
@@ -109,6 +122,15 @@ def tap_key(site: ResolvedSite) -> TapKey:
         site.tuple_index,
         site.interface_slot,
         site.expert,
+        None
+        if source is None
+        else (
+            source.op_pattern,
+            source.peel,
+            source.field,
+            source.arg,
+            source.tuple_index,
+        ),
     )
 
 
@@ -250,6 +272,10 @@ class ExecutorBase:
         #: same list the gather used, kept because metrics need to know
         #: *which* steps a value covers (and that a row covered none)
         self._read_steps: dict[str, list[list[int]]] = {}
+        #: implementation requirements the run's addresses imposed (§7.3,
+        #: e.g. "attn_eager") — execution metadata, stamped into the artifact
+        #: identity next to the engine name, never canonical form
+        self.applied_requirements: set[str] = set()
 
     # ------------------------------------------------------------------ #
     # public surface
@@ -521,6 +547,8 @@ class ExecutorBase:
                 gathered = project(gathered)
         ragged = isinstance(gathered, RaggedValue)
         value = gathered.flat if isinstance(gathered, RaggedValue) else gathered
+        if site.shape.state_axes:
+            return self._state_read(rname, read, site, value, gathered)
         if site.derivation is not None:
             # After the gather, deliberately: the value is `heads` times wider
             # than the tensor it comes from, so deriving it before the gather
@@ -614,6 +642,149 @@ class ExecutorBase:
             selected = selected.detach().cpu()
         return RaggedValue(flat=selected, widths=tuple(widths))
 
+    def _state_read(
+        self,
+        rname: str,
+        read: ReadSpec,
+        site: ResolvedSite,
+        value: torch.Tensor,
+        gathered: "torch.Tensor | RaggedValue",
+    ) -> "torch.Tensor | RaggedValue":
+        """The tail of a read whose trailing axes form a state matrix.
+
+        The tensor keeps its native layout — ``(batch, steps, heads, d_k,
+        d_v)`` after the position gather — because there is no feature vector
+        to flatten to. ``head:`` selects on the head axis directly;
+        ``featurizer`` and ``dims`` are refused off the declared axes (the same
+        generated refusals the attention pattern gets, with the position gather
+        kept, which is what distinguishes the two shapes).
+        """
+        what = f"{site.component!r} ({site.shape.describe()})"
+        if read.featurizer is not None:
+            raise ProtocolError(
+                "P4",
+                f"read {rname!r} featurizes {what}: {site.shape.refusal('it')}",
+            )
+        if isinstance(read.dims, tuple):
+            raise ProtocolError(
+                "P4",
+                f"read {rname!r} slices 'dims' on {what}: that would select "
+                "d_v columns of a matrix as though they were features.",
+            )
+        if site.head is not None:
+            # dim 0 of a ragged flat is the gathered rows; dense keeps
+            # (batch, steps) in front — the head axis is right after either way
+            value = (
+                value[:, site.head]
+                if isinstance(gathered, RaggedValue)
+                else value[:, :, site.head]
+            )
+        if not self.grad_enabled:
+            value = value.detach().cpu()
+        if isinstance(gathered, RaggedValue):
+            return RaggedValue(flat=value, widths=gathered.widths)
+        return value
+
+    def _state_step_writer(
+        self,
+        entries: list[tuple[str, WriteSpec, ResolvedSite]],
+        input_role: str,
+        batch: EncodedBatch,
+    ) -> Callable[[int, torch.Tensor], torch.Tensor]:
+        """Per-step application of ``delta_state`` writes, for the stepwise
+        substitution (round-4 plan §2.3).
+
+        A state edit must feed forward — step ``t``'s replacement is what step
+        ``t+1`` decays and writes into — so the shared whole-tensor write math
+        cannot land it. Instead each addressed step applies the same
+        class-ordered mechanisms to that step's matrix, flattened to one
+        row: ``v_pre`` is ``S_t`` as ``(1, 1, heads·d_k·d_v)``, and a tensor
+        operand (a ``delta_state`` read) is sliced to the same (row, step)
+        before the mechanism sees it, so ``swap`` interchanges step-for-step.
+
+        ``dims`` is refused (a matrix has no feature columns); ``featurizer``
+        refuses through the width lookup, as every state read does.
+        """
+
+        def class_rank(entry: tuple[str, WriteSpec, ResolvedSite]) -> int:
+            do = entry[1].do
+            if str(do.mechanism) == "renormalize":
+                return 2
+            return 1 if is_additive(do) else 0
+
+        prepared: list[tuple[str, WriteSpec, ResolvedSite, list[list[int]]]] = []
+        for ename, write, site in sorted(entries, key=class_rank):
+            if isinstance(write.dims, tuple):
+                raise ProtocolError(
+                    "P4",
+                    f"write {ename!r} slices 'dims' on {site.component!r} "
+                    f"({site.shape.describe()}): that would select d_v columns "
+                    "of a matrix as though they were features.",
+                )
+            prepared.append(
+                (ename, write, site, self._positions(write.pos, batch, input_role))
+            )
+
+        def edit_state(step: int, state: torch.Tensor) -> torch.Tensor:
+            edited = state
+            for ename, write, site, per_row in prepared:
+                for row, positions in enumerate(per_row):
+                    if step not in positions:
+                        continue
+                    j = positions.index(step)
+                    if edited is state:
+                        edited = state.clone()
+                    v_pre = edited[row : row + 1].reshape(1, 1, -1)
+                    v_new = self._written_value(
+                        ename,
+                        write,
+                        site,
+                        v_pre,
+                        lookup=self._state_operand(
+                            ename, row, j, len(positions), v_pre
+                        ),
+                    )
+                    edited[row] = v_new.reshape(edited.shape[1:]).to(edited.dtype)
+            return edited
+
+        return edit_state
+
+    def _state_operand(
+        self, ename: str, row: int, step_index: int, n_steps: int, v_pre: torch.Tensor
+    ) -> Callable[[Any], "torch.Tensor | float"]:
+        """Operand lookup for one (row, addressed-step) state application: a
+        tensor operand must be a state read — ``(batch, steps, heads, d_k,
+        d_v)`` — covering **exactly the write's addressed steps** (the standard
+        write path's elementwise rule, stated rather than broadcast), and is
+        sliced to this row and step so the mechanism math sees two aligned
+        single-step rows."""
+
+        def lookup(value: Any) -> "torch.Tensor | float":
+            operand = self._operand_lookup(value)
+            if not isinstance(operand, torch.Tensor):
+                return operand
+            if operand.dim() != 5:
+                raise ProtocolError(
+                    "P2",
+                    f"write {ename!r} hands {value!r} to a 'delta_state' "
+                    f"write, but its shape is {tuple(operand.shape)} — a state "
+                    "operand is a 'delta_state' read, (batch, steps, heads, "
+                    "d_k, d_v), applied step for step",
+                )
+            if operand.shape[1] != n_steps:
+                raise ProtocolError(
+                    "P2",
+                    f"write {ename!r}: operand {value!r} covers "
+                    f"{operand.shape[1]} steps, but the write addresses "
+                    f"{n_steps} — the j-th operand step lands on the j-th "
+                    "addressed step, so both sides must cover the same steps "
+                    "(read the operand at the write's own positions)",
+                )
+            sliced = operand[row : row + 1, step_index : step_index + 1]
+            return sliced.reshape(1, 1, -1).to(v_pre.device)
+
+        return lookup
+
     # ------------------------------------------------------------------ #
     # writes (the math; landing them is the engine's job)
     # ------------------------------------------------------------------ #
@@ -696,10 +867,16 @@ class ExecutorBase:
         input_role: str,
         batch: EncodedBatch,
         tensor: torch.Tensor,
+        *,
+        per_row: list[list[int]] | None = None,
     ) -> None:
         """Apply every write at one address, in class order, mutating the
         contract-shaped ``tensor`` in place — absolute first, additive deltas
-        summed, renormalize last against the pre-write norm (§2.8)."""
+        summed, renormalize last against the pre-write norm (§2.8).
+
+        ``per_row`` overrides position resolution, the same override
+        :meth:`_finalize_read` takes: a caller whose position axis is not the
+        token axis (a per-chunk state) has already worked the indices out."""
 
         def class_rank(entry: tuple[str, WriteSpec, ResolvedSite]) -> int:
             do = entry[1].do
@@ -772,8 +949,12 @@ class ExecutorBase:
                         self._written_value(ename, write, site, tensor).to(tensor.dtype)
                     )
                 continue
-            per_row = self._positions(write.pos, batch, input_role)
-            widths = {len(row) for row in per_row}
+            positions = (
+                per_row
+                if per_row is not None
+                else self._positions(write.pos, batch, input_role)
+            )
+            widths = {len(row) for row in positions}
             if len(widths) != 1:
                 raise NotImplementedError(
                     f"write {ename!r}: ragged position widths {sorted(widths)} "
@@ -781,7 +962,7 @@ class ExecutorBase:
                     "all-positions or variable write needs every row to be "
                     "the same length"
                 )
-            idx = torch.tensor(per_row, dtype=torch.long, device=tensor.device)
+            idx = torch.tensor(positions, dtype=torch.long, device=tensor.device)
             rows = torch.arange(tensor.shape[0], device=tensor.device).unsqueeze(1)
             fslice = site.feature_slice or slice(None)
             v_pre = tensor[rows, idx][..., fslice]
@@ -791,10 +972,23 @@ class ExecutorBase:
             tensor[rows, idx] = slice_view
 
     def _written_value(
-        self, ename: str, write: WriteSpec, site: ResolvedSite, v_pre: torch.Tensor
+        self,
+        ename: str,
+        write: WriteSpec,
+        site: ResolvedSite,
+        v_pre: torch.Tensor,
+        *,
+        lookup: "Callable[[Any], torch.Tensor | float] | None" = None,
     ) -> torch.Tensor:
         """featurize → class-ordered do → inverse, honoring dims and the
-        error-term contract."""
+        error-term contract.
+
+        ``lookup`` overrides operand resolution — the state-write path slices
+        tensor operands to one (row, step) so the same mechanism math applies
+        per step; everything else uses :meth:`_operand_lookup` unchanged.
+        """
+        if lookup is None:
+            lookup = self._operand_lookup
         stack = self._read_stack(write, site)
         f0, errs = stack.featurize(v_pre)
         dims = None
@@ -810,15 +1004,13 @@ class ExecutorBase:
         if str(do.mechanism) == "renormalize":
             pass  # applied last, below
         elif is_additive(do):
-            delta = apply_delta(
-                do, select(f0), self._operand_lookup, batch=batch_size, n_pos=n_pos
-            )
+            delta = apply_delta(do, select(f0), lookup, batch=batch_size, n_pos=n_pos)
             if dims is None:
                 f = f + delta
             else:
                 f.index_copy_(-1, dims, select(f) + delta)
         else:
-            written = apply_absolute(do, select(f0), self._operand_lookup)
+            written = apply_absolute(do, select(f0), lookup)
             written = written.broadcast_to(select(f0).shape).to(f.dtype)
             if dims is None:
                 f = written.clone()
@@ -830,3 +1022,45 @@ class ExecutorBase:
             else:
                 f.index_copy_(-1, dims, apply_renormalize(select(f), select(f0)))
         return stack.inverse(f, errs)
+
+
+def refuse_unstackable(name: str, site: ResolvedSite) -> None:
+    """Refuse a continuation read whose steps do not stack into a frame.
+
+    📐 A decode step attends over the whole KV cache, so a tensor indexed by the
+    positions being attended *to* is ``prompt + step`` long at step ``step``
+    while the query axis stays 1. The accumulating sink concatenates steps on
+    dim 1, which for an ordinary tap is the position axis, so such a tap either
+    raises a bare torch size error (measured: "Expected size 9 but got size 10")
+    or, for a single-step budget, silently returns one step shaped like a frame.
+    Neither is a continuation read.
+
+    Both conditions are read off the declared axes rather than a component list:
+
+    * **two position axes** — the attention pattern and the scores. There is no
+      non-arbitrary answer to which of them the steps stack along;
+    * **one position axis, over the keys** — ``attention_key``. Its own length
+      is what grows, so consecutive steps are different lengths.
+
+    ``attention_query`` and ``attention_z`` are query-axis-shaped and accumulate
+    correctly, which is why this is a property of the axes and not of "anything
+    inside the attention function".
+    """
+    shape = site.shape
+    if shape.has_contract_form and not any(
+        axis.kind == "position" and axis.name == "key" for axis in shape.axes
+    ):
+        return
+    why = (
+        "it has two position axes, so there is no single axis the decode steps "
+        "stack along"
+        if not shape.has_contract_form
+        else "its position axis runs over the positions being attended to, "
+        "which under a KV cache is the whole prefix and grows by one per step"
+    )
+    raise ProtocolError(
+        "P4",
+        f"read {name!r} reads {site.component!r} in the generated frame, whose "
+        f"shape is {shape.describe()}: {why}, so the steps do not stack into "
+        "one tensor. Read it in the prompt frame.",
+    )
