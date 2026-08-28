@@ -274,6 +274,7 @@ Component vocabulary (per-engine `SiteResolver` maps each to a tap), in
 execution order:
 
 `input_ids` · `embeddings` · `block_input` · `attention_input_norm` ·
+`delta_qkv` · `delta_gate` · `delta_premix` ·
 `attention_query_pre_rope` · `attention_key_pre_rope` ·
 `attention_value_states` · `attention_gate` · `attention_query` ·
 `attention_key` · `attention_scores` · `attention_z` · `attention_result` ·
@@ -397,6 +398,18 @@ execution order:
   recomputes it — so a write here works on every family whose eager attention
   the backend can wrap, and only `swap` is refused arithmetic because nothing
   downstream restores rows summing to 1.
+- **The Gated DeltaNet interior begins at its module boundaries** (round 4.1):
+  `delta_qkv` is `in_proj_qkv`'s output — the fused `[q | k | v]` projection,
+  whose three widths are *unequal* (`key_dim`/`key_dim`/`value_dim`), so it has
+  no head axis and reads whole (or via `dims`); `delta_gate` is `in_proj_z`'s
+  output, the output gate, value-head space; and `delta_premix` is `out_proj`'s
+  **input** — the post-norm, post-gate mixer value, the exact analogue of
+  `attention_premix`, which is why the name. All three require a
+  `linear_attention` layer: at a full-attention layer they refuse with the
+  mirror of the DeltaNet refusal ("a gated-attention mixer computes no
+  delta-rule state"), and a family with no linear stream anywhere (llama,
+  GPT-2) hits that refusal at every layer. The conv output and the kernel
+  boundary are *function* taps (round 4.2) — the `conv1d` module never fires.
 - **`stream` names a mixer stream, and it is a per-layer fact.** It is one of
   `full_attention` / `linear_attention`. A hybrid tower carries a different mixer
   at different depths (Qwen3.6's text tower alternates Gated DeltaNet with gated
