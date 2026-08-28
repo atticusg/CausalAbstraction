@@ -53,6 +53,7 @@ from causalab.protocol.shapes import FeatureShape
 
 __all__ = [
     "ATTENTION_FUNCTION_SLOTS",
+    "DELTA_KERNEL_SLOTS",
     "NORMALIZED_TAPS",
     "READ_ONLY_COMPONENTS",
     "SWAP_ONLY_COMPONENTS",
@@ -432,8 +433,23 @@ _FULL_ATTENTION_ONLY: frozenset[str] = frozenset(
 #: ``in_proj_qkv``/``in_proj_z``/``out_proj`` children at all — and a family
 #: with no linear stream anywhere (llama, gpt2) hits the same refusal at every
 #: layer, which is the architectural refusal by name.
+#: The kernel boundary *inside* the DeltaNet forward — round 4.2. 📐 These are
+#: not module boundaries: the forward calls two module-global functions
+#: (``causal_conv1d_fn`` and the delta-rule kernel), so the taps swap those
+#: globals for the dynamic extent of the tapped mixer's forward. See
+#: :mod:`causalab.neural.engines.pytorch_hooks.delta_interface`.
+DELTA_KERNEL_SLOTS: dict[str, str] = {
+    "delta_conv": "conv",
+    "delta_query": "query",
+    "delta_key": "key",
+    "delta_value": "value",
+    "delta_beta": "beta",
+    "delta_decay": "decay",
+    "delta_kernel_output": "kernel_output",
+}
+
 _LINEAR_ATTENTION_ONLY: frozenset[str] = frozenset(
-    {"delta_qkv", "delta_gate", "delta_premix"}
+    {"delta_qkv", "delta_gate", "delta_premix"} | set(DELTA_KERNEL_SLOTS)
 )
 
 
@@ -724,6 +740,20 @@ def resolve_site(bundle: Any, spec: SiteSpec) -> ResolvedSite:
         # causal_conv1d_fn global instead), which is why the conv output and
         # the kernel boundary are function taps (round 4.2), not module taps.
         mixer = _attn(bundle, layer)
+        if component in DELTA_KERNEL_SLOTS:
+            # no module boundary: the tensor is an argument or return of the
+            # kernel-boundary globals. The mixer is carried as the module — it
+            # is what identifies *which* forward's calls to tap.
+            if component in ("delta_conv",):
+                if head is not None:
+                    _head_slice(bundle, component, head)  # refuses, by shape
+                return tap(mixer, "delta", interface_slot=DELTA_KERNEL_SLOTS[component])
+            return tap(
+                mixer,
+                "delta",
+                feature_slice=_head_slice(bundle, component, head),
+                interface_slot=DELTA_KERNEL_SLOTS[component],
+            )
         if component == "delta_qkv":
             # no head axis: the fused [q | k | v] widths are unequal (the
             # shape's note says where the per-head faces live)

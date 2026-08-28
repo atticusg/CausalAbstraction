@@ -274,7 +274,9 @@ Component vocabulary (per-engine `SiteResolver` maps each to a tap), in
 execution order:
 
 `input_ids` · `embeddings` · `block_input` · `attention_input_norm` ·
-`delta_qkv` · `delta_gate` · `delta_premix` ·
+`delta_qkv` · `delta_gate` · `delta_conv` · `delta_query` · `delta_key` ·
+`delta_value` · `delta_beta` · `delta_decay` · `delta_kernel_output` ·
+`delta_premix` ·
 `attention_query_pre_rope` · `attention_key_pre_rope` ·
 `attention_value_states` · `attention_gate` · `attention_query` ·
 `attention_key` · `attention_scores` · `attention_z` · `attention_result` ·
@@ -410,6 +412,30 @@ execution order:
   delta-rule state"), and a family with no linear stream anywhere (llama,
   GPT-2) hits that refusal at every layer. The conv output and the kernel
   boundary are *function* taps (round 4.2) — the `conv1d` module never fires.
+- **Seven more DeltaNet boxes live at the kernel boundary** (round 4.2), as
+  arguments and returns of two module-global call sites the forward uses:
+  `delta_conv` is `causal_conv1d_fn`'s return (channels-first, the fused
+  unequal widths again, so no head axis); `delta_query`/`delta_key`/
+  `delta_value` are the kernel's first three arguments — post-conv,
+  GVA-**tiled** to the value-head count, and **pre**-l2norm (the kernel
+  normalizes and scales internally, so these are the tensors a write can
+  steer); `delta_beta` (`sigmoid(in_proj_b)`) and `delta_decay` (the
+  log-decay `g`, negative reals) are its per-head gates, whose feature axis
+  IS the head axis; `delta_kernel_output` is its return — the pre-norm,
+  pre-gate `core_attn_out`, pinned by
+  `norm(delta_kernel_output, delta_gate) == delta_premix` (exactly). The
+  wrappers swap the modeling file's own globals for the dynamic extent of the
+  tapped mixer's forward and call through to the originals — so whatever
+  hub/`fla` dispatch the environment resolved keeps computing, and identity
+  is bit-exact by construction. Both delta-rule kernels and both conv
+  entry points are swapped together, so cached decode steps (which natively
+  run the recurrent kernel and `causal_conv1d_update`) are tapped identically
+  to prefill — `delta_key` therefore reads in the generated frame, unlike
+  `attention_key` (the kernel receives one step's k, not the prefix). A
+  `kernelize()`d mixer (a hub-kernel class forward) is refused by name, as is
+  a family whose modeling file does not export the four globals. The untiled
+  q/k and the post-split views are not components (F7: one box, one address —
+  they are `delta_conv` rows re-viewed).
 - **`stream` names a mixer stream, and it is a per-layer fact.** It is one of
   `full_attention` / `linear_attention`. A hybrid tower carries a different mixer
   at different depths (Qwen3.6's text tower alternates Gated DeltaNet with gated

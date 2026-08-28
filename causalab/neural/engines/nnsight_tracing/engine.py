@@ -86,6 +86,16 @@ class NnsightEngine(Engine):
             "delta_qkv",
             "delta_gate",
             "delta_premix",
+            # the kernel boundary: reached by swapping the modeling file's
+            # module globals for the dynamic extent of one mixer forward — a
+            # pytorch_hooks mechanism with no nnsight equivalent
+            "delta_conv",
+            "delta_query",
+            "delta_key",
+            "delta_value",
+            "delta_beta",
+            "delta_decay",
+            "delta_kernel_output",
         }
     )
     _UNDECLARED = _ROUND_TWO_ATTENTION | _ROUND_FOUR_DELTANET

@@ -94,6 +94,16 @@ EXPECTED: dict[str, tuple[int | None, int | None, bool]] = {
     "delta_qkv": (132, None, True),
     "delta_gate": (72, 6, True),
     "delta_premix": (72, 6, True),
+    # the kernel boundary: conv is the fused width again (no head axis); q/k
+    # are TILED to the 6 v-heads of the 10-wide key head dim; the gates' one
+    # scalar per head makes the feature axis the head axis
+    "delta_conv": (132, None, True),
+    "delta_query": (60, 6, True),
+    "delta_key": (60, 6, True),
+    "delta_value": (72, 6, True),
+    "delta_beta": (6, 6, True),
+    "delta_decay": (6, 6, True),
+    "delta_kernel_output": (72, 6, True),
     "attention_probs": (None, 8, False),
     "attention_query_pre_rope": (128, 8, True),
     "attention_key_pre_rope": (64, 4, True),
