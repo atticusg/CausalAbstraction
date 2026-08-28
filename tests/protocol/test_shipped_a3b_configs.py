@@ -25,7 +25,7 @@ pytestmark = pytest.mark.unit
 
 CONFIGS = Path(__file__).resolve().parents[2] / "causalab" / "configs"
 PROTOCOLS = CONFIGS / "protocols" / "qwen3_6_a3b"
-WORKFLOW = CONFIGS / "workflows" / "qwen3_6_a3b_weekdays.json"
+WORKFLOWS = CONFIGS / "workflows"
 
 #: file stem -> expanded point count. `das_apply` is absent on purpose: it
 #: loads a fitted rotation from the `fit` step's output, so it only resolves
@@ -79,11 +79,10 @@ def test_the_attention_scan_names_only_full_attention_layers():
     assert max(layers) == info.num_layers - 1
 
 
-def test_the_workflow_chain_loads():
-    from causalab.workflow.document import load_workflow
-
-    workflow = load_workflow(WORKFLOW, _env())
-    assert set(workflow.document.steps) == {
+#: workflow file stem -> its step names. The two halves of the protocol: step 2
+#: is a fan-out of independent probes, step 4 is a chain.
+WORKFLOW_STEPS = {
+    "qwen3_6_a3b_weekdays": {
         "locate",
         "best",
         "fit",
@@ -91,4 +90,23 @@ def test_the_workflow_chain_loads():
         "apply",
         "scan_heatmap",
         "iia_by_k",
-    }
+    },
+    "qwen3_6_a3b_exploration": {
+        "probe",
+        "logit_lens",
+        "knockout_attention",
+        "knockout_mlp",
+        "harvest",
+        "pca",
+        "spectrum",
+        "head_grid",
+    },
+}
+
+
+@pytest.mark.parametrize("stem", sorted(WORKFLOW_STEPS))
+def test_a_shipped_workflow_loads(stem: str):
+    from causalab.workflow.document import load_workflow
+
+    workflow = load_workflow(WORKFLOWS / f"{stem}.json", _env())
+    assert set(workflow.document.steps) == WORKFLOW_STEPS[stem]

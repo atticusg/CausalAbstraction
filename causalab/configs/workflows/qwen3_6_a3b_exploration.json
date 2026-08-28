@@ -1,0 +1,72 @@
+{
+  "version": "1",
+  "description": "qwen3.6-35b-a3b weekdays, step 2: the exploratory battery as one document - probe, logit lens, the two knockout families, and a harvest whose activations a principal basis is fitted over. Independent steps ARE the parallelism; the only dependency here is harvest -> pca -> spectrum, and the runner derives it.",
+  "output_dir": "qwen3_6_a3b_exploration",
+  "steps": {
+    "probe": {
+      "type": "intervention_protocol",
+      "description": "Confirm the model does the task before spending compute on where.",
+      "document": "../protocols/qwen3_6_a3b/probe.json"
+    },
+    "logit_lens": {
+      "type": "intervention_protocol",
+      "description": "Depth x position: what each cell would predict if the network stopped there.",
+      "document": "../protocols/qwen3_6_a3b/logit_lens.json"
+    },
+    "knockout_attention": {
+      "type": "intervention_protocol",
+      "description": "The (layer x head) grid, over the ten full-attention layers.",
+      "document": "../protocols/qwen3_6_a3b/knockout_head.json"
+    },
+    "knockout_mlp": {
+      "type": "intervention_protocol",
+      "description": "MLP bands at width 1, over the whole tower.",
+      "document": "../protocols/qwen3_6_a3b/knockout_mlp.json"
+    },
+    "harvest": {
+      "type": "intervention_protocol",
+      "description": "Residual stream at three depths, plus the mean-ablation reference.",
+      "document": "../protocols/qwen3_6_a3b/harvest.json"
+    },
+    "pca": {
+      "type": "script",
+      "description": "Centered principal basis over the mid-tower answer-slot activations.",
+      "script": {"module": "causalab.analysis.fit_pca"},
+      "inputs": {
+        "acts": {"step": "harvest", "file": "acts_L20_ans.safetensors"},
+        "k": 8
+      },
+      "outputs": {
+        "weight": "basis_L20.safetensors",
+        "spectrum": {
+          "file": "spectrum_L20.json",
+          "columns": {"pc": "int64", "explained_variance": "float64", "explained_variance_ratio": "float64"}
+        }
+      }
+    },
+    "spectrum": {
+      "type": "script",
+      "description": "How much structure the top components carry, and at what rank it flattens.",
+      "script": {"module": "causalab.io.plots.workflow_figures"},
+      "inputs": {
+        "table": {"step": "pca", "file": "spectrum_L20.json"},
+        "plot": "lines",
+        "value": "explained_variance_ratio",
+        "x": "pc"
+      },
+      "outputs": {"figure": "spectrum_L20.png", "plotted": {"file": "spectrum_L20_plotted.json"}}
+    },
+    "head_grid": {
+      "type": "script",
+      "description": "The knockout grid as a (layer x head) heatmap.",
+      "script": {"module": "causalab.io.plots.workflow_figures"},
+      "inputs": {
+        "table": {"step": "knockout_attention", "file": "answer_logit.json"},
+        "plot": "heatmap",
+        "x": "sites.attn.layer",
+        "y": "sites.attn.head"
+      },
+      "outputs": {"figure": "head_grid.png", "plotted": {"file": "head_grid.json"}}
+    }
+  }
+}

@@ -14,9 +14,18 @@ causalab validate causalab/configs/protocols/qwen3_6_a3b/interchange.json --data
     --data-root causalab/configs/data
 causalab run      causalab/configs/protocols/qwen3_6_a3b/interchange.json \
     --data-root causalab/configs/data --out runs/interchange --device cuda
+# step 2 as a fan-out, step 4 as a chain
+causalab run      causalab/configs/workflows/qwen3_6_a3b_exploration.json \
+    --data-root causalab/configs/data --out runs --device cuda
 causalab run      causalab/configs/workflows/qwen3_6_a3b_weekdays.json \
     --data-root causalab/configs/data --out runs --device cuda
 ```
+
+The PCA half of step 2 needs no new code: `harvest.json`'s activations feed the
+already-shipped `causalab.analysis.fit_pca` script step, which the exploration
+workflow wires up. ⚠️ It is wired at demo scale — 14 rows against a 2048-wide
+residual is a *shape* demonstration, not a fit. The method wants a few thousand
+inputs; widen `../../data/weekdays` before reading anything into the spectrum.
 
 | document | method it implements | points |
 |---|---|---|
