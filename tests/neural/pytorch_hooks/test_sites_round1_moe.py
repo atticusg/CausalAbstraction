@@ -15,6 +15,8 @@ exactly what a wrong ``tuple_index`` would break.
 
 from __future__ import annotations
 
+import copy
+
 import pytest
 import torch
 
@@ -40,6 +42,15 @@ MOE_COMPONENTS = (
     "shared_expert_output",
     "shared_expert_gate",
 )
+
+#: One valid ``do`` payload per non-``swap`` mechanism the refusal must cover:
+#: an absolute-class write, an additive one, and a clamp — enough that the rule
+#: is clearly about the *component*, not about one spelling.
+_MECHANISM_PAYLOADS: dict[str, dict] = {
+    "add_scaled": {"add_scaled": {"op": "v_cf", "alpha": 5.0}},
+    "lerp": {"lerp": {"op": "v_cf", "alpha": 0.5}},
+    "clamp": {"clamp": {"lo": 0.0, "hi": 1.0}},
+}
 
 TEXT = "the quick brown fox jumps"
 #: 📐 measured on tiny-random/qwen3.5-moe: hidden 8, 128 experts, top-10,
@@ -332,6 +343,44 @@ def test_a_featurizer_on_expert_idx_refuses_by_rule_number(qwen35moe_bundle):
     assert excinfo.value.rule == 4
 
 
+def test_router_scores_columns_are_a_ranking_not_a_basis(qwen35moe_bundle):
+    """⚠️ The open judgement call in #52's description, recorded as evidence.
+
+    ``router_scores`` HAS a width (``num_experts_per_tok``), so a featurizer —
+    a ``subspace`` fit across positions — is accepted today. This measures why
+    that acceptance is worth a second look before anyone reads such a fit:
+    column *j* is "the j-th ranked expert for this token", and which expert
+    that is changes token by token.
+
+    📐 Measured on the fixture, one 5-token prompt: column 0 names experts
+    [104, 22, 95, 38, 8] at positions 0-4 — five different experts in one
+    coordinate. A subspace fitted across positions therefore mixes unrelated
+    experts' scores into the same direction, and the resulting basis means
+    nothing, while looking exactly like every other subspace fit in a report.
+
+    This test does not decide the question — it pins the fact the decision
+    rests on, so whichever way it goes, it goes with evidence. If the answer is
+    "refuse", the change is a ``component_width`` special case and this test
+    flips to asserting the refusal.
+    """
+    doc = copy.deepcopy(_doc("expert_idx"))
+    doc["reads"]["r"]["pos"] = {"all": True}
+    ids = executor_for(doc, qwen35moe_bundle, base_texts=[TEXT]).read_value("r")
+    ids = ids.reshape(-1, ids.shape[-1]).long()
+    assert ids.shape[0] > 1, "need several positions for the property to be visible"
+
+    distinct_per_column = [len(set(ids[:, j].tolist())) for j in range(ids.shape[-1])]
+    assert max(distinct_per_column) > 1, (
+        "column j named the same expert at every position — on this input the "
+        "ranking happens to be stable, and the hazard below is not visible here"
+    )
+
+    # and the acceptance this documents: the fit is allowed, today
+    executor_for(
+        _doc("router_scores", featurizer=True), qwen35moe_bundle, base_texts=[TEXT]
+    ).run_all()
+
+
 def test_a_featurizer_on_a_flat_moe_tap_is_fine(qwen35moe_bundle):
     """Anti-vacuity, and the property that matters for `flat_td`: the featurizer
     sees the contract shape, so a k=1 subspace over a 128-wide router works."""
@@ -404,17 +453,26 @@ def _swap_doc(component: str, *, layer: int | None = 0, pos: int = 1) -> dict:
     }
 
 
-@pytest.mark.parametrize(
-    "component",
-    [
-        "router_scores",
-        "expert_idx",
-        "routed_output",
-        "shared_expert_activation",
-        "shared_expert_output",
-        "shared_expert_gate",
-    ],
+#: Every MoE component a write is *allowed* to reach — derived from the two
+#: tables rather than listed, so a component added to one and forgotten in the
+#: other cannot quietly skip the causal check below. ``shared_expert_gate_proj``
+#: and ``shared_expert_up_proj`` were exactly that gap when this was a literal
+#: list: writable, and the only two siblings with no write-moves-logits pin.
+WRITABLE_MOE_COMPONENTS = tuple(
+    c for c in MOE_COMPONENTS if c not in READ_ONLY_COMPONENTS
 )
+
+
+def test_every_writable_moe_component_is_causally_checked():
+    """The guard on the guard: the parametrization below must cover the whole
+    writable surface, so this pins the arithmetic rather than trusting it."""
+    assert len(WRITABLE_MOE_COMPONENTS) == len(MOE_COMPONENTS) - len(
+        [c for c in MOE_COMPONENTS if c in READ_ONLY_COMPONENTS]
+    )
+    assert set(WRITABLE_MOE_COMPONENTS) | {"router_logits"} == set(MOE_COMPONENTS)
+
+
+@pytest.mark.parametrize("component", WRITABLE_MOE_COMPONENTS)
 def test_a_write_through_a_flat_tap_actually_changes_the_logits(
     qwen35moe_bundle, component: str
 ):
@@ -423,7 +481,9 @@ def test_a_write_through_a_flat_tap_actually_changes_the_logits(
     in a discarded copy and the run silently reports the clean numbers.
 
     Swapping the counterfactual value into base at (L0, p1) must move the
-    logits. 📐 It does, for every writable MoE tap.
+    logits. 📐 It does, for every writable MoE tap — including the two
+    projection taps, which feed ``silu(gate) * up -> down_proj`` and so cannot
+    move the shared expert's output without moving the logits.
     """
     executor = executor_for(
         _swap_doc(component),
@@ -448,8 +508,13 @@ def test_a_write_that_cannot_reach_anything_refuses(qwen35moe_bundle, component:
     ``_`` and are never read again. So a write to ``router_logits`` moves the
     logits by exactly 0.0 while every other MoE write moves them (the test
     above). A silent no-op is the worst available outcome: the run succeeds and
-    the conclusion is wrong. ``input_ids`` is read-only for the same class of
-    reason (§5.4) — it is the model's input, not an activation.
+    the conclusion is wrong.
+
+    ``input_ids`` is refused for the *opposite* reason, and the docstring on
+    READ_ONLY_COMPONENTS spells the difference out: 📐 a write there does land
+    (the tap is the embedding's pre-hook input, and mutating it changes the ids
+    the model looks up). It is refused because token ids are not an activation
+    — editing them is a change to the dataset, and belongs in the row's text.
     """
     with pytest.raises(ProtocolError) as excinfo:
         executor_for(
@@ -459,6 +524,64 @@ def test_a_write_that_cannot_reach_anything_refuses(qwen35moe_bundle, component:
             counterfactual_texts=["a slow green turtle sleeps deeply"],
         ).read_value("after")
     message = str(excinfo.value)
-    assert "cannot affect" in message
+    assert "no write" in message and "may change" in message
     # and it must say what to do instead
     assert READ_ONLY_COMPONENTS[component].split(";")[0][:20] in message
+
+
+# --------------------------------------------------------------------------- #
+# expert_idx: a routing table is labels, not features
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("mechanism", ["add_scaled", "lerp", "clamp"])
+def test_arithmetic_on_the_routing_table_refuses(qwen35moe_bundle, mechanism: str):
+    """📐 The finding: before this rule, ``add_scaled`` over ``expert_idx`` ran
+    to completion with no refusal anywhere.
+
+    The routing table is int64 expert *ids*. Scaling or offsetting them is
+    arithmetic on labels: the result names whichever experts it happens to land
+    on where it stays in range, and fails at the gather where it does not —
+    on CUDA a device-side assert, raised far from the write that caused it.
+    Neither outcome is a result, so the write is refused by name, at the plan,
+    before the model runs.
+    """
+    doc = copy.deepcopy(_swap_doc("expert_idx"))
+    doc["writes"]["patch"]["do"] = _MECHANISM_PAYLOADS[mechanism]
+    # `clamp` names no operand, which would leave `v_cf` dead and trip V11
+    # before the rule under test fires — save it so the refusal is what we see
+    doc["save"].append(
+        {
+            "value": "v_cf",
+            "model": "original",
+            "input": "counterfactual",
+            "file_path": "vcf.safetensors",
+        }
+    )
+    with pytest.raises(ProtocolError) as excinfo:
+        executor_for(
+            doc,
+            qwen35moe_bundle,
+            base_texts=[TEXT],
+            counterfactual_texts=["a slow green turtle sleeps deeply"],
+        ).read_value("after")
+    message = str(excinfo.value)
+    assert mechanism in message and "expert_idx" in message
+    assert "swap" in message
+
+
+def test_a_swap_of_the_routing_table_is_still_allowed(qwen35moe_bundle):
+    """The rule narrows the mechanism, not the component: replacing the whole
+    table with one read from elsewhere is the supported way to reroute, and it
+    still moves the logits (the parametrized causal check above covers it —
+    asserted here too so the refusal cannot be widened by accident)."""
+    executor = executor_for(
+        _swap_doc("expert_idx"),
+        qwen35moe_bundle,
+        base_texts=[TEXT],
+        counterfactual_texts=["a slow green turtle sleeps deeply"],
+    )
+    moved = float(
+        (executor.read_value("after") - executor.read_value("clean")).abs().max()
+    )
+    assert moved > 0.0
