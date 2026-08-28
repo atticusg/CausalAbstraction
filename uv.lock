@@ -471,7 +471,7 @@ dev = [
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-xdist", specifier = ">=3.6.0" },
-    { name = "ruff" },
+    { name = "ruff", specifier = "==0.14.5" },
     { name = "scikit-learn-stubs" },
     { name = "scipy-stubs" },
 ]

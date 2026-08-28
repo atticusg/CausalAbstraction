@@ -61,10 +61,16 @@ GQA = ModelInfo(
     vocab_size=1000,
     num_experts=32,
     num_experts_per_tok=4,
+    # deliberately three DIFFERENT inner widths (dense 128, shared 48, routed
+    # 24): the tiny fixture checkpoint carries all three equal, so this table
+    # is the one place a wrong-spelling pick is distinguishable at all
     shared_expert_intermediate_size=48,
-    # ⚠️ deliberately uncoupled: v-heads is not 2·k-heads and the two head dims
-    # differ — the fixture's couplings (2× GVA tiling, equal dims) are exactly
-    # what a table must not assume (round-4 plan §1.1).
+    moe_intermediate_size=24,
+    # ⚠️ the DeltaNet mixer's four dimensions, deliberately uncoupled: v-heads
+    # is not 2·k-heads and the two head dims differ — the fixture's couplings
+    # (2× GVA tiling, equal dims) are exactly what a table must not assume
+    # (round-4 plan §1.1). q/k live in key-head space (3 heads × 10),
+    # v/gate/state in value-head space (6 × 12).
     linear_num_value_heads=6,
     linear_num_key_heads=3,
     linear_key_head_dim=10,
@@ -119,6 +125,21 @@ EXPECTED: dict[str, tuple[int | None, int | None, bool]] = {
     "attention_key": (64, 4, True),
     "attention_scores": (None, 8, False),
     "attention_z": (128, 8, True),
+    # the DeltaNet interior (N7): key_dim = 3·10 = 30, value_dim = 6·12 = 72,
+    # so the fused q|k|v projection is 132 wide; q/k are key-head space (3
+    # heads), everything value-shaped is value-head space (6)
+    "deltanet_qkv": (132, None, True),
+    "deltanet_qkv_conv": (132, None, True),
+    "deltanet_query": (30, 3, True),
+    "deltanet_key": (30, 3, True),
+    "deltanet_value": (72, 6, True),
+    "deltanet_beta": (6, None, True),
+    "deltanet_decay": (6, None, True),
+    "deltanet_gate": (72, 6, True),
+    "deltanet_core_out": (72, 6, True),
+    "deltanet_gated_out": (72, 6, True),
+    # per chunk: a (k_dim x v_dim) matrix per value head — 10·12 per head
+    "deltanet_state": (6 * 10 * 12, 6, True),
     "attention_premix": (128, 8, True),
     # ⚠️ the *value's* shape: this component is derived, and hidden-wide per
     # head rather than head_dim-wide
@@ -131,7 +152,14 @@ EXPECTED: dict[str, tuple[int | None, int | None, bool]] = {
     "router_logits": (32, None, True),
     "router_scores": (4, None, True),
     "expert_idx": (4, None, False),
-    "expert_output": (64, None, True),
+    # the per-expert interior (N6): one vector per routed slot, token-major —
+    # top_k · width, with the projections in the routed experts' own inner
+    # width and the output hidden-wide
+    "expert_gate_proj": (4 * 24, None, True),
+    "expert_up_proj": (4 * 24, None, True),
+    "expert_activation": (4 * 24, None, True),
+    "expert_permutation": (4, None, False),
+    "expert_output": (4 * 64, None, True),
     "routed_output": (64, None, True),
     "shared_expert_gate_proj": (48, None, True),
     "shared_expert_up_proj": (48, None, True),

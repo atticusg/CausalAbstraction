@@ -97,6 +97,26 @@ COMPONENT_RANK: dict[str, int] = {
     "attention_scores": 220,
     "attention_probs": 230,
     "attention_z": 240,
+    # The Gated DeltaNet interior (N7), in ITS mixer's fire order — which is
+    # what these ranks must encode, because the `.source` interiors refuse
+    # out-of-order requests: the fused qkv projection, then the gate's early
+    # reshape (z is projected right after qkv, long before it is consumed),
+    # the causal conv, the q/k/v splits, β, the kernel's decay argument
+    # (requested at call entry, before anything drills into the kernel), the
+    # per-chunk state, the kernel's return, and the post-norm gated output.
+    # A linear-attention layer never carries the full-attention interior, so
+    # sharing the 150–400 mixer band with it collides with nothing.
+    "deltanet_qkv": 250,
+    "deltanet_gate": 252,
+    "deltanet_qkv_conv": 254,
+    "deltanet_query": 256,
+    "deltanet_key": 258,
+    "deltanet_value": 260,
+    "deltanet_beta": 262,
+    "deltanet_decay": 264,
+    "deltanet_state": 266,
+    "deltanet_core_out": 268,
+    "deltanet_gated_out": 270,
     # 🔤 `attention_premix` was `attention_value` until round 2. It is the
     # o-projection's INPUT — on a gated family `z · σ(gate)`, on an ungated one
     # `z` — which is the mixer's output just before it is mixed back into the
@@ -119,7 +139,16 @@ COMPONENT_RANK: dict[str, int] = {
     "router_logits": 510,
     "router_scores": 520,
     "expert_idx": 530,
-    "expert_output": 540,  # per-expert interior (still refused — follow-up F2)
+    # The per-expert interior (N6), ranked where its ops fire inside the fused
+    # experts forward: the gate/up projections, the activation, then — just
+    # before the weighted combine — the kernel's inverse permutation, which is
+    # what `expert_permutation` reads. Its late rank is deliberate: ranks are
+    # execution order, and the `.source` interiors refuse out-of-order taps.
+    "expert_gate_proj": 532,
+    "expert_up_proj": 534,
+    "expert_activation": 536,
+    "expert_permutation": 538,
+    "expert_output": 540,
     "routed_output": 550,
     "mlp_activation": 600,
     # the shared expert runs beside the routed ones; its gate is *consumed*
