@@ -82,6 +82,10 @@ EXPECTED: dict[str, tuple[int | None, int | None, bool]] = {
     "block_input": (64, None, True),
     "attention_input_norm": (64, None, True),
     "attention_probs": (None, 8, False),
+    "attention_query_pre_rope": (128, 8, True),
+    "attention_key_pre_rope": (64, 4, True),
+    "attention_value_states": (64, 4, True),
+    "attention_gate": (128, 8, True),
     "attention_premix": (128, 8, True),
     "attention_output": (64, None, True),
     "block_mid": (64, None, True),
@@ -351,8 +355,48 @@ def test_the_attention_band_has_room_for_round_twos_insertions() -> None:
     ``plan.py`` must still be free, or a later PR is a re-pin rather than an
     insertion."""
     taken = set(COMPONENT_RANK.values())
-    reserved = (160, 170, 180, 190, 200, 210, 220, 240, 350)
-    assert not taken & set(reserved)
+    #: The slots `plan.py` still holds open, updated as each PR claims one —
+    #: which is the point: a PR that takes a slot has to say so here.
+    still_reserved = (200, 210, 220, 240, 350)
+    assert not taken & set(still_reserved)
     # and each lands between the tap before it and the one after
-    assert COMPONENT_RANK["attention_input_norm"] < min(reserved)
-    assert max(reserved) < COMPONENT_RANK["attention_output"]
+    assert COMPONENT_RANK["attention_input_norm"] < min(still_reserved)
+    assert max(still_reserved) < COMPONENT_RANK["attention_output"]
+    # round 2.2 claimed its four, at the numbers plan.py reserved for them
+    assert COMPONENT_RANK["attention_query_pre_rope"] == 160
+    assert COMPONENT_RANK["attention_key_pre_rope"] == 170
+    assert COMPONENT_RANK["attention_value_states"] == 180
+    assert COMPONENT_RANK["attention_gate"] == 190
+
+
+def test_a_kv_space_head_is_refused_at_load_not_just_at_the_tap(env) -> None:
+    """The §2.2 defect in the form round 2 actually walks into.
+
+    ``attention_value_states`` is KV-head space, so on this GQA model head 5 is
+    valid in query space (8 heads) and not here (4). The bound has to come from
+    the *component*: python does not raise on an over-wide slice, it returns an
+    empty one, so the read would have saved ``(b, n_pos, 0)`` and the write
+    would have changed nothing.
+    """
+    raw = base_doc()
+    raw["model"]["key"] = GQA.key
+    raw["sites"]["tgt"] = {
+        "component": "attention_value_states",
+        "layer": 3,
+        "head": 5,
+    }
+    with pytest.raises(ValidationError, match="4 heads"):
+        canonicalize(raw, env)
+
+
+def test_the_query_space_twin_accepts_the_same_head(env) -> None:
+    """Which is what makes the refusal above about the component and not about
+    the number."""
+    raw = base_doc()
+    raw["model"]["key"] = GQA.key
+    raw["sites"]["tgt"] = {
+        "component": "attention_query_pre_rope",
+        "layer": 3,
+        "head": 5,
+    }
+    assert canonicalize(raw, env)["sites"]["tgt"]["head"] == 5
