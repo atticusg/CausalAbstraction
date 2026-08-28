@@ -519,3 +519,61 @@ def test_a_query_space_head_on_the_key_is_refused(qwen35moe_bundle):
             qwen35moe_bundle,
             SiteSpec(component="attention_key", layer=FULL_ATTENTION_LAYER, head=5),
         )
+
+
+def test_a_read_of_a_written_slot_matches_the_module_hook_path(qwen35moe_bundle):
+    """Reading and writing one site in the same forward must mean the same thing
+    whether the site is a module boundary or an interface slot.
+
+    📐 On both paths the read sees the **written** value (difference 0.0),
+    because the executor registers edits before reads and hooks fire in
+    registration order. Pinned across the two mechanisms rather than within one:
+    if they ever diverged, the same document would mean different things
+    depending only on which components it happened to name — and nothing else in
+    the suite compares them.
+    """
+
+    def written_minus_read(component: str) -> float:
+        doc = {
+            "version": "1",
+            "model": {"key": "test", "revision": "main"},
+            "data": base_data_section(with_counterfactual=True),
+            "sites": {"tap": {"component": component, "layer": FULL_ATTENTION_LAYER}},
+            "reads": {
+                "src": {
+                    "site": "tap",
+                    "pos": "all",
+                    "model": "original",
+                    "input": "counterfactual",
+                },
+                "obs": {
+                    "site": "tap",
+                    "pos": "all",
+                    "model": "patched",
+                    "input": "base",
+                },
+            },
+            "writes": {"p": {"site": "tap", "pos": "all", "do": {"swap": "src"}}},
+            "intervened_models": {"patched": {"input": "base", "writes": ["p"]}},
+            "save": [
+                {
+                    "value": "obs",
+                    "model": "patched",
+                    "input": "base",
+                    "file_path": "o.safetensors",
+                }
+            ],
+        }
+        executor = executor_for(
+            doc,
+            qwen35moe_bundle,
+            base_texts=[TEXT],
+            counterfactual_texts=[CF_TEXT],
+        )
+        src, obs = executor.read_value("src"), executor.read_value("obs")
+        return float((obs - src).abs().max())
+
+    # a module boundary, and two interface slots
+    assert written_minus_read("attention_premix") == 0.0
+    assert written_minus_read("attention_query") == 0.0
+    assert written_minus_read("attention_z") == 0.0
