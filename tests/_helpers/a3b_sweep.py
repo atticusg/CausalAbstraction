@@ -48,6 +48,7 @@ __all__ = [
     "READ_ONLY",
     "SWAP_ONLY_WRITES",
     "WHOLE_TENSOR_ONLY",
+    "align_delta_pair",
     "assert_same",
     "default_pos",
     "interchange_doc",
@@ -315,6 +316,38 @@ def assert_same(a: torch.Tensor, b: torch.Tensor, what: str, *, atol: float = AT
     assert torch.allclose(a, b, atol=atol, rtol=0), (
         f"{what}: max abs diff {diff:.3e} exceeds {atol}"
     )
+
+
+def align_delta_pair(hooks_value, trace_value, relation: str, info):
+    """Bring the two engines' captures of one DeltaNet tensor into one frame.
+
+    The transforms are declared, not searched: each is the documented
+    difference between the two vocabularies (:data:`DELTA_FAMILY_PAIRS`), so a
+    wrong address cannot be massaged into agreement here.
+    """
+    if relation == "identical":
+        return hooks_value, trace_value
+    if relation == "gva_tile":
+        # `delta_*` is the kernel's argument, already tiled to the value-head
+        # count; `deltanet_*` is the pre-`repeat_interleave` projection in
+        # key-head space. The tile is over the HEAD axis of an unflattened view.
+        h_k, h_v = info.linear_num_key_heads, info.linear_num_value_heads
+        d_k = info.linear_key_head_dim
+        b, s = trace_value.shape[0], trace_value.shape[1]
+        tiled = (
+            trace_value.reshape(b, s, h_k, d_k)
+            .repeat_interleave(h_v // h_k, dim=2)
+            .reshape(b, s, h_v * d_k)
+        )
+        return hooks_value, tiled
+    if relation == "chunk_boundary":
+        # `delta_state` is per step; `deltanet_state` per 64-token chunk. The
+        # chunk's state is the step-state at the chunk's last position (the
+        # final chunk may be partial, hence the clamp).
+        n_chunks, seq = trace_value.shape[1], hooks_value.shape[1]
+        idx = [min(DELTA_CHUNK * (i + 1) - 1, seq - 1) for i in range(n_chunks)]
+        return hooks_value[:, idx].reshape(trace_value.shape), trace_value
+    raise AssertionError(f"unknown relation {relation!r}")
 
 
 def stream_layers(bundle) -> tuple[int, int]:
