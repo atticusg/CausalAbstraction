@@ -21,8 +21,8 @@ from typing import Any
 import pytest
 import torch
 
-from causalab.neural.pytorch_hooks.metrics import compute_windowed_metric
-from causalab.neural.pytorch_hooks.outputs import MetricTable
+from causalab.neural.shared.metrics import compute_windowed_metric
+from causalab.neural.shared.outputs import MetricTable
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import parse_document
 

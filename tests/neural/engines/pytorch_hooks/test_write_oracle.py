@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from causalab.neural.engines.pytorch_hooks.encoding import encode
+from causalab.neural.shared.encoding import encode
 
 from tests.neural.engines.pytorch_hooks import hook_oracle_lib as oracle_lib
 from tests.neural.engines.pytorch_hooks._drive import base_data_section, executor_for

@@ -20,7 +20,10 @@ import copy
 import pytest
 import torch
 
-from causalab.neural.pytorch_hooks.sites import READ_ONLY_COMPONENTS, resolve_site
+from causalab.neural.engines.pytorch_hooks.sites import (
+    READ_ONLY_COMPONENTS,
+    resolve_site,
+)
 from causalab.protocol.errors import ProtocolError, ValidationError
 from causalab.protocol.plan import COMPONENT_RANK
 from causalab.protocol.registry import component_width

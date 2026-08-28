@@ -7,7 +7,7 @@ import math
 import pytest
 import torch
 
-from causalab.neural.pytorch_hooks.metrics import (
+from causalab.neural.shared.metrics import (
     column_first_token_id,
     column_token_id,
     column_token_ids,
@@ -24,7 +24,7 @@ pytestmark = pytest.mark.numerical_unit
 
 @pytest.fixture(scope="module")
 def tokenizer():
-    from causalab.neural.pytorch_hooks.loading import load_model
+    from causalab.neural.engines.pytorch_hooks.loading import load_model
 
     return load_model(TINY_LLAMA).tokenizer
 
