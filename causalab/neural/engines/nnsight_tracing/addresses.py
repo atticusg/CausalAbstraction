@@ -54,6 +54,7 @@ from typing import Callable, Iterable, Mapping
 
 __all__ = [
     "ADDRESSES",
+    "GENERATED_ADDRESSES",
     "FULL_ATTENTION",
     "LINEAR_ATTENTION",
     "MOE_EXPERTS",
@@ -361,4 +362,26 @@ MOE_EXPERTS: dict[str, SourceAddress] = {
 ADDRESSES: Mapping[str, Mapping[str, SourceAddress]] = {
     "full_attention": FULL_ATTENTION,
     "linear_attention": LINEAR_ATTENTION,
+}
+
+#: Interior addresses in the **generated frame** (N8), where decode dispatches
+#: different code than prefill. 📐 The one entry so far is the reason the table
+#: exists: at ``seq_len == 1`` under a cache the DeltaNet mixer runs the
+#: *recurrent* kernel (``modeling_qwen3_5_moe.py:507``) — a different function
+#: from the chunked one the prompt-frame address drills — and its state
+#: assignment fires once per decode step (``last_recurrent_state_2``; ``_0``
+#: is the zeros fallback, ``_1`` the untaken no-cache branch). An interior
+#: component absent here does not exist in the decode path (the chunk kernel,
+#: the conv's prefill branch, the grouped experts' sort are prefill facts) or
+#: has not been verified there — refused by name either way.
+GENERATED_ADDRESSES: Mapping[str, Mapping[str, SourceAddress]] = {
+    "linear_attention": {
+        "deltanet_state": SourceAddress(
+            module="linear_attn",
+            op_pattern="recurrent_gated_delta_rule",
+            peel=("implementation_0",),
+            field="last_recurrent_state_2",
+            fires="per_step",
+        ),
+    },
 }

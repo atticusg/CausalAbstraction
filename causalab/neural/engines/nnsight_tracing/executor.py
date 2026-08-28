@@ -29,9 +29,14 @@ require one switches it on around its trace and restores the model default
 after (D5). The applied set is stamped as execution metadata, never canonical
 form: the document and its digest are implementation-blind.
 
-v1 boundary: no generated frame (arrives with N8's ``tracer.iter`` step
-anchoring; routing keeps ``generate`` documents on the reference engine). It
-still refuses legibly here in case a document arrives unrouted.
+The generated frame (N8) runs the group as one ``model.generate`` trace:
+prompt-frame operations bind occurrence 0 of their locations — the prefill,
+which is the whole of "writes are prefill-only" — and the decode steps are
+walked with ``tracer.iter``, occurrence ``j`` of a per-forward location being
+the step that consumes generated token ``j-1``. Interior components need a
+generated-frame address of their own: decode dispatches different kernels
+than prefill (the recurrent delta rule replaces the chunked one), so the
+prompt-frame table is not evidence a tensor exists per step.
 """
 
 from __future__ import annotations
@@ -44,13 +49,22 @@ import torch
 
 from causalab.neural.engines.nnsight_tracing.addresses import (
     ADDRESSES,
+    GENERATED_ADDRESSES,
     MOE_EXPERTS,
     AddressResolutionError,
     SourceAddress,
     match_op,
 )
-from causalab.neural.shared.encoding import EncodedBatch
-from causalab.neural.shared.executor_base import ExecutorBase, tap_key
+from causalab.neural.shared.encoding import (
+    EncodedBatch,
+    continuation_frame,
+    resolve_steps,
+)
+from causalab.neural.shared.executor_base import (
+    ExecutorBase,
+    refuse_unstackable,
+    tap_key,
+)
 from causalab.neural.shared.layout import (
     from_contract,
     rebuild_payload,
@@ -61,7 +75,7 @@ from causalab.neural.shared.mechanisms import operand_names
 from causalab.neural.shared.sites import ResolvedSite, resolve_site
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.plan import generated_budget
-from causalab.protocol.schema import WriteSpec
+from causalab.protocol.schema import SiteSpec, WriteSpec
 
 __all__ = ["TracePointExecutor"]
 
@@ -102,19 +116,17 @@ class TracePointExecutor(ExecutorBase):
 
         batch = self._batch(input_role)
         taps = []
+        gen_taps: list[tuple[str, Any]] = []
+        depth = 0
         for rname, read in self.doc.reads.items():
             if str(read.model) != model or str(read.input) != input_role:
                 continue
-            if generated_budget(self.doc, read.pos) is not None:
-                raise ProtocolError(
-                    "P4",
-                    f"read {rname!r} addresses the generated frame, which the "
-                    "nnsight engine does not serve yet (its 'generate' "
-                    "capability is absent — the step-anchored trace reads are "
-                    "phase N8 of the engine plan). Routing sends such "
-                    "documents to the reference engine.",
-                )
-            taps.append((rname, read))
+            budget = generated_budget(self.doc, read.pos)
+            if budget is None:
+                taps.append((rname, read))
+            else:
+                gen_taps.append((rname, read))
+                depth = max(depth, budget)
 
         read_taps = {
             rname: self._wrap(resolve_site(self.bundle, self.doc.sites[str(read.site)]))
@@ -126,8 +138,28 @@ class TracePointExecutor(ExecutorBase):
                 write_names
             ).items()
         }
+        # A continuation read at lm_head is served from kept ln_final
+        # activations and projected at its addressed steps — the reference
+        # engine's own trick, shared here so both serve the same value.
+        gen_sites = {
+            rname: resolve_site(self.bundle, self.doc.sites[str(read.site)])
+            for rname, read in gen_taps
+        }
+        gen_wrapped: dict[str, ResolvedTap] = {}
+        for rname, site in gen_sites.items():
+            refuse_unstackable(rname, site)
+            capture_site = (
+                resolve_site(self.bundle, SiteSpec(component="ln_final"))
+                if site.component == "lm_head"
+                else site
+            )
+            gen_wrapped[rname] = self._wrap_generated(capture_site)
 
-        group_taps = [*read_taps.values(), *(tap for tap, _ in write_taps.values())]
+        group_taps = [
+            *read_taps.values(),
+            *(tap for tap, _ in write_taps.values()),
+            *gen_wrapped.values(),
+        ]
         required = frozenset(
             requirement
             for tap in group_taps
@@ -165,37 +197,100 @@ class TracePointExecutor(ExecutorBase):
         # reached), so a fire-index miss detected at build time is carried out
         # by hand and raised after.
         fire_miss: list[tuple[ResolvedTap, OutOfOrderError]] = []
+        gen_sinks: dict = {}
+        gen_result: Any = None
+        inputs = {
+            "input_ids": batch.input_ids,
+            "attention_mask": batch.attention_mask,
+        }
+
+        def trace_body(tracer: Any) -> Any:
+            # prompt-frame operations first: everything here binds occurrence
+            # 0 of its location — the prefill — which is the whole of "writes
+            # are prefill-only"
+            for _, _, op_kind, tap, entries in operations:
+                per_fire = tap.source is not None and tap.source.fires != "once"
+                try:
+                    if op_kind == "write" and per_fire:
+                        self._land_per_fire_writes(
+                            tracer, tap, entries, input_role, batch
+                        )
+                    elif op_kind == "write":
+                        self._land_writes(tap, entries, input_role, batch)
+                    elif per_fire:
+                        saves[tap_key(tap.site, tap.source)] = self._collect_per_fire(
+                            tracer, tap
+                        )
+                    else:
+                        saves[tap_key(tap.site, tap.source)] = nnsight.save(
+                            self._tap_contract(tap, batch_size)
+                        )
+                except OutOfOrderError as error:
+                    if not per_fire:
+                        raise
+                    fire_miss.append((tap, error))
+                    break
+            if not depth:
+                return None
+            # decode steps: occurrence j of a per-forward location is the
+            # step consuming generated token j-1, so fires 1..depth are
+            # generated positions 0..depth-1
+            gen_order = sorted(
+                {
+                    tap_key(tap.site, tap.source): tap for tap in gen_wrapped.values()
+                }.items(),
+                key=lambda item: item[1].site.depth,
+            )
+            for key, _tap in gen_order:
+                gen_sinks[key] = nnsight.save([])
+            # 📐 rule 3 of the fire-counting probes: occurrences are counted
+            # per location, and a decode-only op (the recurrent delta kernel)
+            # has no prefill occurrence — so its occurrence j is step j+1, one
+            # off. Anchoring each body on a location that fires every forward
+            # makes the iteration index mean the forward; the ops after it
+            # follow the model in order. Skipped when the first tap already is
+            # such a location (every module boundary and interface slot is).
+            needs_anchor = gen_order and (
+                gen_order[0][1].source is not None
+                and gen_order[0][1].source.fires != "once"
+            )
+            embedding = (
+                self.bundle.model.transformer.wte
+                if self.bundle.is_gpt2_family
+                else self.bundle.model.model.embed_tokens
+            )
+            for _step in tracer.iter[1 : depth + 1]:
+                if needs_anchor:
+                    _ = embedding.input
+                for key, tap in gen_order:
+                    gen_sinks[key].append(self._generated_step_value(tap, batch_size))
+            # ⚠️ last: `tracer.result` consumes the whole run, so a request
+            # after it is never reached (measured)
+            return nnsight.save(tracer.result)
+
         with torch.no_grad():
             with self._switched_implementations(required):
-                with self.bundle.model.trace(
-                    {
-                        "input_ids": batch.input_ids,
-                        "attention_mask": batch.attention_mask,
-                    },
-                    position_ids=batch.position_ids(),
-                ) as tracer:
-                    for _, _, op_kind, tap, entries in operations:
-                        per_fire = tap.source is not None and tap.source.fires != "once"
-                        try:
-                            if op_kind == "write" and per_fire:
-                                self._land_per_fire_writes(
-                                    tracer, tap, entries, input_role, batch
-                                )
-                            elif op_kind == "write":
-                                self._land_writes(tap, entries, input_role, batch)
-                            elif per_fire:
-                                saves[tap_key(tap.site, tap.source)] = (
-                                    self._collect_per_fire(tracer, tap)
-                                )
-                            else:
-                                saves[tap_key(tap.site, tap.source)] = nnsight.save(
-                                    self._tap_contract(tap, batch_size)
-                                )
-                        except OutOfOrderError as error:
-                            if not per_fire:
-                                raise
-                            fire_miss.append((tap, error))
-                            break
+                if depth:
+                    # depth+1 forwards give every generated position its
+                    # activations, the last token's included (the extra draw
+                    # is never consumed — the reference engine's own decode
+                    # loop, §2.3); eos_token_id=None keeps decoding past an
+                    # eos exactly as that loop does, and widths truncate
+                    # reads post-hoc. `generate` must be called in the with
+                    # expression itself: it is @traceable, and a plain call
+                    # just generates.
+                    with self.bundle.model.generate(
+                        inputs,
+                        max_new_tokens=depth + 1,
+                        do_sample=False,
+                        eos_token_id=None,
+                    ) as tracer:
+                        gen_result = trace_body(tracer)
+                else:
+                    with self.bundle.model.trace(
+                        inputs, position_ids=batch.position_ids()
+                    ) as tracer:
+                        trace_body(tracer)
         self._trace_sources = {}
         if fire_miss:
             tap, error = fire_miss[0]
@@ -227,6 +322,18 @@ class TracePointExecutor(ExecutorBase):
                 self._read_values[rname] = self._finalize_read(
                     rname, read, tap.site, raw, batch, input_role
                 )
+        if depth:
+            self._finalize_generated(
+                model,
+                input_role,
+                batch=batch,
+                depth=depth,
+                gen_taps=gen_taps,
+                gen_sites=gen_sites,
+                gen_wrapped=gen_wrapped,
+                gen_sinks=gen_sinks,
+                gen_result=gen_result,
+            )
         self._groups_run.add((model, input_role))
 
     # ------------------------------------------------------------------ #
@@ -288,31 +395,47 @@ class TracePointExecutor(ExecutorBase):
             address.arg,
         )
         if key not in self._trace_sources:
-            root = self._drill(site.module.source, address.op_pattern, site)
-            perm = None
-            if address.align is not None:
-                # its own cache slot: several addresses share one sort op, and
-                # the permutation must be requested exactly once per trace
-                perm_key = (id(site.module), address.op_pattern, "align", address.align)
-                if perm_key not in self._trace_sources:
-                    self._trace_sources[perm_key] = self._drill(
-                        root.source, address.align, site
-                    ).output[1]
-                perm = self._trace_sources[perm_key]
-            op = root
-            for entry in address.peel:
-                op = self._drill(op.source, entry, site)
-            if address.field is not None:
-                op = self._drill(op.source, address.field, site)
-            if address.arg is not None:
-                index, keyword = address.arg
-                self._trace_sources[key] = (op.inputs[index][keyword], perm)
-            else:
-                self._trace_sources[key] = (op.output, perm)
+            self._trace_sources[key] = self._navigate_value(
+                tap, perm_cache=self._trace_sources
+            )
         value, perm = self._trace_sources[key]
         if address.tuple_index is not None:
             value = value[address.tuple_index]
         return value, perm
+
+    def _navigate_value(
+        self, tap: ResolvedTap, perm_cache: dict | None = None
+    ) -> tuple[Any, Any]:
+        """The uncached navigation: (pre-``tuple_index`` value, permutation).
+
+        The step loop of the generated frame calls this directly — there each
+        request must bind the *current* occurrence, so a cached proxy would
+        hand back an earlier step's tensor.
+        """
+        address = tap.source
+        assert address is not None
+        site = tap.site
+        root = self._drill(site.module.source, address.op_pattern, site)
+        perm = None
+        if address.align is not None:
+            # its own cache slot: several addresses share one sort op, and
+            # the permutation must be requested exactly once per trace
+            perm_key = (id(site.module), address.op_pattern, "align", address.align)
+            if perm_cache is not None and perm_key in perm_cache:
+                perm = perm_cache[perm_key]
+            else:
+                perm = self._drill(root.source, address.align, site).output[1]
+                if perm_cache is not None:
+                    perm_cache[perm_key] = perm
+        op = root
+        for entry in address.peel:
+            op = self._drill(op.source, entry, site)
+        if address.field is not None:
+            op = self._drill(op.source, address.field, site)
+        if address.arg is not None:
+            index, keyword = address.arg
+            return op.inputs[index][keyword], perm
+        return op.output, perm
 
     def _present_native(self, tap: ResolvedTap, value: Any, perm: Any) -> Any:
         """The value as the declared shape describes it — semantic order.
@@ -535,6 +658,135 @@ class TracePointExecutor(ExecutorBase):
                 f"{n_fires} times on this batch",
             )
         return [[index % n_fires]] * n_rows
+
+    # ------------------------------------------------------------------ #
+    # the generated frame (N8): step-anchored reads under model.generate
+    # ------------------------------------------------------------------ #
+
+    def _wrap_generated(self, site: ResolvedSite) -> ResolvedTap:
+        """A continuation tap's landing.
+
+        Module boundaries and the stackable interface slots are the prompt
+        frame's own landings, one occurrence per decode step. An *interior*
+        component must appear in the generated-frame table — decode dispatches
+        different code than prefill (the recurrent delta kernel replaces the
+        chunked one), so a prompt-frame address is not evidence the tensor
+        exists per step.
+        """
+        if site.kind == "interior":
+            stream = self.bundle.stream_at(site.layer)
+            address = GENERATED_ADDRESSES.get(stream, {}).get(site.component)
+            if address is None:
+                raise ProtocolError(
+                    "P4",
+                    f"component {site.component!r} has no generated-frame "
+                    "address in the nnsight engine's tables "
+                    "(neural/engines/nnsight_tracing/addresses.py): the decode "
+                    "path dispatches different kernels than prefill, so an "
+                    "interior tensor is only served per step once its decode "
+                    "address is verified. Read it in the prompt frame.",
+                )
+            return ResolvedTap(site=site, source=address)
+        if site.interface_slot is not None:
+            return self._wrap(site)
+        return ResolvedTap(site=site)
+
+    def _generated_step_value(self, tap: ResolvedTap, batch_size: int) -> Any:
+        """One decode step's contract tensor for one continuation tap.
+
+        Navigated fresh inside the step body — ``tracer.iter`` binds each
+        request to the current occurrence, so the per-trace cache must not
+        hand back an earlier step's value.
+        """
+        site = tap.site
+        if tap.source is None:
+            envoy = site.module
+            if site.kind == "out":
+                native = tap_tensor(envoy.output, site.tuple_index)
+            else:
+                native = envoy.input
+            return to_contract(native, site.shape, batch_size=batch_size)
+        value, perm = self._navigate_value(tap)
+        if tap.source.tuple_index is not None:
+            value = value[tap.source.tuple_index]
+        native = self._present_native(tap, value, perm)
+        if tap.source.fires != "once":
+            # a per-step state has no position axis of its own: give it the
+            # declared shape's one-step form, (b, 1, heads, feature)
+            heads = site.shape.head_space
+            width = site.shape.width
+            assert heads is not None and width is not None
+            native = native.reshape(-1, 1, heads, width // heads)
+        return to_contract(native, site.shape, batch_size=batch_size)
+
+    def _finalize_generated(
+        self,
+        model: str,
+        input_role: str,
+        *,
+        batch: EncodedBatch,
+        depth: int,
+        gen_taps: list[tuple[str, Any]],
+        gen_sites: dict[str, ResolvedSite],
+        gen_wrapped: dict[str, ResolvedTap],
+        gen_sinks: dict,
+        gen_result: Any,
+    ) -> None:
+        """Build the continuation frame and finalize its reads — the same
+        step-space semantics as the reference engine's decode."""
+        prompt_len = int(batch.input_ids.shape[1])
+        generated = gen_result[:, prompt_len:][:, :depth].detach().cpu()
+        rows_n = int(generated.shape[0])
+        eos = self.bundle.tokenizer.eos_token_id
+        widths: list[int] = []
+        for row in range(rows_n):
+            width = depth
+            if eos is not None:
+                hit = (generated[row] == eos).nonzero()
+                if hit.numel():
+                    width = int(hit[0].item())
+            widths.append(width)
+        continuation = continuation_frame(
+            self.bundle.tokenizer, generated, tuple(widths)
+        )
+        self._continuations[(model, input_role)] = continuation
+
+        dataset_rows = self.role_rows[input_role]
+        field = self.role_fields[input_role]
+        head = None
+        for rname, read in gen_taps:
+            site = gen_sites[rname]
+            tap = gen_wrapped[rname]
+            sink = gen_sinks[tap_key(tap.site, tap.source)]
+            frame = torch.cat(list(sink), dim=1)  # (b, steps, feature)
+            per_row = [
+                resolve_steps(
+                    self._spec(read.pos),
+                    continuation,
+                    row,
+                    dataset_row=dataset_rows[row],
+                    field=field,
+                )
+                for row in range(rows_n)
+            ]
+            self._read_steps[rname] = per_row
+            project = None
+            if tap.site.component != site.component:  # ln_final kept, lm_head owed
+                head = (
+                    head
+                    or resolve_site(self.bundle, SiteSpec(component="lm_head")).module
+                )
+                project = head
+            self._read_values[rname] = self._finalize_read(
+                rname,
+                read,
+                site,
+                frame,
+                batch,
+                input_role,
+                per_row=per_row,
+                project=project,
+            )
 
     @contextlib.contextmanager
     def _switched_implementations(self, required: frozenset[str]) -> Iterator[None]:

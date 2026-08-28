@@ -34,12 +34,17 @@ from causalab.neural.engines.pytorch_hooks.attention_interface import (
     InterfaceTap,
     attention_interface_taps,
 )
-from causalab.neural.shared.encoding import Continuation, EncodedBatch, resolve_steps
+from causalab.neural.shared.encoding import (
+    EncodedBatch,
+    continuation_frame,
+    resolve_steps,
+)
 from causalab.neural.shared.executor_base import (
     ExecutorBase,
     RaggedValue,
     TapKey,
     document_seed,
+    refuse_unstackable,
     tap_key,
 )
 from causalab.protocol.shapes import FeatureShape
@@ -255,7 +260,7 @@ class PointExecutor(ExecutorBase):
             interface: dict[int, list[InterfaceTap]] = {}
             batch_size = batch.input_ids.shape[0]
             for name, site in gen_capture_sites.items():
-                _refuse_unstackable(name, site)
+                refuse_unstackable(name, site)
                 key = tap_key(site)
                 if key in steps:
                     continue
@@ -310,7 +315,7 @@ class PointExecutor(ExecutorBase):
                 if hit.numel():
                     width = int(hit[0].item())
             widths.append(width)
-        continuation = _continuation_frame(
+        continuation = continuation_frame(
             self.bundle.tokenizer, generated, tuple(widths)
         )
         self._continuations[(model, input_role)] = continuation
@@ -451,48 +456,6 @@ def _refuse_interior(what: str, site: ResolvedSite) -> None:
     )
 
 
-def _refuse_unstackable(name: str, site: ResolvedSite) -> None:
-    """Refuse a continuation read whose steps do not stack into a frame.
-
-    📐 A decode step attends over the whole KV cache, so a tensor indexed by the
-    positions being attended *to* is ``prompt + step`` long at step ``step``
-    while the query axis stays 1. The accumulating sink concatenates steps on
-    dim 1, which for an ordinary tap is the position axis, so such a tap either
-    raises a bare torch size error (measured: "Expected size 9 but got size 10")
-    or, for a single-step budget, silently returns one step shaped like a frame.
-    Neither is a continuation read.
-
-    Both conditions are read off the declared axes rather than a component list:
-
-    * **two position axes** — the attention pattern and the scores. There is no
-      non-arbitrary answer to which of them the steps stack along;
-    * **one position axis, over the keys** — ``attention_key``. Its own length
-      is what grows, so consecutive steps are different lengths.
-
-    ``attention_query`` and ``attention_z`` are query-axis-shaped and accumulate
-    correctly, which is why this is a property of the axes and not of "anything
-    inside the attention function".
-    """
-    shape = site.shape
-    if shape.has_contract_form and not any(
-        axis.kind == "position" and axis.name == "key" for axis in shape.axes
-    ):
-        return
-    why = (
-        "it has two position axes, so there is no single axis the decode steps "
-        "stack along"
-        if not shape.has_contract_form
-        else "its position axis runs over the positions being attended to, "
-        "which under a KV cache is the whole prefix and grows by one per step"
-    )
-    raise ProtocolError(
-        "P4",
-        f"read {name!r} reads {site.component!r} in the generated frame, whose "
-        f"shape is {shape.describe()}: {why}, so the steps do not stack into "
-        "one tensor. Read it in the prompt frame.",
-    )
-
-
 @contextlib.contextmanager
 def _installed(
     module: Any,
@@ -608,34 +571,3 @@ def _accumulating(
         yield
     finally:
         handle.remove()
-
-
-def _continuation_frame(
-    tokenizer: Any, generated: torch.Tensor, widths: tuple[int, ...]
-) -> Continuation:
-    """Build the frame the decode produced, characters included.
-
-    Token spans come from incremental detokenization — decode the row's
-    first ``k`` tokens, then ``k + 1``, and the growth is token ``k``'s
-    span. Re-encoding the finished text would not do: a tokenizer is free
-    to merge across a boundary the decode never saw, and the spans have to
-    describe the tokens the model actually emitted.
-    """
-    texts: list[str] = []
-    offsets: list[tuple[tuple[int, int], ...]] = []
-    for row, width in enumerate(widths):
-        ids = [int(t) for t in generated[row, :width]]
-        spans: list[tuple[int, int]] = []
-        text = ""
-        for k in range(width):
-            grown = tokenizer.decode(ids[: k + 1], skip_special_tokens=True)
-            spans.append((len(text), len(grown)))
-            text = grown
-        texts.append(text)
-        offsets.append(tuple(spans))
-    return Continuation(
-        token_ids=generated.detach().cpu(),
-        widths=widths,
-        texts=tuple(texts),
-        offsets=tuple(offsets),
-    )
