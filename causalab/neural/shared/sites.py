@@ -427,6 +427,15 @@ _FULL_ATTENTION_ONLY: frozenset[str] = frozenset(
     | set(ATTENTION_FUNCTION_SLOTS)
 )
 
+#: The mirror (round 4): components that only exist on a Gated DeltaNet mixer.
+#: A full-attention layer computes no delta-rule state — its mixer has no
+#: ``in_proj_qkv``/``in_proj_z``/``out_proj`` children at all — and a family
+#: with no linear stream anywhere (llama, gpt2) hits the same refusal at every
+#: layer, which is the architectural refusal by name.
+_LINEAR_ATTENTION_ONLY: frozenset[str] = frozenset(
+    {"delta_qkv", "delta_gate", "delta_premix"}
+)
+
 
 def _check_stream(bundle: Any, component: str, spec: SiteSpec, layer: int) -> None:
     """Refuse a site whose stream the layer does not carry, before hooking.
@@ -455,6 +464,15 @@ def _check_stream(bundle: Any, component: str, spec: SiteSpec, layer: int) -> No
             f"{layer} of {bundle.key!r} carries {actual!r} — a Gated DeltaNet "
             "block computes no attention matrix, so there is no such tensor at "
             f"this layer. This tower is ({', '.join(bundle.streams)}).",
+        )
+    if component in _LINEAR_ATTENTION_ONLY and actual != "linear_attention":
+        raise ProtocolError(
+            "P4",
+            f"component {component!r} needs a Gated DeltaNet (linear-attention) "
+            f"mixer, but layer {layer} of {bundle.key!r} carries {actual!r} — a "
+            "gated-attention mixer computes no delta-rule state, so there is no "
+            f"such tensor at this layer. This tower is "
+            f"({', '.join(bundle.streams)}).",
         )
 
 
@@ -696,6 +714,32 @@ def resolve_site(bundle: Any, spec: SiteSpec) -> ResolvedSite:
             "in",
             shape=component_shape(bundle.info, "attention_premix"),
             derivation="attention_result",
+        )
+    if component in _LINEAR_ATTENTION_ONLY:
+        # The DeltaNet mixer's module boundaries (round 4.1). 📐 All three are
+        # ordinary nn.Module sides: in_proj_qkv/in_proj_z fire before the conv
+        # and the kernel, out_proj's input is the post-norm post-gate mixer
+        # value — the exact analogue of attention_premix, hence the name. The
+        # conv1d MODULE never fires (measured: the forward calls the
+        # causal_conv1d_fn global instead), which is why the conv output and
+        # the kernel boundary are function taps (round 4.2), not module taps.
+        mixer = _attn(bundle, layer)
+        if component == "delta_qkv":
+            # no head axis: the fused [q | k | v] widths are unequal (the
+            # shape's note says where the per-head faces live)
+            if head is not None:
+                _head_slice(bundle, component, head)  # refuses, by shape
+            return tap(mixer.in_proj_qkv, "out")
+        if component == "delta_gate":
+            return tap(
+                mixer.in_proj_z,
+                "out",
+                feature_slice=_head_slice(bundle, component, head),
+            )
+        return tap(
+            mixer.out_proj,
+            "in",
+            feature_slice=_head_slice(bundle, component, head),
         )
     if component in _ATTENTION_INTERIOR:
         return _attention_interior_site(

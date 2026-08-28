@@ -76,8 +76,21 @@ class NnsightEngine(Engine):
             "attention_gate",
         }
     )
-    components = frozenset(COMPONENTS) - _ROUND_TWO_ATTENTION
-    writable_components = frozenset(COMPONENTS) - _ROUND_TWO_ATTENTION
+    # Round 4's DeltaNet module-boundary taps are ordinary envoy reads and
+    # would very likely work here unchanged — but nothing exercises them on
+    # this engine, and declaring support this engine has never been tested for
+    # is the claim worth not making (the same reasoning as the module-boundary
+    # four above).
+    _ROUND_FOUR_DELTANET = frozenset(
+        {
+            "delta_qkv",
+            "delta_gate",
+            "delta_premix",
+        }
+    )
+    _UNDECLARED = _ROUND_TWO_ATTENTION | _ROUND_FOUR_DELTANET
+    components = frozenset(COMPONENTS) - _UNDECLARED
+    writable_components = frozenset(COMPONENTS) - _UNDECLARED
     is_local = True
 
     def __init__(self, *, device: str = "cpu") -> None:

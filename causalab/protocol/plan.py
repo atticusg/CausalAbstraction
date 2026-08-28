@@ -59,6 +59,12 @@ COMPONENT_RANK: dict[str, int] = {
     "embeddings": 0,
     "block_input": 100,
     "attention_input_norm": 150,  # input_layernorm, between resid_pre and mixer
+    # The DeltaNet mixer's interior (round 4) interleaves numerically with the
+    # full-attention band below: a layer carries one stream or the other, so
+    # only relative order *within* a stream is ever compared, and the numbers
+    # avoid every attention slot so that neither round renumbers the other.
+    "delta_qkv": 152,  # in_proj_qkv's fused [q|k|v] output, pre-conv
+    "delta_gate": 154,  # in_proj_z's output — the output gate, produced early
     # The mixer's interior, in the order the forward computes it. All four are
     # module boundaries: q_norm/k_norm run BEFORE RoPE and are nn.Modules, so
     # the pre-RoPE projections are ordinary forward hooks rather than taps
@@ -66,6 +72,9 @@ COMPONENT_RANK: dict[str, int] = {
     "attention_query_pre_rope": 160,
     "attention_key_pre_rope": 170,
     "attention_value_states": 180,
+    # the DeltaNet post-norm, post-gate mixer input — the exact analogue of
+    # attention_premix, which is why the name
+    "delta_premix": 182,
     # produced with q (one fused projection) and consumed at the very end, at
     # `attn_output * sigmoid(gate)` — ranked where it is produced
     "attention_gate": 190,

@@ -62,6 +62,13 @@ GQA = ModelInfo(
     num_experts=32,
     num_experts_per_tok=4,
     shared_expert_intermediate_size=48,
+    # ⚠️ deliberately uncoupled: v-heads is not 2·k-heads and the two head dims
+    # differ — the fixture's couplings (2× GVA tiling, equal dims) are exactly
+    # what a table must not assume (round-4 plan §1.1).
+    linear_num_value_heads=6,
+    linear_num_key_heads=3,
+    linear_key_head_dim=10,
+    linear_value_head_dim=12,
 )
 
 
@@ -81,6 +88,12 @@ EXPECTED: dict[str, tuple[int | None, int | None, bool]] = {
     "embeddings": (64, None, True),
     "block_input": (64, None, True),
     "attention_input_norm": (64, None, True),
+    # the DeltaNet interior's module boundaries: qkv is 2·(3·10) + 6·12 = 132
+    # wide with NO head axis (unequal fused widths); the gate and the premix
+    # are value-head space, 6 heads of 12
+    "delta_qkv": (132, None, True),
+    "delta_gate": (72, 6, True),
+    "delta_premix": (72, 6, True),
     "attention_probs": (None, 8, False),
     "attention_query_pre_rope": (128, 8, True),
     "attention_key_pre_rope": (64, 4, True),
