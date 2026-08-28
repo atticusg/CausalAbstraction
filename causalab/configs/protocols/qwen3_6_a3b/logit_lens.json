@@ -1,0 +1,35 @@
+{
+  "version": "1",
+  "description": "Step 2 / logit lens, expressed with no new primitive. Reading block_output at layer L and swapping it into block_output at the LAST block leaves exactly ln_final and the unembedding downstream - which is the lens by definition. The L=39 point is the identity and must reproduce the model's own prediction. ⚠️ The (layer x position) grid is TWO axes, not one read at pos 'all': a prompt-frame metric reduces exactly one position per example, so `top_k` over a 7-position read is refused. The position is therefore a swept axis, and the 11 x 7 cross is the grid. The transplant itself is still whole-prompt, and the patched forward for a given layer is content-identical across the seven position points, so the planner interns it.",
+  "model": {"key": "Qwen/Qwen3.6-35B-A3B", "revision": "main", "dtype": "bf16"},
+  "data": {
+    "base": {"dataset": "weekdays/train", "field": "input"}
+  },
+  "positions": {
+    "every": {"all": true},
+    "cell":  {"sweep": [{"index": 0}, {"index": 1}, {"index": 2}, {"index": 3}, {"index": 4}, {"index": 5}, {"index": 6}]}
+  },
+  "sites": {
+    "source":  {"component": "block_output", "layer": {"sweep": [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 39]}},
+    "sink":    {"component": "block_output", "layer": 39},
+    "lm_head": {"component": "lm_head"}
+  },
+  "reads": {
+    "resid":   {"site": "source",  "pos": "every", "model": "original", "input": "base"},
+    "lens_at": {"site": "lm_head", "pos": "cell",  "model": "lensed",   "input": "base"}
+  },
+  "writes": {
+    "project": {"site": "sink", "pos": "every", "do": {"swap": "resid"}}
+  },
+  "intervened_models": {
+    "lensed": {"input": "base", "writes": ["project"]}
+  },
+  "metrics": {
+    "top5":    {"kind": "top_k", "of": "lens_at", "k": 5, "by": "prob"},
+    "decodes": {"kind": "match", "of": "lens_at", "expected": "base_answer", "token_form": "space_prefixed"}
+  },
+  "save": [
+    {"value": "top5", "model": "lensed", "input": "base", "file_path": "top5.json"},
+    {"value": "decodes", "model": "lensed", "input": "base", "file_path": "decodes.json"}
+  ]
+}

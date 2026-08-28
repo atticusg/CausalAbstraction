@@ -495,6 +495,37 @@ register_model(
 )
 register_model(
     ModelInfo(
+        # A hybrid MoE tower: 30 of its 40 layers carry a Gated DeltaNet mixer
+        # and only every 4th (3, 7, ... 39) is full attention, so the attention
+        # vocabulary resolves at ten layers and refuses architecturally at the
+        # rest. `attn_output_gate` is true, which is what makes
+        # `attention_gate` a real component here.
+        key="Qwen/Qwen3.6-35B-A3B",
+        hidden_size=2048,
+        num_layers=40,
+        num_heads=16,
+        # GQA ratio 8 — the KV-space components (`attention_key`,
+        # `attention_key_pre_rope`, `attention_value_states`) have TWO heads,
+        # not sixteen, which is the bound `head_space` exists to enforce.
+        num_kv_heads=2,
+        # decoupled: heads * head_dim = 4096 = 2x hidden_size
+        head_dim=256,
+        # ⚠️ The checkpoint's text_config declares no `intermediate_size` (every
+        # layer is a sparse MoE block; `moe_intermediate_size` is 512). This is
+        # the `4 * hidden` fallback `_intermediate_size` computes, recorded so
+        # the static entry and `model_info_from_hf_config` cannot disagree —
+        # `mlp_activation` refuses at the tap table on this family regardless,
+        # because a sparse-MoE block has no `act_fn`.
+        intermediate_size=8192,
+        vocab_size=248320,
+        native_dtype="bf16",
+        num_experts=256,
+        num_experts_per_tok=8,
+        shared_expert_intermediate_size=512,
+    )
+)
+register_model(
+    ModelInfo(
         key="google/gemma-2-2b-it",
         hidden_size=2304,
         num_layers=26,

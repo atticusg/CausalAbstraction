@@ -1,0 +1,102 @@
+{
+  "version": "1",
+  "description": "Step 2 / PCA's input, and the mean reference knockout needs. Pure reads at three depths x two positions, one un-intervened forward, no writes. The `acts_*` files are the (rows, positions, 2048) tensors an offline centered PCA is fitted on. `mean_L20_ans` is the SAME address read a second time and reduced where the rows are gathered - the on-manifold replacement value a mean ablation swaps in. It has to be a second read rather than a second save entry, because the manifest allows one entry per value (rule 10); the two reads are content-identical so the planner interns them and the forward is still run once.",
+  "model": {
+    "key": "Qwen/Qwen3.6-35B-A3B",
+    "revision": "main",
+    "dtype": "bf16"
+  },
+  "data": {
+    "base": {
+      "dataset": "weekdays/train",
+      "field": "input"
+    }
+  },
+  "positions": {
+    "answer_tok": {
+      "index": -1
+    },
+    "subject": {
+      "variable": "subject"
+    }
+  },
+  "sites": {
+    "L8": {
+      "component": "block_output",
+      "layer": 8
+    },
+    "L20": {
+      "component": "block_output",
+      "layer": 20
+    },
+    "L32": {
+      "component": "block_output",
+      "layer": 32
+    }
+  },
+  "reads": {
+    "acts_L8_ans": {
+      "site": "L8",
+      "pos": "answer_tok",
+      "model": "original",
+      "input": "base"
+    },
+    "acts_L20_ans": {
+      "site": "L20",
+      "pos": "answer_tok",
+      "model": "original",
+      "input": "base"
+    },
+    "acts_L32_ans": {
+      "site": "L32",
+      "pos": "answer_tok",
+      "model": "original",
+      "input": "base"
+    },
+    "acts_L20_sub": {
+      "site": "L20",
+      "pos": "subject",
+      "model": "original",
+      "input": "base"
+    },
+    "mean_L20_ans": {
+      "site": "L20",
+      "pos": "answer_tok",
+      "model": "original",
+      "input": "base"
+    }
+  },
+  "save": [
+    {
+      "value": "acts_L8_ans",
+      "model": "original",
+      "input": "base",
+      "file_path": "acts_L8_ans.safetensors"
+    },
+    {
+      "value": "acts_L20_ans",
+      "model": "original",
+      "input": "base",
+      "file_path": "acts_L20_ans.safetensors"
+    },
+    {
+      "value": "acts_L32_ans",
+      "model": "original",
+      "input": "base",
+      "file_path": "acts_L32_ans.safetensors"
+    },
+    {
+      "value": "acts_L20_sub",
+      "model": "original",
+      "input": "base",
+      "file_path": "acts_L20_sub.safetensors"
+    },
+    {
+      "value": "mean_L20_ans",
+      "model": "original",
+      "input": "base",
+      "file_path": "mean_L20_ans.safetensors",
+      "reduce": "mean"
+    }
+  ]
+}

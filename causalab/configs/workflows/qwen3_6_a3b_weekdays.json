@@ -1,0 +1,82 @@
+{
+  "version": "1",
+  "description": "qwen3.6-35b-a3b weekdays: the whole hypothesis-testing chain as one document - locate a (layer x position) cell, select the best, fit DAS over k x seed at it, select the winner, apply that winner on the held-out split, and plot both stages. The dependencies are derived from the wiring, not remembered; every step's outputs stay in its own directory.",
+  "output_dir": "qwen3_6_a3b_weekdays",
+  "steps": {
+    "locate": {
+      "type": "intervention_protocol",
+      "description": "40-point layer x position interchange scan.",
+      "document": "../protocols/qwen3_6_a3b/locate_scan.json"
+    },
+    "best": {
+      "type": "script",
+      "description": "The cell with the highest IIA becomes the fit's site and position.",
+      "script": {"module": "causalab.workflow.scripts.select"},
+      "inputs": {
+        "table": {"step": "locate", "file": "iia.json"},
+        "choose": "max",
+        "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}
+      },
+      "outputs": {
+        "values": {"file": "values.json", "keys": {"best_layer": 20, "best_pos": {"index": -1}}}
+      }
+    },
+    "fit": {
+      "type": "intervention_protocol",
+      "description": "DAS over k x seed at the located cell.",
+      "document": "../protocols/qwen3_6_a3b/das_sweep.json",
+      "set": {
+        "sites.target.layer": {"artifact": "best", "key": "best_layer"}
+      }
+    },
+    "best_fit": {
+      "type": "script",
+      "description": "Pick the rank and seed to carry to held-out data.",
+      "script": {"module": "causalab.workflow.scripts.select"},
+      "inputs": {
+        "table": {"step": "fit", "file": "iia.json"},
+        "choose": "max",
+        "emit": {"best_k": "featurizers.rot.k", "best_seed": "train.seed"}
+      },
+      "outputs": {
+        "values": {"file": "values.json", "keys": {"best_k": 8, "best_seed": 0}}
+      }
+    },
+    "apply": {
+      "type": "intervention_protocol",
+      "description": "Evaluate the winning rotation on weekdays/test.",
+      "document": "../protocols/qwen3_6_a3b/das_apply.json",
+      "set": {
+        "sites.target.layer": {"artifact": "best", "key": "best_layer"},
+        "featurizers.rot.file_path": "fit/rot.safetensors",
+        "featurizers.rot.k": {"artifact": "best_fit", "key": "best_k"},
+        "featurizers.rot.entry": {
+          "k": {"artifact": "best_fit", "key": "best_k"},
+          "seed": {"artifact": "best_fit", "key": "best_seed"}
+        }
+      }
+    },
+    "scan_heatmap": {
+      "type": "script",
+      "script": {"module": "causalab.io.plots.workflow_figures"},
+      "inputs": {
+        "table": {"step": "locate", "file": "iia.json"},
+        "plot": "heatmap",
+        "x": "sites.target.layer",
+        "y": "positions.tap"
+      },
+      "outputs": {"figure": "scan_iia.png", "plotted": {"file": "scan_iia.json"}}
+    },
+    "iia_by_k": {
+      "type": "script",
+      "script": {"module": "causalab.io.plots.workflow_figures"},
+      "inputs": {
+        "table": {"step": "fit", "file": "iia.json"},
+        "plot": "lines",
+        "x": "featurizers.rot.k",
+        "series": "train.seed"
+      },
+      "outputs": {"figure": "iia_by_k.png", "plotted": {"file": "iia_by_k.json"}}
+    }
+  }
+}

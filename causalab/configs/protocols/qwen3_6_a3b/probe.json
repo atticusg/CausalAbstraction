@@ -1,0 +1,83 @@
+{
+  "version": "1",
+  "description": "Step 2 / probe: greedy-decode four tokens and read them back as text. No writes, so no intervened_models - the whole document is the 'just run these prompts' shape. The `decode` metric is in the `ids` domain, so the run owes no vocabulary projection at all (IM spec 2.10); `top_k` at the first generated position is the answer distribution that produced token 0.",
+  "model": {
+    "key": "Qwen/Qwen3.6-35B-A3B",
+    "revision": "main",
+    "dtype": "bf16"
+  },
+  "data": {
+    "base": {
+      "dataset": "weekdays/train",
+      "field": "input"
+    }
+  },
+  "positions": {
+    "continuation": {
+      "generated": {
+        "max_new_tokens": 4
+      },
+      "all": true
+    },
+    "first_answer": {
+      "index": -1
+    }
+  },
+  "sites": {
+    "lm_head": {
+      "component": "lm_head"
+    }
+  },
+  "reads": {
+    "tail": {
+      "site": "lm_head",
+      "pos": "continuation",
+      "model": "original",
+      "input": "base"
+    },
+    "answer": {
+      "site": "lm_head",
+      "pos": "first_answer",
+      "model": "original",
+      "input": "base"
+    }
+  },
+  "metrics": {
+    "text": {
+      "kind": "decode",
+      "of": "tail"
+    },
+    "top5": {
+      "kind": "top_k",
+      "of": "answer",
+      "k": 5,
+      "by": "prob"
+    },
+    "correct": {
+      "kind": "match",
+      "of": "answer",
+      "expected": "base_answer",
+      "token_form": "space_prefixed"
+    }
+  },
+  "save": [
+    {
+      "value": "text",
+      "model": "original",
+      "input": "base",
+      "file_path": "text.json"
+    },
+    {
+      "value": "top5",
+      "model": "original",
+      "input": "base",
+      "file_path": "top5.json"
+    },
+    {
+      "value": "correct",
+      "model": "original",
+      "input": "base",
+      "file_path": "correct.json"
+    }
+  ]
+}

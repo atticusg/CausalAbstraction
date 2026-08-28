@@ -1,0 +1,89 @@
+{
+  "version": "1",
+  "description": "Step 2 / knockout, MLP family at band width 1: zero the MoE block's output at each of the 40 layers in turn. `mlp_output` is the block's combined routed+shared output and is hidden-wide on every layer, so unlike the attention family this scan covers the whole tower. Note that `mlp_activation` is NOT addressable here - a sparse-MoE block has no act_fn, and the tap table refuses it by name.",
+  "model": {
+    "key": "Qwen/Qwen3.6-35B-A3B",
+    "revision": "main",
+    "dtype": "bf16"
+  },
+  "data": {
+    "base": {
+      "dataset": "weekdays/train",
+      "field": "input"
+    }
+  },
+  "positions": {
+    "every": {
+      "all": true
+    }
+  },
+  "sites": {
+    "mlp": {
+      "component": "mlp_output",
+      "layer": {
+        "sweep": {
+          "range": [
+            0,
+            40
+          ]
+        }
+      }
+    },
+    "lm_head": {
+      "component": "lm_head"
+    }
+  },
+  "reads": {
+    "logits": {
+      "site": "lm_head",
+      "pos": -1,
+      "model": "ablated",
+      "input": "base"
+    }
+  },
+  "writes": {
+    "zero": {
+      "site": "mlp",
+      "pos": "every",
+      "do": {
+        "swap": 0.0
+      }
+    }
+  },
+  "intervened_models": {
+    "ablated": {
+      "input": "base",
+      "writes": [
+        "zero"
+      ]
+    }
+  },
+  "metrics": {
+    "still_correct": {
+      "kind": "match",
+      "of": "logits",
+      "expected": "base_answer",
+      "token_form": "space_prefixed"
+    },
+    "answer_logit": {
+      "kind": "token_logit",
+      "of": "logits",
+      "token": "base_answer",
+      "token_form": "space_prefixed"
+    }
+  },
+  "save": [
+    {
+      "value": "still_correct",
+      "model": "ablated",
+      "input": "base",
+      "file_path": "still_correct.json"
+    },
+    {
+      "value": "answer_logit",
+      "model": "ablated",
+      "input": "base",
+      "file_path": "answer_logit.json"
+    }
+  ]
+}

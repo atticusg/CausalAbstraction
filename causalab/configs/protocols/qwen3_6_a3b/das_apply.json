@@ -1,0 +1,102 @@
+{
+  "version": "1",
+  "description": "Step 4 / DAS apply: evaluate ONE fitted rotation on the held-out split rather than re-fitting it. `file_path` loads the bundle and `entry` names which (k, seed) point of the sweep to apply; the bundle's identity (model, site, k, parametrization, dtype) is checked at load, so a rotation fitted elsewhere refuses instead of silently mis-applying. No train section - a featurizer with file_path may not be trained. Driven by workflow.json, which sets file_path, k and entry from the fit step's winner.",
+  "model": {
+    "key": "Qwen/Qwen3.6-35B-A3B",
+    "revision": "main",
+    "dtype": "bf16"
+  },
+  "data": {
+    "base": {
+      "dataset": "weekdays/test",
+      "field": "input"
+    },
+    "counterfactual": {
+      "dataset": "weekdays/test",
+      "field": "counterfactual_inputs[0]"
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layer": 20
+    },
+    "lm_head": {
+      "component": "lm_head"
+    }
+  },
+  "featurizers": {
+    "rot": {
+      "kind": "subspace",
+      "k": 8,
+      "parametrization": "cayley",
+      "file_path": "fit/rot.safetensors",
+      "entry": {
+        "k": 8,
+        "seed": 0
+      }
+    }
+  },
+  "reads": {
+    "v_cf": {
+      "site": "target",
+      "pos": -1,
+      "model": "original",
+      "input": "counterfactual",
+      "featurizer": "rot"
+    },
+    "logits": {
+      "site": "lm_head",
+      "pos": -1,
+      "model": "patched",
+      "input": "base"
+    }
+  },
+  "writes": {
+    "patch": {
+      "site": "target",
+      "pos": -1,
+      "featurizer": "rot",
+      "do": {
+        "swap": "v_cf"
+      }
+    }
+  },
+  "intervened_models": {
+    "patched": {
+      "input": "base",
+      "writes": [
+        "patch"
+      ]
+    }
+  },
+  "metrics": {
+    "iia": {
+      "kind": "logit_diff",
+      "of": "logits",
+      "a": "cf_answer",
+      "b": "base_answer",
+      "token_form": "space_prefixed"
+    },
+    "iia_match": {
+      "kind": "match",
+      "of": "logits",
+      "expected": "cf_answer",
+      "token_form": "space_prefixed"
+    }
+  },
+  "save": [
+    {
+      "value": "iia",
+      "model": "patched",
+      "input": "base",
+      "file_path": "iia.json"
+    },
+    {
+      "value": "iia_match",
+      "model": "patched",
+      "input": "base",
+      "file_path": "iia_match.json"
+    }
+  ]
+}

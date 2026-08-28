@@ -1,0 +1,108 @@
+{
+  "version": "1",
+  "description": "Step 2 / paired examples, and step 4's locate stage: the full localization sweep as ONE document. Two explicit axes - sites.target.layer over the 40-block tower at stride 2, and positions.tap over the answer slot and the subject token - cross to 40 points. Every read and write referencing `target` or `tap` moves together, and the counterfactual harvest is shared across all 40 by content dedup.",
+  "model": {
+    "key": "Qwen/Qwen3.6-35B-A3B",
+    "revision": "main",
+    "dtype": "bf16"
+  },
+  "data": {
+    "base": {
+      "dataset": "weekdays/train",
+      "field": "input"
+    },
+    "counterfactual": {
+      "dataset": "weekdays/train",
+      "field": "counterfactual_inputs[0]"
+    }
+  },
+  "positions": {
+    "tap": {
+      "sweep": [
+        {
+          "index": -1
+        },
+        {
+          "variable": "subject"
+        }
+      ]
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layer": {
+        "sweep": {
+          "range": [
+            0,
+            40,
+            2
+          ]
+        }
+      }
+    },
+    "lm_head": {
+      "component": "lm_head"
+    }
+  },
+  "reads": {
+    "v_cf": {
+      "site": "target",
+      "pos": "tap",
+      "model": "original",
+      "input": "counterfactual"
+    },
+    "logits": {
+      "site": "lm_head",
+      "pos": -1,
+      "model": "patched",
+      "input": "base"
+    }
+  },
+  "writes": {
+    "patch": {
+      "site": "target",
+      "pos": "tap",
+      "do": {
+        "swap": "v_cf"
+      }
+    }
+  },
+  "intervened_models": {
+    "patched": {
+      "input": "base",
+      "writes": [
+        "patch"
+      ]
+    }
+  },
+  "metrics": {
+    "iia": {
+      "kind": "match",
+      "of": "logits",
+      "expected": "cf_answer",
+      "token_form": "space_prefixed"
+    },
+    "logit_diff": {
+      "kind": "logit_diff",
+      "of": "logits",
+      "a": "cf_answer",
+      "b": "base_answer",
+      "token_form": "space_prefixed"
+    }
+  },
+  "save": [
+    {
+      "value": "iia",
+      "model": "patched",
+      "input": "base",
+      "file_path": "iia.json"
+    },
+    {
+      "value": "logit_diff",
+      "model": "patched",
+      "input": "base",
+      "file_path": "logit_diff.json"
+    }
+  ]
+}
