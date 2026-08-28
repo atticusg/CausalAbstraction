@@ -1,6 +1,6 @@
 # Causalab Testing Conventions
 
-Causalab is a codebase for trusted mechanistic interpretability experiments. It contains tested primitives of interpretability methods, expressed as serializable intervention protocols (docs/intervention_protocol.md) executed by backends. The tests must be held to a high standard to create confidence in the results. Trustworthiness and reputation is the most valuable asset of us researchers, we need to back it up with consistently correct experiments.
+Causalab is a codebase for trusted mechanistic interpretability experiments. It contains tested primitives of interpretability methods, expressed as serializable intervention protocols (docs/intervention_protocol.md) executed by engines. The tests must be held to a high standard to create confidence in the results. Trustworthiness and reputation is the most valuable asset of us researchers, we need to back it up with consistently correct experiments.
 
 
 ## Quick Start
@@ -13,10 +13,10 @@ Every test belongs to exactly one tier, declared via a pytest marker. The five m
 
 | Tier | Marker | What it asserts | Wall budget |
 | --- | --- | --- | --- |
-| `numerical_unit` | `@pytest.mark.numerical_unit` | Expected input–output pairs pinned on fixed seeds (CPU): the frozen parity goldens (`tests/neural/parity/goldens/*.json` replayed through protocol documents on tiny-random), task numerical pins (`tests/tasks/<task>/pinned_samples.json`), metric/train-loop values, and the task-driven end-to-end IIA pin (`tests/neural/pytorch_hooks/test_end_to_end_iia.py` — a serialized task table driven through the CLI). Catches sign flips. | <2 min total |
+| `numerical_unit` | `@pytest.mark.numerical_unit` | Expected input–output pairs pinned on fixed seeds (CPU): the frozen parity goldens (`tests/neural/parity/goldens/*.json` replayed through protocol documents on tiny-random), task numerical pins (`tests/tasks/<task>/pinned_samples.json`), metric/train-loop values, and the task-driven end-to-end IIA pin (`tests/neural/engines/pytorch_hooks/test_end_to_end_iia.py` — a serialized task table driven through the CLI). Catches sign flips. | <2 min total |
 | `property` | `@pytest.mark.property` | Object properties: shape & dtype contracts, invariances / equivariances / determinism (load twice → same digests and canonical form), causal-model invariants. | <1 min total |
 | `unit` | `@pytest.mark.unit` | Pure-function tests, parsers, validation rules, small utilities (the "else" bucket). The default tier — marker still required (enforcement does not infer it). Includes the golden tier's CPU structural guard (`tests/golden/test_structural.py`). | <5 min total |
-| `smoke` | `@pytest.mark.smoke` | Corpus documents execute end-to-end on `tiny-random` through the real CLI (`tests/neural/pytorch_hooks/test_run_corpus.py`, `test_workflow_run.py`): artifact existence, shapes, indicator ranges — no numerical pins. | <5 min total |
+| `smoke` | `@pytest.mark.smoke` | Corpus documents execute end-to-end on `tiny-random` through the real CLI (`tests/neural/engines/pytorch_hooks/test_run_corpus.py`, `test_workflow_run.py`): artifact existence, shapes, indicator ranges — no numerical pins. | <5 min total |
 | `golden` | `@pytest.mark.golden` | Real-model runs on an accelerator — the **sole GPU tier**, two sub-tiers under `tests/golden/` with opposite provenance (see [Golden](#golden)). | model-bound; run per document set |
 
 All five markers are registered in `pyproject.toml`. `tests/conftest.py` installs a `pytest_collection_modifyitems` hook that **fails the run** with a `pytest.UsageError` listing offending nodeids if any test lacks a tier marker.
@@ -26,7 +26,7 @@ All five markers are registered in `pyproject.toml`. `tests/conftest.py` install
 ### Mocking policy
 
 1. **Tiny real over mocks.** Use the smallest real implementations: `hf-internal-testing/tiny-random-*` checkpoints instead of mocking a neural network, tiny committed fixture datasets, ...
-2. **Mock only at system boundaries.** Reserve mocks for transactional dependencies CI shouldn't hit: HTTP APIs, paid services, time/random, forced error paths. (The CLI's lazily-imported execution backend is stubbed via `sys.modules` in `tests/protocol/test_cli.py` — the same idea.)
+2. **Mock only at system boundaries.** Reserve mocks for transactional dependencies CI shouldn't hit: HTTP APIs, paid services, time/random, forced error paths. (The CLI's lazily-imported execution engine is stubbed via `sys.modules` in `tests/protocol/test_cli.py` — the same idea.)
 
 ### Unit tests
 
@@ -52,7 +52,7 @@ Every pinned file follows the same rule: **regenerate via its script, review the
 
 ### Smoke
 
-Corpus documents (`tests/protocols/*_im.json`) run through the real CLI on `hf-internal-testing/tiny-random-LlamaForCausalLM` with `--set` overrides retargeting layers/model at tiny scale. Assertions are existence/shape/dtype only — tiny-random output content is garbage by design. The workflow capstone (`tests/neural/pytorch_hooks/test_workflow_run.py`) runs the whole weekdays pipeline shape the same way, and `test_bundle_entries_run.py` covers the two tensor handoffs between steps: a *swept* fit applied at one selected coordinate (the capstone deliberately collapses that sweep, which is how the gap went unseen) and a mean-ablation harvest reduced at save time. `test_script_step_run.py` is the `script`-step capstone, covering both of its directions in one pipeline: protocol → script → script, and protocol → script → protocol (a fitted basis re-entering a model-touching run, with its ArtifactIdentity checked). The capstone also pins `--resume`: an edit to a step's *script* busts the reuse, which is why the script's content hash is in the digest.
+Corpus documents (`tests/protocols/*_im.json`) run through the real CLI on `hf-internal-testing/tiny-random-LlamaForCausalLM` with `--set` overrides retargeting layers/model at tiny scale. Assertions are existence/shape/dtype only — tiny-random output content is garbage by design. The workflow capstone (`tests/neural/engines/pytorch_hooks/test_workflow_run.py`) runs the whole weekdays pipeline shape the same way, and `test_bundle_entries_run.py` covers the two tensor handoffs between steps: a *swept* fit applied at one selected coordinate (the capstone deliberately collapses that sweep, which is how the gap went unseen) and a mean-ablation harvest reduced at save time. `test_script_step_run.py` is the `script`-step capstone, covering both of its directions in one pipeline: protocol → script → script, and protocol → script → protocol (a fitted basis re-entering a model-touching run, with its ArtifactIdentity checked). The capstone also pins `--resume`: an edit to a step's *script* busts the reuse, which is why the script's content hash is in the digest.
 
 Step scripts themselves are unit-tested under `tests/steps/`: each shipped script against a hand-computed oracle plus a determinism assertion (`numerical_unit`), the `select`/`plot` reductions and their refusals (`unit`), and the isolation path proved by comparing pids. That a real `causalab validate` of a workflow whose script imports torch never itself imports torch is checked in a subprocess (`tests/protocol/test_load_is_torch_free.py`), since `tests/conftest.py` imports torch at session scope.
 
@@ -66,7 +66,7 @@ The sole accelerator tier, under `tests/golden/`, in two sub-tiers with **opposi
 Practicalities:
 
 - Run with `uv run pytest tests/golden -m golden` on a box with an accelerator. Gated models (`meta-llama/Llama-3.1-8B`, `google/gemma-2-2b-it`) need a licensed `HF_TOKEN` — without one the load 401s with nothing naming the cause.
-- The reference backend runs each (model, input) forward group as **one batch**; the largest paper-golden document (hours, 1,152 rows on Llama-8B) wants ~35GB free in bf16.
+- The reference engine runs each (model, input) forward group as **one batch**; the largest paper-golden document (hours, 1,152 rows on Llama-8B) wants ~35GB free in bf16.
 - A CPU structural guard (`tests/golden/test_structural.py`, tier `unit`, runs in CI) keeps the tier honest without loading models: documents load and digest to their pins, every non-pending goldens entry is claimed by exactly one test, provenance fields are present.
 - VRAM reclamation: `tests/conftest.py::pytest_runtest_teardown` runs `gc.collect()` + `torch.cuda.empty_cache()` after every `golden`-marked test.
 

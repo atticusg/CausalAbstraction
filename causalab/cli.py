@@ -11,8 +11,8 @@ here is what lets ``protocol/`` carry no workflow code and ``workflow/`` depend
 on ``protocol/`` one way only — so the intervention protocol is usable on its
 own, which is the point of having two packages.
 
-``run`` needs an execution backend; the reference backend
-(:mod:`causalab.neural.pytorch_hooks`) is imported lazily by whichever half
+``run`` needs an execution engine; the reference engine
+(:mod:`causalab.neural.engines.pytorch_hooks`) is imported lazily by whichever half
 needs it, so the pure verbs stay torch-free.
 """
 
@@ -116,7 +116,7 @@ def _build_parser() -> argparse.ArgumentParser:
             p.add_argument(
                 "--device",
                 default="cpu",
-                help="torch device string for the reference backend "
+                help="torch device string for the reference engine "
                 "(cpu, cuda, cuda:1, mps)",
             )
             p.add_argument(

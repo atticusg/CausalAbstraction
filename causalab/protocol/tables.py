@@ -18,7 +18,7 @@ lives in a step's ``outputs`` declaration rather than inside the file: an empty
 table has no rows to infer from, and a declaration still covers that case.
 
 This module lives in ``protocol/`` because it is **torch-free** and both sides
-of the stack need it: the reference backend writes tables through it, and the
+of the stack need it: the reference engine writes tables through it, and the
 workflow layer's step scripts read them. It owns no pandas dependency either —
 callers that want a DataFrame build one from the rows.
 """
