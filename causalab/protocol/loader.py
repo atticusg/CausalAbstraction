@@ -27,9 +27,16 @@ from typing import Any, Mapping
 from causalab.protocol import canonical as _canonical
 from causalab.protocol.bundles import select_entry, selector_slot
 from causalab.protocol.errors import ParseError, ValidationError
+from causalab.protocol.method import (
+    document_type,
+    is_split,
+    method_digest,
+    split_document,
+)
 from causalab.protocol.resolve import ResolutionEnv, resolve_artifact_fields
 from causalab.protocol.schema import (
     FEATURIZER_SLOTS,
+    NON_COLUMN_METRIC_FIELDS,
     OPTIONAL_METRIC_FIELDS,
     Document,
     PositionSpec,
@@ -39,7 +46,7 @@ from causalab.protocol.schema import (
 from causalab.protocol.sweep import DEFAULT_POINT_CAP, Expansion, expand
 from causalab.protocol.validate import validate_document
 
-__all__ = ["LoadedProtocol", "apply_overrides", "load", "load_text"]
+__all__ = ["LoadedProtocol", "apply_overrides", "flatten", "load", "load_text"]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -54,6 +61,13 @@ class LoadedProtocol:
     document_digest: str
     canonical_points: tuple[Mapping[str, Any], ...]
     point_digests: tuple[str, ...]
+    #: The method this document was composed from (§1.1), when it was written
+    #: in split form: its content hash, and the ``method`` reference when the
+    #: method came from a reusable file rather than inline. The *composed*
+    #: document digests as if it had been written flat, so method provenance is
+    #: reported and stamped, never folded into the canonical bytes (§7).
+    method_digest: str | None = None
+    method_ref: str | None = None
 
 
 def load_text(path: Path) -> dict[str, Any]:
@@ -121,6 +135,23 @@ def _check_json_values(raw: Any, *, _path: str = "") -> None:
         )
 
 
+def flatten(
+    raw: Mapping[str, Any], *, base_dir: Path | None = None
+) -> tuple[dict[str, Any], str | None, str | None]:
+    """One protocol document as a flat tree, whichever form it was written in
+    (§1.1). Returns the flat document, the method's content digest, and the
+    ``method`` reference when the method came from a file.
+
+    Everything that addresses fields by path — ``--set`` overrides, a workflow
+    step's ``set`` block, the run verb's model pre-registration — flattens
+    first, so a dotted path means the same thing in both forms.
+    """
+    if not is_split(raw):
+        return dict(raw), None, None
+    composed, method_raw, method_ref = split_document(raw, base_dir=base_dir)
+    return composed, method_digest(method_raw), method_ref
+
+
 def load(
     source: Path | Mapping[str, Any],
     env: ResolutionEnv,
@@ -128,9 +159,36 @@ def load(
     overrides: Mapping[str, Any] | None = None,
     point_cap: int | None = DEFAULT_POINT_CAP,
     backend_is_local: bool | None = None,
+    base_dir: Path | None = None,
 ) -> LoadedProtocol:
-    """Load one protocol document through the full pipeline."""
+    """Load one protocol document through the full pipeline.
+
+    ``base_dir`` is where a relative ``method`` reference resolves from when
+    the document arrives as a tree rather than a file (a workflow step reads
+    its inner document itself); a document loaded from a path uses its own
+    directory. An inlined method — the usual case, one file per run — needs
+    neither.
+
+    A *split* document (§1.1) is flattened first: the composition is an
+    ordinary protocol document, and everything after this line — overrides,
+    artifact fields, sweeps, validation, canonicalization — cannot tell how the
+    document was authored. ``--set`` paths therefore address the *composed*
+    document, whichever form it was written in.
+    """
     raw = dict(load_text(source)) if isinstance(source, Path) else dict(source)
+    kind = document_type(raw)
+    if kind == "method":
+        raise ValidationError(
+            18,
+            "this is a method file: it names no network, no data and no "
+            "addresses, so there is nothing to run. Bind it from a document's "
+            "`application` half (§1.1), or ask for its signature with "
+            "`causalab explain`.",
+            path="type",
+        )
+    raw, method_digest_value, method_ref = flatten(
+        raw, base_dir=source.parent if isinstance(source, Path) else base_dir
+    )
     if overrides:
         raw = apply_overrides(raw, overrides)
     # artifact fields resolve first (§1: legal anywhere a value is), then the
@@ -158,6 +216,8 @@ def load(
         document_digest=_canonical.digest(canonical_document),
         canonical_points=canonical_points,
         point_digests=tuple(_canonical.digest(c) for c in canonical_points),
+        method_digest=method_digest_value,
+        method_ref=method_ref,
     )
 
 
@@ -221,9 +281,15 @@ def _check_loaded_featurizers(doc: Document, env: ResolutionEnv) -> None:
             )
             if fname in chain and str(entry.site) not in used_sites:
                 used_sites.append(str(entry.site))
+        realization = _canonical.canonical_model(doc.raw["model"])
         expected: dict[str, Any] = {
             "model_key": doc.model.key,
             "model_revision": doc.model.revision,
+            # the realization the bundle was fitted against is part of its
+            # identity (§8): a rotation fitted in bf16 does not apply to fp32
+            # activations just because the shapes agree
+            "model_dtype": realization["dtype"],
+            "model_quantization": realization.get("quantization"),
             "k": spec.k,
             "parametrization": spec.parametrization,
             "dtype": spec.dtype if spec.dtype is not None else "fp32",
@@ -302,6 +368,13 @@ def _entry_identity(
 
 _INDEX = re.compile(r"^(.*)\[(\d+)\]$")
 
+#: Dotted paths an override may *create*. An override normally has to hit a
+#: field that exists — inventing structure is how a typo becomes an
+#: experiment. These two are the exception because the document is never
+#: really silent about them: canonicalization materializes both (§7), so
+#: setting one fills a default rather than adding a field.
+CREATABLE_PATHS: frozenset[str] = frozenset({"model.dtype", "model.revision"})
+
 
 def apply_overrides(
     raw: dict[str, Any], overrides: Mapping[str, Any]
@@ -309,7 +382,8 @@ def apply_overrides(
     """Apply ``--set path=value`` overrides (§9): dotted paths, ``[i]`` for
     list entries, values as JSON (bare words fall back to strings). The
     path must exist — an override that would *create* structure is a typo,
-    not an experiment."""
+    not an experiment — except for :data:`CREATABLE_PATHS`, the fields the
+    canonical form materializes whether or not they are authored."""
     out = json.loads(json.dumps(raw))  # deep copy, stays plain JSON types
     for dotted, value in overrides.items():
         node: Any = out
@@ -320,7 +394,9 @@ def apply_overrides(
             key, index = (
                 (match.group(1), int(match.group(2))) if match else (part, None)
             )
-            if not isinstance(node, dict) or key not in node:
+            if not isinstance(node, dict) or (
+                key not in node and not (last and dotted in CREATABLE_PATHS)
+            ):
                 raise ParseError(
                     "P2",
                     f"--set {dotted}: {key!r} does not exist in the document",
@@ -374,7 +450,8 @@ def check_data_columns(loaded: LoadedProtocol, env: ResolutionEnv) -> list[str]:
         for field, value in metric.fields.items():
             if (
                 metric.kind == "kl"
-                or field in ("k", *OPTIONAL_METRIC_FIELDS.get(str(metric.kind), ()))
+                or field in NON_COLUMN_METRIC_FIELDS
+                or field in OPTIONAL_METRIC_FIELDS.get(str(metric.kind), ())
                 or not isinstance(value, str)
             ):
                 continue

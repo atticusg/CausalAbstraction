@@ -31,14 +31,16 @@ ROT_FIXTURE_RELPATH = "artifacts/weekdays/llama31_8b/subspace/rot_k8.safetensors
 
 def write_rot_fixture(artifacts_root: Path) -> Path:
     """A deterministic fitted-DAS bundle matching 09_das_apply_im.json:
-    stamped identity for (Llama-3.1-8B @ main, block_output L18, k=8,
-    cayley, fp32), weight zeros. Load-time checks read only the header."""
+    stamped identity for (Llama-3.1-8B @ main in fp32, block_output L18, k=8,
+    cayley, fp32 params), weight zeros. Load-time checks read only the
+    header."""
     target = artifacts_root / ROT_FIXTURE_RELPATH
     target.parent.mkdir(parents=True, exist_ok=True)
     identity = build_artifact_identity(
         produced_by="0" * 64,
         model_key="meta-llama/Llama-3.1-8B",
         model_revision="main",
+        model_dtype="fp32",
         tokenizer="meta-llama/Llama-3.1-8B",
         site={"component": "block_output", "layer": 18},
         k=8,

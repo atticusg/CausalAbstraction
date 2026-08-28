@@ -141,6 +141,148 @@ def test_rule_4_metric_on_non_lm_head_read():
     expect_rule(4, doc)
 
 
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"kind": "class_probs", "groups": {"days": ["Monday"]}},
+        {"kind": "token_logit", "token": "cf_answer"},
+        {"kind": "cross_entropy", "target": "cf_answer"},
+        {"kind": "match", "expected": "cf_answer"},
+    ],
+)
+def test_rule_4_still_binds_the_token_space_kinds_to_lm_head(spec):
+    """``top_k`` was loosened to any read; its siblings were not. Each of
+    these resolves an authored string to a token id, which only an
+    ``lm_head`` read can be indexed by."""
+    doc = base_doc()
+    doc["metrics"]["m"] = {"of": "v_cf", **spec}
+    doc["save"].append(
+        {
+            "value": "m",
+            "model": "original",
+            "input": "counterfactual",
+            "file_path": "m.json",
+        }
+    )
+    expect_rule(4, doc)
+
+
+def test_rule_4_top_k_binds_to_a_read_at_any_component():
+    """The point of the change: a top-k over a wide read is the reduction that
+    keeps the wide tensor off disk, so it must be expressible."""
+    doc = base_doc()
+    doc["metrics"]["tk"] = {"kind": "top_k", "of": "v_cf", "k": 4, "by": "abs_value"}
+    doc["save"].append(
+        {
+            "value": "tk",
+            "model": "original",
+            "input": "counterfactual",
+            "file_path": "tk.json",
+        }
+    )
+    parse_and_validate(doc)
+
+
+def test_rule_4_top_k_by_prob_off_lm_head_is_refused():
+    """A softmax across a residual stream normalizes over an axis that is not
+    an event space — the resulting numbers are probabilities of nothing."""
+    doc = base_doc()
+    doc["metrics"]["tk"] = {"kind": "top_k", "of": "v_cf", "k": 4, "by": "prob"}
+    doc["save"].append(
+        {
+            "value": "tk",
+            "model": "original",
+            "input": "counterfactual",
+            "file_path": "tk.json",
+        }
+    )
+    err = expect_rule(4, doc)
+    assert "prob" in str(err)
+
+
+def test_rule_4_top_k_by_prob_on_lm_head_is_legal():
+    doc = base_doc()
+    doc["metrics"]["tk"] = {"kind": "top_k", "of": "logits", "k": 4, "by": "prob"}
+    doc["save"].append(
+        {"value": "tk", "model": "patched", "input": "base", "file_path": "tk.json"}
+    )
+    parse_and_validate(doc)
+
+
+def _lm_head_read_through(**extra: object) -> dict[str, Any]:
+    """A doc with a second lm_head read that does NOT hand the projection on
+    unchanged — the site says vocabulary, the read's value is not."""
+    doc = base_doc()
+    doc["reads"]["flogits"] = {
+        "site": "lm_head",
+        "pos": -1,
+        "model": "patched",
+        "input": "base",
+        **extra,
+    }
+    return doc
+
+
+def test_rule_4_top_k_by_prob_over_a_featurized_lm_head_read_is_refused():
+    """The site alone cannot answer "is this the vocabulary?": a featurizer
+    re-expresses the projection in its own latents, so `prob` there would
+    softmax an axis that is not an event space — even though the site says
+    lm_head, which is exactly the case a component check waves through."""
+    doc = _lm_head_read_through(featurizer="f")
+    doc["featurizers"] = {
+        "f": {"kind": "subspace", "k": 4, "parametrization": "cayley"}
+    }
+    doc["metrics"]["tk"] = {"kind": "top_k", "of": "flogits", "k": 2, "by": "prob"}
+    doc["save"].append(
+        {"value": "tk", "model": "patched", "input": "base", "file_path": "tk.json"}
+    )
+    err = expect_rule(4, doc)
+    assert "featurizer" in str(err)
+
+
+def test_rule_4_top_k_by_prob_over_a_dims_sliced_lm_head_read_is_refused():
+    """`dims` re-indexes a slice, so entry j is no longer token j — the same
+    hole as the featurizer, through the other read transform."""
+    doc = _lm_head_read_through(dims=[0, 1, 2])
+    doc["metrics"]["tk"] = {"kind": "top_k", "of": "flogits", "k": 2, "by": "prob"}
+    doc["save"].append(
+        {"value": "tk", "model": "patched", "input": "base", "file_path": "tk.json"}
+    )
+    err = expect_rule(4, doc)
+    assert "dims" in str(err)
+
+
+def test_rule_4_top_k_by_value_over_a_featurized_lm_head_read_is_legal():
+    """Anti-vacuity: the refusal is about `prob`'s softmax, not about
+    featurized reads — ranking latents by signed value is the use case
+    any-read top_k exists for."""
+    doc = _lm_head_read_through(featurizer="f")
+    doc["featurizers"] = {
+        "f": {"kind": "subspace", "k": 4, "parametrization": "cayley"}
+    }
+    doc["metrics"]["tk"] = {"kind": "top_k", "of": "flogits", "k": 2, "by": "value"}
+    doc["save"].append(
+        {"value": "tk", "model": "patched", "input": "base", "file_path": "tk.json"}
+    )
+    parse_and_validate(doc)
+
+
+def test_rule_4_a_token_space_kind_over_a_featurized_lm_head_read_is_refused():
+    """`match` resolves an authored string to a token id and indexes the read
+    with it — over a featurizer's latents that indexes the wrong axis, so the
+    lm_head site is not enough for the token-space kinds either."""
+    doc = _lm_head_read_through(featurizer="f")
+    doc["featurizers"] = {
+        "f": {"kind": "subspace", "k": 4, "parametrization": "cayley"}
+    }
+    doc["metrics"]["m"] = {"kind": "match", "of": "flogits", "expected": "cf_answer"}
+    doc["save"].append(
+        {"value": "m", "model": "patched", "input": "base", "file_path": "m.json"}
+    )
+    err = expect_rule(4, doc)
+    assert "featurizer" in str(err)
+
+
 # rule 5 — read bindings ------------------------------------------------------ #
 
 
@@ -298,8 +440,10 @@ def test_rule_9_disjoint_dims_absolutes_are_legal():
 
 
 def test_rule_10_metric_not_saved():
+    # the read is saved plain (a dims slice on an lm_head read feeding a
+    # token-space metric is now a rule-4 error of its own); the point here is
+    # only that the declared metric never appears in `save`
     doc = base_doc()
-    doc["reads"]["logits"]["dims"] = [0, 1]
     doc["save"] = [
         {
             "value": "logits",

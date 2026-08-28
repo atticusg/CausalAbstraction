@@ -517,7 +517,7 @@ the test split, and plot — as one workflow over the golden-corpus documents
   "description": "weekdays-8b: locate -> DAS k x seed fits at the best cell -> apply on test; scan heatmap + IIA-vs-k curves.",
   "output_dir": "weekdays_8b",
   "steps": {
-    "locate": {"type": "intervention_protocol", "document": "../methods/weekdays_locate_scan.json"},
+    "locate": {"type": "intervention_protocol", "document": "../protocols/weekdays_locate_scan.json"},
     "best": {
       "type": "script", "script": {"module": "causalab.workflow.scripts.select"},
       "inputs": {
@@ -527,7 +527,7 @@ the test split, and plot — as one workflow over the golden-corpus documents
       },
       "outputs": {"values": "values.json"}
     },
-    "fit": {"type": "intervention_protocol", "document": "../methods/weekdays_das_sweep.json",
+    "fit": {"type": "intervention_protocol", "document": "../protocols/weekdays_das_sweep.json",
              "set": {"positions.best": {"artifact": "best", "key": "best_pos"},
                      "sites.target.layer": {"artifact": "best", "key": "best_layer"}}},
     "best_fit": {
@@ -539,7 +539,7 @@ the test split, and plot — as one workflow over the golden-corpus documents
       },
       "outputs": {"values": "values.json"}
     },
-    "apply": {"type": "intervention_protocol", "document": "../methods/weekdays_das_apply.json",
+    "apply": {"type": "intervention_protocol", "document": "../protocols/weekdays_das_apply.json",
                "set": {"featurizers.rot.file_path": "fit/rot.safetensors",
                        "featurizers.rot.k": {"artifact": "best_fit", "key": "best_k"},
                        "featurizers.rot.entry": {
