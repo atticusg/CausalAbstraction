@@ -276,7 +276,7 @@ execution order:
 `input_ids` · `embeddings` · `block_input` · `attention_input_norm` ·
 `attention_query_pre_rope` · `attention_key_pre_rope` ·
 `attention_value_states` · `attention_gate` · `attention_query` ·
-`attention_key` · `attention_scores` · `attention_z` ·
+`attention_key` · `attention_scores` · `attention_z` · `attention_result` ·
 `attention_output` · `attention_premix` · `attention_probs` · `block_mid` ·
 `mlp_input_norm` · `mlp_input` · `router_logits` · `router_scores` ·
 `expert_idx` · `expert_output` · `routed_output` · `mlp_activation` ·
@@ -318,12 +318,24 @@ execution order:
 - **`expert` is refused on every round-1 MoE component.** None of these tensors
   is indexed by expert: the router's axes are all-experts or top-k, and the
   shared expert is not one of the routed experts.
-- **Two components are read-only, and a write to either is refused** rather than
+- **`attention_result` is the per-head contribution to the residual stream**,
+  and the only component the model never computes: the block projects the whole
+  `attention_premix` at once, so what the forward pass forms is the *sum* over
+  heads. `sum_h attention_result == attention_output` (minus the o-projection's
+  bias, which belongs to no head) is the identity that defines it.
+  Naming a `head` is strongly encouraged — the dense form is `heads` times
+  `attention_output`, which on a 64-head model at hidden 4096 is 64× the memory
+  — but the whole tensor is not refused, only documented. The read is derived
+  after the position gather, so the cost is `n_positions · heads · hidden`
+  rather than `seq · heads · hidden`.
+- **Three components are read-only, and a write to any is refused** rather than
   silently discarded. `input_ids` is the model's input. `router_logits` is
   discarded by the MoE block itself, which routes on the scores and indices it
   computed from them — so a write there could not reach anything. Write
   `router_scores` to reweight the chosen experts, or `expert_idx` to change
-  which experts fire.
+  which experts fire. `attention_result` is *derived* — there is no tensor there
+  to change — so write `attention_premix` with the same `head` instead; the
+  result is a linear function of it.
 - **The mixer's interior is four module boundaries, not four chunk ops.**
   `attention_query_pre_rope` and `attention_key_pre_rope` are the queries and
   keys as the mixer computes them, *before* RoPE rotates them — on a family with

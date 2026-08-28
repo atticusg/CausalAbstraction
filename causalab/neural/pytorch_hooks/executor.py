@@ -678,7 +678,10 @@ class PointExecutor:
         elif site.feature_slice is not None:
             width = site.feature_slice.stop - site.feature_slice.start
         else:
-            width = component_width(self.bundle.info, site.component, head=None)
+            # `head=site.head` matters only for a *derived* component, which
+            # carries no feature_slice: a head there narrows the value's width
+            # without narrowing the captured tensor's.
+            width = component_width(self.bundle.info, site.component, head=site.head)
         return build_stack(
             read.featurizer,
             dict(self.doc.featurizers),
@@ -725,6 +728,12 @@ class PointExecutor:
                 gathered = project(gathered)
         ragged = isinstance(gathered, RaggedValue)
         value = gathered.flat if isinstance(gathered, RaggedValue) else gathered
+        if site.derivation is not None:
+            # After the gather, deliberately: the value is `heads` times wider
+            # than the tensor it comes from, so deriving it before the gather
+            # would cost `seq · H · hidden` where this costs
+            # `n_positions · H · hidden`.
+            value = _derive(site, value, rname)
         if site.feature_slice is not None:
             value = value[..., site.feature_slice]
         stack = self._read_stack(read, site)
@@ -1016,6 +1025,52 @@ def _whole_native_tensor(
             f"{shape.axes[-1].label} entries as though they were features.",
         )
     return raw
+
+
+def _derive(site: "ResolvedSite", value: torch.Tensor, rname: str) -> torch.Tensor:
+    """Compute a derived component from the tensor its tap captured."""
+    if site.derivation == "attention_result":
+        return _attention_result(site, value)
+    raise ProtocolError("P2", f"read {rname!r}: unknown derivation {site.derivation!r}")
+
+
+def _attention_result(site: "ResolvedSite", premix: torch.Tensor) -> torch.Tensor:
+    """Head ``h``'s contribution to the residual stream.
+
+    ``result[..., h, :] = premix[..., h·d:(h+1)·d] @ W_o[:, h·d:(h+1)·d].T`` —
+    the part of the block's attention output that head ``h`` is responsible for.
+    The model never forms it: it projects the whole premix at once, so what it
+    computes is the *sum* over heads (plus the o-projection's bias, if it has
+    one). ``sum_h result == attention_output - bias`` is the identity that
+    defines this component, and the test suite pins it.
+
+    Computed by **masking and re-projecting** rather than by slicing the weight
+    matrix. That is deliberate: ``nn.Linear`` stores ``(out, in)`` and
+    transformers' ``Conv1D`` (GPT-2's ``c_proj``) stores ``(in, out)``, so a
+    weight-slicing implementation has to know which family it is looking at and
+    is silently wrong if it guesses. Running the projection the model's own
+    module defines cannot be wrong about its own layout, and the bias — which is
+    *not* attributable to any head — is subtracted back off explicitly.
+    """
+    module = site.module
+    bias = getattr(module, "bias", None)
+    heads = site.shape.head_space
+    assert heads is not None  # the premix tap always has a head axis
+    per_head = premix.shape[-1] // heads
+
+    def contribution(head: int) -> torch.Tensor:
+        masked = torch.zeros_like(premix)
+        window = slice(head * per_head, (head + 1) * per_head)
+        masked[..., window] = premix[..., window]
+        out = module(masked)
+        return out if bias is None else out - bias
+
+    if site.head is not None:
+        return contribution(site.head)
+    # The whole tensor: `heads` times wider than `attention_output`. On a real
+    # A3B that is 64x at hidden 4096, which is why naming a `head` is
+    # encouraged — but it is a documented cost, not a refusal.
+    return torch.cat([contribution(head) for head in range(heads)], dim=-1)
 
 
 def _interface_edit(

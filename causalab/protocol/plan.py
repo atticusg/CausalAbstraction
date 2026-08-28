@@ -52,9 +52,8 @@ __all__ = [
 #: output and the per-head result), and the reserved slots below say where each
 #: goes so that each PR is an insertion rather than a re-pin.
 #:
-#: Still reserved::
-#:
-#:     350  attention_result            the per-head contribution to the stream
+#: Every slot the round reserved is now claimed; the gaps that remain are for
+#: whatever the MoE and DeltaNet interiors need (follow-ups F2 and F3).
 COMPONENT_RANK: dict[str, int] = {
     "input_ids": -10,  # the model's input: before every activation
     "embeddings": 0,
@@ -85,6 +84,10 @@ COMPONENT_RANK: dict[str, int] = {
     # introduces those separately, and two components a letter apart in meaning
     # and identical in name is nnterp#51's cautionary tale happening to us.
     "attention_premix": 300,
+    # derived, not computed: the model never forms it, so it sorts where it
+    # would be if it did — between the tensor it is a function of and the sum
+    # of its own heads
+    "attention_result": 350,
     "attention_output": 400,
     # resid_mid is post_attention_layernorm's INPUT and mlp_input_norm its
     # OUTPUT, so the two straddle that one module in this order

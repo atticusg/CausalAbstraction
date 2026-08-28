@@ -173,9 +173,7 @@ def test_the_read_has_the_shape_the_interface_produces(
     qwen35moe_bundle, component: str
 ):
     _, contract = QWEN_INTERFACE[component]
-    executor = executor_for(
-        _read_doc(component), qwen35moe_bundle, base_texts=[TEXT]
-    )
+    executor = executor_for(_read_doc(component), qwen35moe_bundle, base_texts=[TEXT])
     assert tuple(executor.read_value("r").shape) == contract
 
 
@@ -263,9 +261,7 @@ def test_attention_knockout_is_expressible_on_the_scores(qwen35moe_bundle):
     """
     mask = torch.zeros(1, 8, 5, 5)
     mask[:, 0, :, 0] = -1e4
-    doc = _write_doc(
-        "attention_scores", {"add_scaled": {"op": "knock", "alpha": 1.0}}
-    )
+    doc = _write_doc("attention_scores", {"add_scaled": {"op": "knock", "alpha": 1.0}})
     doc["params"] = {"knock": {"file_path": "k.safetensors"}}
     del doc["reads"]["v_cf"]
     assert (
@@ -286,9 +282,7 @@ def test_a_uniform_shift_of_the_scores_is_a_no_op_because_softmax_is_shift_invar
     shift along the axis it normalizes. A knockout therefore has to be targeted,
     which is why the recipe above uses a full-shape mask rather than a scalar.
     """
-    doc = _write_doc(
-        "attention_scores", {"add_scaled": {"op": -10000.0, "alpha": 1.0}}
-    )
+    doc = _write_doc("attention_scores", {"add_scaled": {"op": -10000.0, "alpha": 1.0}})
     del doc["reads"]["v_cf"]
     assert _moved(qwen35moe_bundle, doc) < 1e-3
 
@@ -429,11 +423,7 @@ def test_a_tap_at_one_layer_leaves_another_layers_output_alone():
             return torch.zeros_like(scores)
 
         with attention_interface_taps(
-            {
-                id(bundle.mixer_at(1)): (
-                    InterfaceTap(slot="scores", edit=wreck),
-                )
-            }
+            {id(bundle.mixer_at(1)): (InterfaceTap(slot="scores", edit=wreck),)}
         ):
             with torch.no_grad():
                 wrecked_logits = bundle.model(**encoded).logits.clone()
