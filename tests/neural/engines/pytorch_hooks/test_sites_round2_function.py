@@ -32,12 +32,12 @@ from __future__ import annotations
 import pytest
 import torch
 
-from causalab.neural.pytorch_hooks.attention_interface import (
+from causalab.neural.engines.pytorch_hooks.attention_interface import (
     InterfaceTap,
     attention_interface_taps,
 )
-from causalab.neural.pytorch_hooks.loading import ModelBundle, load_model
-from causalab.neural.pytorch_hooks.sites import resolve_site
+from causalab.neural.engines.pytorch_hooks.loading import ModelBundle, load_model
+from causalab.neural.shared.sites import resolve_site
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.registry import component_shape
 from causalab.protocol.schema import SiteSpec
@@ -354,7 +354,7 @@ def test_the_mode_taps_functional_softmax_and_nothing_else():
     counting is what stands between this and tapping the wrong softmax on a
     family that has two.
     """
-    from causalab.neural.pytorch_hooks.attention_interface import _SoftmaxTap
+    from causalab.neural.engines.pytorch_hooks.attention_interface import _SoftmaxTap
 
     x = torch.randn(2, 3)
     mode = _SoftmaxTap(lambda t: t)
@@ -372,7 +372,9 @@ def test_a_family_that_does_not_softmax_exactly_once_is_refused(qwen35moe_bundle
     second sliding-window pass, would have *a* softmax tapped and which one
     would depend on source order — the silent-wrong-tensor failure this whole
     effort exists to prevent."""
-    from causalab.neural.pytorch_hooks.attention_interface import _check_one_softmax
+    from causalab.neural.engines.pytorch_hooks.attention_interface import (
+        _check_one_softmax,
+    )
 
     module = qwen35moe_bundle.mixer_at(FULL_ATTENTION_LAYER)
     _check_one_softmax(module, 1)  # the measured case: fine
