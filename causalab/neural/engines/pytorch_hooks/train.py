@@ -36,7 +36,7 @@ import torch
 
 from causalab.neural.engines.pytorch_hooks.executor import PointExecutor, document_seed
 from causalab.neural.engines.pytorch_hooks.featurizers import Gate, Stage
-from causalab.neural.engines.pytorch_hooks.metrics import column_token_ids
+from causalab.neural.shared.metrics import column_token_ids
 from causalab.protocol.engine import ExecutionRequest
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.schema import (
@@ -336,7 +336,7 @@ def _run_eval(
     split: str,
 ) -> dict[str, float]:
     """Evaluate the declared eval metrics on the split, hard-gate eval mode."""
-    from causalab.neural.engines.pytorch_hooks.metrics import compute_metric
+    from causalab.neural.shared.metrics import compute_metric
 
     rows_of = getattr(request.env.datasets, "rows")
     split_rows = rows_of(split)

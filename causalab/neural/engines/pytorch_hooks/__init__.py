@@ -7,7 +7,7 @@ stamping. Everything enters through :class:`PytorchHooksEngine`.
 """
 
 from causalab.neural.engines.pytorch_hooks.engine import PytorchHooksEngine
-from causalab.neural.engines.pytorch_hooks.encoding import (
+from causalab.neural.shared.encoding import (
     EncodedBatch,
     encode,
     resolve_position,

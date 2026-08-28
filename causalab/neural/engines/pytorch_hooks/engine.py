@@ -22,12 +22,13 @@ from typing import Any, Mapping
 
 
 from causalab.neural.engines.pytorch_hooks.executor import PointExecutor
-from causalab.neural.engines.pytorch_hooks.loading import TensorBundle, load_model
-from causalab.neural.engines.pytorch_hooks.metrics import (
+from causalab.neural.engines.pytorch_hooks.loading import load_model
+from causalab.neural.shared.services import load_tensors, resolve_roles, site_identity
+from causalab.neural.shared.metrics import (
     compute_metric,
     compute_windowed_metric,
 )
-from causalab.neural.engines.pytorch_hooks.outputs import (
+from causalab.neural.shared.outputs import (
     MetricTable,
     TensorFile,
     code_commit,
@@ -145,13 +146,13 @@ class PytorchHooksEngine(Engine):
             device=self.device,
             quantization=_quantization_key(realization),
         )
-        role_rows, role_fields = _resolve_roles(doc, request)
+        role_rows, role_fields = resolve_roles(doc, request)
         return PointExecutor(
             doc,
             bundle,
             role_rows=role_rows,
             role_fields=role_fields,
-            load_tensors=functools.partial(_load_tensors, request),
+            load_tensors=functools.partial(load_tensors, request),
             grad_enabled=grad_enabled,
             coords=coords,
         )
@@ -244,7 +245,7 @@ class PytorchHooksEngine(Engine):
                 # bound to where it was read, and a consumer (a script step
                 # fitting a basis on it, then a document loading that basis)
                 # has no other way to prove the two agree
-                read_site = _site_identity(doc, str(doc.reads[entry.value].site))
+                read_site = site_identity(doc, str(doc.reads[entry.value].site))
                 tensor_files.setdefault(entry.file_path, TensorFile()).add(
                     entry.value,
                     executor.read_value(entry.value),
@@ -297,32 +298,13 @@ def _summary_stat(values: list[Any]) -> Any:
     return f"{len(values)} rows"
 
 
-def _site_identity(doc: Document, site_name: str | None) -> dict[str, Any] | None:
-    """One site as the ArtifactIdentity records it — the non-null address
-    fields only, the shape ``loader.py`` builds its expectation in."""
-    if site_name is None or site_name not in doc.sites:
-        return None
-    record = doc.sites[site_name]
-    return {
-        key: value
-        for key, value in {
-            "component": record.component,
-            "layer": record.layer,
-            "head": record.head,
-            "expert": record.expert,
-            "stream": record.stream,
-        }.items()
-        if value is not None
-    }
-
-
 def _featurizer_identity(
     doc: Document, name: str, site_name: str | None, point_digest: str
 ) -> dict[str, str]:
     from causalab.protocol.resolve import build_artifact_identity
 
     spec = doc.featurizers[name]
-    site = _site_identity(doc, site_name)
+    site = site_identity(doc, site_name)
     base = doc.data["base"]
     trained_on = base.dataset if not isinstance(base, tuple) else base[0].dataset
     realization = canonical_model(doc.raw["model"])
@@ -351,76 +333,3 @@ def _quantization_key(
     if quantization is None:
         return None
     return tuple(sorted(quantization.items()))
-
-
-def _resolve_roles(
-    doc: Document, request: ExecutionRequest
-) -> tuple[dict[str, list[dict[str, Any]]], dict[str, str]]:
-    """Dataset rows + field selector per input role, rows paired by index.
-
-    ``rows`` is part of the :class:`~causalab.protocol.resolve.DatasetResolver`
-    contract, so this reads it directly — a resolver without it is a typing
-    error at construction, not a surprise at run time."""
-    rows_of = request.env.datasets.rows
-    role_rows: dict[str, list[dict[str, Any]]] = {}
-    role_fields: dict[str, str] = {}
-    lengths: dict[str, int] = {}
-    for role, value in doc.data.items():
-        entries = value if isinstance(value, tuple) else (value,)
-        for j, role_spec in enumerate(entries):
-            role_name = role if not isinstance(value, tuple) else f"{role}[{j}]"
-            role_rows[role_name] = rows_of(str(role_spec.dataset))
-            role_fields[role_name] = str(role_spec.field)
-            lengths[role_name] = len(role_rows[role_name])
-    if len(set(lengths.values())) > 1:
-        raise ProtocolError(
-            "P2",
-            f"input roles have unequal row counts {lengths} — rows are paired "
-            "by index (§2.2)",
-        )
-    return role_rows, role_fields
-
-
-@functools.lru_cache(maxsize=32)
-def _read_bundle(path: str, _stamp: tuple[int, int]) -> TensorBundle:
-    """One bundle, read once. The cache matters: a write operand resolves
-    its ``params`` tensor on every application, so an uncached read would
-    re-open the same file for every batch of every point.
-
-    ``_stamp`` is the file's (mtime, size), so a path rewritten in the same
-    process — a step re-run into an existing run tree — is a cache miss
-    rather than a stale tensor."""
-    from safetensors.torch import load_file
-
-    from causalab.protocol.resolve import read_safetensors_metadata
-
-    meta = read_safetensors_metadata(Path(path)) or {}
-    raw_entries = meta.get("entries")
-    entry_coords: dict[str, Any] = {}
-    if isinstance(raw_entries, str):
-        try:
-            decoded = json.loads(raw_entries)
-        except json.JSONDecodeError as err:
-            raise ProtocolError(
-                "P2", f"{path}: unreadable 'entries' table in the header — {err}"
-            ) from err
-        if isinstance(decoded, dict):
-            entry_coords = decoded
-    return TensorBundle(tensors=load_file(path), entry_coords=entry_coords)
-
-
-def _load_tensors(request: ExecutionRequest, file_path: str) -> TensorBundle:
-    """Load a tensor bundle referenced by a featurizer/params file_path,
-    resolved through the artifact store (which owns the run-tree/external
-    overlay inside a workflow)."""
-    artifacts = request.env.artifacts
-    resolve = getattr(artifacts, "resolve_path", None)
-    if resolve is not None:
-        target = Path(resolve(file_path))
-    else:
-        root = getattr(artifacts, "root", None)
-        if root is None:
-            raise ProtocolError("P2", "artifact store exposes no filesystem root")
-        target = Path(root) / file_path
-    stat = target.stat()
-    return _read_bundle(str(target), (stat.st_mtime_ns, stat.st_size))

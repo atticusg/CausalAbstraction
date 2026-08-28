@@ -18,8 +18,8 @@ from typing import Any
 import pytest
 import torch
 
-from causalab.neural.pytorch_hooks.encoding import encode
-from causalab.neural.pytorch_hooks.executor import PointExecutor, RaggedValue
+from causalab.neural.shared.encoding import encode
+from causalab.neural.engines.pytorch_hooks.executor import PointExecutor, RaggedValue
 from causalab.protocol.schema import SECTION_ORDER, parse_document
 
 from tests.neural.engines.pytorch_hooks.conftest import TINY_GPT2, TINY_LLAMA
@@ -118,7 +118,7 @@ def _decoded_ids(executor: PointExecutor) -> torch.Tensor:
 
 @pytest.mark.parametrize("key", [TINY_LLAMA, TINY_GPT2])
 def test_continuation_matches_hf_greedy(key):
-    from causalab.neural.pytorch_hooks.loading import load_model
+    from causalab.neural.engines.pytorch_hooks.loading import load_model
 
     bundle = load_model(key)
     ours = _decoded_ids(_executor(bundle, _doc(key)))
