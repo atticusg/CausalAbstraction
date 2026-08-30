@@ -10,7 +10,7 @@ abstraction, interchange interventions, DAS, DBM, steering, and ablation.
 contains the six-step protocol:
 
 1. [Behavioral analysis](answer-research-question/behavioral-analysis/behavioral-analysis.md) — can the model do it, and how does it fail?
-2. [Exploratory experimentation](answer-research-question/exploratory-experimentation/exploratory-experimentation.md) — cheap probes for signal
+2. [Exploratory experimentation](answer-research-question/exploratory-experimentation/exploratory-experimentation.md) — parallel logit lens, PCA, and counterfactual patching experiments
 3. [Hypothesis generation](answer-research-question/hypothesis-generation/hypothesis-generation.md) — the causal model and the counterfactuals that test it
 4. [Hypothesis testing](answer-research-question/hypothesis-testing/hypothesis-testing.md) — the hypothesis against its alternatives
 5. [Generalize results](answer-research-question/generalize-results/generalize-results.md) — how far the claim reaches

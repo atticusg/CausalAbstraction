@@ -17,44 +17,43 @@ is active. The next phase stays blocked until the active phase is complete.
 ```
                     ┌──────────────────────────────┐
                     │     behavioral analysis      │
-                    │   can the model do it, and   │
-                    │   how does it fail?          │
                     │  REQUIRED FIRST; BLOCKS ALL  │
                     │         LATER PHASES         │
                     └──────────────┬───────────────┘
-                                   │
+                                   │ reuse its code and setup
+                    ┌──────────────┼──────────────┐
+                    ▼              ▼              ▼
+              ┌───────────┐  ┌───────────┐  ┌───────────────┐
+              │logit lens │  │    PCA    │  │counterfactual │
+              │           │  │           │  │   patching    │
+              └─────┬─────┘  └─────┬─────┘  └───────┬───────┘
+                    └──────────────┼──────────────┘
+                                   ▼ all three complete
+                    ┌──────────────────────────────┐
+                    │    hypothesis generation     │
+                    └──────────────┬───────────────┘
                                    ▼
                     ┌──────────────────────────────┐
-        ┌──────────▶│ exploratory experimentation  │
-        │           │   cheap probes for signal    │
-        │           └──────────────┬───────────────┘
-        │                          │
-        │                          ▼
-        │           ┌──────────────────────────────┐
-        │  ┌───────▶│    hypothesis generation     │
-        │  │        │  a causal model + the        │
-        │  │        │  counterfactuals to test it  │
-        │  │        └──────────────┬───────────────┘
-        │  │                       │
-        │  │                       ▼
-        │  │        ┌──────────────────────────────┐
-        │  └────────┤      hypothesis testing      │
-        │           │   the hypothesis against     │
-        └───────────┤   its alternatives           │
+                    │      hypothesis testing      │
                     └──────────────┬───────────────┘
-                                   │  strong positive result
+                                   │ strong positive result
                                    ▼
                     ┌──────────────────────────────┐
                     │      generalize results      │
-                    │   how far does the claim     │
-                    │   actually reach?            │
                     └──────────────┬───────────────┘
-                                   │
                                    ▼
                     ┌──────────────────────────────┐
                     │         save results         │
                     └──────────────────────────────┘
 ```
+
+The three branches between behavioral analysis and hypothesis generation are the
+exploratory experimentation phase. Launch them in parallel after behavioral
+analysis finishes. Hypothesis generation cannot begin until all three branches
+finish and their observations have been assembled.
+
+The return paths after a failed or ambiguous hypothesis test are described under
+"Routing after hypothesis testing" below.
 
 | Step | Document | The question it answers |
 |---|---|---|
@@ -94,6 +93,12 @@ analysis may evaluate several prompt formats in separate GPU jobs within one
 experiment. This does not unblock exploratory experimentation: every unit still
 belongs to behavioral analysis, and that phase must finish before the pipeline
 advances.
+
+After that gate passes, exploratory experimentation launches its logit lens, PCA,
+and counterfactual patching experiments in parallel. Each reuses the
+selected prompt, model configuration, code, and evaluation setup from behavioral
+analysis. Hypothesis generation remains blocked until the exploratory phase is
+complete.
 
 ## Routing after hypothesis testing
 

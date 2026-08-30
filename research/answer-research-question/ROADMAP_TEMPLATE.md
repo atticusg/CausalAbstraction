@@ -25,9 +25,14 @@ parallel, but the next phase remains blocked until the current phase is complete
 ```
 behavioral analysis             required first; blocks every later phase
         │
+        │ reuse its selected prompt, model, code, and evaluation setup
         ▼
-exploratory experimentation     independent units may run in parallel
+exploratory experimentation     launch these three experiments in parallel:
+        ├── logit lens
+        ├── PCA
+        └── counterfactual patching
         │
+        │ all three must finish
         ▼
 hypothesis generation           independent units may run in parallel
         │
@@ -49,9 +54,9 @@ save results
 
 ### 2. Exploratory experimentation
 
-- **Expect:** {which probes, and what each would show if the guess is right}
-- **Units:** {one per probe × site, roughly}
-- **Skip / shorten if:** {…}
+- **Logit lens:** {what it would show if the initial guess were right}
+- **PCA:** {what it would show if the initial guess were right}
+- **Counterfactual patching:** {what it would show if the initial guess were right}
 
 ### 3. Hypothesis generation
 
