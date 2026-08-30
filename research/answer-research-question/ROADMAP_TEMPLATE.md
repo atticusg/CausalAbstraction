@@ -17,11 +17,35 @@ end of every step. See [`answer-research-question.md`](answer-research-question.
 Use one block for each step. Before the step begins, describe what you expect and
 divide the work into the units that you will track.
 
+The steps are blocking phases, not independent work streams. Complete behavioral
+analysis before launching any work from a later phase. After that, launch work
+only from the current phase. Independent units within that phase may run in
+parallel, but the next phase remains blocked until the current phase is complete.
+
+```
+behavioral analysis             required first; blocks every later phase
+        │
+        ▼
+exploratory experimentation     independent units may run in parallel
+        │
+        ▼
+hypothesis generation           independent units may run in parallel
+        │
+        ▼
+hypothesis testing              independent tests may run in parallel
+        │                       │
+        │ strong result         └── revise and return to an earlier phase
+        ▼
+generalize results              independent checks may run in parallel
+        │
+        ▼
+save results
+```
+
 ### 1. Behavioral analysis
 
 - **Expect:** {…}
 - **Units:** {…}
-- **Skip / shorten if:** {…}
 
 ### 2. Exploratory experimentation
 

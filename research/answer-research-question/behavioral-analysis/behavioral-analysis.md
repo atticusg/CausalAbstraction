@@ -5,8 +5,25 @@ a shortcut instead of the intended behavior.
 
 ## Can the model solve the task?
 
-Find a prompt that the model solves reliably and measure its accuracy. If the model
-fails representative variations, stop rather than studying a task it cannot solve.
+First find a prompt under which the model actually exhibits the behavior. Do not
+launch any later phase until this is established and the behavioral analysis is
+complete.
+
+1. Write several plausible prompt formats, usually about ten. Vary wording,
+   formatting, answer position, and other small choices that could affect whether
+   the model understands the task.
+2. Evaluate the candidates on comparable examples. These evaluations may run in
+   parallel as separate small GPU jobs within the same experiment. No work from a
+   later phase may run alongside them.
+3. Inspect the generated outputs as well as the aggregate scores. Confirm that a
+   high score reflects the intended behavior rather than a formatting artifact,
+   memorized pattern, or shortcut.
+4. Select one prompt and report its performance. Performance must be well above
+   random chance and should normally be about 90% or higher. If performance is
+   lower, do not proceed unless the failures reveal a stable, systematic behavior
+   that becomes the explicit subject of the research question.
+5. If no prompt produces either reliable task performance or a clear systematic
+   behavior, stop and revise the task or research question.
 
 - Decide whether to include examples in the prompt **before** you start. These
   examples may let the model match a pattern instead of using the algorithm under
@@ -15,8 +32,8 @@ fails representative variations, stop rather than studying a task it cannot solv
 - Vary phrasing, format, and token choices. What usually matters: whether the
   answer follows a space, whether it is a single token under this tokenizer, and
   whether every possible answer begins with a different token.
-- Record the working prompt verbatim, the accuracy over a reasonable sample, and
-  which variations failed.
+- Record every candidate prompt verbatim, its evaluation result, which prompt was
+  selected, and the selected prompt's accuracy over a reasonable sample.
 
 ## What systematic errors does it make?
 
@@ -32,8 +49,9 @@ from one that fails whenever two operands have the same value.
   different accuracy in different positions, that constrains where the mechanism
   can be.
 - **Off-format outputs are a prompt problem.** Go fix the prompt.
-- Record a table of examples with the concrete input, actual output, expected
-  output, and type of error. A reader cannot check aggregate rates alone.
+- Preserve every error example with the concrete input, actual output, and
+  expected output. Group the errors and report the short list of recurring
+  patterns. A reader cannot check aggregate rates alone.
 
 ## For multi-token generations, what kind of output is it producing?
 
@@ -56,10 +74,32 @@ define a consistent score.
   identity).
 - One for the output characterization, if the behavior is multi-token.
 
+## Final report
+
+Write `result/behavioral-analysis.html` as a minimal, self-contained interactive
+report. Use [`REPORT_TEMPLATE.html`](REPORT_TEMPLATE.html) as its structure. The
+report must contain only the following:
+
+1. **Prompt examples.** Put this first. Provide one tab for every prompt format
+   that was evaluated. Each tab must show the exact prompt text and four or five
+   complete examples, including the exact input sent to the model and the model's
+   output.
+2. **Prompt results.** Provide one simple table whose rows correspond to the same
+   prompt tabs. Report the number of evaluated examples and the success rate for
+   each prompt.
+3. **Selected prompt.** State only which prompt was selected.
+4. **Error examples.** Provide a minimal browser for moving through every error.
+   Each entry must show the exact input, expected output, and actual model output.
+5. **Error patterns.** End with a short bullet list of the recurring patterns in
+   the selected prompt's errors.
+
+Use direct technical language. Do not add a narrative summary, implementation
+log, causal interpretation, unrelated plots, or additional sections.
+
 ## Handoff
 
-You leave with a working prompt, measured accuracy, an examples table, a summary of
-the errors, and a scoring rule. If you
+You leave with a selected prompt, measured performance, the interactive behavioral
+report, a summary of the errors, and a scoring rule. If you
 will build a causalab task from this behavior, check it against the five task
 quality objectives now rather than after the task is written —
 [`../../implementation/setup-task/instructions/task_quality_objectives.md`](../../implementation/setup-task/instructions/task_quality_objectives.md).

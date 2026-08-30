@@ -6,6 +6,12 @@ steps.
 
 Read this file before entering any step.
 
+These steps are dependent phases. They are not six work streams that can begin
+together. Behavioral analysis is the first gate: complete it before launching
+exploratory experiments, generating hypotheses, or starting any later work. A
+phase may launch its own independent units in parallel, but only while that phase
+is active. The next phase stays blocked until the active phase is complete.
+
 ## The flow
 
 ```
@@ -13,6 +19,8 @@ Read this file before entering any step.
                     │     behavioral analysis      │
                     │   can the model do it, and   │
                     │   how does it fail?          │
+                    │  REQUIRED FIRST; BLOCKS ALL  │
+                    │         LATER PHASES         │
                     └──────────────┬───────────────┘
                                    │
                                    ▼
@@ -66,7 +74,8 @@ Before running an experiment, copy
 State a question that has a definite answer. For example, ask "is the answer
 computed at the final token or carried from the operands?" rather than "how does
 the model do X?" Also record what the answer would change, what you expect from
-each step, when you can skip a step, and what result would stop the project.
+each step, the routing conditions for later phases, and what result would stop
+the project. Behavioral analysis is never optional.
 
 After every step, update the plan and append what happened, how it differed from
 your expectation, and what changes next. Never edit earlier log entries.
@@ -79,6 +88,12 @@ the roadmap. Each unit must produce a result that you can record.
 "Understand the attention pattern" is not a unit. "Ablate each head at the final
 token and record which ones change the output" is. Record null results so they are
 not repeated.
+
+Units within the active phase may run concurrently. For example, behavioral
+analysis may evaluate several prompt formats in separate GPU jobs within one
+experiment. This does not unblock exploratory experimentation: every unit still
+belongs to behavioral analysis, and that phase must finish before the pipeline
+advances.
 
 ## Routing after hypothesis testing
 
