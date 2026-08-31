@@ -168,7 +168,7 @@ def encode(
     )
     input_ids = enc["input_ids"].to(device)
     attention_mask = enc["attention_mask"].to(device)
-    refuse_double_bos(tokenizer, texts, input_ids, attention_mask)
+    refuse_double_bos(tokenizer, input_ids, attention_mask)
     return EncodedBatch(
         texts=tuple(texts),
         input_ids=input_ids,
@@ -182,7 +182,6 @@ def encode(
 
 def refuse_double_bos(
     tokenizer: Any,
-    texts: Sequence[str],
     input_ids: "torch.Tensor",
     attention_mask: "torch.Tensor",
 ) -> None:
