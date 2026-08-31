@@ -379,11 +379,6 @@ dependencies = [
     { name = "dash" },
     { name = "dash-cytoscape" },
     { name = "datasets" },
-    { name = "ipycytoscape" },
-    { name = "ipykernel" },
-    { name = "ipywidgets" },
-    { name = "jupyter-dash" },
-    { name = "jupyterlab" },
     { name = "matplotlib" },
     { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "networkx", version = "3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -410,6 +405,13 @@ dependencies = [
 nnsight = [
     { name = "nnsight" },
 ]
+notebook = [
+    { name = "ipycytoscape" },
+    { name = "ipykernel" },
+    { name = "ipywidgets" },
+    { name = "jupyter-dash" },
+    { name = "jupyterlab" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -434,11 +436,11 @@ requires-dist = [
     { name = "dash" },
     { name = "dash-cytoscape" },
     { name = "datasets", specifier = ">=2.20.0" },
-    { name = "ipycytoscape" },
-    { name = "ipykernel", specifier = ">=7.0.1" },
-    { name = "ipywidgets" },
-    { name = "jupyter-dash" },
-    { name = "jupyterlab" },
+    { name = "ipycytoscape", marker = "extra == 'notebook'" },
+    { name = "ipykernel", marker = "extra == 'notebook'", specifier = ">=7.0.1" },
+    { name = "ipywidgets", marker = "extra == 'notebook'" },
+    { name = "jupyter-dash", marker = "extra == 'notebook'" },
+    { name = "jupyterlab", marker = "extra == 'notebook'" },
     { name = "matplotlib" },
     { name = "networkx" },
     { name = "nnsight", marker = "extra == 'nnsight'", git = "https://github.com/ndif-team/nnsight.git?rev=8c480727" },
@@ -458,7 +460,7 @@ requires-dist = [
     { name = "transformers", specifier = ">=5.16" },
     { name = "umap-learn", specifier = ">=0.5.0" },
 ]
-provides-extras = ["nnsight"]
+provides-extras = ["notebook", "nnsight"]
 
 [package.metadata.requires-dev]
 dev = [

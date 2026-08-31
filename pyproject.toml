@@ -15,9 +15,6 @@ dependencies = [
     "pandas",
     "numpy",
     "scikit-learn",
-    "ipywidgets",
-    "jupyterlab",
-    "ipycytoscape",
     "seaborn",
     # 5.16 is the first release carrying models/qwen3_5_moe (Qwen3.6-35B-A3B's
     # text tower); the hookpoint vocabulary work targets that architecture.
@@ -26,9 +23,7 @@ dependencies = [
     "tensorboard",
     "dash",
     "dash-cytoscape",
-    "jupyter-dash",
     "rich",
-    "ipykernel>=7.0.1",
     "umap-learn>=0.5.0",
     "pot>=0.9.0",
     "openai>=1.50.0",
@@ -78,6 +73,19 @@ module-name = ["causalab"]
 module-root = ""
 
 [project.optional-dependencies]
+# Interactive/Jupyter-only additions: nothing in causalab/, tests/, scripts/ or
+# research/ imports these (dash + dash-cytoscape stay core —
+# causalab.io.plots.causal_graph imports dash at module level). Split out so
+# headless installs (e.g. the silico cluster-job GPU image, where causalab is
+# merged into a network-less job venv) don't carry the jupyter-server stack.
+# Ported from causalab-internal #539 after the intervention-protocol sync.
+notebook = [
+    "ipywidgets",
+    "jupyterlab",
+    "ipycytoscape",
+    "jupyter-dash",
+    "ipykernel>=7.0.1",
+]
 # The nnsight tracing engine (causalab/neural/engines/nnsight_tracing/).
 # Pinned to the 0.8-branch rev the engine was verified against on the real
 # Qwen3.6-35B-A3B (cockpit notes/causalab-nnsight-engine-plan.md §0 decision 1;
