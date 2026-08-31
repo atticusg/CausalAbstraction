@@ -22,6 +22,10 @@ model moving the variable to where the unembedding will read it.
 
 ## The protocol
 
+[`protocols/mcqa_trace_scan.json`](protocols/mcqa_trace_scan.json), inlined
+verbatim — the file is what `causalab run` reads, and
+`tests/demos/test_demos.py` checks these bytes against it.
+
 ```json
 {
   "version": "1",

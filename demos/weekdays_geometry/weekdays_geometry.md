@@ -23,49 +23,110 @@ whole reason to ask about geometry rather than about a direction.
 
 ## The protocol
 
-A workflow demo: the thesis is the chain, and each step's document is linked
-rather than inlined.
+A workflow demo: the thesis is the chain. It is inlined here in full, and its
+five step documents follow it, folded, under
+[*The step documents, verbatim*](#the-step-documents-verbatim) — so that the
+chain stays the thing this section reads as.
+
+[`workflows/weekdays_geometry.json`](workflows/weekdays_geometry.json), inlined
+verbatim — the file is what `causalab run` reads, and
+`tests/demos/test_demos.py` checks these bytes against it.
 
 ```json
 {
   "version": "1",
+  "description": "The weekdays_geometry demo end to end: check the model can do the task, locate the cell that carries the answer, ask how few directions in that cell suffice, and walk the straight line between two answers. Nothing here declares an order -- every edge is a reference to an earlier step's output, and the runner derives the rest.",
   "output_dir": "weekdays_geometry",
   "steps": {
-    "baseline":       {"type": "intervention_protocol", "document": "../protocols/weekdays_baseline.json"},
-    "locate":         {"type": "intervention_protocol", "document": "../protocols/weekdays_locate_scan.json"},
-    "locate_heatmap": {"type": "script", "script": {"module": "causalab.io.plots.workflow_figures"},
-                       "inputs": {"table": {"step": "locate", "file": "iia.json"},
-                                  "plot": "heatmap", "x": "sites.target.layer", "y": "positions.tap"},
-                       "outputs": {"figure": "locate_iia.png", "plotted": {"file": "locate_iia.json"}}},
-    "best":           {"type": "script", "script": {"module": "causalab.workflow.scripts.select"},
-                       "inputs": {"table": {"step": "locate", "file": "iia.json"}, "choose": "max",
-                                  "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}},
-                       "outputs": {"values": {"file": "values.json",
-                                              "keys": {"best_layer": 18, "best_pos": {"index": -1}}}}},
-    "harvest":        {"type": "intervention_protocol", "document": "../protocols/weekdays_harvest.json",
-                       "set": {"sites.target.layer": {"artifact": "best", "key": "best_layer"},
-                               "positions.best":     {"artifact": "best", "key": "best_pos"}}},
-    "pca":            {"type": "script", "script": {"module": "causalab.analysis.fit_pca"},
-                       "inputs": {"acts": {"step": "harvest", "file": "acts.safetensors"}, "k": 32},
-                       "outputs": {"weight": "basis.safetensors",
-                                   "spectrum": {"file": "spectrum.json",
-                                                "columns": {"pc": "int64",
-                                                            "explained_variance": "float64",
-                                                            "explained_variance_ratio": "float64"}}}},
-    "spectrum_curve": {"type": "script", "script": {"module": "causalab.io.plots.workflow_figures"},
-                       "inputs": {"table": {"step": "pca", "file": "spectrum.json"},
-                                  "plot": "lines", "x": "pc", "value": "explained_variance_ratio"},
-                       "outputs": {"figure": "pca_spectrum.png"}},
-    "fit":            {"type": "intervention_protocol", "document": "../protocols/weekdays_das_sweep.json",
-                       "set": {"sites.target.layer": {"artifact": "best", "key": "best_layer"},
-                               "positions.best":     {"artifact": "best", "key": "best_pos"}}},
-    "iia_by_k":       {"type": "script", "script": {"module": "causalab.io.plots.workflow_figures"},
-                       "inputs": {"table": {"step": "fit", "file": "iia.json"},
-                                  "plot": "lines", "x": "featurizers.rot.k", "series": "train.seed"},
-                       "outputs": {"figure": "iia_by_k.png", "plotted": {"file": "iia_by_k.json"}}},
-    "walk":           {"type": "intervention_protocol", "document": "../protocols/weekdays_linear_walk.json",
-                       "set": {"sites.target.layer": {"artifact": "best", "key": "best_layer"},
-                               "positions.best":     {"artifact": "best", "key": "best_pos"}}}
+    "baseline": {
+      "type": "intervention_protocol",
+      "document": "../protocols/weekdays_baseline.json"
+    },
+    "locate": {
+      "type": "intervention_protocol",
+      "document": "../protocols/weekdays_locate_scan.json"
+    },
+    "locate_heatmap": {
+      "type": "script",
+      "script": {"module": "causalab.io.plots.workflow_figures"},
+      "inputs": {
+        "table": {"step": "locate", "file": "iia.json"},
+        "plot": "heatmap",
+        "x": "sites.target.layer",
+        "y": "positions.tap"
+      },
+      "outputs": {"figure": "locate_iia.png", "plotted": {"file": "locate_iia.json"}}
+    },
+    "best": {
+      "type": "script",
+      "script": {"module": "causalab.workflow.scripts.select"},
+      "inputs": {
+        "table": {"step": "locate", "file": "iia.json"},
+        "choose": "max",
+        "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}
+      },
+      "outputs": {
+        "values": {"file": "values.json", "keys": {"best_layer": 18, "best_pos": {"index": -1}}}
+      }
+    },
+    "harvest": {
+      "type": "intervention_protocol",
+      "document": "../protocols/weekdays_harvest.json",
+      "set": {
+        "sites.target.layer": {"artifact": "best", "key": "best_layer"},
+        "positions.best": {"artifact": "best", "key": "best_pos"}
+      }
+    },
+    "pca": {
+      "type": "script",
+      "script": {"module": "causalab.analysis.fit_pca"},
+      "inputs": {"acts": {"step": "harvest", "file": "acts.safetensors"}, "k": 32},
+      "outputs": {
+        "weight": "basis.safetensors",
+        "spectrum": {"file": "spectrum.json",
+                     "columns": {"pc": "int64",
+                                 "explained_variance": "float64",
+                                 "explained_variance_ratio": "float64"}}
+      }
+    },
+    "spectrum_curve": {
+      "type": "script",
+      "script": {"module": "causalab.io.plots.workflow_figures"},
+      "inputs": {
+        "table": {"step": "pca", "file": "spectrum.json"},
+        "plot": "lines",
+        "x": "pc",
+        "value": "explained_variance_ratio"
+      },
+      "outputs": {"figure": "pca_spectrum.png"}
+    },
+    "fit": {
+      "type": "intervention_protocol",
+      "document": "../protocols/weekdays_das_sweep.json",
+      "set": {
+        "sites.target.layer": {"artifact": "best", "key": "best_layer"},
+        "positions.best": {"artifact": "best", "key": "best_pos"}
+      }
+    },
+    "iia_by_k": {
+      "type": "script",
+      "script": {"module": "causalab.io.plots.workflow_figures"},
+      "inputs": {
+        "table": {"step": "fit", "file": "iia.json"},
+        "plot": "lines",
+        "x": "featurizers.rot.k",
+        "series": "train.seed"
+      },
+      "outputs": {"figure": "iia_by_k.png", "plotted": {"file": "iia_by_k.json"}}
+    },
+    "walk": {
+      "type": "intervention_protocol",
+      "document": "../protocols/weekdays_linear_walk.json",
+      "set": {
+        "sites.target.layer": {"artifact": "best", "key": "best_layer"},
+        "positions.best": {"artifact": "best", "key": "best_pos"}
+      }
+    }
   }
 }
 ```
@@ -110,6 +171,391 @@ the DAS document's site and position at them. The DAS document is therefore
 *not* pinned to a layer — the scan chooses it, and if the scan chooses
 differently the fit follows, with no edit anywhere.
 
+### The step documents, verbatim
+
+The table above links each of these; this is what they say. Every block is the
+file byte for byte — the file is what `causalab run` reads, and
+`tests/demos/test_demos.py` fails if a copy here stops matching it.
+
+<details>
+<summary><code>baseline</code> · <code>protocols/weekdays_baseline.json</code> — one un-intervened forward per row (22 lines)</summary>
+
+```json
+{
+  "version": "1",
+  "description": "RQ1 -- can the model solve the task at all? No writes, so no intervened models: one un-intervened forward per row, scored against the row's own answer. A localization result on a task the model cannot do is a measurement of noise, so this document runs first and gates the rest.",
+  "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main", "dtype": "bf16"},
+  "data": {
+    "base": {"dataset": "weekdays/train", "field": "input"}
+  },
+  "sites": {
+    "lm_head": {"component": "lm_head"}
+  },
+  "reads": {
+    "logits": {"site": "lm_head", "pos": -1, "model": "original", "input": "base"}
+  },
+  "metrics": {
+    "accuracy": {"kind": "match",  "of": "logits", "expected": "base_answer_forms", "mode": "first_token"},
+    "said":     {"kind": "top_k",  "of": "logits", "k": 3, "by": "prob"}
+  },
+  "save": [
+    {"value": "accuracy", "model": "original", "input": "base", "file_path": "accuracy.json"},
+    {"value": "said",     "model": "original", "input": "base", "file_path": "said.json"}
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary><code>locate</code> · <code>protocols/weekdays_locate_scan.json</code> — 32 layers × 3 positions, scored by IIA (109 lines)</summary>
+
+```json
+{
+  "version": "1",
+  "description": "RQ2 -- which position carries the result? Interchange the residual stream at a 32-layer x 3-position grid and score IIA. The task's generator samples the counterfactual independently, so entity AND number differ between the two prompts: each input token therefore carries half of what determines the answer, and only the answer slot can carry the whole result. The entity and number columns are the control -- a scan that lights them up is reading something other than the result.",
+  "model": {
+    "key": "meta-llama/Llama-3.1-8B",
+    "revision": "main",
+    "dtype": "bf16"
+  },
+  "data": {
+    "base": {
+      "dataset": "weekdays/train",
+      "field": "input"
+    },
+    "counterfactual": {
+      "dataset": "weekdays/train",
+      "field": "counterfactual_inputs[0]"
+    }
+  },
+  "positions": {
+    "tap": {
+      "sweep": [
+        {
+          "variable": "entity"
+        },
+        {
+          "variable": "number"
+        },
+        {
+          "index": -1
+        }
+      ]
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layer": {
+        "sweep": {
+          "range": [
+            0,
+            32
+          ]
+        }
+      }
+    },
+    "lm_head": {
+      "component": "lm_head"
+    }
+  },
+  "reads": {
+    "v_cf": {
+      "site": "target",
+      "pos": "tap",
+      "model": "original",
+      "input": "counterfactual"
+    },
+    "logits": {
+      "site": "lm_head",
+      "pos": -1,
+      "model": "patched",
+      "input": "base"
+    }
+  },
+  "writes": {
+    "patch": {
+      "site": "target",
+      "pos": "tap",
+      "do": {
+        "swap": "v_cf"
+      }
+    }
+  },
+  "intervened_models": {
+    "patched": {
+      "input": "base",
+      "writes": [
+        "patch"
+      ]
+    }
+  },
+  "metrics": {
+    "iia": {
+      "kind": "match",
+      "of": "logits",
+      "expected": "label_forms",
+      "mode": "first_token"
+    },
+    "logit_diff": {
+      "kind": "logit_diff",
+      "of": "logits",
+      "a": "cf_answer",
+      "b": "base_answer"
+    }
+  },
+  "save": [
+    {
+      "value": "iia",
+      "model": "patched",
+      "input": "base",
+      "file_path": "iia.json"
+    },
+    {
+      "value": "logit_diff",
+      "model": "patched",
+      "input": "base",
+      "file_path": "logit_diff.json"
+    }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary><code>harvest</code> · <code>protocols/weekdays_harvest.json</code> — pure reads at the located cell (42 lines)</summary>
+
+```json
+{
+  "version": "1",
+  "description": "RQ3a -- the activations a principal basis is fitted to. Pure reads at the located cell: one un-intervened forward per row, one row per activation. No `reduce`, because a mean has no variance to decompose.",
+  "model": {
+    "key": "meta-llama/Llama-3.1-8B",
+    "revision": "main",
+    "dtype": "bf16"
+  },
+  "data": {
+    "base": {
+      "dataset": "weekdays/train",
+      "field": "input"
+    }
+  },
+  "positions": {
+    "best": {
+      "index": -1
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layer": 18
+    }
+  },
+  "reads": {
+    "acts": {
+      "site": "target",
+      "pos": "best",
+      "model": "original",
+      "input": "base"
+    }
+  },
+  "save": [
+    {
+      "value": "acts",
+      "model": "original",
+      "input": "base",
+      "file_path": "acts.safetensors"
+    }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary><code>fit</code> · <code>protocols/weekdays_das_sweep.json</code> — a trained rotation, over k × seed (49 lines)</summary>
+
+```json
+{
+  "version": "1",
+  "description": "RQ3b -- how few directions carry the variable? Train an orthogonal rotation at the located cell and interchange only its first k coordinates, over k x seed = 9 fits from one harvest. The k axis is the question: the smallest k whose IIA still matches the whole-cell interchange bounds the variable's causal dimensionality.",
+  "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main", "dtype": "bf16"},
+  "data": {
+    "base":           {"dataset": "weekdays/train", "field": "input"},
+    "counterfactual": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
+  },
+  "positions": {
+    "best": {"index": -1}
+  },
+  "sites": {
+    "target":  {"component": "block_output", "layer": 18},
+    "lm_head": {"component": "lm_head"}
+  },
+  "featurizers": {
+    "rot": {"kind": "subspace", "k": {"sweep": [2, 8, 32]}, "parametrization": "cayley"}
+  },
+  "reads": {
+    "v_cf":   {"site": "target",  "pos": "best", "model": "original", "input": "counterfactual", "featurizer": "rot"},
+    "logits": {"site": "lm_head", "pos": -1,     "model": "patched",  "input": "base"}
+  },
+  "writes": {
+    "patch": {"site": "target", "pos": "best", "featurizer": "rot", "do": {"swap": "v_cf"}}
+  },
+  "intervened_models": {
+    "patched": {"input": "base", "writes": ["patch"]}
+  },
+  "metrics": {
+    "iia": {"kind": "match",         "of": "logits", "expected": "label_forms", "mode": "first_token"},
+    "ce":  {"kind": "cross_entropy", "of": "logits", "target": "label"}
+  },
+  "train": {
+    "objective":  [[1.0, "ce"]],
+    "params":     ["rot"],
+    "optimizer":  {"name": "adamw", "lr": 1e-3, "weight_decay": 0.0},
+    "steps":      {"epochs": 10},
+    "batch":      {"pairs": 16},
+    "precision":  {"feature": "fp32", "loss": "fp32"},
+    "eval":       {"every": {"epochs": 1}, "split": "weekdays/test", "metrics": ["iia"]},
+    "early_stop": {"metric": "iia", "patience": 3, "mode": "max"},
+    "seed":       {"sweep": [0, 1, 2]}
+  },
+  "save": [
+    {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.json"},
+    {"value": "ce",  "model": "patched", "input": "base", "file_path": "ce.json"},
+    {"value": "rot", "site": "target", "file_path": "rot.safetensors"}
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary><code>walk</code> · <code>protocols/weekdays_linear_walk.json</code> — <code>lerp</code> from base to counterfactual, α in 11 steps (118 lines)</summary>
+
+```json
+{
+  "version": "1",
+  "description": "RQ4 -- what does the model say from the points between two answers? Interpolate the located cell's activation from the base row's value to the counterfactual row's, alpha in 11 steps, and read the probability mass on each of the seven weekday tokens. alpha=0 is the un-intervened model and alpha=1 is the full interchange of RQ2, so the two endpoints are results this demo already has: the sweep is the straight line between them.",
+  "model": {
+    "key": "meta-llama/Llama-3.1-8B",
+    "revision": "main",
+    "dtype": "bf16"
+  },
+  "data": {
+    "base": {
+      "dataset": "weekdays/train",
+      "field": "input"
+    },
+    "counterfactual": {
+      "dataset": "weekdays/train",
+      "field": "counterfactual_inputs[0]"
+    }
+  },
+  "positions": {
+    "best": {
+      "index": -1
+    }
+  },
+  "sites": {
+    "target": {
+      "component": "block_output",
+      "layer": 18
+    },
+    "lm_head": {
+      "component": "lm_head"
+    }
+  },
+  "reads": {
+    "v_cf": {
+      "site": "target",
+      "pos": "best",
+      "model": "original",
+      "input": "counterfactual"
+    },
+    "logits": {
+      "site": "lm_head",
+      "pos": -1,
+      "model": "walked",
+      "input": "base"
+    }
+  },
+  "writes": {
+    "walk": {
+      "site": "target",
+      "pos": "best",
+      "do": {
+        "lerp": {
+          "op": "v_cf",
+          "alpha": {
+            "sweep": [
+              0.0,
+              0.1,
+              0.2,
+              0.3,
+              0.4,
+              0.5,
+              0.6,
+              0.7,
+              0.8,
+              0.9,
+              1.0
+            ]
+          }
+        }
+      }
+    }
+  },
+  "intervened_models": {
+    "walked": {
+      "input": "base",
+      "writes": [
+        "walk"
+      ]
+    }
+  },
+  "metrics": {
+    "day_probs": {
+      "kind": "class_probs",
+      "of": "logits",
+      "groups": {
+        "Monday": [
+          "Monday"
+        ],
+        "Tuesday": [
+          "Tuesday"
+        ],
+        "Wednesday": [
+          "Wednesday"
+        ],
+        "Thursday": [
+          "Thursday"
+        ],
+        "Friday": [
+          "Friday"
+        ],
+        "Saturday": [
+          "Saturday"
+        ],
+        "Sunday": [
+          "Sunday"
+        ]
+      }
+    }
+  },
+  "save": [
+    {
+      "value": "day_probs",
+      "model": "walked",
+      "input": "base",
+      "file_path": "day_probs.json"
+    }
+  ]
+}
+```
+
+</details>
 ## Run it
 
 ```bash
