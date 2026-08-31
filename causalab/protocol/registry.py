@@ -800,6 +800,25 @@ register_model(
 )
 register_model(
     ModelInfo(
+        # The pretrained sibling of the demo model above — same architecture,
+        # same tokenizer, different weights. 07_cross_model names both, which
+        # is the only reason a second 1B entry exists: a document that reads
+        # one checkpoint and writes another has to size both offline.
+        # Source: the checkpoint's own config.json, revision
+        # 4e20de362430cd3b72f300e6b0f18e50e7166e08.
+        key="meta-llama/Llama-3.2-1B",
+        hidden_size=2048,
+        num_layers=16,
+        num_heads=32,
+        num_kv_heads=8,
+        head_dim=64,
+        intermediate_size=8192,
+        vocab_size=128256,
+        native_dtype="bf16",
+    )
+)
+register_model(
+    ModelInfo(
         key="gpt2",
         hidden_size=768,
         num_layers=12,

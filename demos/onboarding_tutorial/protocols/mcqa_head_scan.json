@@ -1,0 +1,33 @@
+{
+  "version": "1",
+  "description": "Which attention head moves the answer symbol into the answer slot? 06 asks which component; this asks which head of it. The site is attention_probs -- the post-softmax pattern itself -- so a point interchanges one head's whole (query x key) pattern from the counterfactual into the base and asks whether the model then answers the counterfactual's symbol. The pattern must be read at pos 'all': a row of it is a distribution over key positions, and a single query position is not the object an interchange on attention moves. 16 layers x 32 heads over 64 pairs.",
+  "model": {"key": "meta-llama/Llama-3.2-1B-Instruct", "revision": "main", "dtype": "bf16"},
+  "data": {
+    "base":           {"dataset": "mcqa/pairs_n64_s0", "field": "input"},
+    "counterfactual": {"dataset": "mcqa/pairs_n64_s0", "field": "counterfactual_inputs[0]"}
+  },
+  "sites": {
+    "pattern": {"component": "attention_probs",
+                "layer": {"sweep": {"range": [0, 16]}},
+                "head":  {"sweep": {"range": [0, 32]}}},
+    "lm_head": {"component": "lm_head"}
+  },
+  "reads": {
+    "p_cf":   {"site": "pattern", "pos": "all", "model": "original", "input": "counterfactual"},
+    "logits": {"site": "lm_head", "pos": -1,    "model": "patched",  "input": "base"}
+  },
+  "writes": {
+    "patch": {"site": "pattern", "pos": "all", "do": {"swap": "p_cf"}}
+  },
+  "intervened_models": {
+    "patched": {"input": "base", "writes": ["patch"]}
+  },
+  "metrics": {
+    "iia":        {"kind": "match",      "of": "logits", "expected": "cf_answer", "token_form": "space_prefixed"},
+    "logit_diff": {"kind": "logit_diff", "of": "logits", "a": "cf_answer", "b": "base_answer", "token_form": "space_prefixed"}
+  },
+  "save": [
+    {"value": "iia",        "model": "patched", "input": "base", "file_path": "iia.json"},
+    {"value": "logit_diff", "model": "patched", "input": "base", "file_path": "logit_diff.json"}
+  ]
+}

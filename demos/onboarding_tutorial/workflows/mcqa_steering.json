@@ -1,0 +1,52 @@
+{
+  "version": "1",
+  "description": "The 10_steering demo end to end: ablate every layer to find which ones the answer needs, harvest the contrast at the located cell, subtract the means into a direction, and add it back at eleven strengths. The ablation arm and the steering arm share no data edge, so the runner may run them together -- necessity and sufficiency are two independent questions about the same cell.",
+  "output_dir": "mcqa_steering",
+  "steps": {
+    "ablate": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_ablate.json"
+    },
+    "ablation_curve": {
+      "type": "script",
+      "script": {"module": "causalab.io.plots.workflow_figures"},
+      "inputs": {
+        "table": {"step": "ablate", "file": "accuracy.json"},
+        "plot": "lines",
+        "x": "sites.target.layer"
+      },
+      "outputs": {"figure": "ablation.png", "plotted": {"file": "ablation.json"}}
+    },
+    "harvest": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_contrast_harvest.json"
+    },
+    "direction": {
+      "type": "script",
+      "script": {"module": "causalab.analysis.harvest_difference"},
+      "inputs": {
+        "positive": {"step": "harvest", "file": "acts_cf.safetensors"},
+        "negative": {"step": "harvest", "file": "acts_base.safetensors"},
+        "normalize": false
+      },
+      "outputs": {
+        "weight": "direction.safetensors",
+        "stats": {"file": "stats.json", "columns": {"dim": "int64", "value": "float64"}}
+      }
+    },
+    "steer": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_steer.json"
+    },
+    "steer_curve": {
+      "type": "script",
+      "script": {"module": "causalab.io.plots.workflow_figures"},
+      "inputs": {
+        "table": {"step": "steer", "file": "flipped.json"},
+        "plot": "lines",
+        "x": "writes.push.do.add_scaled.alpha"
+      },
+      "outputs": {"figure": "steering.png", "plotted": {"file": "steering.json"}}
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "version": "1",
+  "description": "The 07_cross_model demo end to end: harvest one checkpoint's answer-slot activation, graft it into another checkpoint's forward, and score what comes out. Two protocol steps and one file between them -- the shape a cross-model experiment has to take when a document names exactly one model.",
+  "output_dir": "mcqa_cross_model",
+  "steps": {
+    "source": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_source_harvest.json"
+    },
+    "graft": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_cross_patch.json"
+    }
+  }
+}

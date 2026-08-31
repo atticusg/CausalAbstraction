@@ -1,0 +1,58 @@
+{
+  "version": "1",
+  "description": "The 05_variance_vs_cause demo end to end: harvest the located cell once, fit a principal basis at two widths, and run the same interchange through each. The two apply steps share one document and differ only in the fit they load and the k they declare, which is what makes the pair a controlled comparison rather than two experiments.",
+  "output_dir": "mcqa_pca",
+  "steps": {
+    "harvest": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_harvest.json"
+    },
+    "pca1": {
+      "type": "script",
+      "script": {"module": "causalab.analysis.fit_pca"},
+      "inputs": {"acts": {"step": "harvest", "file": "acts.safetensors"}, "k": 1},
+      "outputs": {
+        "weight": "basis.safetensors",
+        "spectrum": {"file": "spectrum.json",
+                     "columns": {"pc": "int64",
+                                 "explained_variance": "float64",
+                                 "explained_variance_ratio": "float64"}}
+      }
+    },
+    "pca32": {
+      "type": "script",
+      "script": {"module": "causalab.analysis.fit_pca"},
+      "inputs": {"acts": {"step": "harvest", "file": "acts.safetensors"}, "k": 32},
+      "outputs": {
+        "weight": "basis.safetensors",
+        "spectrum": {"file": "spectrum.json",
+                     "columns": {"pc": "int64",
+                                 "explained_variance": "float64",
+                                 "explained_variance_ratio": "float64"}}
+      }
+    },
+    "apply1": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_pca_apply.json"
+    },
+    "apply32": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_pca_apply.json",
+      "set": {
+        "featurizers.pcs.k": 32,
+        "featurizers.pcs.file_path": "pca32/basis.safetensors"
+      }
+    },
+    "spectrum_curve": {
+      "type": "script",
+      "script": {"module": "causalab.io.plots.workflow_figures"},
+      "inputs": {
+        "table": {"step": "pca32", "file": "spectrum.json"},
+        "plot": "lines",
+        "x": "pc",
+        "value": "explained_variance_ratio"
+      },
+      "outputs": {"figure": "pca_spectrum.png"}
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+ "built_by": "causalab.tasks.serialize",
+ "causalab_commit": "190b309967c25c1192c4071abd7a8c4e0309d0a1",
+ "columns": [
+  "answer",
+  "answer_position",
+  "base_answer",
+  "cf_answer",
+  "choice0",
+  "choice1",
+  "color",
+  "counterfactual_inputs",
+  "counterfactual_inputs_variables",
+  "input",
+  "label",
+  "object",
+  "symbol0",
+  "symbol1",
+  "template"
+ ],
+ "digest": "caf58562afbd884a09f974b30926cc87bfe7b144cee31add7a1f60f3dfff227b",
+ "generator": "generate_dataset",
+ "n": 128,
+ "n_rows": 128,
+ "seed": 1,
+ "target_variables": [
+  "answer"
+ ],
+ "task": "MCQA",
+ "task_cfg": {}
+}

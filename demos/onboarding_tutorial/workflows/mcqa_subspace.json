@@ -1,0 +1,25 @@
+{
+  "version": "1",
+  "description": "The 04_subspace demo end to end: fit a rotation per k on the train split, apply each one to the test split, and draw both curves. The apply step's document names fit/rot.safetensors, and that reference is the whole dependency -- nothing here declares an order.",
+  "output_dir": "mcqa_subspace",
+  "steps": {
+    "fit": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_das_fit.json"
+    },
+    "apply": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_das_apply.json"
+    },
+    "test_curve": {
+      "type": "script",
+      "script": {"module": "causalab.io.plots.workflow_figures"},
+      "inputs": {
+        "table": {"step": "apply", "file": "iia.json"},
+        "plot": "lines",
+        "x": "featurizers.rot.k"
+      },
+      "outputs": {"figure": "iia_by_k.png", "plotted": {"file": "iia_by_k.json"}}
+    }
+  }
+}
