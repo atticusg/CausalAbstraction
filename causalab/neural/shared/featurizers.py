@@ -12,7 +12,9 @@ lossy-split behavior and DAS semantics.
 
 ``gate`` is soft during training (``σ(θ/T) ⊙ x``, temperature annealed by
 the train loop) and **hard** in eval (``θ > 0``) — the parity oracle's
-mask mode pins the hard-eval split.
+mask mode pins the hard-eval split. A gate loaded from a fitted ``theta``
+(:meth:`Gate.from_theta`) is that eval-mode object and nothing else, so a
+DBM fit has a held-out *apply* pass in the same shape DAS does.
 
 Everything here is per-position math on ``(..., d)`` tensors; widths come
 from the resolved site, never from the document.
@@ -27,7 +29,8 @@ stay fp32 against a bf16 backbone.
 *local* generator rather than the global RNG, so its starting rotation cannot
 depend on build order or on whether a train loop ran. :func:`build_stack` takes
 the ``seed``; the executor resolves it from ``train.seed`` (0 when the document
-declares no fit). ``gate`` inits to zeros and the rest load from files.
+declares no fit). ``gate`` inits to zeros, or loads a fitted ``theta``; the rest load from
+files.
 """
 
 from __future__ import annotations
@@ -214,6 +217,24 @@ class Gate(Stage):
 
     def slot_params(self) -> dict[str, torch.Tensor]:
         return {"theta": self.theta}
+
+    @classmethod
+    def from_theta(cls, theta: torch.Tensor) -> "Gate":
+        """A gate reconstituted from a fitted ``theta`` (§2.5 ``file_path``).
+
+        The number a DBM fit *reports* is scored through its eval-mode hard
+        split, so an apply document only reproduces the fit if the reloaded
+        stage is the same object a trained gate is after ``stage.eval()``:
+        same ``theta``, same ``θ > 0`` mask. ``theta`` is therefore copied
+        verbatim — no re-init, no thresholding here — and left untrainable,
+        because applying a mask is not resuming a fit (a ``file_path``
+        featurizer may not appear in ``train.params``).
+        """
+        gate = cls(int(theta.numel()))
+        gate.theta = torch.nn.Parameter(
+            theta.detach().clone().reshape(-1), requires_grad=False
+        )
+        return gate
 
 
 @dataclasses.dataclass
@@ -421,6 +442,17 @@ def _build_stage(
             return Standardize(slot("mu"), slot("sigma"))
         if kind == "sae":
             return Sae(slot("enc"), slot("dec"), slot("b_enc"), slot("b_dec"))
+        if kind == "gate":
+            theta = slot("theta")
+            if theta.numel() != width:
+                raise ProtocolError(
+                    "P2",
+                    f"{what}: the fitted gate is {theta.numel()} wide but the "
+                    f"site here is {width} — a mask is a set of coordinates of "
+                    "one activation, so it only applies at the width it was "
+                    "fitted at",
+                )
+            return Gate.from_theta(theta)
         raise ProtocolError(
             "P2", f"featurizer kind {kind!r} cannot be loaded from a file"
         )
