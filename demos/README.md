@@ -66,5 +66,8 @@ document, one campaign, tables you read. A **workflow** if the product is a
 figure, or a value a later step consumes: the figure script and the `select`
 script both read the step record that only a workflow writes. The smallest
 useful workflow is one protocol step plus one script step, which is a legitimate
-shape rather than a workaround — 02 ships exactly that beside its protocol
-([the one-step workflow](onboarding_tutorial/02_trace.md#the-one-step-workflow)).
+shape rather than a workaround — 02 ships exactly that beside its protocol, and
+both 02 and 03 inline the workflow next to the figure it produces
+([02's](onboarding_tutorial/02_trace.md#results) ·
+[03's](onboarding_tutorial/03_localize.md#q1--yes)), so the picture and its
+generation are read together.

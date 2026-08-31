@@ -6,7 +6,7 @@
 | **Method** | interchange intervention at every cell of a 16 × 22 grid, read back as text |
 | **Model** | `meta-llama/Llama-3.2-1B-Instruct` @ `main`, bf16 |
 | **Data** | `mcqa/pair_n1_s0` — **one** pair, `different_symbol` design ([01](01_define.md)) |
-| **Documents** | [`protocols/mcqa_trace_scan.json`](protocols/mcqa_trace_scan.json) · [`workflows/mcqa_trace.json`](workflows/mcqa_trace.json) ([below](#the-one-step-workflow)) |
+| **Documents** | [`protocols/mcqa_trace_scan.json`](protocols/mcqa_trace_scan.json) · [`workflows/mcqa_trace.json`](workflows/mcqa_trace.json) |
 | **Cost** | 352 points × 2 forwards = 704 single-row forwards |
 | **Reproduced** | ✓ 2026-08-31, `pytorch_hooks` on one H100 80GB, digest `0685b0fafc6037ae…` |
 
@@ -181,128 +181,21 @@ difference being patched there.
 
 Run on 2026-08-31, one H100 80GB, reference engine (`pytorch_hooks`), bf16,
 document digest `0685b0fafc6037ae…` as stamped into `mcqa_trace/protocol.json`.
-All 352 points completed. The table below is the whole `flipped.json`, one cell
-per (layer, token index): **1** means the patched model said the
-counterfactual's answer symbol, `" Q"`, instead of the base's `" Z"`.
+All 352 points completed.
 
-```
-  L |  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21
-  0 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
-  1 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
-  2 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
-  3 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
-  4 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
-  5 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
-  6 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
-  7 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
-  8 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
-  9 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
- 10 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
- 11 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
- 12 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
- 13 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
- 14 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1
- 15 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1
-```
+The picture below is the whole run. It needs one thing the protocol above cannot
+give it: a **figure step**. `causalab.io.plots.workflow_figures` reads a table's
+sweep axes from the step record a *workflow* writes, and a bare `causalab run` of
+a protocol writes `protocol.json`, which carries the points but not the axes — so
+`axes_for` returns `()`, `aggregate` collapses all 352 cells into one row, and the
+renderer raises `KeyError: 'sites.target.layer'`.
 
-Two columns are non-zero and the other twenty are zero at every depth. That is
-the whole finding, and it is sharper than the reference figure it replaces:
-**column 16 carries the answer from L0 to L13, column 21 from L14 to L15, and no
-cell is ever ambiguous.** The same grid as a picture is
-[below](#the-one-step-workflow) — a protocol cannot draw its own table, and the
-two-step workflow that can is worth its own section.
-
-### Q1 — yes, from the embedding up
-
-✓ `flipped` at (L0, index 16) is **1.0**. The patched model says `" Q"` at
-probability **0.897**. The two prompts differ exactly at that token, so this is
-the sanity check passing, not a finding: the embedding difference does reach the
-block output.
-
-**Verdict.** Yes.
-
-### Q2 — yes, at the last two layers
-
-✓ `flipped` at (L15, index 21) is **1.0**, `" Q"` at probability **0.848**. The
-unembedding reads position 21, so anything else would have meant the model's own
-answer is not where it writes it. Column 21 is 1 at L14 and L15 and 0 below.
-
-**Verdict.** Yes.
-
-### Q3 — the hop is between L13 and L14, and no layer carries both
-
-**Finding, and it corrects the reference.** The pre-refactor figure this demo
-used to show had one row — L12 — where *both* columns were legible, and the
-prose here read the hop off that overlap. On the document's own pair there is
-**no such row**: the symbol column is 1 for L0–L13 and 0 for L14–L15, the slot
-column is 0 for L0–L13 and 1 for L14–L15, and the two never overlap. The
-transition is a clean partition between **L13 and L14**, two layers later than
-the reference's L12 and with no band where the variable is readable in both
-places at once.
-
-The columns between the two are 0 everywhere, as before: whatever carries the
-symbol across, it is not laid down in the intervening token positions.
-
-That the greedy read-out flips all-or-nothing is what makes the partition clean
-— it is also what a single pair can and cannot tell you, which is why the
-population scan in [03](03_localize.md) sees the same hop as a *gradient* rather
-than a step.
-
-**Verdict.** Between L13 and L14. No layer carries both.
-
-### Q4 — yes, the distractor column is silent
-
-✓ This is the question the reference figure could not answer, because its
-counterfactual changed only one symbol. Running the document answers it:
-`flipped` at `positions.tap.index = 12` — symbol0, the distractor — is **0.0 at
-every one of the 16 layers**, exactly the null the design predicts. Patching the
-wrong symbol never moves the answer; at (L15, 12) the model still says `" Z"` at
-probability 0.853, its base answer.
-
-**Verdict.** 0 at every layer, as predicted. The `different_symbol` design
-buys a distractor column that stays silent.
-
-## Limits
-
-- One pair. The routing pattern is often stable across inputs, but a single
-  trace cannot say so — that is [03](03_localize.md)'s job, and it is why 03 exists.
-- **The protocol on its own cannot render its own figure**, which is why this
-  demo also ships a two-step workflow — see
-  [*The one-step workflow*](#the-one-step-workflow). The figure script
-  (`causalab.io.plots.workflow_figures`) reads a table's sweep axes from the
-  `_step.json` a *workflow step* writes; a bare `causalab run` of a protocol
-  writes `protocol.json` instead, so `axes_for` returns `()` and the renderer
-  collapses all 352 cells into one. Nothing is wrong with either shape: the
-  protocol is the experiment and the workflow is the experiment plus its
-  picture.
-- The grid is `block_output` only. A signal that is present in
-  `attention_output` and cancelled by the MLP is invisible here.
-- There is no embedding row: `embeddings` is a separate, layer-less component,
-  so it is a second one-line document rather than a row of this sweep.
-
-## Next
-
-- **[03 — Locate across the population](03_localize.md)** runs this
-  intervention over all 64 pairs and turns "what did it say" into "how often was
-  it right", which is what makes the L13/L14 hop a claim rather than an anecdote.
-
-## The one-step workflow
-
-Everything above is a **protocol**: one document, one campaign, two tables. That
-is the right shape for the experiment — but it is also why this demo's evidence
-is a pasted grid rather than a picture. `causalab.io.plots.workflow_figures`
-reads a table's sweep axes from the step record a *workflow* writes, and a bare
-`causalab run` of a protocol writes `protocol.json`, which carries the points but
-not the axes. So `axes_for` returns `()`, `aggregate` collapses all 352 cells
-into a single row, and the renderer raises `KeyError: 'sites.target.layer'`.
-
-The fix is not a workaround, it is the other shape: **one protocol step plus one
-script step.** Nothing fans out and nothing is chained, so there is no
-scheduling in it at all — the only reason to write it is that a table and the
-picture of that table are two products of one experiment, and a workflow is what
-records both under one digest.
-
-[`workflows/mcqa_trace.json`](workflows/mcqa_trace.json):
+One protocol step plus one script step fixes that, and it is the other legitimate
+shape rather than a workaround: nothing fans out and nothing is chained, so there
+is no scheduling in it at all — the only reason to write it is that a table and
+the picture of that table are two products of one experiment, recorded under one
+digest. [`workflows/mcqa_trace.json`](workflows/mcqa_trace.json), inlined
+verbatim so `tests/demos/test_demos.py` can hold this copy to the file:
 
 ```json
 {
@@ -332,23 +225,14 @@ records both under one digest.
 }
 ```
 
-Two things about it are worth copying rather than reading past.
-
 **The scan step names the protocol, it does not restate it.** `document` points
-at the same `../protocols/mcqa_trace_scan.json` the rest of this demo runs, so
-the experiment is bit-for-bit the one documented above — its campaign digest is
+at the same `../protocols/mcqa_trace_scan.json` documented above, so the
+experiment is bit-for-bit the one this demo describes — its campaign digest is
 still `0685b0fafc6037ae…`. Adding a figure did not change what runs.
 
 **`plotted` is not optional in spirit.** A `.png` carries no record, so the
 `heatmap` step declares `flipped_grid.json` beside it: the exact rows that were
-drawn, in the same directory, under the same step digest. A figure whose numbers
-are not written down next to it is a binary nobody can date.
-
-```bash
-uv run causalab validate demos/onboarding_tutorial/workflows/mcqa_trace.json \
-    --data-root demos/onboarding_tutorial/data
-# OK: demos/onboarding_tutorial/workflows/mcqa_trace.json — 2 steps, digest 475bad60fedde631…
-```
+drawn, in the same directory, under the same step digest.
 
 ```bash
 uv run causalab explain demos/onboarding_tutorial/workflows/mcqa_trace.json \
@@ -361,29 +245,98 @@ uv run causalab explain demos/onboarding_tutorial/workflows/mcqa_trace.json \
 #   heatmap: script causalab.io.plots.workflow_figures -> flipped_grid.json, flipped_grid.png
 ```
 
-Note the absent `--dtype`: this is a workflow, so the flag is refused and the
-step's own document supplies `bf16` — the same rule as
-[03](03_localize.md#run-it).
-
 ```bash
 uv run causalab run demos/onboarding_tutorial/workflows/mcqa_trace.json \
     --data-root demos/onboarding_tutorial/data \
     --out runs --device cuda
 ```
 
+Note the absent `--dtype`: this is a workflow, so the flag is refused and the
+step's own document supplies `bf16` — the same rule as
+[03](03_localize.md#run-it).
+
 ![Trace grid](figures/02_trace_flipped_grid.png)
 
-*This run: the same 352-point scan as the table in [Results](#results), drawn by
-the workflow's own `heatmap` step from `flipped.json`. Rows are the 22 token
-positions, columns the 16 layers; a bright cell is one where patching made the
-model say the counterfactual's `" Q"`. The two bright runs are index 16 across
-L0–L13 and index 21 across L14–L15 — the same clean partition, and the same
-absence of any overlap row, that the numbers give.*
+*This run: all 352 cells of `flipped.json`, drawn by the workflow's own `heatmap`
+step. Rows are the 22 token positions, columns the 16 layers; a bright cell is
+one where patching made the model say the counterfactual's `" Q"` instead of the
+base's `" Z"`. Look at which rows are bright, and at where each one stops.*
 
-**When to reach for which.** If the product is a number, write the protocol and
-read the table; the pure verbs already tell you the point count and the digest.
-If the product is a figure — or a value some later step consumes, which is
-[03](03_localize.md)'s `select` — write the workflow, because the step record is
-what makes a table plottable and a result addressable. The two are not a
-hierarchy: `mcqa_trace.json` is three lines of scheduling around the document
-that does the work.
+Two of the twenty-two positions are ever non-zero, and the other twenty are zero
+at every depth. That is the whole finding, and it is sharper than the reference
+figure it replaces: **index 16 carries the answer from L0 to L13, index 21 from
+L14 to L15, and no cell is ever ambiguous.**
+
+### Q1 — yes, from the embedding up
+
+✓ `flipped` at (L0, index 16) is **1.0**. The patched model says `" Q"` at
+probability **0.897**. The two prompts differ exactly at that token, so this is
+the sanity check passing, not a finding: the embedding difference does reach the
+block output.
+
+**Verdict.** Yes.
+
+### Q2 — yes, at the last two layers
+
+✓ `flipped` at (L15, index 21) is **1.0**, `" Q"` at probability **0.848**. The
+unembedding reads position 21, so anything else would have meant the model's own
+answer is not where it writes it. Column 21 is 1 at L14 and L15 and 0 below.
+
+**Verdict.** Yes.
+
+### Q3 — the hop is between L13 and L14, and no layer carries both
+
+**Finding, and it corrects the reference.** The pre-refactor figure this demo
+used to show had one row — L12 — where *both* columns were legible, and the
+prose here read the hop off that overlap. On the document's own pair there is
+**no such layer**: index 16 is 1 for L0–L13 and 0 for L14–L15, index 21 is 0 for
+L0–L13 and 1 for L14–L15, and the two never overlap. The
+transition is a clean partition between **L13 and L14**, two layers later than
+the reference's L12 and with no band where the variable is readable in both
+places at once.
+
+The positions between the two are 0 everywhere, as before: whatever carries the
+symbol across, it is not laid down in the intervening token positions.
+
+That the greedy read-out flips all-or-nothing is what makes the partition clean
+— it is also what a single pair can and cannot tell you, which is why the
+population scan in [03](03_localize.md) sees the same hop as a *gradient* rather
+than a step.
+
+**Verdict.** Between L13 and L14. No layer carries both.
+
+### Q4 — yes, the distractor position is silent
+
+✓ This is the question the reference figure could not answer, because its
+counterfactual changed only one symbol. Running the document answers it:
+`flipped` at `positions.tap.index = 12` — symbol0, the distractor — is **0.0 at
+every one of the 16 layers**, exactly the null the design predicts. Patching the
+wrong symbol never moves the answer; at (L15, 12) the model still says `" Z"` at
+probability 0.853, its base answer.
+
+**Verdict.** 0 at every layer, as predicted. The `different_symbol` design
+buys a distractor position that stays silent.
+
+## Limits
+
+- One pair. The routing pattern is often stable across inputs, but a single
+  trace cannot say so — that is [03](03_localize.md)'s job, and it is why 03 exists.
+- **The protocol on its own cannot render its own figure**, which is why this
+  demo also ships a two-step workflow, inlined in [Results](#results). The
+  figure script
+  (`causalab.io.plots.workflow_figures`) reads a table's sweep axes from the
+  `_step.json` a *workflow step* writes; a bare `causalab run` of a protocol
+  writes `protocol.json` instead, so `axes_for` returns `()` and the renderer
+  collapses all 352 cells into one. Nothing is wrong with either shape: the
+  protocol is the experiment and the workflow is the experiment plus its
+  picture.
+- The grid is `block_output` only. A signal that is present in
+  `attention_output` and cancelled by the MLP is invisible here.
+- There is no embedding row: `embeddings` is a separate, layer-less component,
+  so it is a second one-line document rather than a row of this sweep.
+
+## Next
+
+- **[03 — Locate across the population](03_localize.md)** runs this
+  intervention over all 64 pairs and turns "what did it say" into "how often was
+  it right", which is what makes the L13/L14 hop a claim rather than an anecdote.
