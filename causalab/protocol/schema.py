@@ -228,7 +228,7 @@ FEATURIZER_SLOTS: dict[str, tuple[str, ...]] = {
 #: legal on every kind; ``description`` is legal everywhere.
 FEATURIZER_FIELDS: dict[str, frozenset[str]] = {
     "identity": frozenset(),
-    "subspace": frozenset({"k", "parametrization", "init"}),
+    "subspace": frozenset({"k", "parametrization", "init", "seed"}),
     "pca": frozenset({"k"}),
     "sae": frozenset(),
     "standardize": frozenset(),
@@ -632,6 +632,13 @@ class FeaturizerSpec:
     k: Leaf | None = None
     parametrization: Leaf | None = None
     init: Leaf | None = None
+    #: ``subspace`` only: the draw its initial rotation comes from. Absent, it
+    #: is the document's seed (``train.seed``, or 0 with no fit) — so nothing
+    #: about an existing document changes. Authoring it is what makes an
+    #: *untrained* subspace a **random rank-k basis a document can sweep**,
+    #: which is the matched-k control the localization report requires and no
+    #: preset could express.
+    seed: Leaf | None = None
     dtype: Leaf | None = None
     file_path: Leaf | None = None
     entry: Any = None
@@ -1413,6 +1420,13 @@ def _parse_featurizer(raw: Any, path: str) -> FeaturizerSpec:
             "'entry' selects inside a loaded bundle — it needs a file_path",
             path=path,
         )
+    if "seed" in obj and "file_path" in obj:
+        raise ParseError(
+            "P2",
+            "'seed' picks an *initial* rotation; a featurizer loaded from a "
+            "file_path has its weights in the file and draws nothing",
+            path=f"{path}.seed",
+        )
     parametrization = None
     if "parametrization" in obj:
         parametrization = _wrapped(
@@ -1426,6 +1440,9 @@ def _parse_featurizer(raw: Any, path: str) -> FeaturizerSpec:
         parametrization=parametrization,
         init=_wrapped(obj["init"], _scalar_str, f"{path}.init")
         if "init" in obj
+        else None,
+        seed=_wrapped(obj["seed"], _scalar_int, f"{path}.seed")
+        if "seed" in obj
         else None,
         dtype=_wrapped(
             obj["dtype"], lambda v, p: _enum(v, PRECISION_DTYPES, p), f"{path}.dtype"

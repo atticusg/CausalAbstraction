@@ -22,6 +22,22 @@ by mean over examples. ``choose`` then picks the best group and ``emit`` reads
 that group's columns. The exact rule, including when a table is ranked *as
 written*, is :func:`._sidecar.aggregate`.
 
+``choose`` is ``"max"``, ``"min"`` or ``"knee"``. The last is for a saturating
+curve — IIA against subspace rank — where the highest score is *not* the answer:
+it takes the **cheapest** group within ``tolerance`` (default 0.02) of the best,
+ordered by a cost axis:
+
+```json
+"inputs": {
+  "table": {"step": "fit", "file": "iia.json"},
+  "choose": "knee", "order": "featurizers.rot.k", "tolerance": 0.02,
+  "emit": {"best_k": "featurizers.rot.k"}
+}
+```
+
+``order`` defaults to the run's sole numeric sweep axis and is required when
+there is more than one. See :func:`_knee`.
+
 Two behaviours v1 had as spec rules and this has as script behaviour, on
 purpose: the axes come from published data rather than from the document model,
 and the as-written case is decided by the data rather than by the producing
@@ -39,7 +55,12 @@ from causalab.io.step_io import StepError, frame, write_values
 
 __all__ = ["main"]
 
-CHOICES = ("max", "min")
+CHOICES = ("max", "min", "knee")
+
+#: Default half-width of the "as good as the best" band for ``choose: "knee"``.
+#: 0.02 of an IIA-style score: a two-point difference is inside the run-to-run
+#: noise of a fit, so it is not evidence that a larger k bought anything.
+DEFAULT_KNEE_TOLERANCE = 0.02
 
 
 def _decode(value: Any) -> Any:
@@ -54,6 +75,69 @@ def _decode(value: Any) -> Any:
     if hasattr(value, "item"):
         return value.item()
     return value
+
+
+def _knee(
+    grouped: Any,
+    axes: tuple[str, ...],
+    value_column: str,
+    *,
+    order: Any,
+    tolerance: Any,
+) -> Any:
+    """The index of the *cheapest* group that is as good as the best one.
+
+    ``max`` answers "which cell scored highest", which is not the question a
+    rank sweep asks. The causal protocol's own instruction is to *"choose rank
+    from the IIA-versus-k curve, not the highest score"*, and on a saturated
+    curve `idxmax` returns whichever near-tied group the table happens to list
+    first — one A3B run got k=2 that way, the right answer by luck.
+
+    So: among the groups within ``tolerance`` of the best value, take the one
+    with the smallest ``order`` coordinate. ``order`` defaults to the run's
+    sole numeric sweep axis, and is **required** when there is more than one —
+    "the knee" is meaningless until someone says which axis is the cost.
+
+    Ranks upward like ``max``, because a knee is a saturation point: the curve
+    this exists for climbs with k and then flattens. A metric where lower is
+    better has no knee in this sense — use ``min``.
+    """
+    from pandas.api.types import is_numeric_dtype
+
+    numeric = [
+        axis
+        for axis in axes
+        if axis in grouped.columns and is_numeric_dtype(grouped[axis])
+    ]
+    if order is None:
+        if len(numeric) != 1:
+            raise StepError(
+                "'knee' needs to know which axis is the cost: give 'order' "
+                f"(the run's numeric axes are {numeric or 'none'})"
+            )
+        order = numeric[0]
+    order = str(order)
+    if order not in grouped.columns:
+        raise StepError(
+            f"'order' column {order!r} is not in the aggregated table "
+            f"({sorted(map(str, grouped.columns))}) — the producing run "
+            "carried no such axis"
+        )
+    if not is_numeric_dtype(grouped[order]):
+        raise StepError(
+            f"'order' column {order!r} is not numeric, so 'smallest' has no "
+            "meaning — a knee needs a cost axis that can be ordered"
+        )
+    try:
+        band = float(tolerance)
+    except (TypeError, ValueError):
+        raise StepError(f"'tolerance' is a number, got {tolerance!r}") from None
+    if band < 0:
+        raise StepError(f"'tolerance' is not negative, got {band}")
+
+    best = grouped[value_column].max()
+    within = grouped[grouped[value_column] >= best - band]
+    return within[order].idxmin()
 
 
 def main(inputs: Mapping[str, Any], outputs: Mapping[str, Path]) -> None:
@@ -75,13 +159,22 @@ def main(inputs: Mapping[str, Any], outputs: Mapping[str, Path]) -> None:
             f"(has {sorted(map(str, df.columns))})"
         )
 
-    grouped, _ = aggregate(df, table_path, value_column)
+    grouped, axes = aggregate(df, table_path, value_column)
 
-    index = (
-        grouped[value_column].idxmax()
-        if choose == "max"
-        else grouped[value_column].idxmin()
-    )
+    if choose == "knee":
+        index = _knee(
+            grouped,
+            axes,
+            value_column,
+            order=inputs.get("order"),
+            tolerance=inputs.get("tolerance", DEFAULT_KNEE_TOLERANCE),
+        )
+    else:
+        index = (
+            grouped[value_column].idxmax()
+            if choose == "max"
+            else grouped[value_column].idxmin()
+        )
     # single-row FRAME indexing: a row Series would upcast mixed dtypes and
     # emit integer coordinates as floats, which a consuming document's strict
     # parse then refuses

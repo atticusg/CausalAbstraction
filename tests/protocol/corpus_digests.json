@@ -141,5 +141,19 @@
     "points": [
       "d5cc4079fe9d77d67d68cb22fbd6dffabdbc32fe88f1d5af735add5b60ba20b3"
     ]
+  },
+  "13_random_subspace_control_im.json": {
+    "document": "439a47450d346f5db06b5569e1dbd6eb39a7f7a319174d95db01a4af81051d1e",
+    "points": [
+      "edfa87785bff26f6ce8b7d71b62695936d4514625c5b0024ad0bc94d3bfc151a",
+      "32a1a4a269dcfadd2184c96fbf8b3be7a6a50cbc01fbc5ff052950f39f029a24",
+      "be6d08d5c7dcca8852f2ec4a8e6c22684ec15412ebe871243894ec6ab2b38a98"
+    ]
+  },
+  "14_multi_position_patch_im.json": {
+    "document": "36d06932e534624f99640d3e9bdf34cec5a3a4f7b1909f7408141028a7add12c",
+    "points": [
+      "36d06932e534624f99640d3e9bdf34cec5a3a4f7b1909f7408141028a7add12c"
+    ]
   }
 }
