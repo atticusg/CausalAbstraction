@@ -17,16 +17,10 @@ from __future__ import annotations
 
 import pytest
 
-from causalab.neural.pipeline import LMPipeline
-from tests._helpers.tiny import TINY_RANDOM_MODEL_NAME
+from tests._helpers.pipeline_shim import PipelineShim
 
 
 @pytest.fixture(scope="session")
-def he_tiny_pipeline() -> LMPipeline:
+def he_tiny_pipeline() -> PipelineShim:
     """Tiny Llama stub wrapped in an LMPipeline (CPU, float32)."""
-    return LMPipeline(
-        TINY_RANDOM_MODEL_NAME,
-        max_new_tokens=1,
-        device="cpu",
-        dtype="float32",
-    )
+    return PipelineShim("hf-internal-testing/tiny-random-LlamaForCausalLM")

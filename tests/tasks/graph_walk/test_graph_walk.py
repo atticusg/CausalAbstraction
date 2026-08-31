@@ -557,11 +557,10 @@ def _tiny_pipeline():
     duplicated here so this consolidated test file is self-contained
     (no cross-conftest fixture-sharing assumptions).
     """
-    from causalab.neural.pipeline import LMPipeline
+    from tests._helpers.pipeline_shim import PipelineShim
+    from tests._helpers.tiny import TINY_RANDOM_MODEL_NAME
 
-    from tests._helpers.tiny import tiny_random_model
-
-    return LMPipeline(tiny_random_model(), max_new_tokens=1, padding_side="left")
+    return PipelineShim(TINY_RANDOM_MODEL_NAME)
 
 
 class TestGraphWalkTokenPositionsProperty:

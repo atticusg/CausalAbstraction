@@ -20,7 +20,6 @@ import os
 from causalab.io.plots import (
     GridCell,
     cell_grid_dimensions,
-    cells_from_site_grid,
     get_selected_heads,
     plot_attention_head_heatmap,
     plot_attention_head_mask,
@@ -55,120 +54,6 @@ def _pos_cell(layer: int, position: str, indices=None, n_features=None) -> GridC
         indices=indices,
         n_features=n_features,
     )
-
-
-# ---------------------- Tests for cells_from_site_grid ---------------------- #
-
-
-class _StubPos:
-    """Minimal PositionResolver with an id (what the grid builders bind)."""
-
-    def __init__(self, name: str) -> None:
-        self.id = name
-
-    def index(self, inp):  # pragma: no cover - never resolved in these tests
-        return [0]
-
-
-def _residual_grid(layers, position_names):
-    """A hand-built per-unit residual SiteGrid (no model/pipeline needed)."""
-    from causalab.neural.featurized_site import FeaturizedSite
-    from causalab.neural.site import Site
-    from causalab.neural.specs import SiteSpec
-
-    grid = {}
-    for layer in layers:
-        for name in position_names:
-            spec = SiteSpec(
-                fsite=FeaturizedSite(Site("block_output", layer)),
-                positions=_StubPos(name),
-                key=f"residual_stream.L{layer}.block_output.{name}",
-                width=8,
-            )
-            grid[(layer, name)] = [[spec]]
-    return grid
-
-
-def _head_grid(layers, heads, position_name="last"):
-    from causalab.neural.featurized_site import FeaturizedSite
-    from causalab.neural.head_view import HeadSite
-    from causalab.neural.specs import SiteSpec
-
-    grid = {}
-    for layer in layers:
-        for head in heads:
-            spec = SiteSpec(
-                fsite=FeaturizedSite(
-                    HeadSite(kind="attention_value", layer=layer, head=head)
-                ),
-                positions=_StubPos(position_name),
-                key=f"attention_head.L{layer}.H{head}.{position_name}",
-                width=4,
-            )
-            grid[(layer, head)] = [[spec]]
-    return grid
-
-
-class TestCellsFromSiteGrid:
-    def test_joins_structure_from_specs_never_from_keys(self):
-        """(component, layer, position) come from the specs; the opaque
-        feature_indices keys are matched exactly, never parsed."""
-        grid = _residual_grid([0, 1], ["last"])
-        feature_indices = {
-            "residual_stream.L0.block_output.last": [1, 2],
-            "residual_stream.L1.block_output.last": None,
-        }
-        component, cells = cells_from_site_grid(grid, feature_indices)
-        assert component == "residual_stream"
-        by_layer = {c.layer: c for c in cells}
-        assert set(by_layer) == {0, 1}
-        assert by_layer[0].position == "last"
-        assert by_layer[0].indices == (1, 2)
-        assert by_layer[1].indices is None
-
-    def test_skips_keys_absent_from_indices(self):
-        grid = _residual_grid([0, 1], ["last"])
-        component, cells = cells_from_site_grid(
-            grid, {"residual_stream.L1.block_output.last": []}
-        )
-        assert component == "residual_stream"
-        assert [c.layer for c in cells] == [1]
-        assert cells[0].indices == ()
-
-    def test_head_grid_carries_heads(self):
-        grid = _head_grid([0], [0, 1])
-        component, cells = cells_from_site_grid(
-            grid,
-            {
-                "attention_head.L0.H0.last": None,
-                "attention_head.L0.H1.last": [],
-            },
-        )
-        assert component == "attention_head"
-        assert {(c.layer, c.head) for c in cells} == {(0, 0), (0, 1)}
-
-    def test_shared_int_n_features(self):
-        grid = _residual_grid([0], ["last"])
-        _, cells = cells_from_site_grid(
-            grid, {"residual_stream.L0.block_output.last": None}, 16
-        )
-        assert cells[0].n_features == 16
-
-    def test_fused_grid_key_recovers_structure_from_specs(self):
-        """A one_target_all_units-style grid keys on ("all",) — structure must
-        still come out per spec (the legacy path parsed unit ids here)."""
-        grid = _residual_grid([0, 1], ["last"])
-        fused = {("all",): [[groups[0][0] for groups in grid.values()]]}
-        feature_indices = {
-            "residual_stream.L0.block_output.last": None,
-            "residual_stream.L1.block_output.last": [3],
-        }
-        component, cells = cells_from_site_grid(fused, feature_indices)
-        assert component == "residual_stream"
-        assert {c.layer for c in cells} == {0, 1}
-
-
-# ---------------------- Tests for get_selected_heads ---------------------- #
 
 
 class TestGetSelectedHeads:

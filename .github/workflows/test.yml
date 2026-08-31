@@ -81,7 +81,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Run tests
-        run: uv run pytest -v -m "not gpu and not slow" --junit-xml=pytest.xml
+        run: uv run pytest -v -m "not golden" --junit-xml=pytest.xml
 
       - name: Publish test results
         if: always()

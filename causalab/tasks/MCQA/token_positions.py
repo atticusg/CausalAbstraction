@@ -6,7 +6,7 @@ such as answer symbols, periods, and the last token.
 
 from typing import Any, Callable
 
-from causalab.neural.pipeline import LMPipeline
+from causalab.neural.token_positions import LMPipeline
 from causalab.neural.token_positions import (
     TokenPosition,
     build_token_positions,

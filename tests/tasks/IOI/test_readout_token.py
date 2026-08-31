@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from causalab.methods.metric import single_token_id
+from causalab.neural.shared.metrics import column_token_id
 from causalab.tasks.IOI.causal_models import NAMES
 
 pytestmark = pytest.mark.numerical_unit
@@ -29,7 +29,7 @@ def test_single_token_id_returns_emitted_leading_space_id(gpt2_pipeline) -> None
     for name in NAMES:
         emitted = tokenizer.encode(" " + name.strip(), add_special_tokens=False)
         assert len(emitted) == 1, f"{name!r} is not single-token with a leading space"
-        resolved = single_token_id(gpt2_pipeline, name)
+        resolved = column_token_id(gpt2_pipeline.tokenizer, name)
         if resolved != emitted[0]:
             mismatched.append((name, resolved, emitted[0]))
 

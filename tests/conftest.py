@@ -9,13 +9,6 @@ import numpy as np
 
 from causalab.causal.causal_model import CausalModel
 from causalab.causal.trace import Mechanism, input_var
-from causalab.neural.pipeline import LMPipeline
-from causalab.neural.token_positions import TokenPosition
-
-# Re-export so tests can do "from tests.conftest import assert_runner_completed".
-from tests.end_to_end._helpers.runner_completion import (  # noqa: F401
-    assert_runner_completed,
-)
 
 # Tier markers recognised by the warn-mode collection hook below. Mirrors the
 # tier taxonomy in docs/TESTS.md. Tests must declare exactly one of
@@ -24,67 +17,6 @@ from tests.end_to_end._helpers.runner_completion import (  # noqa: F401
 # default tier (`unit`) is the most common; tag with
 # `pytestmark = pytest.mark.unit` at module scope.
 _TIER_MARKERS = frozenset({"smoke", "numerical_unit", "golden", "property", "unit"})
-
-
-# --- ``model: tiny-random`` smoke-only guardrail ----------------------------
-#
-# ``causalab/configs/model/tiny-random.yaml`` carries ``is_smoke_only: true``
-# and a fat-finger warning header. The hook below is the pytest-side runtime
-# half of that guardrail: it wraps :func:`causalab.io.configs.load_runner_config`
-# in :func:`pytest_configure` (i.e. *before* any test module imports the
-# function by name) so that any test which composes a cfg with
-# ``model.is_smoke_only`` set must also carry the ``smoke`` pytest marker.
-#
-# (``chat-coherent`` = Qwen3-4B-Instruct is the *trained* stub used by the
-# golden tier — it is NOT flagged ``is_smoke_only`` because its outputs are
-# meaningful, not random noise.)
-#
-# Why ``pytest_configure`` and not an autouse fixture? Test modules
-# typically do ``from causalab.io.configs import load_runner_config``,
-# which binds the function-name *at import time*. An autouse fixture that
-# rebinds the module attribute after import is a no-op for those callers.
-# Patching in ``pytest_configure`` runs before any test-module collection /
-# import, so subsequent ``from`` imports pick up the wrapped function.
-#
-# This is pytest-only — it does not protect against fat-fingering
-# ``model=tiny-random`` in a real Hydra CLI invocation. The yaml-header
-# banner plus the random-init weights producing visibly nonsense numbers
-# handle that path.
-
-_CURRENT_TEST_IS_SMOKE: list[bool] = [False]
-
-
-def pytest_configure(config):
-    """Install the ``is_smoke_only`` guardrail before any test imports."""
-    from causalab.io import configs as _configs_module
-
-    if getattr(_configs_module, "_load_runner_config_guardrail_installed", False):
-        return  # idempotent; already patched (e.g. nested pytest invocation)
-
-    real_loader = _configs_module.load_runner_config
-
-    def _guarded_loader(*args, **kwargs):
-        cfg = real_loader(*args, **kwargs)
-        model = getattr(cfg, "model", None)
-        if model is not None and bool(getattr(model, "is_smoke_only", False)):
-            if not _CURRENT_TEST_IS_SMOKE[0]:
-                raise AssertionError(
-                    f"Composed a model config flagged ``is_smoke_only: true`` "
-                    f"(model.id={getattr(model, 'id', '?')!r}) outside the "
-                    f"smoke tier. ``tiny-random`` weights are random-init and "
-                    f"produce nonsense numbers — pick a real model config "
-                    f"(e.g. ``chat-coherent``) or tag "
-                    f"this test with @pytest.mark.smoke."
-                )
-        return cfg
-
-    _configs_module.load_runner_config = _guarded_loader
-    _configs_module._load_runner_config_guardrail_installed = True
-
-
-def pytest_runtest_setup(item):
-    """Track whether the currently-running test is in the smoke tier."""
-    _CURRENT_TEST_IS_SMOKE[0] = "smoke" in {m.name for m in item.iter_markers()}
 
 
 @pytest.hookimpl(wrapper=True)
@@ -104,7 +36,6 @@ def pytest_runtest_teardown(item, nextitem):
     fixtures are reclaimed at module boundaries too. Gated on the ``golden``
     marker (the sole GPU tier) so CPU tiers don't pay for per-test GC.
     """
-    _CURRENT_TEST_IS_SMOKE[0] = False
     try:
         return (yield)
     finally:
@@ -376,63 +307,3 @@ def mcqa_counterfactual_datasets(mcqa_causal_model, seed_everything):
         ]
 
     return datasets
-
-
-@pytest.fixture(scope="function")
-def mock_tiny_lm():
-    """Return an :class:`LMPipeline` backed by the tiny-random Llama stub.
-
-    Tests on this fixture want a placeholder pipeline that exercises real
-    HF shapes / dtypes / tokenizer behaviour without the cost of loading a
-    production-sized model. The underlying model is cached in-process via
-    :func:`tests._helpers.tiny.tiny_random_model`, so repeated fixture
-    construction is effectively free after the first pytest session warm-up.
-    """
-    from tests._helpers.tiny import TINY_RANDOM_MODEL_NAME
-
-    return LMPipeline(model_or_name=TINY_RANDOM_MODEL_NAME, max_new_tokens=3)
-
-
-@pytest.fixture(scope="function")
-def token_positions(mock_tiny_lm, mcqa_causal_model):
-    """Create token position identifiers for the MCQA task."""
-
-    # Define a function to get the last token
-    def get_last_token(prompt):
-        token_ids = mock_tiny_lm.load(prompt)["input_ids"][0]
-        return [len(token_ids) - 1]
-
-    # Define a function to get the position of the answer symbol
-    def get_answer_symbol_position(prompt):
-        # Parse the prompt to get the causal input
-        causal_input = mcqa_causal_model.input_loader(prompt)
-
-        # Get the answer pointer
-        output = mcqa_causal_model.new_trace(causal_input)
-        answer_position = output["answer_pointer"]
-
-        # Get the symbol at that position
-        answer_symbol = causal_input[f"symbol{answer_position}"]
-
-        # Find the token position of this symbol
-        mock_tiny_lm.load(prompt)["input_ids"][0]
-        text = prompt.split("\n")
-
-        for i, line in enumerate(text[1:]):  # Skip the question line
-            if line.startswith(answer_symbol):
-                # Found the line with the answer
-                # Count tokens up to this point
-                substring = "\n".join(text[: i + 1]) + "\n" + answer_symbol
-                position_tokens = mock_tiny_lm.load(substring)["input_ids"][0]
-                return [
-                    len(position_tokens) - 1
-                ]  # Return the last token position (the symbol)
-
-        # Fallback to last token if the symbol isn't found
-        return get_last_token(prompt)
-
-    # Create TokenPosition objects
-    return [
-        TokenPosition(get_last_token, mock_tiny_lm, id="last_token"),
-        TokenPosition(get_answer_symbol_position, mock_tiny_lm, id="answer_symbol"),
-    ]

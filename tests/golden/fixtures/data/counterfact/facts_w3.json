@@ -1,0 +1,337 @@
+[
+ {
+  "input": "Mir Damad is affiliated with the religion of",
+  "subject": "Mir Damad",
+  "answer": " Islam"
+ },
+ {
+  "input": "Killer Mike is native to",
+  "subject": "Killer Mike",
+  "answer": " Atlanta"
+ },
+ {
+  "input": "Namor is affiliated with the",
+  "subject": "Namor",
+  "answer": " Avengers"
+ },
+ {
+  "input": "Alexa Internet's owner,",
+  "subject": "Alexa Internet",
+  "answer": " Amazon"
+ },
+ {
+  "input": "The location of 2000 Australian Open is in the heart of",
+  "subject": "2000 Australian Open",
+  "answer": " Melbourne"
+ },
+ {
+  "input": "2005 Australian Open is located in",
+  "subject": "2005 Australian Open",
+  "answer": " Melbourne"
+ },
+ {
+  "input": "Josetsu, who has a citizenship of",
+  "subject": "Josetsu",
+  "answer": " Japan"
+ },
+ {
+  "input": "Kindle Fire, created by",
+  "subject": "Kindle Fire",
+  "answer": " Amazon"
+ },
+ {
+  "input": "Active Server Pages, a product developed by",
+  "subject": "Active Server Pages",
+  "answer": " Microsoft"
+ },
+ {
+  "input": "Chromecast is developed by",
+  "subject": "Chromecast",
+  "answer": " Google"
+ },
+ {
+  "input": "David Weigel's profession is a bit like that of a",
+  "subject": "David Weigel",
+  "answer": " journalist"
+ },
+ {
+  "input": "Saikano was created in the country of",
+  "subject": "Saikano",
+  "answer": " Japan"
+ },
+ {
+  "input": "IJmuiden, in the",
+  "subject": "IJmuiden",
+  "answer": " Netherlands"
+ },
+ {
+  "input": "iPod Mini is developed by",
+  "subject": "iPod Mini",
+  "answer": " Apple"
+ },
+ {
+  "input": "Jon Postel's domain of activity is the world of the",
+  "subject": "Jon Postel",
+  "answer": " Internet"
+ },
+ {
+  "input": "Florida Championship Wrestling is owned by the",
+  "subject": "Florida Championship Wrestling",
+  "answer": " WWE"
+ },
+ {
+  "input": "Selim I is affiliated with the religion of",
+  "subject": "Selim I",
+  "answer": " Islam"
+ },
+ {
+  "input": "Newton Moore worked in the office of the mayor of",
+  "subject": "Newton Moore",
+  "answer": " London"
+ },
+ {
+  "input": "Scott Forstall is employed by",
+  "subject": "Scott Forstall",
+  "answer": " Apple"
+ },
+ {
+  "input": "The original language of Voodoo Lounge is a blend of",
+  "subject": "Voodoo Lounge",
+  "answer": " English"
+ },
+ {
+  "input": "The original language of Il Posto is a mixture of",
+  "subject": "Il Posto",
+  "answer": " Italian"
+ },
+ {
+  "input": "Amiibo is developed by",
+  "subject": "Amiibo",
+  "answer": " Nintendo"
+ },
+ {
+  "input": "The location of Harvard Law School is in",
+  "subject": "Harvard Law School",
+  "answer": " Cambridge"
+ },
+ {
+  "input": "Greg Dyke works for the",
+  "subject": "Greg Dyke",
+  "answer": " BBC"
+ },
+ {
+  "input": "Irish Free State belongs to the continent of",
+  "subject": "Irish Free State",
+  "answer": " Europe"
+ },
+ {
+  "input": "The Home Depot formed in 1978 and is headquartered in",
+  "subject": "The Home Depot",
+  "answer": " Atlanta"
+ },
+ {
+  "input": "MacBook Air is developed by",
+  "subject": "MacBook Air",
+  "answer": " Apple"
+ },
+ {
+  "input": "iPod Classic is developed by",
+  "subject": "iPod Classic",
+  "answer": " Apple"
+ },
+ {
+  "input": "Jon Sopel is employed by the",
+  "subject": "Jon Sopel",
+  "answer": " BBC"
+ },
+ {
+  "input": "In Papua New Guinea, the language spoken is a mixture of",
+  "subject": "Papua New Guinea",
+  "answer": " English"
+ },
+ {
+  "input": "2004 Australian Open is located in",
+  "subject": "2004 Australian Open",
+  "answer": " Melbourne"
+ },
+ {
+  "input": "Spanish East Indies's capital,",
+  "subject": "Spanish East Indies",
+  "answer": " Manila"
+ },
+ {
+  "input": "Halle Berry, who works as a",
+  "subject": "Halle Berry",
+  "answer": " model"
+ },
+ {
+  "input": "The Leftovers was released on",
+  "subject": "The Leftovers",
+  "answer": " HBO"
+ },
+ {
+  "input": "Steve Ballmer is employed by",
+  "subject": "Steve Ballmer",
+  "answer": " Microsoft"
+ },
+ {
+  "input": "Adam Schefter, of",
+  "subject": "Adam Schefter",
+  "answer": " ESPN"
+ },
+ {
+  "input": "Barry Bonds professionally plays the sport of",
+  "subject": "Barry Bonds",
+  "answer": " baseball"
+ },
+ {
+  "input": "Pennzoil's headquarters are in",
+  "subject": "Pennzoil",
+  "answer": " Houston"
+ },
+ {
+  "input": "George Newnes worked in the city of",
+  "subject": "George Newnes",
+  "answer": " London"
+ },
+ {
+  "input": "KeyArena, from the",
+  "subject": "KeyArena",
+  "answer": " Seattle"
+ },
+ {
+  "input": "statistical model works in the field of",
+  "subject": "statistical model",
+  "answer": " statistics"
+ },
+ {
+  "input": "2002 Australian Open is located in",
+  "subject": "2002 Australian Open",
+  "answer": " Melbourne"
+ },
+ {
+  "input": "Charles Babbage works in the field of",
+  "subject": "Charles Babbage",
+  "answer": " mathematics"
+ },
+ {
+  "input": "Tim Tebow plays in the position of",
+  "subject": "Tim Tebow",
+  "answer": " quarterback"
+ },
+ {
+  "input": "United Launch Alliance, by contrast, is a joint venture between",
+  "subject": "United Launch Alliance",
+  "answer": " Boeing"
+ },
+ {
+  "input": "Second Polish Republic's capital city is",
+  "subject": "Second Polish Republic",
+  "answer": " Warsaw"
+ },
+ {
+  "input": "The native language of Pierre Alcover is",
+  "subject": "Pierre Alcover",
+  "answer": " French"
+ },
+ {
+  "input": "Lexus RX, developed by",
+  "subject": "Lexus RX",
+  "answer": " Toyota"
+ },
+ {
+  "input": "The original language of The Voice Israel is",
+  "subject": "The Voice Israel",
+  "answer": " Hebrew"
+ },
+ {
+  "input": "Toulouse belongs to the continent of",
+  "subject": "Toulouse",
+  "answer": " Europe"
+ },
+ {
+  "input": "In Raseborg, the language spoken is",
+  "subject": "Raseborg",
+  "answer": " Swedish"
+ },
+ {
+  "input": "Jackie Robinson professionally plays the sport of",
+  "subject": "Jackie Robinson",
+  "answer": " baseball"
+ },
+ {
+  "input": "Italian Chemical Society's expertise is in the field of organic",
+  "subject": "Italian Chemical Society",
+  "answer": " chemistry"
+ },
+ {
+  "input": "SunTrust Banks's headquarters are in",
+  "subject": "SunTrust Banks",
+  "answer": " Atlanta"
+ },
+ {
+  "input": "Acura RL is developed by",
+  "subject": "Acura RL",
+  "answer": " Honda"
+ },
+ {
+  "input": "Canadian Cancer Society is headquartered in",
+  "subject": "Canadian Cancer Society",
+  "answer": " Toronto"
+ },
+ {
+  "input": "Wii U is developed by",
+  "subject": "Wii U",
+  "answer": " Nintendo"
+ },
+ {
+  "input": "Lawrence Taylor professionally plays the sport of",
+  "subject": "Lawrence Taylor",
+  "answer": " football"
+ },
+ {
+  "input": "The genre played by RuneScape is a",
+  "subject": "RuneScape",
+  "answer": " fantasy"
+ },
+ {
+  "input": "Count Basie performs on the",
+  "subject": "Count Basie",
+  "answer": " piano"
+ },
+ {
+  "input": "Henri Herz died at the age of 93 in",
+  "subject": "Henri Herz",
+  "answer": " Paris"
+ },
+ {
+  "input": "The Good Wife debuted on",
+  "subject": "The Good Wife",
+  "answer": " CBS"
+ },
+ {
+  "input": "Metropolitan France's capital,",
+  "subject": "Metropolitan France",
+  "answer": " Paris"
+ },
+ {
+  "input": "Adam Kendon was born in",
+  "subject": "Adam Kendon",
+  "answer": " London"
+ },
+ {
+  "input": "North Side Gang was created in the early 1980s by a group of",
+  "subject": "North Side Gang",
+  "answer": " Chicago"
+ },
+ {
+  "input": "Austrian Empire's capital city is",
+  "subject": "Austrian Empire",
+  "answer": " Vienna"
+ },
+ {
+  "input": "Shane McMahon is employed by the",
+  "subject": "Shane McMahon",
+  "answer": " WWE"
+ }
+]

@@ -1,7 +1,0 @@
-# @package baseline
-_name_: baseline
-
-batch_size: 32
-
-visualization:
-  figure_format: ${figure_format}

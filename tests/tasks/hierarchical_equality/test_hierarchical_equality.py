@@ -32,8 +32,7 @@ from hypothesis import HealthCheck, given, settings, strategies as st
 
 from typing import Any, Callable, cast
 
-from causalab.neural.pipeline import LMPipeline
-from causalab.neural.token_positions import TokenPosition
+from causalab.neural.token_positions import LMPipeline, TokenPosition
 from causalab.tasks.hierarchical_equality.causal_models import (
     CAUSAL_MODEL,
     TARGET_VARIABLE,

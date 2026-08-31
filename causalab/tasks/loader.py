@@ -13,7 +13,7 @@ import os
 from dataclasses import dataclass, field
 from functools import cached_property
 from types import ModuleType
-from typing import Callable
+from typing import Any, Callable
 
 from causalab.causal.causal_model import CausalModel, derive_checker
 
@@ -440,3 +440,86 @@ def _resolve_checker(
         f"(see causalab.causal.causal_model.build_output_tokens) or ship a "
         f"checker.py exporting checker(neural_output, causal_output) -> bool."
     )
+
+
+def resolve_task(
+    task_name: str,
+    task_config: dict[str, Any],
+    target_variable: str | None,
+    seed: int | None = None,
+) -> tuple[Task, Any]:
+    """Build a Task from explicit parameters.
+
+    ``task_config`` contains task-specific fields (domain_type, graph_type, etc.).
+    ``target_variable`` sets the intervention variable on the returned task and
+    overrides the module's TARGET_VARIABLE export.  It is required — passing
+    ``None`` raises ``ValueError`` to prevent silent use of a wrong default.
+
+    The type allows ``None`` because callers commonly pass
+    ``cfg.task.get("target_variable")`` from a Hydra config; the runtime
+    check converts that into a clear error message at the boundary.
+    """
+    if target_variable is None:
+        raise ValueError(
+            "resolve_task() requires an explicit target_variable. "
+            "Pass the variable name you want to localize (e.g. 'answer', 'color'). "
+            "Omitting it silently uses the module default, which is often wrong."
+        )
+    task_cfg_raw = None
+
+    if task_name == "graph_walk":
+        from causalab.tasks.graph_walk.config import GraphWalkConfig
+
+        # Omit `seed` when None so GraphWalkConfig's dataclass default applies
+        # (single source of truth for the default seed).
+        gw_kwargs: dict[str, Any] = {
+            "graph_type": task_config["graph_type"],
+            "graph_size": task_config["graph_size"],
+            "graph_size_2": task_config["graph_size_2"],
+            "context_length": task_config["context_length"],
+            "separator": task_config["separator"],
+            "no_backtrack": task_config["no_backtrack"],
+        }
+        if seed is not None:
+            gw_kwargs["seed"] = seed
+        task_cfg_raw = GraphWalkConfig(**gw_kwargs)
+    elif task_name == "natural_domains_arithmetic":
+        from causalab.tasks.natural_domains_arithmetic.config import NaturalDomainConfig
+
+        task_cfg_raw = NaturalDomainConfig(
+            domain_type=task_config["domain_type"],
+            number_range=task_config.get("number_range", None),
+            number_groups=task_config.get("number_groups", None),
+            result_entities=task_config.get("result_entities", None),
+        )
+    elif task_name == "identity_naming":
+        from causalab.tasks.identity_naming.config import IdentityNamingConfig
+
+        task_cfg_raw = IdentityNamingConfig(
+            domain_type=task_config["domain_type"],
+        )
+
+    # Generic factory support: a task that exports CREATE_CAUSAL_MODEL (and no
+    # CAUSAL_MODEL singleton) but is not special-cased above receives the raw
+    # Hydra task-config dict, so factory tasks introduced outside this function
+    # (e.g. session-local research tasks selecting a `query`) load without a
+    # bespoke branch here. Singletons and the special-cased factories above are
+    # untouched (task_cfg_raw is already set, or stays None for singletons).
+    if task_cfg_raw is None:
+        # Resolve through the shared loader helper so the factory probe honours
+        # the same shipped-first / session-local fallback as load_task itself.
+        _cm = _import_task_module(task_name, "causal_models")
+        if _has_model_export(_cm, "CREATE_CAUSAL_MODEL") and not _has_model_export(
+            _cm, "CAUSAL_MODEL"
+        ):
+            task_cfg_raw = dict(task_config)
+
+    # load_task accepts dict | None; the *Config dataclasses above are not dicts,
+    # but the underlying loaders accept them at runtime (task-specific shims).
+    task = load_task(task_name, task_cfg=task_cfg_raw)  # pyright: ignore[reportArgumentType]
+    task.intervention_variable = target_variable
+    # Apply the optional scoring-convention override (e.g. MCQA letter→value).
+    # ``score_by`` is absent for tasks that don't declare alternatives, in
+    # which case this is a no-op.
+    task.apply_score_mode(task_config.get("score_by"))
+    return task, task_cfg_raw
