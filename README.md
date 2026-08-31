@@ -14,7 +14,7 @@ You write a high-level causal model describing *how you think* an LM solves a ta
    cd causalab
    uv sync
    ```
-2. **Run a demo.** [`demos/`](demos/) is one markdown file per research question, with the documents that answer it. Two need no GPU: [causal_model](demos/causal_model/causal_model.md), which has no network in it at all, and [01_define](demos/onboarding_tutorial/01_define.md). The other eight run in under two minutes on one H100 between them. The format is [`docs/demos.md`](docs/demos.md).
+2. **Run a demo.** [`demos/`](demos/) is one markdown file per research question, with the documents that answer it. Two need no GPU: [causal_model](demos/causal_model/causal_model.md), which has no network in it at all, and [01_define](demos/onboarding_tutorial/01_define.md). The eight onboarding demos that do need one total **5.4 minutes** of H100 time between them, the longest being 88 s. The format is [`docs/demos.md`](docs/demos.md).
 3. **Read the two specs.** [`docs/intervention_protocol.md`](docs/intervention_protocol.md) — the document format (sections, the `do` algebra, sweeps, validation, digests, the engine contract). [`docs/workflow_protocol.md`](docs/workflow_protocol.md) — chaining protocol runs with script steps: inputs, one Python script, declared outputs.
 4. **Run a shipped protocol:**
    ```bash
