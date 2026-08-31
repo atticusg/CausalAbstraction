@@ -943,6 +943,12 @@ A conforming loader rejects the document unless all of these hold:
     exactly one half, or by both with the same value; and the composition is
     closed — every input and every site address bound. An unfilled hole is
     refused with the list of what is missing.
+19. Write widths are uniform: every row a write addresses carries the same
+    number of positions. Only an `all` or `variable` write can be ragged, and
+    only the tokenizer can say how wide a row is — so, unlike the rest of this
+    checklist, rule 19 is checked when the run encodes its inputs, **before any
+    forward pass**, not at load. `validate` cannot decide it: the pure verbs
+    hold no tokenizer, by design.
 
 ## 6. Derived — never authored
 
