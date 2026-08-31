@@ -781,6 +781,25 @@ register_model(
 )
 register_model(
     ModelInfo(
+        # The onboarding demos' model (demos/onboarding_tutorial/). Registered
+        # so `validate` and `explain` can size their documents offline — the
+        # pure verbs read this table rather than fetching a config, so a demo
+        # naming an unregistered key is checkable only by running it.
+        # Source: the checkpoint's own config.json, revision
+        # 9213176726f574b556790deb65791e0c5aa438b6.
+        key="meta-llama/Llama-3.2-1B-Instruct",
+        hidden_size=2048,
+        num_layers=16,
+        num_heads=32,
+        num_kv_heads=8,
+        head_dim=64,
+        intermediate_size=8192,
+        vocab_size=128256,
+        native_dtype="bf16",
+    )
+)
+register_model(
+    ModelInfo(
         key="gpt2",
         hidden_size=768,
         num_layers=12,

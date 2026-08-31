@@ -14,8 +14,9 @@ You write a high-level causal model describing *how you think* an LM solves a ta
    cd causalab
    uv sync
    ```
-2. **Read the two specs.** [`docs/intervention_protocol.md`](docs/intervention_protocol.md) — the document format (sections, the `do` algebra, sweeps, validation, digests, the engine contract). [`docs/workflow_protocol.md`](docs/workflow_protocol.md) — chaining protocol runs with script steps: inputs, one Python script, declared outputs.
-3. **Run a shipped protocol:**
+2. **Run a demo.** [`demos/`](demos/) is one markdown file per research question, with the documents that answer it; [01_define](demos/onboarding_tutorial/01_define.md) needs no GPU. The format is [`docs/demos.md`](docs/demos.md).
+3. **Read the two specs.** [`docs/intervention_protocol.md`](docs/intervention_protocol.md) — the document format (sections, the `do` algebra, sweeps, validation, digests, the engine contract). [`docs/workflow_protocol.md`](docs/workflow_protocol.md) — chaining protocol runs with script steps: inputs, one Python script, declared outputs.
+4. **Run a shipped protocol:**
    ```bash
    uv run causalab explain  causalab/configs/protocols/interchange.json --data-root <data>
    uv run causalab run      causalab/configs/protocols/interchange.json \
@@ -83,7 +84,8 @@ causalab/
 ├── io/              # disk I/O + plotting primitives
 └── configs/         # protocols/ (flat documents) + runs/ (split ones) +
                     #   methods/ + workflows/ — JSON, no Python config system
-docs/                # the two specs, CODEBASE.md, TESTS.md, test_migration.md
+demos/               # one markdown demo per research question + its documents
+docs/                # the two specs, demos.md, CODEBASE.md, TESTS.md, test_migration.md
 tests/               # tiered suite — see docs/TESTS.md
 ```
 
@@ -101,4 +103,4 @@ See [`docs/TESTS.md`](docs/TESTS.md). CPU tiers run with `uv run pytest -m "not 
 
 ## History
 
-The Hydra runner, `analyses/` chains, `methods/` as Python, SLURM dispatch, and the notebook demos were retired in the protocol refactor (PR #20); [`docs/test_migration.md`](docs/test_migration.md) is the ledger. Their intervention cores return as shipped protocol documents and workflows.
+The Hydra runner, `analyses/` chains, `methods/` as Python and SLURM dispatch were retired in the protocol refactor (PR #20); [`docs/test_migration.md`](docs/test_migration.md) is the ledger. Their intervention cores return as shipped protocol documents and workflows. The notebook demos return as [`demos/`](demos/) — markdown around runnable documents, since a notebook's reason to exist was carrying its own execution.
