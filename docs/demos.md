@@ -237,6 +237,34 @@ needed, `.html` only for a figure that must be interactive
 whose figure matters declares the numbers beside it — the shipped
 `workflow_figures` script writes a `plotted` table for exactly this.
 
+## 4.1 A learned method is two documents
+
+Any featurizer the document *trains* — a `subspace` rotation, a `gate` mask —
+makes the run's own metric tables **train scores**: they are the fit re-scored
+on the split that chose it. A demo may not quote them as a result.
+
+The second document is an **apply**: no `train` section, a `file_path` naming
+the fitted artifact, and any split you like. Its `ArtifactIdentity` — model,
+site, k, parametrization, dtype — is checked on load, so an apply pointed at the
+wrong cell is refused rather than scored.
+
+```json
+"fit":   {"type": "intervention_protocol", "document": "../protocols/das_fit.json"},
+"apply": {"type": "intervention_protocol", "document": "../protocols/das_apply.json"}
+```
+
+The gap is not academic. `demos/onboarding_tutorial/04_subspace.md` measures
+**0.945 train against 0.531 held-out** at k = 16 — the fit's own number is
+nearly twice the real one, and it is worst exactly where a reader is most
+likely to stop reading.
+
+**An apply document does not `validate` on its own**, and that is correct: its
+`file_path` is a *run-tree* path (`"fit/rot.safetensors"`) whose leading segment
+is a step name, which only means something inside the workflow that declares it.
+Standalone it is `[V15] artifact file not found`; validate the workflow.
+`tests/demos/test_demos.py` allows exactly this exception, and only when a
+workflow in the same demo names the document as a step.
+
 ## 5. Voice
 
 Distilled from the notebook demos this format replaces; the point is that the
@@ -283,7 +311,8 @@ not nowhere.
 
 Before opening the PR:
 
-- [ ] every JSON in the demo passes `causalab validate … --data --data-root <root>`
+- [ ] every JSON in the demo passes `causalab validate … --data --data-root <root>`,
+      or, for the second half of a fit→apply pair, its **workflow** does (below)
 - [ ] every `explain` block is pasted output, not typed by hand
 - [ ] every document is inlined verbatim, beside a link to the file it copies
 - [ ] `Results` has one subsection per `Experimental design` question, same order
@@ -291,6 +320,8 @@ Before opening the PR:
 - [ ] every figure caption says what produced it
 - [ ] the header's `Reproduced` field is true
 - [ ] `Limits` is not empty
+- [ ] **if the method learns anything, the demo ships a fit *and* an apply**,
+      and quotes the apply's number
 
 `tests/demos/test_demos.py` checks the mechanical half of this list — the
 documents, the links, the inlined copies, the quoted digests and the section

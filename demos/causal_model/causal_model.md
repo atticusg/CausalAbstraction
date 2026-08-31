@@ -7,7 +7,7 @@
 | **Model** | none |
 | **Data** | none: the input space is 10³ triples and is enumerated |
 | **Documents** | none: this demo's artifact is the pair of causal graphs, built in the snippet below |
-| **Cost** | CPU, under two seconds |
+| **Cost** | CPU, under half a second |
 | **Reproduced** | ✓ 2026-08-31, CPU, `causalab.causal.causal_model` |
 
 ## TL;DR
@@ -132,8 +132,9 @@ PY
 # Q4  pairs distinguished by interchanging Y   0  (0.000)
 ```
 
-**Hardware.** None. **Measured: 1.4 s** of wall clock on one laptop core, for
-the 1000-input enumeration and all three 1000-pair sweeps. Everything in this
+**Hardware.** None. **Measured: 0.40 s** of wall clock on one laptop core (best of three,
+interpreter start-up included), for the 1000-input enumeration and all three
+1000-pair sweeps. Everything in this
 demo is arithmetic over integers, which is the reason to do it before booking
 anything: the questions it answers are the ones a GPU cannot answer any better.
 

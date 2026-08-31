@@ -250,6 +250,7 @@ class TestPastedOutput:
 
     @pytest.mark.parametrize("demo_dir", _demo_dirs(), ids=_ids(_demo_dirs()))
     def test_quoted_digests_are_current(self, demo_dir: Path) -> None:
+        from causalab.protocol.errors import ValidationError
         from causalab.protocol.loader import load
         from causalab.workflow.document import load_workflow
 
@@ -266,7 +267,16 @@ class TestPastedOutput:
                 real.update(workflow.inner_digests.values())
                 real.update(workflow.step_digests.values())
             else:
-                loaded = load(document, env)
+                try:
+                    loaded = load(document, env)
+                except ValidationError as error:
+                    # an apply document does not load on its own — its artifact
+                    # lives in a run tree. Its digests are already in `real`
+                    # via the workflow that runs it (inner_digests /
+                    # step_digests above), so nothing is lost by skipping it.
+                    if error.rule != 15 or not _run_tree_load(document):
+                        raise
+                    continue
                 real.add(loaded.document_digest)
                 real.update(loaded.point_digests)
         # a demo also quotes the content digest a table was built at — the
