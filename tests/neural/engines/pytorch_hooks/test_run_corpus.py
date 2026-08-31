@@ -77,8 +77,8 @@ def test_01_harvest_runs(roots, tmp_path):
     assert code == 0
     acts = load_file(str(tmp_path / "acts_L8_ans.safetensors"))
     assert acts["acts_L8_ans"].shape == (4, 1, 16)
-    ragged = load_file(str(tmp_path / "acts_L8_sub.safetensors"))
-    assert "acts_L8_sub.widths" in ragged  # multi-token subjects are ragged
+    ragged = load_file(str(tmp_path / "acts_L8_ent.safetensors"))
+    assert "acts_L8_ent.widths" in ragged  # multi-token entities are ragged
 
 
 def test_02_interchange_runs_and_scores(roots, tmp_path):

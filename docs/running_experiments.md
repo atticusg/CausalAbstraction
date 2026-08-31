@@ -147,6 +147,15 @@ document must not say it.
 Both verbs are pure — no weights, no network, no accelerator — so they cost a
 second and catch every load error.
 
+⚠️ **"Load error" is narrower than "would have run".** The pure verbs hold no
+tokenizer, so nothing whose answer is a token count is knowable here: a
+`{"variable": …}` or `{"all": true}` position that turns out ragged across rows
+is refused when the batch is encoded ([V19] for a write), not by `validate`.
+`--data` does check that every column and every prompt variable a document
+names *exists* in the resolved tables, at every expanded point of a sweep —
+that half used to be checked at coordinate 0 only, and for columns only, which
+is how a 64-point scan validated `OK` with 32 points that could not run.
+
 ⚠️ They are also **registry-only**: they derive featurizer widths from the
 static metadata in `causalab/protocol/registry.py` rather than fetching a
 config, so a digest never depends on connectivity. The A3B is not one of the

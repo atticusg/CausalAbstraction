@@ -438,6 +438,61 @@ def test_validate_data_accepts_the_generated_tables_columns(env):
     assert "entity" in refs  # the column position
 
 
+def test_validate_data_flags_a_missing_position_variable(env):
+    """The false green this closes. ``weekdays_locate_scan`` swept its tap over
+    ``{"variable": "subject"}``, no task-generated table has a ``subject``, and
+    ``validate --data`` still printed ``OK … 64 points`` — the whole point of
+    the pure verbs being a load-error checklist. 32 of those points then died
+    mid-campaign with ``[P2] no value for prompt variable 'subject'``.
+
+    Existence is answerable without a tokenizer, so it is answered here; the
+    *width* of the resulting window is not, and stays a run-time refusal."""
+    loaded = load(CORPUS_DIR / "07_weekdays_locate_scan_im.json", env)
+    raw = json.loads(json.dumps(dict(loaded.raw)))
+    # the axis exactly as it shipped, bad coordinate second
+    raw["positions"]["tap"] = {"sweep": [{"index": -1}, {"variable": "subject"}]}
+    with pytest.raises(Exception) as err:
+        check_data_columns(load(raw, env), env)
+    assert "subject" in str(err.value)
+    assert "prompt variable" in str(err.value)
+
+
+def test_validate_data_checks_every_point_not_just_the_first(env):
+    """The structural half of the same false green: this pass read
+    ``point_documents[0]``, so a swept axis was only ever checked at coordinate
+    0. Any reference that varies with the sweep — a position, a metric column,
+    a dataset field — was unchecked at every other coordinate."""
+    loaded = load(CORPUS_DIR / "07_weekdays_locate_scan_im.json", env)
+    raw = json.loads(json.dumps(dict(loaded.raw)))
+    raw["metrics"]["iia"]["expected"] = {"sweep": ["cf_answer", "not_a_column"]}
+    with pytest.raises(Exception) as err:
+        check_data_columns(load(raw, env), env)
+    assert "not_a_column" in str(err.value)
+
+
+def test_validate_data_accepts_a_variable_only_the_sibling_names(env):
+    """A prompt variable is per-role (§2.3): the counterfactual role's value
+    for ``entity`` lives in ``counterfactual_inputs_variables``, not in a
+    top-level column of that name. Resolving one spelling but not the other
+    would refuse every real task table."""
+    refs = check_data_columns(
+        load(CORPUS_DIR / "07_weekdays_locate_scan_im.json", env), env
+    )
+    assert "entity" in refs
+
+
+def test_validate_data_flags_a_missing_scope_variable(env):
+    """``scope``/``relative_to`` spelled as a variable is the same reference,
+    and the ROME-shaped ``{"index": -1, "scope": {"variable": …}}`` idiom is
+    where it is actually written."""
+    loaded = load(CORPUS_DIR / "07_weekdays_locate_scan_im.json", env)
+    raw = json.loads(json.dumps(dict(loaded.raw)))
+    raw["positions"]["tap"] = {"index": -1, "scope": {"variable": "not_a_variable"}}
+    with pytest.raises(Exception) as err:
+        check_data_columns(load(raw, env), env)
+    assert "not_a_variable" in str(err.value)
+
+
 def test_validate_data_flags_a_missing_relative_to_column(env):
     loaded = load(CORPUS_DIR / "10_task_table_iia_im.json", env)
     raw = json.loads(json.dumps(dict(loaded.raw)))
