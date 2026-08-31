@@ -8,7 +8,7 @@
 | **Data** | `mcqa/pairs_n64_s0` — 64 pairs, `different_symbol` design ([01](01_define.md)) |
 | **Documents** | [`protocols/mcqa_locate_scan.json`](protocols/mcqa_locate_scan.json) · [`workflows/mcqa_locate.json`](workflows/mcqa_locate.json) |
 | **Cost** | 128 points × 2 forwards, 64 rows each = 16 384 row-forwards |
-| **Reproduced** | ⚠ figure carried from the pre-refactor reference run, scored in centroid mode |
+| **Reproduced** | ✓ 2026-08-31, `pytorch_hooks` on one H100 80GB, digest `7dd122b239ad4e36…` |
 
 ## TL;DR
 
@@ -177,12 +177,20 @@ uv run causalab explain demos/onboarding_tutorial/workflows/mcqa_locate.json \
 ```bash
 uv run causalab run demos/onboarding_tutorial/workflows/mcqa_locate.json \
     --data-root demos/onboarding_tutorial/data \
-    --out runs --device cuda --dtype bf16
+    --out runs --device cuda
 ```
 
 **Hardware.** 128 points × 2 forwards × 64 rows on a 1.2 B model. One GPU with
 8 GB; the batch is 64 short rows, so the run is dominated by point count rather
-than by memory. Estimated from `explain`, not measured.
+than by memory. **Measured: 39 s of wall clock** on one H100 80GB for all three
+steps, model load included.
+
+> **No `--dtype` on a workflow.** The flag sets `model.dtype` on *one* protocol
+> document, and a workflow's steps each declare their own realization, so the
+> CLI refuses it: *"a workflow's steps each declare their own realization — set
+> it in the step's document, or with that step's own `set` block"*. Every
+> protocol under `protocols/` already pins `"dtype": "bf16"`, so there is
+> nothing to override.
 
 ## Experimental design
 
@@ -239,61 +247,118 @@ than near 1.0, the deficit is the position spec's, not the model's.
 
 ## Results
 
-> **Not yet regenerated.** The document above has not been run since the
-> protocol refactor. The figure below is the same grid from the pre-refactor
-> pipeline, scored in **centroid mode** — a different quantity from the IIA the
-> document computes. It is here because the routing pattern is the finding and
-> the pattern is the same; the numbers are not this document's.
+Run on 2026-08-31, one H100 80GB, reference engine (`pytorch_hooks`), bf16,
+workflow digest `7dd122b239ad4e36…`. All three steps ran; `scan` produced 8 192
+per-example records over 128 cells (64 pairs each), which `heatmap` and `best`
+aggregate identically — both call `causalab.io.step_record.aggregate`, and the
+aggregate was checked to be the mean of the 64 per-example values in every cell.
+
+The whole grid, IIA per (layer, position):
+
+```
+  L | symbol0(-10)   symbol1(-6)   answer slot(-1)   the other five
+  0 |        0.453         0.531             0.000            0.000
+  1 |        0.391         0.531             0.000            0.000
+  2 |        0.375         0.531             0.000            0.000
+  3 |        0.297         0.531             0.000            0.000
+  4 |        0.250         0.531             0.000            0.000
+  5 |        0.234         0.531             0.000            0.000
+  6 |        0.250         0.531             0.000            0.000
+  7 |        0.266         0.531             0.000            0.000
+  8 |        0.266         0.531             0.000            0.000
+  9 |        0.156         0.469             0.000            0.000
+ 10 |        0.094         0.422             0.000            0.000
+ 11 |        0.094         0.359             0.047            0.000
+ 12 |        0.031         0.250             0.172            0.000
+ 13 |        0.031         0.234             0.188            0.000
+ 14 |        0.000         0.000             0.969            0.000
+ 15 |        0.000         0.000             0.969            0.000
+```
+
+The five positions that are not a symbol or the answer slot — `?\n`, both
+periods, and both choice words — are **0.000 at all 16 layers**, all 80 cells.
+That is what a cell carrying nothing looks like when the metric is IIA rather
+than an accuracy with a floor.
 
 ### Q1 — yes
 
 ![Locate grid](figures/03_locate_grid.png)
 
-*Reference run: Llama-3.2-1B-Instruct, pre-refactor `locate`, centroid mode over
-the full MCQA dataset. Rows are layers, columns are the task's named positions.
-Cell values are centroid accuracy, not the IIA above. Look at the two bright
-regions and where they sit.*
+*This run: Llama-3.2-1B-Instruct, `mcqa_locate`'s `scan` step, IIA over 64
+pairs, rendered by the workflow's own `heatmap` step from `iia.json`. Rows are
+the eight positions, columns the 16 layers. The bright cell at the right of the
+`{"index": -1}` row is the answer slot in the last two layers; the long band is
+`{"index": -6}`, symbol1, decaying with depth.*
 
-The grid is far from flat: 0.96–0.97 at one column in the early layers, 1.00 at
-another in the last two, and 0.04–0.08 across most of the rest.
+The grid is far from flat: **max IIA 0.969 at (L14, answer slot)**, grid mean
+0.094, grid min 0.000.
 
 **Verdict.** Yes — the variable is movable by an interchange, and the cells that
-move it are a small minority.
+move it are a small minority: 4 of 128 cells exceed 0.5.
 
-### Q2 — the answer slot, in the last two layers
+### Q2 — the answer slot, at L14
 
-`last_token` scores 1.00 at L14 and L15 and 0.20 or less everywhere below L13.
-That is the cell `select` would emit, and the cell a subspace method would then
-be trained in.
+`best/values.json`, the `select` step's own output, is exactly:
 
-**Verdict.** (L15, answer slot) on the reference run.
+```json
+{
+  "best_layer": 14,
+  "best_pos": {
+    "index": -1
+  }
+}
+```
 
-### Q3 — yes, and the crossing is visible in the numbers
+[02](02_trace.md) predicted the answer slot in the last layers from a single
+pair, and its own GPU run put the slot's flip at L14–L15. The population agrees
+to the layer: 0.969 at L14, 0.969 at L15, 0.188 at L13.
 
-**Finding.** `correct_symbol` reads 0.96, 0.96, 0.97 at L0–L2, holds 0.82–0.89
-through L8, then falls: 0.71 at L9, 0.41 at L10, 0.36 at L11, 0.14 at L12–L13,
-0.04 at L14–L15. `last_token` does the reverse, sitting at 0.04 until L11 and
-reaching 1.00 at L14. The two profiles cross between L11 and L13 — the same band
-[02](02_trace.md)'s single trace put at L12, now from 64 pairs instead of one.
+**Verdict.** (L14, answer slot `-1`), at IIA 0.969.
 
-The unrelated positions never leave the floor: both `_period` columns stay at
-0.04–0.08 throughout, which is what a cell carrying nothing looks like on this
-scale.
+### Q3 — yes, and the crossing is at L14
 
-**Verdict.** Yes, crossing at L11–L13.
+**Finding.** The two symbol columns start high and decay: symbol1 (`-6`) holds
+0.531 from L0 to L8, then 0.469, 0.422, 0.359, 0.250, 0.234, and 0.000 at L14;
+symbol0 (`-10`) starts at 0.453 and decays faster, reaching 0.031 by L12. The
+answer slot does the reverse: 0.000 until L10, then 0.047, 0.172, 0.188, and
+0.969 at L14.
 
-### Q4 — no result
+The slot column first beats *both* symbol columns at **L14** — later than
+[02](02_trace.md)'s L13/L14 partition by nothing at all, and later than the
+"somewhere in the middle" this document expected. The hop is a late-layer event
+on this model, not a mid-stack one: through L13 the answer is still only where
+it entered.
 
-The reference run used the task's `correct_symbol` position, which resolves to
-the right slot per row and therefore has no ceiling below 1.0 — that is why its
-symbol column reaches 0.96 rather than 0.53. The document above, with fixed
-indices, cannot; running it produces the two numbers to compare against 0.531
-and 0.469.
+**Verdict.** Yes, crossing at L14.
+
+### Q4 — the fixed indices cost almost exactly what the design said
+
+✓ This is the question the reference run could not answer, and the two numbers
+land on the ceilings this document derived from the dataset's slot balance:
+
+| position | ceiling (rows where it holds the correct symbol) | measured max | at |
+|---|---|---|---|
+| symbol1 `-6` | 0.531 = 34/64 | **0.531** | L0–L8 |
+| symbol0 `-10` | 0.469 = 30/64 | **0.453** = 29/64 | L0 |
+
+symbol1 sits **exactly at its ceiling** — 34 of 64, to the last bit — for nine
+consecutive layers, and symbol0 reaches 29 of the 30 rows available to it,
+96.6% of its ceiling. So both symbol columns are carrying the variable
+*perfectly on the rows they apply to*, and the entire deficit from 1.0 is the
+position spec's, not the model's: a fixed index cannot know which slot holds the
+correct symbol, and the cost of that is precisely 1 − 0.531 and 1 − 0.469.
+
+**Verdict.** 0.531 against a ceiling of 0.531, and 0.453 against 0.469. The
+deficit is the position spec's, exactly as predicted.
 
 ## Limits
 
-- The figure's quantity is centroid accuracy, the document's is IIA. They agree
-  about which cells matter and they are not the same number.
+- The figure and the numbers are now the same run and the same quantity. The
+  earlier centroid-mode reference figure is gone.
+- A binary all-or-nothing read-out per pair is why several cells sit at exactly
+  k/64. It makes the ceilings in Q4 checkable to the bit, and it also means a
+  cell that half-moves the variable on every pair is indistinguishable from one
+  that fully moves it on half.
 - The fixed-index positions cap the two symbol columns at 0.531 and 0.469 by
   construction. That is a property of this dataset's slot balance and would
   change with a different seed.

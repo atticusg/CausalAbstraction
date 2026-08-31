@@ -12,20 +12,20 @@ carry its own execution; a document does not, so what is left is the experiment.
 Three demos on one multiple-choice task, in order. Each takes something concrete
 from the one before it.
 
-| | demo | question | needs a GPU |
-|---|---|---|---|
-| 01 | [Define the task](onboarding_tutorial/01_define.md) | does this counterfactual dataset tell two variables apart? | no |
-| 02 | [Trace one pair](onboarding_tutorial/02_trace.md) | for one pair, which cells carry the answer symbol? | yes, a small one |
-| 03 | [Localize the variable](onboarding_tutorial/03_localize.md) | across 64 pairs, which cell carries it most reliably? | yes, a small one |
+| | demo | question | needs a GPU | measured |
+|---|---|---|---|---|
+| 01 | [Define the task](onboarding_tutorial/01_define.md) | does this counterfactual dataset tell two variables apart? | no | < 1 s, CPU |
+| 02 | [Trace one pair](onboarding_tutorial/02_trace.md) | for one pair, which cells carry the answer symbol? | yes, a small one | 49 s, 1×H100 |
+| 03 | [Localize the variable](onboarding_tutorial/03_localize.md) | across 64 pairs, which cell carries it most reliably? | yes, a small one | 39 s, 1×H100 |
 
 **Start with 01.** It runs on a laptop in under a second and it is the demo that
 decides whether the other two measure anything.
 
 ## Worked research
 
-| demo | question | needs |
-|---|---|---|
-| [Weekdays geometry](weekdays_geometry/weekdays_geometry.md) | where and how is the answer day represented, and what does the model say between two answers? | one GPU ≥40 GB |
+| demo | question | needs | measured |
+|---|---|---|---|
+| [Weekdays geometry](weekdays_geometry/weekdays_geometry.md) | where and how is the answer day represented, and what does the model say between two answers? | one GPU ≥40 GB | 132 s, 1×H100 |
 
 A **workflow demo**: four research questions as ten steps, each RQ's answer
 feeding the next one's document.
@@ -39,6 +39,16 @@ shape of a run is checkable before it is booked:
 ```bash
 uv run causalab validate <doc> --data-root <demo>/data --data
 uv run causalab explain  <doc> --data-root <demo>/data
+```
+
+The third command needs the accelerator. Note that `--dtype` applies to a
+**protocol** document only — a workflow's steps each declare their own
+realization, so `causalab run <workflow> --dtype bf16` is refused. Every demo
+document already pins its dtype, so there is nothing to pass:
+
+```bash
+uv run causalab run <protocol> --data-root <demo>/data --out runs/<name> --device cuda --dtype bf16
+uv run causalab run <workflow> --data-root <demo>/data --out runs           --device cuda
 ```
 
 Each demo carries its own `data/`, with the `<ref>.manifest.json` sidecar that
