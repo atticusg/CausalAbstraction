@@ -150,9 +150,23 @@ dataset and a metric and depend on nothing of each other's, so the runner
 schedules them together — and the demo's question is precisely the difference
 between two things that are otherwise identical.
 
-### The pattern arm
+| step | document | what it contributes |
+|---|---|---|
+| `pattern_scan` | [`mcqa_head_scan.json`](protocols/mcqa_head_scan.json) | interchanges a whole layer's post-softmax pattern, layers 12–15 (no head axis — see Limits) |
+| `pattern_curve` | `causalab.io.plots.workflow_figures` | draws the pattern arm's IIA against layer |
+| `result_scan` | [`mcqa_head_premix_scan.json`](protocols/mcqa_head_premix_scan.json) | interchanges one head's slice of the o-projection's input, 4 layers × 32 heads |
+| `grid` | `causalab.io.plots.workflow_figures` | draws the scan as a grid, and records the exact rows drawn |
+| `per_head` | `causalab.analysis.head_stats` | mean and spread of the metric over each (layer, head) |
+| `best` | `causalab.workflow.scripts.select` | groups the metric table by the producing document's own sweep coordinates and emits the argmax cell |
 
-[`protocols/mcqa_head_scan.json`](protocols/mcqa_head_scan.json), inlined verbatim:
+### The step documents, verbatim
+
+The table above links each of these; this is what they say. Every block is
+the file byte for byte — the file is what `causalab run` reads, and
+`tests/demos/test_demos.py` fails if a copy here stops matching it.
+
+<details>
+<summary><code>pattern_scan</code> · <code>protocols/mcqa_head_scan.json</code> — Interchanges a whole layer's post-softmax pattern, layers 12–15 (no head axis — see Limits) (95 lines)</summary>
 
 ```json
 {
@@ -252,15 +266,19 @@ between two things that are otherwise identical.
 }
 ```
 
+[`protocols/mcqa_head_scan.json`](protocols/mcqa_head_scan.json), inlined verbatim:
+
+
 | section | says | why this and not that |
 |---|---|---|
 | `sites.pattern` | `attention_probs`, **no `head`** | not a simplification — a measured limitation. See [Limits](#limits): a `head` on an `attention_probs` write does not reach the write, so a head axis here would expand to points that are the same experiment under different names |
 | `pos: "all"` | the whole (query × key) matrix | a row of the pattern is a distribution over key positions; one query position is not the object an interchange on attention moves. The registry says so in the shape's own note |
 | `do: {"swap": …}` | and nothing else is legal here | the pattern's rows sum to 1 and the value multiply downstream assumes it. A delta or a scale would leave rows that nothing renormalizes — `attention_scores`, one step upstream of the softmax, is where those are legal |
 
-### The value arm
+</details>
 
-[`protocols/mcqa_head_premix_scan.json`](protocols/mcqa_head_premix_scan.json), inlined verbatim:
+<details>
+<summary><code>result_scan</code> · <code>protocols/mcqa_head_premix_scan.json</code> — Interchanges one head's slice of the o-projection's input, 4 layers × 32 heads (108 lines)</summary>
 
 ```json
 {
@@ -373,6 +391,9 @@ between two things that are otherwise identical.
 }
 ```
 
+[`protocols/mcqa_head_premix_scan.json`](protocols/mcqa_head_premix_scan.json), inlined verbatim:
+
+
 `attention_premix` is the o-projection's **input**, which is head-shaped — so
 naming a head selects that head's slice, and the projection being linear is what
 makes a swap there equivalent to swapping that head's addition to the residual
@@ -394,6 +415,8 @@ stream.
 >
 > That refusal arrives at the **plan**, not at load: `validate` and `explain`
 > both pass on the document that cannot run. See [Limits](#limits).
+
+</details>
 
 ## Run it
 

@@ -84,9 +84,22 @@ flowchart LR
 difference in the whole experiment is which checkpoint produced the file, which
 is what makes the comparison clean and the refusal interpretable.
 
-### The harvest
+Both workflows declare the same two step names, running the same two files —
+that is what makes them a controlled pair rather than two experiments:
 
-[`protocols/mcqa_source_harvest.json`](protocols/mcqa_source_harvest.json), inlined verbatim:
+| step | document | what it contributes | control arm | experimental arm |
+|---|---|---|---|---|
+| `source` | [`mcqa_source_harvest.json`](protocols/mcqa_source_harvest.json) | one un-intervened forward on the *source* checkpoint; the tensor is the only thing that crosses | `set` → `Llama-3.2-1B-Instruct` | as authored: `Llama-3.2-1B` |
+| `graft` | [`mcqa_cross_patch.json`](protocols/mcqa_cross_patch.json) | loads that tensor as a `params` constant and swaps it into the *target* checkpoint's forward | identical bytes, digest `fbde3416f010e05d…` | identical bytes, digest `fbde3416f010e05d…` |
+
+### The step documents, verbatim
+
+The table above links each of these; this is what they say. Every block is
+the file byte for byte — the file is what `causalab run` reads, and
+`tests/demos/test_demos.py` fails if a copy here stops matching it.
+
+<details>
+<summary><code>source</code> · <code>protocols/mcqa_source_harvest.json</code> — One un-intervened forward on the *source* checkpoint; the tensor is the only thing that crosses (20 lines)</summary>
 
 ```json
 {
@@ -111,15 +124,19 @@ is what makes the comparison clean and the refusal interpretable.
 }
 ```
 
+[`protocols/mcqa_source_harvest.json`](protocols/mcqa_source_harvest.json), inlined verbatim:
+
+
 | section | says | why this and not that |
 |---|---|---|
 | `model.key` | `meta-llama/Llama-3.2-1B` | the pretrained sibling: same 16 layers, same 2048-wide stream, same tokenizer, different weights. The control workflow overrides this field to the instruction-tuned key and changes nothing else |
 | `data.base` | the pair table's **counterfactual** column | the sole role is `base` because a document's roles name *inputs*, not sides of a contrast, and this document runs one forward. What makes it the counterfactual is the `field` |
 | no `writes` | one un-intervened forward | this half of a cross-model experiment observes; the other half intervenes |
 
-### The graft
+</details>
 
-[`protocols/mcqa_cross_patch.json`](protocols/mcqa_cross_patch.json), inlined verbatim:
+<details>
+<summary><code>graft</code> · <code>protocols/mcqa_cross_patch.json</code> — Loads that tensor as a `params` constant and swaps it into the *target* checkpoint's forward (37 lines)</summary>
 
 ```json
 {
@@ -161,11 +178,16 @@ is what makes the comparison clean and the refusal interpretable.
 }
 ```
 
+[`protocols/mcqa_cross_patch.json`](protocols/mcqa_cross_patch.json), inlined verbatim:
+
+
 | section | says | why this and not that |
 |---|---|---|
 | `params.v_src` | a `file_path` plus `{"entry": {"slot": "acts"}}` | §2.8: a write operand is a read name, a param name, or a literal scalar — **never a tensor**. A constant vector enters as a `params` entry, and this is the only channel a value has for crossing a model boundary |
 | `"slot": "acts"` | which tensor of the bundle | a bundle harvested *from a read* is keyed by that read's name rather than by `value`, and `slot` is the params-only key that says so |
 | `metrics.said` | `top_k`, k = 1 | what the model actually emitted. `iia` and `survived` are two 0/1 questions and cannot describe a third outcome; a graft is exactly the intervention that might produce one |
+
+</details>
 
 ## Run it
 

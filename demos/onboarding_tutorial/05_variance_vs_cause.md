@@ -108,9 +108,23 @@ block changing two fields, which is what makes the pair a controlled comparison:
 the model, the site, the position, the metric and the split are the same bytes,
 and the only difference is how many directions the write is allowed to touch.
 
-### The harvest
+| step | document | what it contributes |
+|---|---|---|
+| `harvest` | [`mcqa_harvest.json`](protocols/mcqa_harvest.json) | pure reads at the located cell — one un-intervened forward, the tensor a basis is fitted to |
+| `pca1` | `causalab.analysis.fit_pca` | fits a 1-component principal basis over the harvest |
+| `pca32` | `causalab.analysis.fit_pca` | fits a 32-component principal basis over the same harvest |
+| `apply1` | [`mcqa_pca_apply.json`](protocols/mcqa_pca_apply.json) | the same interchange as 03, through the principal basis only; the orthogonal remainder is left alone |
+| `apply32` | [`mcqa_pca_apply.json`](protocols/mcqa_pca_apply.json) | the same interchange as 03, through the principal basis only; the orthogonal remainder is left alone |
+| `spectrum_curve` | `causalab.io.plots.workflow_figures` | draws the explained-variance ratio against component index |
 
-[`protocols/mcqa_harvest.json`](protocols/mcqa_harvest.json), inlined verbatim:
+### The step documents, verbatim
+
+The table above links each of these; this is what they say. Every block is
+the file byte for byte — the file is what `causalab run` reads, and
+`tests/demos/test_demos.py` fails if a copy here stops matching it.
+
+<details>
+<summary><code>harvest</code> · <code>protocols/mcqa_harvest.json</code> — Pure reads at the located cell — one un-intervened forward, the tensor a basis is fitted to (20 lines)</summary>
 
 ```json
 {
@@ -135,15 +149,19 @@ and the only difference is how many directions the write is allowed to touch.
 }
 ```
 
+[`protocols/mcqa_harvest.json`](protocols/mcqa_harvest.json), inlined verbatim:
+
+
 | section | says | why this and not that |
 |---|---|---|
 | `data` | only a `base` role | there is no counterfactual: a principal basis is fitted on what the model *does*, with no reference to what would change it. That is the whole meaning of "unsupervised" here |
 | no `writes` | and therefore no `intervened_models` | a harvest is one un-intervened forward. The section is absent rather than empty, which is what makes "this document cannot have changed the model" checkable |
 | `save` | `.safetensors`, not `.json` | dense numerics are the one thing JSON is wrong for (workflow spec §2.5) |
 
-### The application
+</details>
 
-[`protocols/mcqa_pca_apply.json`](protocols/mcqa_pca_apply.json), inlined verbatim:
+<details>
+<summary><code>apply1</code> · <code>apply32</code> · <code>protocols/mcqa_pca_apply.json</code> — The same interchange as 03, through the principal basis only; the orthogonal remainder is left alone (37 lines)</summary>
 
 ```json
 {
@@ -185,6 +203,9 @@ and the only difference is how many directions the write is allowed to touch.
 }
 ```
 
+[`protocols/mcqa_pca_apply.json`](protocols/mcqa_pca_apply.json), inlined verbatim:
+
+
 ```mermaid
 flowchart LR
   CF["original<br/>on counterfactual"] -->|"v_cf = Pᵀx, through pcs"| W["write patch<br/>do: swap, through pcs"]
@@ -205,6 +226,8 @@ flowchart LR
 > 2048 and leaves everything else exactly as the base prompt produced it — which
 > is what makes the comparison against `k = 32` a statement about *directions*
 > rather than about how much was overwritten.
+
+</details>
 
 ## Run it
 

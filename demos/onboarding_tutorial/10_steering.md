@@ -95,9 +95,23 @@ flowchart LR
 sufficiency are two questions about the same cell that happen not to depend on
 each other.
 
-### The ablation
+| step | document | what it contributes |
+|---|---|---|
+| `ablate` | [`mcqa_ablate.json`](protocols/mcqa_ablate.json) | zeroes the answer slot's residual one layer at a time, and measures the clean accuracy in the same run |
+| `ablation_curve` | `causalab.io.plots.workflow_figures` | draws accuracy against the layer ablated |
+| `harvest` | [`mcqa_contrast_harvest.json`](protocols/mcqa_contrast_harvest.json) | reads both halves of every pair at the located cell, so their difference varies only the symbol |
+| `direction` | `causalab.analysis.harvest_difference` | subtracts the two harvest means into a single (2048,) steering direction |
+| `steer` | [`mcqa_steer.json`](protocols/mcqa_steer.json) | adds the harvested direction at eleven strengths; α = 0 is the un-intervened control |
+| `steer_curve` | `causalab.io.plots.workflow_figures` | draws the flipped fraction against steering strength |
 
-[`protocols/mcqa_ablate.json`](protocols/mcqa_ablate.json), inlined verbatim:
+### The step documents, verbatim
+
+The table above links each of these; this is what they say. Every block is
+the file byte for byte — the file is what `causalab run` reads, and
+`tests/demos/test_demos.py` fails if a copy here stops matching it.
+
+<details>
+<summary><code>ablate</code> · <code>protocols/mcqa_ablate.json</code> — Zeroes the answer slot's residual one layer at a time, and measures the clean accuracy in the same run (33 lines)</summary>
 
 ```json
 {
@@ -135,15 +149,19 @@ each other.
 }
 ```
 
+[`protocols/mcqa_ablate.json`](protocols/mcqa_ablate.json), inlined verbatim:
+
+
 | section | says | why this and not that |
 |---|---|---|
 | `writes.zero` | `{"swap": 0.0}` | §2.8's operand grammar admits a **literal scalar**, so ablation needs no new mechanism and no zero tensor. With no featurizer the feature space is the whole vector, so this replaces the activation outright |
 | two reads of `lm_head` | one in `ablated`, one in `original` | the clean accuracy is measured *by the same document, on the same rows, in the same run*. A baseline quoted from elsewhere is a baseline that can drift |
 | `metrics.*.expected` | `base_answer`, not `cf_answer` | there is no counterfactual here. The question is whether the model survives, not whether it can be redirected |
 
-### The direction
+</details>
 
-[`protocols/mcqa_contrast_harvest.json`](protocols/mcqa_contrast_harvest.json), inlined verbatim:
+<details>
+<summary><code>harvest</code> · <code>protocols/mcqa_contrast_harvest.json</code> — Reads both halves of every pair at the located cell, so their difference varies only the symbol (23 lines)</summary>
 
 ```json
 {
@@ -171,6 +189,9 @@ each other.
 }
 ```
 
+[`protocols/mcqa_contrast_harvest.json`](protocols/mcqa_contrast_harvest.json), inlined verbatim:
+
+
 Both halves of every pair are read in one document, so the two harvests differ
 in exactly what the pair was built to vary. `causalab.analysis.harvest_difference`
 then subtracts their means into a single `(2048,)` vector.
@@ -183,9 +204,10 @@ then subtracts their means into a single `(2048,)` vector.
 > Asking whether *that* has a mean direction is the sharper question, and
 > [Results](#q4--no-the-mean-direction-does-not-steer) is why.
 
-### The steering
+</details>
 
-[`protocols/mcqa_steer.json`](protocols/mcqa_steer.json), inlined verbatim:
+<details>
+<summary><code>steer</code> · <code>protocols/mcqa_steer.json</code> — Adds the harvested direction at eleven strengths; α = 0 is the un-intervened control (37 lines)</summary>
 
 ```json
 {
@@ -227,11 +249,16 @@ then subtracts their means into a single `(2048,)` vector.
 }
 ```
 
+[`protocols/mcqa_steer.json`](protocols/mcqa_steer.json), inlined verbatim:
+
+
 | section | says | why this and not that |
 |---|---|---|
 | `params.steer` | a `file_path` into the `direction` step | a write operand is a name or a scalar, never a tensor, so a constant vector enters as a `params` entry — the same channel [07](07_cross_model.md) uses, here for the purpose it was designed for |
 | `writes.push.do` | `add_scaled`, with `alpha` swept | the one **additive** mechanism in the algebra. Any number of additive writes may coexist at an address; only one absolute write may |
 | the sweep including `0.0` | eleven strengths, the first a no-op | `α = 0` *is* the un-intervened model, so the control is a point of the sweep rather than a second document |
+
+</details>
 
 ## Run it
 

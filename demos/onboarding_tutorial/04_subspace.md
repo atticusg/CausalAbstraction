@@ -69,9 +69,20 @@ between them. A single document with a `train` block would have produced a
 number too, and that number would have been wrong — see the box in
 [Experimental design](#experimental-design).
 
-### The fit
+| step | document | what it contributes |
+|---|---|---|
+| `fit` | [`mcqa_das_fit.json`](protocols/mcqa_das_fit.json) | trains an orthogonal rotation at the located cell and interchanges only its first *k* coordinates, over k = 1…128 |
+| `apply` | [`mcqa_das_apply.json`](protocols/mcqa_das_apply.json) | loads each fitted rotation and scores it on a split the fit never saw. No `train` section |
+| `test_curve` | `causalab.io.plots.workflow_figures` | draws held-out IIA against *k* |
 
-[`protocols/mcqa_das_fit.json`](protocols/mcqa_das_fit.json), inlined verbatim:
+### The step documents, verbatim
+
+The table above links each of these; this is what they say. Every block is
+the file byte for byte — the file is what `causalab run` reads, and
+`tests/demos/test_demos.py` fails if a copy here stops matching it.
+
+<details>
+<summary><code>fit</code> · <code>protocols/mcqa_das_fit.json</code> — Trains an orthogonal rotation at the located cell and interchanges only its first *k* coordinates, over k = 1…128 (48 lines)</summary>
 
 ```json
 {
@@ -124,6 +135,9 @@ number too, and that number would have been wrong — see the box in
 }
 ```
 
+[`protocols/mcqa_das_fit.json`](protocols/mcqa_das_fit.json), inlined verbatim:
+
+
 | section | says | why this and not that |
 |---|---|---|
 | `featurizers.rot` | `subspace`, `k` swept, `parametrization: "cayley"` | only *choices* are authored. The width `d` = 2048 is derived from (model, site), so a rotation cannot disagree with the stream it rotates. Cayley keeps the matrix orthogonal by construction rather than by penalty |
@@ -136,9 +150,10 @@ number too, and that number would have been wrong — see the box in
 The sweep is on `featurizers.rot.k`, so one document expands to eight fits and
 the runner plans them together — eight rotations from one model load.
 
-### The application
+</details>
 
-[`protocols/mcqa_das_apply.json`](protocols/mcqa_das_apply.json), inlined verbatim:
+<details>
+<summary><code>apply</code> · <code>protocols/mcqa_das_apply.json</code> — Loads each fitted rotation and scores it on a split the fit never saw. No `train` section (38 lines)</summary>
 
 ```json
 {
@@ -181,6 +196,9 @@ the runner plans them together — eight rotations from one model load.
 }
 ```
 
+[`protocols/mcqa_das_apply.json`](protocols/mcqa_das_apply.json), inlined verbatim:
+
+
 **No `train` section, a different `data`, and a `file_path`.** Those three
 differences are the entire demo's methodological content. The featurizer's
 `ArtifactIdentity` — model, site, k, parametrization, dtype — is checked when
@@ -191,6 +209,8 @@ width is refused rather than scored.
 > `featurizers.rot.k`, and axis identity is name identity (§3), so each apply
 > point selects the fit at *its own* `k` without an `entry` selector. Sixteen
 > points would be the cross product; there are eight.
+
+</details>
 
 ## Run it
 

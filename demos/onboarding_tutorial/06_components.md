@@ -230,9 +230,26 @@ hand between two experiments.
 > is what the spec leaves; it also happens to read better, since each arm's
 > `set` block shows the whole objective it trained under.
 
-### The scan
+| step | document | what it contributes |
+|---|---|---|
+| `scan` | [`mcqa_component_scan.json`](protocols/mcqa_component_scan.json) | three components × 16 layers of interchange at the answer slot, scored by IIA |
+| `grid` | `causalab.io.plots.workflow_figures` | draws the scan as a grid, and records the exact rows drawn |
+| `best` | `causalab.workflow.scripts.select` | groups the metric table by the producing document's own sweep coordinates and emits the argmax cell |
+| `gate_fit_lo` | [`mcqa_gate_fit.json`](protocols/mcqa_gate_fit.json) | trains a per-dimension gate at the cell `best` chose, under an annealed temperature and an L1 penalty |
+| `gate_apply_lo` | [`mcqa_gate_apply.json`](protocols/mcqa_gate_apply.json) | scores the fitted mask on a split it never saw, in eval mode where the gate is a hard `θ > 0` split |
+| `gate_fit_mid` | [`mcqa_gate_fit.json`](protocols/mcqa_gate_fit.json) | trains a per-dimension gate at the cell `best` chose, under an annealed temperature and an L1 penalty |
+| `gate_apply_mid` | [`mcqa_gate_apply.json`](protocols/mcqa_gate_apply.json) | scores the fitted mask on a split it never saw, in eval mode where the gate is a hard `θ > 0` split |
+| `gate_fit_hi` | [`mcqa_gate_fit.json`](protocols/mcqa_gate_fit.json) | trains a per-dimension gate at the cell `best` chose, under an annealed temperature and an L1 penalty |
+| `gate_apply_hi` | [`mcqa_gate_apply.json`](protocols/mcqa_gate_apply.json) | scores the fitted mask on a split it never saw, in eval mode where the gate is a hard `θ > 0` split |
 
-[`protocols/mcqa_component_scan.json`](protocols/mcqa_component_scan.json), inlined verbatim:
+### The step documents, verbatim
+
+The table above links each of these; this is what they say. Every block is
+the file byte for byte — the file is what `causalab run` reads, and
+`tests/demos/test_demos.py` fails if a copy here stops matching it.
+
+<details>
+<summary><code>scan</code> · <code>protocols/mcqa_component_scan.json</code> — Three components × 16 layers of interchange at the answer slot, scored by IIA (35 lines)</summary>
 
 ```json
 {
@@ -272,6 +289,9 @@ hand between two experiments.
 }
 ```
 
+[`protocols/mcqa_component_scan.json`](protocols/mcqa_component_scan.json), inlined verbatim:
+
+
 | section | says | why this and not that |
 |---|---|---|
 | `sites.target.component` | a sweep over three component names | the component is document vocabulary like any other field, so it is sweepable, and one document plans all 48 points against one model load. Three separate documents would be three loads and three digests |
@@ -279,9 +299,10 @@ hand between two experiments.
 | `positions.slot` | `{"index": -1}` | the answer slot, the only position [03](03_localize.md) found carrying the variable late |
 | `metrics` | `match` **and** `logit_diff` | a binary metric on 64 rows is coarse; the graded one is what distinguishes "did not move it" from "moved it a little" |
 
-### The fit and its application
+</details>
 
-[`protocols/mcqa_gate_fit.json`](protocols/mcqa_gate_fit.json), inlined verbatim:
+<details>
+<summary><code>gate_fit_lo</code> · <code>gate_fit_mid</code> · <code>gate_fit_hi</code> · <code>protocols/mcqa_gate_fit.json</code> — Trains a per-dimension gate at the cell `best` chose, under an annealed temperature and an L1 penalty (49 lines)</summary>
 
 ```json
 {
@@ -334,6 +355,9 @@ hand between two experiments.
   ]
 }
 ```
+
+[`protocols/mcqa_gate_fit.json`](protocols/mcqa_gate_fit.json), inlined verbatim:
+
 
 A **gate** featurizer splits the site into `(σ(θ)⊙x, (1−σ(θ))⊙x)`. The write is
 an ordinary swap, so what actually happens is
@@ -389,6 +413,8 @@ ends with is a *mask* rather than a blend.
 > gradient noise — and can score well by accident. That is why every arm below
 > reports `fit_diagnostics.json`'s `decisive_fraction` beside its IIA, and why
 > the arm with the lowest decisive fraction is the one this demo trusts least.
+
+</details>
 
 ## Run it
 
