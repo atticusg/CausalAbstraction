@@ -35,7 +35,13 @@ from causalab.protocol.schema import (
     parse_document,
 )
 
-__all__ = ["ExecutorSurface", "execute_request", "featurizer_identity"]
+__all__ = [
+    "ExecutorSurface",
+    "TrainEvalScore",
+    "TrainOutcome",
+    "execute_request",
+    "featurizer_identity",
+]
 
 
 class ExecutorSurface(Protocol):
@@ -51,6 +57,51 @@ class ExecutorSurface(Protocol):
     def addressed_steps(self, name: str) -> list[list[int]]: ...
     def generated_ids(self, name: str) -> list[list[int]]: ...
     def rows_for_metrics(self) -> list[dict[str, Any]]: ...
+
+
+@dataclasses.dataclass(frozen=True)
+class TrainEvalScore:
+    """One point's ``train.eval`` result: the split it was measured on, the
+    mean per eval metric, and how many eval passes ran.
+
+    ``passes`` is there so a reader can tell "evaluated once at the end" from
+    "evaluated every epoch and early-stopped", which decides whether the score
+    describes the returned weights or merely the last pass over them.
+    """
+
+    split: str
+    metrics: Mapping[str, float]
+    passes: int
+    #: The trained featurizers this score describes — the join back to the
+    #: saved bundle, which stamps the same point digest.
+    featurizers: tuple[str, ...] = ()
+
+    def as_record(self, *, point: str, coords: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "point": point,
+            "coords": dict(coords),
+            "split": self.split,
+            "metrics": dict(self.metrics),
+            "passes": self.passes,
+            "featurizers": list(self.featurizers),
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class TrainOutcome:
+    """What an engine's train loop produced.
+
+    ``stages`` is the fitted stage per trained featurizer name — what the save
+    manifest writes. ``eval_score`` is the held-out score from ``train.eval``,
+    and it is deliberately *not* a metric-table column: it is measured on a
+    different split, i.e. a different population from the point's metric rows,
+    and folding it in under the same metric name is exactly the confusion that
+    made a fit document's ``iia.json`` read as an eval score when it was the
+    train score (spec §2.12).
+    """
+
+    stages: Mapping[str, Any]
+    eval_score: TrainEvalScore | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -71,7 +122,7 @@ def execute_request(
     executor_factory: Callable[
         [Document, ExecutionRequest, Mapping[str, Any]], ExecutorSurface
     ],
-    train_runner: Callable[[Document, Any, ExecutionRequest], dict[str, Any]]
+    train_runner: Callable[[Document, Any, ExecutionRequest], TrainOutcome]
     | None = None,
 ) -> RunResult:
     """Run one :class:`ExecutionRequest` through one engine's executors.
@@ -82,6 +133,7 @@ def execute_request(
     """
     tensor_files: dict[str, TensorFile] = {}
     metric_files: dict[str, MetricTable] = {}
+    train_evals: list[Mapping[str, Any]] = []
     summaries: list[Mapping[str, Any]] = []
     for point_raw, coords, digest in zip(
         request.points, request.coords, request.digests
@@ -94,6 +146,7 @@ def execute_request(
             point_digest=digest,
             tensor_files=tensor_files,
             metric_files=metric_files,
+            train_evals=train_evals,
             executor_factory=executor_factory,
             train_runner=train_runner,
             engine_name=engine_name,
@@ -126,6 +179,7 @@ def execute_request(
         tensor_files,
         metric_files,
         identity_base=identity_base,
+        train_evals=train_evals,
     )
     return RunResult(files=files, summaries=tuple(summaries))
 
@@ -138,10 +192,11 @@ def _execute_point(
     point_digest: str,
     tensor_files: dict[str, TensorFile],
     metric_files: dict[str, MetricTable],
+    train_evals: list[Mapping[str, Any]],
     executor_factory: Callable[
         [Document, ExecutionRequest, Mapping[str, Any]], ExecutorSurface
     ],
-    train_runner: Callable[[Document, Any, ExecutionRequest], dict[str, Any]] | None,
+    train_runner: Callable[[Document, Any, ExecutionRequest], TrainOutcome] | None,
     engine_name: str,
 ) -> Mapping[str, Any]:
     executor = executor_factory(doc, request, coords)
@@ -155,7 +210,12 @@ def _execute_point(
                 "capability is absent, so routing should not have sent it "
                 "here",
             )
-        trained_stages = train_runner(doc, executor, request)
+        outcome = train_runner(doc, executor, request)
+        trained_stages = dict(outcome.stages)
+        if outcome.eval_score is not None:
+            train_evals.append(
+                outcome.eval_score.as_record(point=point_digest, coords=coords)
+            )
     executor.run_all()
     metric_values: dict[str, list[Any]] = {}
     windowed: dict[str, _Windowed] = {}

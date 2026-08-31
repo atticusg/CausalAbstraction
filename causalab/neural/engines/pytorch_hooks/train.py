@@ -35,6 +35,7 @@ from typing import Any, Mapping
 import torch
 
 from causalab.neural.engines.pytorch_hooks.executor import PointExecutor, document_seed
+from causalab.neural.shared.execution import TrainEvalScore, TrainOutcome
 from causalab.neural.shared.featurizers import Gate, Stage
 from causalab.neural.shared.metrics import column_token_ids
 from causalab.protocol.engine import ExecutionRequest
@@ -128,11 +129,23 @@ def _slice_rows(
 
 def run_training(
     doc: Document, executor: PointExecutor, request: ExecutionRequest
-) -> dict[str, Stage]:
+) -> TrainOutcome:
     """Fit the declared params; returns the trained stages by featurizer
-    name (for the save manifest). ``executor`` is the full-data executor —
-    its stage cache is shared with every training minibatch, so the stages
-    it later evaluates are the fitted ones."""
+    name (for the save manifest) **and** the ``train.eval`` score.
+
+    ``executor`` is the full-data executor — its stage cache is shared with
+    every training minibatch, so the stages it later evaluates are the fitted
+    ones.
+
+    The eval score is returned rather than dropped because it used to be
+    computed and then consumed only inside the ``early_stop`` branch, so a fit
+    document's saved metric table was the **train** score under a name a reader
+    took for the eval one. Spec §2.12 says every metric a document declares is
+    saved; step 4 of the causal protocol asks for train and eval together. Both
+    were unsatisfiable. :class:`~causalab.neural.shared.execution.TrainOutcome`
+    carries it to the run tree as a sibling record — never as a column in the
+    metric table, whose rows are a different split.
+    """
     train = doc.train
     assert train is not None
     # one reader of train.seed, shared with the featurizer inits the executor
@@ -177,12 +190,25 @@ def run_training(
 
     anneals = _parse_anneals(train.anneal, stages)
     eval_every_epochs = None
-    if train.eval is not None and "epochs" in train.eval["every"]:
+    if train.eval is not None:
+        if "epochs" not in train.eval["every"]:
+            # This loop only reaches an eval on an epoch boundary. Accepting an
+            # `updates` counter here would run *no* eval at all and still save
+            # the fit, which is the silent-wrong-number this commit exists to
+            # remove — so refuse instead of pretending.
+            raise ProtocolError(
+                "P4",
+                "train.eval.every must count epochs in this engine — "
+                f"got {sorted(train.eval['every'])}; an update counter would "
+                "silently never evaluate",
+            )
         eval_every_epochs = concrete_int(
             train.eval["every"]["epochs"], "train.eval.every.epochs"
         )
     best: float | None = None
     stale = 0
+    eval_passes = 0
+    last_score: dict[str, float] | None = None
     order_rng = torch.Generator().manual_seed(seed)
 
     minibatch_executors = [
@@ -248,6 +274,8 @@ def run_training(
                 request,
                 concrete_str(train.eval["split"], "train.eval.split"),
             )
+            eval_passes += 1
+            last_score = score
             if train.early_stop is not None:
                 metric_name = str(train.early_stop["metric"])
                 mode = str(train.early_stop["mode"])
@@ -265,7 +293,18 @@ def run_training(
                         break
     for stage in stages.values():
         stage.eval()
-    return {name: stages[name] for name in trained_names}
+    eval_score = None
+    if train.eval is not None and last_score is not None:
+        eval_score = TrainEvalScore(
+            split=concrete_str(train.eval["split"], "train.eval.split"),
+            metrics=dict(last_score),
+            passes=eval_passes,
+            featurizers=tuple(trained_names),
+        )
+    return TrainOutcome(
+        stages={name: stages[name] for name in trained_names},
+        eval_score=eval_score,
+    )
 
 
 def _build_optimizer(
