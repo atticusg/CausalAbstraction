@@ -266,6 +266,27 @@ def build_artifact_identity(**fields: Any) -> dict[str, str]:
     }
 
 
+#: Extra guidance for the mismatches whose *cause* is not where the reader
+#: looks first, as ``str.format`` templates over ``want`` (what the document
+#: implies) and ``got`` (what the bundle was stamped with).
+#:
+#: ``model_dtype`` is the one that has cost real time twice. A ``model`` block
+#: with no ``dtype`` **implies fp32**, so an apply document that simply omits
+#: the field is refused against a bf16 fit — and the fix is in the document,
+#: not on the command line: ``--dtype`` exists only on a *document* run
+#: (it is a ``--set model.dtype=…`` shorthand), and a workflow run has no such
+#: flag at all, so a chained fit → apply can only be repaired in the file.
+_MISMATCH_HINTS: dict[str, str] = {
+    "model_dtype": (
+        '. Precision is a document fact: write "dtype": "{got}" into this '
+        "document's 'model' block, next to the fit's. A 'model' with no "
+        "'dtype' implies 'fp32', which is what an apply document usually gets "
+        "wrong. The --dtype flag is not the fix: it is a --set shorthand on a "
+        "document run, and a workflow run does not accept it at all"
+    ),
+}
+
+
 def check_artifact_identity(
     stamped: Mapping[str, Any] | None,
     expected: Mapping[str, Any],
@@ -288,7 +309,8 @@ def check_artifact_identity(
             raise ValidationError(
                 15,
                 f"{what}: ArtifactIdentity mismatch on {key!r} — the document "
-                f"implies {want!r} but the bundle was stamped {got!r} (§2.5)",
+                f"implies {want!r} but the bundle was stamped {got!r} (§2.5)"
+                + _MISMATCH_HINTS.get(key, "").format(want=want, got=got),
             )
         if got is None:
             raise ValidationError(

@@ -178,9 +178,7 @@ def test_a_band_scores_exactly_the_writes_it_names(tmp_path: Path) -> None:
     one-layer band inside a two-band document is bit-identical to a document
     carrying only that write. Bands do not leak into each other, and the shared
     harvest does not change what any of them sees."""
-    together = _run(
-        tmp_path / "together", _band_doc({"narrow": [0], "wide": [0, 1]})
-    )
+    together = _run(tmp_path / "together", _band_doc({"narrow": [0], "wide": [0, 1]}))
     alone = _run(tmp_path / "alone", _band_doc({"narrow": [0]}))
     assert list(table_frame(together / "iia_narrow.json")["value"]) == pytest.approx(
         list(table_frame(alone / "iia_narrow.json")["value"]), abs=0.0
