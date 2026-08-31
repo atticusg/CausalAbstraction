@@ -699,6 +699,13 @@ they differ qualitatively:
 Run on 2026-08-31, one H100 80GB, reference engine (`pytorch_hooks`), bf16,
 workflow digest `b4c84874445539d3…`. All ten steps completed in 132 s.
 
+Run twice: once with the declared `best_layer` at its inherited 18 and once at
+the reconciled 26, into separate output directories with nothing resumed. Every
+number below is bit-identical across the two — `best/values.json`, the baseline
+accuracy, the locate maximum, the PCA spectrum to nine decimals, all three
+`iia_by_k` means, and the 704 walk records. The declared value is validated
+against, not measured with, and this is the check that says so.
+
 **The layer is selected, not pinned, and it is 26.** `best` is a `select` step,
 so the layer the downstream steps use is whatever `locate`'s argmax turns out to
 be — and it is **L26**, on a plateau running L26–L31. Every RQ3 and RQ4 number
@@ -936,6 +943,15 @@ ring-versus-line comparison remains unanswered — see Limits.
   `class_probs` writes seven. The numbers land in `day_probs.json` regardless —
   a figure is a rendering, not the record — and a seven-series plot is one more
   script step.
+- **Every answer is tokenizer-ambiguous, and `token_form` is left on `auto`.**
+  The run warns on it for all seven days: `" Thursday"` is token 7950
+  space-prefixed and 38888 bare, and both forms are single tokens naming
+  different rows, so `auto` picks the space-prefixed one for `logit_diff`,
+  `cross_entropy` and the class probabilities alike. That is the right choice for
+  this template — the answer follows `"is "` — but it is a choice the documents
+  do not state, and on a template whose answer starts a line it would be the
+  wrong one. Setting each metric's `token_form` to `space_prefixed` explicitly
+  would make the demo say what it relies on.
 - **One model, one task, one prompt template.** Whether the ring is a fact about
   weekdays, about cyclic categories, or about this checkpoint is not asked here.
 

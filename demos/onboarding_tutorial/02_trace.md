@@ -6,7 +6,7 @@
 | **Method** | interchange intervention at every cell of a 16 × 22 grid, read back as text |
 | **Model** | `meta-llama/Llama-3.2-1B-Instruct` @ `main`, bf16 |
 | **Data** | `mcqa/pair_n1_s0` — **one** pair, `different_symbol` design ([01](01_define.md)) |
-| **Documents** | [`protocols/mcqa_trace_scan.json`](protocols/mcqa_trace_scan.json) |
+| **Documents** | [`protocols/mcqa_trace_scan.json`](protocols/mcqa_trace_scan.json) · [`workflows/mcqa_trace.json`](workflows/mcqa_trace.json) ([below](#the-one-step-workflow)) |
 | **Cost** | 352 points × 2 forwards = 704 single-row forwards |
 | **Reproduced** | ✓ 2026-08-31, `pytorch_hooks` on one H100 80GB, digest `0685b0fafc6037ae…` |
 
@@ -208,7 +208,9 @@ counterfactual's answer symbol, `" Q"`, instead of the base's `" Z"`.
 Two columns are non-zero and the other twenty are zero at every depth. That is
 the whole finding, and it is sharper than the reference figure it replaces:
 **column 16 carries the answer from L0 to L13, column 21 from L14 to L15, and no
-cell is ever ambiguous.**
+cell is ever ambiguous.** The same grid as a picture is
+[below](#the-one-step-workflow) — a protocol cannot draw its own table, and the
+two-step workflow that can is worth its own section.
 
 ### Q1 — yes, from the embedding up
 
@@ -264,14 +266,15 @@ buys a distractor column that stays silent.
 
 - One pair. The routing pattern is often stable across inputs, but a single
   trace cannot say so — that is [03](03_localize.md)'s job, and it is why 03 exists.
-- **This demo ships no figure, and cannot render one from its own run.** The
-  repo's figure script (`causalab.io.plots.workflow_figures`) reads a table's
-  sweep axes from the `_step.json` a *workflow step* writes; a bare
-  `causalab run` of a protocol document writes `protocol.json` instead, so
-  `axes_for` returns `()` and the renderer collapses all 352 cells into one.
-  The grid above is the table itself, which is the more checkable artifact —
-  but a bare-protocol demo wanting a picture currently has to become a
-  one-step workflow.
+- **The protocol on its own cannot render its own figure**, which is why this
+  demo also ships a two-step workflow — see
+  [*The one-step workflow*](#the-one-step-workflow). The figure script
+  (`causalab.io.plots.workflow_figures`) reads a table's sweep axes from the
+  `_step.json` a *workflow step* writes; a bare `causalab run` of a protocol
+  writes `protocol.json` instead, so `axes_for` returns `()` and the renderer
+  collapses all 352 cells into one. Nothing is wrong with either shape: the
+  protocol is the experiment and the workflow is the experiment plus its
+  picture.
 - The grid is `block_output` only. A signal that is present in
   `attention_output` and cancelled by the MLP is invisible here.
 - There is no embedding row: `embeddings` is a separate, layer-less component,
@@ -282,3 +285,105 @@ buys a distractor column that stays silent.
 - **[03 — Locate across the population](03_localize.md)** runs this
   intervention over all 64 pairs and turns "what did it say" into "how often was
   it right", which is what makes the L13/L14 hop a claim rather than an anecdote.
+
+## The one-step workflow
+
+Everything above is a **protocol**: one document, one campaign, two tables. That
+is the right shape for the experiment — but it is also why this demo's evidence
+is a pasted grid rather than a picture. `causalab.io.plots.workflow_figures`
+reads a table's sweep axes from the step record a *workflow* writes, and a bare
+`causalab run` of a protocol writes `protocol.json`, which carries the points but
+not the axes. So `axes_for` returns `()`, `aggregate` collapses all 352 cells
+into a single row, and the renderer raises `KeyError: 'sites.target.layer'`.
+
+The fix is not a workaround, it is the other shape: **one protocol step plus one
+script step.** Nothing fans out and nothing is chained, so there is no
+scheduling in it at all — the only reason to write it is that a table and the
+picture of that table are two products of one experiment, and a workflow is what
+records both under one digest.
+
+[`workflows/mcqa_trace.json`](workflows/mcqa_trace.json):
+
+```json
+{
+  "version": "1",
+  "description": "The 02_trace demo's scan with a figure after it. One protocol step and one script step is the smallest workflow that is not a protocol: nothing here fans out, and the reason to write it is that a table and the picture of that table are two products of one experiment. It is also the only way a dense index sweep gets a figure -- causalab.io.plots.workflow_figures reads a table's sweep axes from the step record a workflow writes, so the same protocol run on its own produces a table no shipped renderer can draw.",
+  "output_dir": "mcqa_trace",
+  "steps": {
+    "scan": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_trace_scan.json"
+    },
+    "heatmap": {
+      "type": "script",
+      "script": {"module": "causalab.io.plots.workflow_figures"},
+      "inputs": {
+        "table": {"step": "scan", "file": "flipped.json"},
+        "plot": "heatmap",
+        "x": "sites.target.layer",
+        "y": "positions.tap.index"
+      },
+      "outputs": {
+        "figure": "flipped_grid.png",
+        "plotted": {"file": "flipped_grid.json"}
+      }
+    }
+  }
+}
+```
+
+Two things about it are worth copying rather than reading past.
+
+**The scan step names the protocol, it does not restate it.** `document` points
+at the same `../protocols/mcqa_trace_scan.json` the rest of this demo runs, so
+the experiment is bit-for-bit the one documented above — its campaign digest is
+still `0685b0fafc6037ae…`. Adding a figure did not change what runs.
+
+**`plotted` is not optional in spirit.** A `.png` carries no record, so the
+`heatmap` step declares `flipped_grid.json` beside it: the exact rows that were
+drawn, in the same directory, under the same step digest. A figure whose numbers
+are not written down next to it is a binary nobody can date.
+
+```bash
+uv run causalab validate demos/onboarding_tutorial/workflows/mcqa_trace.json \
+    --data-root demos/onboarding_tutorial/data
+# OK: demos/onboarding_tutorial/workflows/mcqa_trace.json — 2 steps, digest 475bad60fedde631…
+```
+
+```bash
+uv run causalab explain demos/onboarding_tutorial/workflows/mcqa_trace.json \
+    --data-root demos/onboarding_tutorial/data
+# digest    475bad60fedde6311c23657c69d48a6226626dc86572b044fc925bd48a648342
+# schedule  2 levels
+#   level 0: scan
+#   level 1: heatmap
+#   scan: intervention_protocol ../protocols/mcqa_trace_scan.json — 352 point(s), campaign digest 0685b0fafc6037ae…
+#   heatmap: script causalab.io.plots.workflow_figures -> flipped_grid.json, flipped_grid.png
+```
+
+Note the absent `--dtype`: this is a workflow, so the flag is refused and the
+step's own document supplies `bf16` — the same rule as
+[03](03_localize.md#run-it).
+
+```bash
+uv run causalab run demos/onboarding_tutorial/workflows/mcqa_trace.json \
+    --data-root demos/onboarding_tutorial/data \
+    --out runs --device cuda
+```
+
+![Trace grid](figures/02_trace_flipped_grid.png)
+
+*This run: the same 352-point scan as the table in [Results](#results), drawn by
+the workflow's own `heatmap` step from `flipped.json`. Rows are the 22 token
+positions, columns the 16 layers; a bright cell is one where patching made the
+model say the counterfactual's `" Q"`. The two bright runs are index 16 across
+L0–L13 and index 21 across L14–L15 — the same clean partition, and the same
+absence of any overlap row, that the numbers give.*
+
+**When to reach for which.** If the product is a number, write the protocol and
+read the table; the pure verbs already tell you the point count and the digest.
+If the product is a figure — or a value some later step consumes, which is
+[03](03_localize.md)'s `select` — write the workflow, because the step record is
+what makes a table plottable and a result addressable. The two are not a
+hierarchy: `mcqa_trace.json` is three lines of scheduling around the document
+that does the work.

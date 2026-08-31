@@ -60,3 +60,11 @@ Read [`docs/demos.md`](../docs/demos.md), then copy the closest existing demo's
 skeleton. `tests/demos/test_demos.py` checks the mechanical half of the format:
 that every document validates, every link resolves, every document is inlined in
 its demo byte for byte, and every demo has the seven sections in order.
+
+**Which document shape?** A **protocol** if the product is a number — one
+document, one campaign, tables you read. A **workflow** if the product is a
+figure, or a value a later step consumes: the figure script and the `select`
+script both read the step record that only a workflow writes. The smallest
+useful workflow is one protocol step plus one script step, which is a legitimate
+shape rather than a workaround — 02 ships exactly that beside its protocol
+([the one-step workflow](onboarding_tutorial/02_trace.md#the-one-step-workflow)).
