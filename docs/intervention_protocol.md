@@ -165,8 +165,12 @@ record, and stamped into artifacts; it is not part of the canonical bytes.
 - **Anything per-row or task-semantic is a column**, computed when the table is
   built — answer forms for `match` (sec. 2.10), values that place a position per
   row (sec. 2.3). Documents reference columns; they never compute.
-- Dataset **columns** referenced by metrics and by `column` positions are checked
-  against the resolved tables by `validate --data`, not at load.
+- Dataset **columns** referenced by metrics and by `column` positions, and the
+  prompt **variables** named by `variable` positions and by `scope` /
+  `relative_to` anchors, are checked against the resolved tables by
+  `validate --data`, not at load. The check covers **every expanded point**, so
+  a reference that appears only at one coordinate of a sweep is checked there
+  too.
 
 ### 2.3 `positions`
 
@@ -236,9 +240,20 @@ the model said the row's value for `x`.
   the row, so it is a property of the *row*, not of a role's text — the same
   `{"column": "c"}` resolves to the same string whichever role reads it. Use
   `column` when the value is computed by the task (per-row answer symbols,
-  chosen entities): being an explicit reference, it is checked by
-  `validate --data`, where a variable that only happens to exist as a column
-  is not.
+  chosen entities) and every role must read the same string; use `variable`
+  when each role's own text carries its own value, which is what a
+  counterfactual pair usually needs.
+- **What `validate --data` can and cannot say about a position.** Both
+  spellings are checked for **existence** — a `column` against the resolved
+  tables' columns, a `variable` against each role's `<field>_variables` sibling
+  and the same-named-column fallback. Neither is checked for **width**: what a
+  variable or a column resolves to is a char span, hence a token count, and the
+  pure verbs hold no tokenizer (`ResolutionEnv` carries datasets and artifacts
+  and stays torch- and network-free). So a per-row window that turns out ragged
+  across rows is a *run-time* refusal — rule 19 for a write — and no amount of
+  pre-flighting moves it earlier. When a document needs one token per row at a
+  variable, say so: `{"index": -1, "scope": {"variable": "x"}}` is the last
+  token of `x`'s span and is never ragged.
 - The value in a column position is a **string**, resolved like a variable's
   value (it must occur exactly once in the row's text). Integer token indices
   are deliberately not a v1 spelling: they would bind a table to one
@@ -1148,7 +1163,7 @@ runs the full pipeline, a split one composing its halves first.
 | verb | effect |
 |---|---|
 | `run <doc>` | validate, expand, plan, execute, stamp; writes `<out>/protocol.json` — the canonical document, its digest, the per-point provenance digests, and the method it was composed from |
-| `validate <doc> [--data]` | sec. 5 checks; `--data` also checks column references |
+| `validate <doc> [--data]` | sec. 5 checks; `--data` also checks column and prompt-variable references, at every point |
 | `explain <doc>` | models + forward plan, expanded point count, derived `requires`, resolved bindings, digest, what `save` produces |
 | `--engine` (explain) | also route the document and print which engine would serve it, or the sec. 8 refusal. Opt-in: engines are heavy, and without it `explain` stays torch-free |
 | `digest <doc>` | the campaign digest |

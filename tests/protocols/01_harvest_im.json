@@ -7,7 +7,7 @@
   },
   "positions": {
     "answer_tok": {"index": -1},
-    "subject":    {"variable": "subject"}
+    "entity":     {"variable": "entity"}
   },
   "sites": {
     "L8":  {"component": "block_output", "layer": 8},
@@ -15,14 +15,14 @@
   },
   "reads": {
     "acts_L8_ans":  {"site": "L8",  "pos": "answer_tok", "model": "original", "input": "base"},
-    "acts_L8_sub":  {"site": "L8",  "pos": "subject",    "model": "original", "input": "base"},
+    "acts_L8_ent":  {"site": "L8",  "pos": "entity",     "model": "original", "input": "base"},
     "acts_L24_ans": {"site": "L24", "pos": "answer_tok", "model": "original", "input": "base"},
-    "acts_L24_sub": {"site": "L24", "pos": "subject",    "model": "original", "input": "base"}
+    "acts_L24_ent": {"site": "L24", "pos": "entity",     "model": "original", "input": "base"}
   },
   "save": [
     {"value": "acts_L8_ans", "model": "original", "input": "base", "file_path": "acts_L8_ans.safetensors"},
-    {"value": "acts_L8_sub", "model": "original", "input": "base", "file_path": "acts_L8_sub.safetensors"},
+    {"value": "acts_L8_ent", "model": "original", "input": "base", "file_path": "acts_L8_ent.safetensors"},
     {"value": "acts_L24_ans", "model": "original", "input": "base", "file_path": "acts_L24_ans.safetensors"},
-    {"value": "acts_L24_sub", "model": "original", "input": "base", "file_path": "acts_L24_sub.safetensors"}
+    {"value": "acts_L24_ent", "model": "original", "input": "base", "file_path": "acts_L24_ent.safetensors"}
   ]
 }

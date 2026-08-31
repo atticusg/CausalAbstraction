@@ -1,6 +1,6 @@
 [
-  {"input": "If today is Thursday, tomorrow is", "counterfactual_inputs": ["If today is Saturday, tomorrow is"], "answer": " Friday", "base_answer": " Friday", "cf_answer": " Sunday", "label": " Sunday", "subject": "Thursday"},
-  {"input": "If today is Friday, tomorrow is", "counterfactual_inputs": ["If today is Sunday, tomorrow is"], "answer": " Saturday", "base_answer": " Saturday", "cf_answer": " Monday", "label": " Monday", "subject": "Friday"},
-  {"input": "If today is Saturday, tomorrow is", "counterfactual_inputs": ["If today is Thursday, tomorrow is"], "answer": " Sunday", "base_answer": " Sunday", "cf_answer": " Friday", "label": " Friday", "subject": "Saturday"},
-  {"input": "If today is Sunday, tomorrow is", "counterfactual_inputs": ["If today is Friday, tomorrow is"], "answer": " Monday", "base_answer": " Monday", "cf_answer": " Saturday", "label": " Saturday", "subject": "Sunday"}
+  {"input": "If today is Thursday, tomorrow is", "counterfactual_inputs": ["If today is Saturday, tomorrow is"], "counterfactual_inputs_variables": [{"entity": "Saturday"}], "answer": " Friday", "base_answer": " Friday", "cf_answer": " Sunday", "label": " Sunday", "entity": "Thursday"},
+  {"input": "If today is Friday, tomorrow is", "counterfactual_inputs": ["If today is Sunday, tomorrow is"], "counterfactual_inputs_variables": [{"entity": "Sunday"}], "answer": " Saturday", "base_answer": " Saturday", "cf_answer": " Monday", "label": " Monday", "entity": "Friday"},
+  {"input": "If today is Saturday, tomorrow is", "counterfactual_inputs": ["If today is Thursday, tomorrow is"], "counterfactual_inputs_variables": [{"entity": "Thursday"}], "answer": " Sunday", "base_answer": " Sunday", "cf_answer": " Friday", "label": " Friday", "entity": "Saturday"},
+  {"input": "If today is Sunday, tomorrow is", "counterfactual_inputs": ["If today is Friday, tomorrow is"], "counterfactual_inputs_variables": [{"entity": "Friday"}], "answer": " Monday", "base_answer": " Monday", "cf_answer": " Saturday", "label": " Saturday", "entity": "Sunday"}
 ]
