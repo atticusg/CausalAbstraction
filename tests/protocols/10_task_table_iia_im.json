@@ -1,0 +1,38 @@
+{
+  "version": "1",
+  "description": "Interchange over a task-generated table (the dataset-serialization seam): swap the answer-slot residual from the counterfactual into base and score IIA against the causal model's post-intervention label. The answer forms come from the task's output_tokens declaration, and first_token grading keeps the table tokenizer-agnostic.",
+  "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
+  "data": {
+    "base":   {"dataset": "weekdays/task_n4_s0", "field": "input"},
+    "counterfactual": {"dataset": "weekdays/task_n4_s0", "field": "counterfactual_inputs[0]"}
+  },
+  "positions": {
+    "answer_tok": {"index": -1},
+    "subject":    {"column": "entity"}
+  },
+  "sites": {
+    "target":  {"component": "block_output", "layer": 18},
+    "lm_head": {"component": "lm_head"}
+  },
+  "reads": {
+    "v_cf":         {"site": "target",  "pos": "answer_tok", "model": "original", "input": "counterfactual"},
+    "subject_acts": {"site": "target",  "pos": "subject",    "model": "original", "input": "base"},
+    "logits":       {"site": "lm_head", "pos": "answer_tok", "model": "patched",  "input": "base"},
+    "logits_clean": {"site": "lm_head", "pos": "answer_tok", "model": "original", "input": "base"}
+  },
+  "writes": {
+    "patch": {"site": "target", "pos": "answer_tok", "do": {"swap": "v_cf"}}
+  },
+  "intervened_models": {
+    "patched": {"input": "base", "writes": ["patch"]}
+  },
+  "metrics": {
+    "iia": {"kind": "match", "of": "logits", "expected": "label_forms", "mode": "first_token", "token_form": "space_prefixed"}
+  },
+  "save": [
+    {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.json"},
+    {"value": "logits", "model": "patched", "input": "base", "file_path": "logits.safetensors"},
+    {"value": "logits_clean", "model": "original", "input": "base", "file_path": "logits_clean.safetensors"},
+    {"value": "subject_acts", "model": "original", "input": "base", "file_path": "subject_acts.safetensors"}
+  ]
+}

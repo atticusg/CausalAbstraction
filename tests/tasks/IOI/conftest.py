@@ -19,11 +19,11 @@ from __future__ import annotations
 
 import pytest
 
-from causalab.neural.pipeline import LMPipeline, resolve_device
+from tests._helpers.pipeline_shim import PipelineShim
 
 
 @pytest.fixture(scope="session")
-def gpt2_pipeline() -> LMPipeline:
+def gpt2_pipeline() -> PipelineShim:
     """Session-scoped ``gpt2`` :class:`LMPipeline` for token-position tests.
 
     Loaded once per pytest session; subsequent fixture injections reuse
@@ -33,5 +33,4 @@ def gpt2_pipeline() -> LMPipeline:
     resolution requires the unpadded tokenization frame, and a fixed
     ``max_length`` is rejected by ``_load_for_indexing``.
     """
-    device = resolve_device()
-    return LMPipeline("gpt2", max_new_tokens=1, device=device)
+    return PipelineShim("gpt2")

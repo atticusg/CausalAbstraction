@@ -209,3 +209,30 @@ def test_check_format_version_rejects_newer_version(tmp_path: object) -> None:
 
     with pytest.raises(ValueError, match="format version"):
         load_tensors_with_meta(str(tmp_path), "newer")
+
+
+class TestSaveInterventionResults:
+    """The stored-artifact schema at the io boundary (EU5b, #487): producers
+    hand ``save_intervention_results`` the legacy one-synthetic-batch
+    ``raw_results`` view (``GenerationResult.to_raw_results()``); the on-disk
+    schema is independent of the run's internal batch split (the flat result
+    erased batch boundaries before io ever sees them — the EU5a review's
+    ``batch_size < n_examples`` follow-up) and unchanged vs legacy runs with
+    ``batch_size >= n_examples``. Legacy multi-batch runs stored one inner
+    ``"string"`` list per batch (and single-example batches a bare str);
+    ``to_raw_results()`` always emits the one-batch nesting instead."""
+
+    def _results_by_key(self, n: int = 3, width: int = 2):
+        from causalab.neural.pipeline import GenerationResult
+
+        result = GenerationResult(
+            sequences=torch.arange(n * width, dtype=torch.long).reshape(n, width),
+            strings=[f"out_{i}" for i in range(n)],
+        )
+        return {
+            ("layer0", "pos0"): {
+                "avg_score": 0.5,
+                "scores_by_variable": {},
+                "raw_results": result.to_raw_results(),
+            }
+        }

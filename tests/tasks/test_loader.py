@@ -33,7 +33,7 @@ from pathlib import Path
 import pytest
 
 from causalab.causal.causal_model import CausalModel
-from causalab.runner.helpers import resolve_task
+from causalab.tasks.loader import resolve_task
 from causalab.tasks.loader import (
     Task,
     load_task,

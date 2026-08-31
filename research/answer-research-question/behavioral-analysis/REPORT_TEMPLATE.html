@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Behavioral analysis</title>
+  <style>
+    body { font: 14px/1.45 system-ui, sans-serif; margin: 2rem auto; max-width: 960px; padding: 0 1rem; }
+    h1, h2 { margin-top: 2rem; }
+    button { background: white; border: 1px solid #999; cursor: pointer; padding: .5rem .75rem; }
+    button[aria-selected="true"] { background: #eee; font-weight: 600; }
+    [role="tabpanel"][hidden] { display: none; }
+    .tabs, .controls { display: flex; flex-wrap: wrap; gap: .5rem; }
+    pre { background: #f5f5f5; overflow: auto; padding: .75rem; white-space: pre-wrap; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #bbb; padding: .5rem; text-align: left; }
+    .error { border: 1px solid #bbb; margin: .75rem 0; padding: .75rem; }
+  </style>
+</head>
+<body>
+  <h1>Prompt examples</h1>
+  <div class="tabs" role="tablist" aria-label="Prompt formats">
+    <button role="tab" aria-selected="true" aria-controls="prompt-1">Prompt 1</button>
+    <button role="tab" aria-selected="false" aria-controls="prompt-2">Prompt 2</button>
+  </div>
+
+  <section id="prompt-1" role="tabpanel">
+    <h2>Exact prompt</h2>
+    <pre>Replace with the exact prompt text.</pre>
+    <h2>Examples</h2>
+    <pre>Input 1: Replace with the exact model input.
+Output 1: Replace with the exact model output.
+
+Repeat for four or five examples.</pre>
+  </section>
+  <section id="prompt-2" role="tabpanel" hidden>
+    <h2>Exact prompt</h2>
+    <pre>Replace with the exact prompt text.</pre>
+    <h2>Examples</h2>
+    <pre>Input 1: Replace with the exact model input.
+Output 1: Replace with the exact model output.
+
+Repeat for four or five examples.</pre>
+  </section>
+
+  <h1>Prompt results</h1>
+  <table>
+    <thead><tr><th>Prompt</th><th>Examples</th><th>Success rate</th></tr></thead>
+    <tbody>
+      <tr><td>Prompt 1</td><td>0</td><td>0%</td></tr>
+      <tr><td>Prompt 2</td><td>0</td><td>0%</td></tr>
+    </tbody>
+  </table>
+
+  <h1>Selected prompt</h1>
+  <p>Prompt 1</p>
+
+  <h1>Error examples</h1>
+  <div class="controls">
+    <button id="previous-error" type="button">Previous</button>
+    <span id="error-position" aria-live="polite"></span>
+    <button id="next-error" type="button">Next</button>
+  </div>
+  <article class="error">
+    <pre><strong>Input:</strong> Replace with the exact input.
+<strong>Expected output:</strong> Replace with the expected output.
+<strong>Model output:</strong> Replace with the actual model output.</pre>
+  </article>
+  <article class="error" hidden>
+    <pre><strong>Input:</strong> Replace with the exact input.
+<strong>Expected output:</strong> Replace with the expected output.
+<strong>Model output:</strong> Replace with the actual model output.</pre>
+  </article>
+
+  <h1>Error patterns</h1>
+  <ul>
+    <li>Replace with one recurring error pattern.</li>
+  </ul>
+
+  <script>
+    const tabs = [...document.querySelectorAll('[role="tab"]')];
+    const panels = [...document.querySelectorAll('[role="tabpanel"]')];
+    for (const tab of tabs) {
+      tab.addEventListener('click', () => {
+        for (const candidate of tabs) candidate.setAttribute('aria-selected', String(candidate === tab));
+        for (const panel of panels) panel.hidden = panel.id !== tab.getAttribute('aria-controls');
+      });
+    }
+
+    const errors = [...document.querySelectorAll('.error')];
+    const position = document.querySelector('#error-position');
+    let errorIndex = 0;
+    function showError(nextIndex) {
+      errorIndex = (nextIndex + errors.length) % errors.length;
+      errors.forEach((error, index) => { error.hidden = index !== errorIndex; });
+      position.textContent = `${errorIndex + 1} of ${errors.length}`;
+    }
+    document.querySelector('#previous-error').addEventListener('click', () => showError(errorIndex - 1));
+    document.querySelector('#next-error').addEventListener('click', () => showError(errorIndex + 1));
+    showError(0);
+  </script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+{
+  "version": "1",
+  "description": "Run one protocol and summarize its metric table.",
+  "output_dir": "example_analysis",
+  "steps": {
+    "experiment": {
+      "type": "intervention_protocol",
+      "document": "experiment.json"
+    },
+    "summary": {
+      "type": "script",
+      "script": {"path": "summarize.py"},
+      "inputs": {
+        "table": {"step": "experiment", "file": "metric.json"},
+        "value_column": "value"
+      },
+      "outputs": {
+        "summary": {
+          "file": "summary.json",
+          "columns": {"count": "int64", "mean": "float64"}
+        }
+      }
+    }
+  }
+}

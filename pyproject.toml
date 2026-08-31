@@ -14,31 +14,34 @@ dependencies = [
     "matplotlib",
     "pandas",
     "numpy",
-    "pyvene",
     "scikit-learn",
     "ipywidgets",
     "jupyterlab",
     "ipycytoscape",
     "seaborn",
-    "transformers",
+    # 5.16 is the first release carrying models/qwen3_5_moe (Qwen3.6-35B-A3B's
+    # text tower); the hookpoint vocabulary work targets that architecture.
+    "transformers>=5.16",
     "safetensors",
     "tensorboard",
     "dash",
     "dash-cytoscape",
     "jupyter-dash",
     "rich",
-    "nnsight>=0.5.9",
     "ipykernel>=7.0.1",
     "umap-learn>=0.5.0",
-    "hydra-core>=1.3.0",
     "pot>=0.9.0",
     "openai>=1.50.0",
     "datasets>=2.20.0",
     "python-dotenv>=1.0.0",
+    # the protocol stack's YAML authoring surface (transitive before, via
+    # hydra-core/omegaconf). Metric tables are JSON, so no parquet engine.
+    "pyyaml>=6.0",
+    # transform ops: the t-distribution CDF `paired_ttest@1` needs. Transitive
+    # before (via scikit-learn), but an op's dependency belongs in the record
+    # of what this package requires, not in another library's install tree.
+    "scipy>=1.10",
 ]
-
-[tool.uv.sources]
-pyvene = { git = "https://github.com/stanfordnlp/pyvene.git", branch = "main" }
 
 [tool.pytest.ini_options]
 markers = [
@@ -54,7 +57,6 @@ norecursedirs = [".venv", "__pycache__"]
 [tool.coverage.run]
 omit = [
     "tests/*",
-    "demos/*",
     ".venv/*",
 ]
 
@@ -67,9 +69,21 @@ exclude_lines = [
     "if __name__ == .__main__.:",
 ]
 
+[project.scripts]
+# One entry point over both document types; it dispatches on the `steps` section
+causalab = "causalab.cli:main"
+
 [tool.uv.build-backend]
 module-name = ["causalab"]
 module-root = ""
+
+[project.optional-dependencies]
+# The nnsight tracing engine (causalab/neural/engines/nnsight_tracing/).
+# Pinned to the 0.8-branch rev the engine was verified against on the real
+# Qwen3.6-35B-A3B (cockpit notes/causalab-nnsight-engine-plan.md §0 decision 1;
+# experiments/2026-08-28 nnsight 0.8 verification): bump deliberately, re-running
+# the address canary, never implicitly.
+nnsight = ["nnsight"]
 
 [build-system]
 requires = ["uv_build>=0.9.5,<0.10.0"]
@@ -80,14 +94,27 @@ dev = [
     "pytest>=8.4.2",
     "pytest-cov>=7.0.0",
     "pytest-xdist>=3.6.0",
-    "ruff",
+    # pinned exactly: formatting is a CI gate, and an unpinned formatter turns
+    # a green tree red on a bystander ruff release (it bit the N-stack)
+    "ruff==0.14.5",
     "pre-commit>=4.4.0",
     "basedpyright",
     "scikit-learn-stubs",
     "pandas-stubs",
+    "scipy-stubs",
     "ipdb>=0.13.13",
     "hypothesis>=6.0",
+    # the nnsight engine's parity suite runs in the default dev env (CI uses
+    # `uv sync --frozen`, which installs this group); the runtime dependency
+    # itself is the optional extra above
+    "nnsight",
 ]
+
+[tool.uv.sources]
+# One source for the extra and the dev group alike — the 0.8-branch rev the
+# engine was verified against (see the optional-dependencies note above).
+nnsight = { git = "https://github.com/ndif-team/nnsight.git", rev = "8c480727" }
+
 
 [tool.ruff]
 # target-version inferred from project.requires-python
@@ -119,8 +146,6 @@ exclude = [
     "causalab/tasks/IOI",
     # Research-run output dir (generated at runtime, gitignored) — not shipped code
     "agent_logs",
-    # Tutorial notebooks — exploratory teaching code, not API surface
-    "demos",
 ]
 # Disable cascading inference rules to avoid untyped code propagating errors
 reportUnknownVariableType = "none"

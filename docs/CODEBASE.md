@@ -1,280 +1,100 @@
 # Architecture
 
-## 1. Package Structure
+## 1. Package structure
 
 | Module | Named for |
 |---|---|
 | `causal/` | causal model primitives |
-| `tasks/` | task definitions |
-| `neural/` | neural network interface |
-| `methods/` | interpretability methods |
+| `tasks/` | task definitions (causal models + counterfactual generators) + `serialize.py`, which writes them out as dataset tables |
+| `protocol/` | the engine-free document layer |
+| `neural/engines/pytorch_hooks/` | the reference execution engine |
+| `analysis/` | numerical analysis a workflow `script` step runs: fits, statistics, intervention operands |
+| `workflow/` | the workflow document model, runner, and CLI verbs |
 | `io/` | disk I/O + shared plotting primitives |
-| `analyses/` | research analyses |
-| `runner/` | run orchestration |
-
-**Dependency flow:** `tasks/` and `causal/` are independent. `neural/` depends on neither. `io/` depends on `neural/`, `tasks/`, and `causal/` only — it is the lowest application layer above third-party libs. `methods/` depends on `neural/`, `causal/`, and `io/`. `analyses/` depends on all four. `runner/` is a thin shell over `analyses/`.
-
-
-## 2. Runner Config System
-
-The runner uses [Hydra](https://hydra.cc/) for configuration. Configs live in `causalab/configs/`.
-
-### Config groups — module defaults
-
-Each config group holds defaults for one concern. Switching a group swaps the entire module config:
-
-```
-configs/
-├── config.yaml        # root: sets default group selections + experiment_root
-├── task/              # one file per task (weekdays, hierarchical_equality, ...)
-├── model/             # one file per model (llama31_8b, gpt2, ...)
-├── analysis/          # one file per analysis type — default values only (see below)
-└── runners/            # named full-run presets (see below)
-```
-
-Shared global fields (`seed`, `experiment_root`, Hydra output settings) live in `base.yaml` and are inherited by both `config.yaml` and every runner config.
-
-### Analysis configs — self-contained defaults
-
-Each file in `analysis/` (e.g. `subspace.yaml`, `locate.yaml`) defines the complete set of defaults for one analysis type. Each file's **first line is `# @package <name>`** — Hydra mounts the file at `cfg.<name>` automatically. Every parameter has a **concrete default value** — no root-level interpolation for shared params:
-
-```yaml
-# analysis/subspace.yaml
-# @package subspace
-_name_: subspace
-_subdir: ${.method}_k${.k_features}
-_output_dir: ${experiment_root}/subspace/${._subdir}
-method: pca
-k_features: 32      # concrete default, not ${k_features}
-batch_size: 32       # concrete default, not ${batch_size}
-```
-
-The three leading-underscore keys above (`_name_`, `_subdir`, `_output_dir`) are the **only** directives the runner recognizes: `_name_` selects the analysis module to dispatch (by bare name — there is no `_runner_target_` or other dispatch field), and `_subdir`/`_output_dir` route output. Any other `_..._` key is a config-author mistake and is **rejected at dispatch** (`run_exp.py` `_check_known_directives`), not silently ignored.
-
-Analysis configs contain only analysis-specific defaults. Dataset construction parameters (`n_train`, `n_test`, `enumerate_all`, `balanced`) live in task configs and are read via `cfg.task.*`. The global `seed` lives in `config.yaml` and is read via `cfg.seed`. See invariant 12 in §3.
-
-Analysis configs use *relative* OmegaConf interpolations (`${.method}`, `${._subdir}`) for self-references so they resolve correctly inside their own package. References to task/model config groups (`${experiment_root}`, `${task.colormap}`) are absolute and resolve from the root.
-
-`_subdir` must be **patterned on a discriminating field** (`${.method}_k${.k_features}`, `L${.layers[0]}`, …) — never a fixed literal like `default`. Two runs sharing a `_subdir` overwrite each other; even when no sweep is planned, concurrent or follow-up dispatches collide and the last writer wins (the `manifold_selfie/default` hazard, #171 C4).
-
-### Runner configs — full-run presets
-
-Runner configs are **primary Hydra configs** selected with `--config-name <name>`. They live under `causalab/configs/runners/<group>/` — not at the config root. Each runner starts with `# @package _global_`, inherits `base.yaml` for shared globals, declares its own task and model, and pulls analyses by listing them in the defaults list.
-
-Because a runner sits in a sub-directory of the config root, its defaults entries must use **absolute** (leading-`/`) paths so they resolve from the root rather than relative to the runner's own location:
-
-```yaml
-# runners/<group>/he_pipeline.yaml — multi-step pipeline
-# @package _global_
-defaults:
-  - /base
-  - /task: hierarchical_equality
-  - /model: llama31_8b
-  - /analysis/locate
-  - /analysis/subspace
-  - _self_
-
-locate:
-  layers: [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-subspace:
-  method: pca
-  k_features: 8
-
-post:
-  - type: variable_localization_heatmap
-    source_step: locate
-    source_method: interchange
-```
-
-A bare `- analysis/<name>` (no leading `/`) resolves *relative* to the runner's package and fails to load (`Could not load 'runners/.../analysis/<name>'`). The defaults line `- /analysis/locate` tells Hydra to *load `analysis/locate.yaml` and merge it at the package declared by its `# @package` directive* (here, `cfg.locate`); the body's `locate.layers` override then merges on top. When authoring a new runner, copy a shipped preset (e.g. `causalab/configs/runners/demos/baseline_demo.yaml`) to inherit this form.
-
-Order in the defaults list = order of execution. The runner discovers analyses at runtime by scanning top-level keys of `cfg` for entries that carry the `_name_` sentinel — OmegaConf preserves insertion order, so the chain runs in the order you wrote.
-
-### Running experiments
-
-```bash
-# Run a named preset
-uv run python -m causalab.runner.run_exp --config-name he_locate
-
-# Introspect full resolved config before running
-uv run python -m causalab.runner.run_exp --config-name he_locate --cfg job
-```
-
-`run_exp.py` is a standard Hydra entry point: `--config-name <name>` makes the runner config the primary config for that run. CLI overrides have the highest precedence and can override anything set by the preset.
-
-For the practical how-to-run reference — the `scripts/run_exp.sh` wrapper (basename discovery, CLI overrides), `--experiment-root`, `--slurm` dispatch, and session-local code injection — see [`causalab/runner/README.md`](../causalab/runner/README.md).
-
-### Execution model
-
-`run_exp.py` iterates the analysis chain by walking top-level keys of `cfg` for any whose value is a `DictConfig` containing `_name_`. The order of those keys matches the order of `- analysis/<name>` entries in the runner's defaults list. Each step's config is passed to its `main(cfg, analysis_cfg)` entry point as the second argument — the runner does not mutate `cfg` to alias it.
-
-**Post-steps.** The optional `post:` key holds cross-analysis visualization steps that run after all analysis steps complete. Each entry has a `type:` that maps to a handler in `causalab/runner/post_steps.py`.
-
-### Fan-out (many GPUs, short time)
-
-`causalab/runner/fanout.py` (`uv run python -m causalab.runner.fanout`) decomposes one experiment into many independent shards along arbitrary Hydra-override axes and runs them in parallel — e.g. one shard per `layer`, or per `layer × token` for a scan (the widest, shortest set of jobs). It is **analysis-agnostic**: it builds the cartesian product of the declared axes into a manifest, then runs each shard through the runner entry point — inheriting its runner discovery and `experiment_root` routing. No analysis changes are needed.
-
-- **Axes.** `--axis 'K=v1,v2'` (values verbatim; `range(a,b)` expands to scalars) for scalar-valued fields; `--axis-each 'K=range(0,32)'` wraps each value in a singleton list (`[0]`, `[1]`, …) for list-valued fields like `locate.layers`. `--const 'K=v'` applies to every shard. A YAML `--spec` is the file-form equivalent.
-- **Output routing — by `experiment_root`, not `_subdir`.** Each shard runs with `--experiment-root <base>/shards/<id>`, so shard subtrees are disjoint by construction. This is required because analysis `_subdir` patterns are keyed on the *method* (e.g. `locate.yaml`'s `_subdir: ${.method}`), not on the scan axis — two `layers=[0]` / `layers=[1]` shards would otherwise overwrite the same `results.json`. `--collect` recombines shards into the canonical single-tree layout under `<base>`, unioning scan analyses' `scores_per_cell` (cell keys are disjoint across shards, so the union is lossless) and copying everything else, axis-suffixing any non-mergeable collisions.
-- **Backends (cluster-agnostic).** `--backend auto` picks SLURM when `sbatch` is on PATH, else runs locally across visible GPUs (round-robin `CUDA_VISIBLE_DEVICES`). The SLURM backend submits one array job `0-(N-1)%CAP` and waits for it to complete. Per-site `--partition`/`--account`/`--qos` come from `causalab/configs/cluster/*.yaml`, CLI flags, or env (`CAUSALAB_SLURM_*`), and are omitted entirely when unset (cluster default applies). Peak GPUs ≈ `CAP × gpus_per_shard`; `gpus_per_shard` defaults to the model config's `slurm.gpus`.
-
-## 3. Layering rule (neural/ vs methods/ vs analyses/)
-
-`neural/` mirrors the pyvene API surface — pyvene intervention modes (`collect`, `replace`, `interchange`, `interpolate`, `mask`, `noise`, etc.), hook plumbing, the `IntervenableModel` wrapper, and the base `Featurizer` interface. Nothing else.
-
-`methods/` holds mechanistic interpretability **tools** — reusable primitives and compositions of `neural/` primitives:
-- featurizer subclasses (rotation for DAS, SAE encoders, PCA, UMAP, spline/flow manifolds, noise, standardize)
-- training loops over learned interventions (batching at scale is fine)
-- paired-input (base/counterfactual) logic that pairs a mode with a causal hypothesis
-- scoring functions and metric definitions
-
-`analyses/` is where research questions live — dataset loading from paths, artifact-directory layout, metadata tagged with `experiment_type`, heatmap/plot generation, and any end-to-end workflow that answers "where does variable X live?" or "does steering Y work?". Each analysis is a Hydra entry point (`main(cfg)`).
-
-### Invariants
-
-1. **`neural/` must not import from `methods/`.** If a module in `neural/` composes a mode with a hypothesis, subclasses a featurizer, or owns a training loop, it belongs in `methods/`.
-2. **`methods/` must not import from `runner/` or `analyses/`.** Methods are library code; they receive configuration as plain arguments (or a resolved `DictConfig`) from their caller. They must not reach into `configs/` for defaults. Save/load primitives shared across layers live in `causalab/io/`.
-3. **`io/` must not import from `methods/`, `analyses/`, or `runner/`.** It depends only on `neural/`, `tasks/`, `causal/`, and third-party libs. This is what allows `methods/` and `analyses/` to both consume `io/` without circular edges.
-4. **`methods/` must not own research-question orchestration.** No dataset loading from a path, no creation of a named artifact directory layout (`heatmaps/`, `train_eval/`, `metadata.json`, …), no metadata dicts tagged with an `experiment_type`. Those are analysis-layer concerns. Methods return in-memory result dicts; `analyses/` decides where results land. (Composite `save_*` helpers that bundle disk layout + plot for a specific method may live beside that method, but they must consume `io/` primitives only — they never re-implement artifact I/O.)
-5. **Hydra is the single source of truth for configuration.** `methods/` functions must not embed hyperparameter defaults (epochs, learning rates, batch sizes, regularization coefficients, subspace dimensions, etc.). Defaults live exactly once, in `configs/`. A method either (a) takes explicit keyword arguments with no implicit fallback, or (b) accepts a pre-resolved config object. `config=None` branches that inject hardcoded defaults inside `methods/` are a violation.
-
-6. **Static figure outputs use a standard `figure_format`, defaulting to PNG.** Any function in `causalab/io/plots/` or downstream that saves a matplotlib figure to disk (PNG or PDF) accepts an optional `figure_format: Literal["png", "pdf"]` (default `"png"`), or resolves it via `analysis.visualization.figure_format` in Hydra configs. The default lives once at the top of `configs/base.yaml` (`figure_format: png`); every analysis config inherits it via `visualization.figure_format: ${figure_format}`, so PNG is the single source of truth and PDF is opt-in (override globally with `figure_format=pdf` or per-analysis). Callers build paths with `causalab.io.plots.figure_format.path_with_figure_format` (which strips/replaces any extension on a basename), so format is never baked into a hardcoded `.pdf`/`.png` suffix in code. Interactive-only outputs (Plotly/HTML) are exempt.
-
-7. **`experiment_root` is the single source of truth for output paths.** It is declared once in `causalab/configs/base.yaml` and consumed by every runner, analysis, and method. The Hydra default is `experiment_root: artifacts/${task.name}/${model.id}` — artifacts land in the gitignored `artifacts/` tree at the repo root. Override it per run with a Hydra override (`experiment_root=<path>`).
-
-    Notebooks and scripts must not override `experiment_root` with `tempfile.mkdtemp()` or other ephemeral paths — artifacts written to `/tmp/` are invisible to downstream analyses and lost on reboot. Always pass a path under `artifacts/`.
-
-8. **Demo notebooks must not configure logging.** No `logging.basicConfig(...)` or `logging.getLogger().setLevel(...)` in notebooks under `demos/analyses/*/demo.ipynb`. Library code already configures its own loggers; notebook-level overrides pollute the root logger and produce noisy output that obscures the demo's purpose. Users who need verbose output can set log levels in their own session.
-
-9. **Demo notebooks must inline interactive HTML, not use IFrame.** To display interactive Plotly HTML files, read the file content and use `display(HTML(content))` — never `display(IFrame(path))`. Cursor's notebook renderer cannot resolve local filesystem paths in `<iframe src="...">`, so IFrame-based display silently fails (shows only the object repr). The pattern is:
-   ```python
-   from IPython.display import HTML
-   with open(html_path, 'r') as f:
-       display(HTML(f.read()))
-   ```
-
-10. **Demo notebooks follow the five-section structure.** Each `demos/analyses/*/demo.ipynb` is a self-contained walkthrough: configure, run, and inspect results — all from one place. See `demos/analyses/baseline/demo.ipynb` as the reference implementation. The five sections are:
-
-   **Section 1 — Research question and functionality.** A single markdown cell with the analysis name as a heading, followed by bolded metadata entries:
-   - **Research question** — the question this analysis answers (in italics), matching the README opening paragraph.
-   - **When to run this analysis** — practical guidance on when this analysis is appropriate.
-   - **Dependent on artifacts from analyses** — which upstream analyses must run first (or "None").
-   - **Producing artifacts for analyses** — which downstream analyses consume this analysis's outputs.
-   - **Produced artifacts** — a bullet list of every output, with the filename in backticks/bold and a one-line description of what it shows.
-
-   **Section 2 — Configuration.** Three cells:
-   1. A **markdown cell** with the `## Configuration` header, a description of where the config is written, and a **table** of the key configurable fields (`| Field | What it controls |`).
-   2. A **code cell containing only the YAML string** (`config_yaml = """..."""`). This is the single thing the user edits. The YAML follows the runner config structure: `defaults:` with `/base`, `/task`, `/model`, and `- analysis/<name>` entries for each analysis; plus top-level `<name>:` blocks for any overrides.
-   3. A **code cell that saves the YAML** to `causalab/configs/<name>_demo.yaml` and **loads the full Hydra config**, printing the resolved result so the user can verify defaults.
-
-   **Section 3 — Run.** A markdown cell with a one-line explanation, followed by a code cell that runs the analysis via `subprocess.run` (not Jupyter `!` magic):
-   ```python
-   returncode = subprocess.run(
-       ["uv", "run", "python", "-m", "causalab.runner.run_exp", "--config-name", "<name>_demo"],
-       cwd=project_root,
-       capture_output=False,
-   )
-   if returncode.returncode != 0:
-       raise Exception(f"Experiment failed with return code {returncode.returncode}")
-   ```
-   Using `subprocess.run` gives explicit control over the return code, making failures visible as Python exceptions rather than silently passing in the notebook.
-
-   **Section 4 — Artifact inspection.** Split into two subsections with separate headers:
-   - **Artifacts: main results** — the outputs that directly answer the research question. A setup code cell derives `artifact_dir` from the config variables defined in section 2 (not hardcoded), then lists the directory contents. Then one **markdown + code cell pair** per main artifact.
-   - **Artifacts: logs and sanity checks** — secondary outputs like task samples, counterfactual sanity checks, reference distributions, and metadata. Same markdown + code cell pair structure.
-
-   In both subsections the markdown cell names the artifact (as a `###` heading) and explains what to look for; the code cell loads and displays it (JSON pretty-printed, images shown inline, tensors summarized by shape).
-
-   **Section 5 — Takeaway.** A final markdown cell summarizing what to check before proceeding to downstream analyses.
-
-11. **Each analysis module has a three-section README.** Every package under `analyses/` must include a `README.md` following the template below. See `baseline/README.md` (simple) and `pullback/README.md` (complex) as reference examples.
-
-    **Section 1 — Opening paragraph (no header).** State the research question the analysis answers in one sentence, in italics. Follow with what the analysis does mechanically (one or two sentences) and where it sits in the pipeline — what it reads from and what depends on it. Pattern:
-    ```
-    # Module Name
-
-    <Name> answers: *<research question in italics>* It <what it does mechanically>.
-    The artifacts produced here are prerequisites for `<downstream>`.
-    ```
-    If the analysis has non-trivial algorithms (optimization loops, learned components), add a `## Overview` section after the opening paragraph with an ASCII diagram of the data flow. Skip this for straightforward forward-pass analyses.
-
-    **Section 2 — Configuration (`## Configuration`).** Cover two scopes:
-    - **Root config** (`causalab/configs/config.yaml`) — list only the shared params that this analysis actually reads (e.g. `experiment_root`, `batch_size`, `layer`). One bullet per param with its default.
-    - **Module config** (`causalab/configs/analysis/<name>.yaml`) — paste the full YAML block with an inline `# comment` on every field explaining what it controls:
-      ```yaml
-      analysis:
-        _name_: <name>
-        param_one: value   # what it does
-        param_two: value   # what it does
-      ```
-      If the module config has sub-groups (e.g. `belief_optim`, `embedding_optim`), document each sub-group under its own bold heading.
-
-    **Section 3 — Outputs (`## Outputs`).** Split into two subsections:
-    - `### Interpretation` — one bullet per human-readable output (JSON result, HTML visualization, PDF plot): `**\`filename\`** — What the number or visual shows. What a good result looks like. What a bad result suggests.` Lead with the most important output (the direct answer to the research question). Focus on *what to look for*, not just what the file contains.
-    - `### Saved artifacts` — a table of every file saved to disk for downstream consumption:
-
-      | File | Shape / Format | Used by |
-      |---|---|---|
-      | `file.pt` | `[dim1, dim2]` tensor | `next_analysis` |
-      | `metadata.json` | run config snapshot | provenance |
-
-      Follow the table with any notes needed to interpret non-obvious dimensions.
-
-    **What to omit from analysis READMEs:**
-    - **How to run** — that belongs in [`causalab/runner/README.md`](../causalab/runner/README.md), not here.
-    - **Implementation details** — method internals belong in inline code comments, not the README, unless the algorithm is a core research contribution of the analysis.
-    - **Redundant config docs** — don't re-document params that are self-evident from their name and default value.
-
-12. **Dataset construction parameters live in task config; seed lives at root.** The four dataset-construction knobs — `n_train`, `n_test`, `enumerate_all`, `balanced` — are defined in task configs (`configs/task/*.yaml`) and read by analyses via `cfg.task.*`. `seed` is defined once in `config.yaml` and read via `cfg.seed`. Analysis configs must not duplicate these fields. Runner configs that need to override dataset sizes for a specific run do so in the `task:` override block, not per-analysis. This ensures every step in a multi-step pipeline uses the same dataset parameters unless the task itself dictates otherwise.
-
-Practical consequence: `neural/` stays small and boring; `methods/` stays a library of interchangeable tools; `analyses/` is the only layer that knows about disk layout, Hydra, and research intent. This makes the dependency flow declared in §1 enforceable rather than aspirational.
-
-
-## 4. Artifact serialization policy
-
-**Artifact serialization policy (migration in progress).** The target end state is that all on-disk artifacts produced by `causalab` are split into (1) a tensor payload persisted as `.safetensors` and (2) optional non-tensor metadata persisted as a sibling `.meta.json` under the same stem (e.g. `manifold.safetensors` + `manifold.meta.json`), and that both are written and read exclusively via the helpers in `causalab.io.artifacts`. Migration is staged by artifact kind:
-
-- **Kind-(a) — tensors + scalar meta.** Today, kind-(a) artifacts are serialized via `save_tensors_with_meta` / `save_module` (and their load counterparts) from `causalab.io.artifacts`. This is the steady-state shape and applies now.
-- **Kind-(b/c/d) — pickle blobs (sklearn instances), mixed payloads, optimizer state.** These sites still use `torch.save` / `torch.load(weights_only=False)` / `pickle`. Migration of each is tracked in `SAFETENSORS_MIGRATION_PLAN.md` (root of repo). The CI grep rule that bans `torch.save`, `torch.load`, and `pickle` outside `causalab/io/artifacts.py` activates **after** these migrations complete. HuggingFace-managed weights (`.bin`, `model.safetensors` from transformers cache) are out of scope.
-
-**Currently-deferred call sites** (explicit list of the surface that the CI grep rule will cover once it activates):
-
-- `causalab/io/artifacts.py` — `load_pickle` / `save_pickle` helpers (to be deleted after kind-(b/c/d) migration)
-- `causalab/analyses/output_manifold/main.py:142-144, 195, 324` — `hellinger_pca` pickle (PR follow-up)
-- `causalab/analyses/path_steering/main.py:1211, 1221, 1515, 1533` — `hellinger_pca` readers
-- `causalab/methods/spline/belief_fit.py:61` — `torch.load(weights_only=False)` (PR follow-up)
-- `causalab/analyses/pullback/main.py:471, 492, 580, 833` — `torch.load(weights_only=False)`
-- `causalab/neural/units.py:269` — `torch.load(weights_only=False)`
-
-
-## 5. Config notes
-
-Config knobs do not compose freely. The combinations below are known to interact, and setting one without the matching other produces misleading results rather than an error.
-
-### `task.resample_variable` × `locate.mode`
-
-`task.resample_variable` (in every `configs/task/*.yaml`) controls how counterfactuals are generated by `generate_datasets` (`runner/helpers.py`):
-
-- `"all"` — the counterfactual is a fresh independent sample; every input variable may differ from the original. This is what every task's hand-written `counterfactuals.generate_dataset` does by default, and it's the right setting for centroid-mode analyses and any analysis that compares *distributions* rather than exact tokens.
-- A variable name (e.g. `"entity"`, `"number"`) — the counterfactual is a copy of the original with only that one input variable resampled to a different value. The task's generator is bypassed.
-
-`locate.mode: pairwise` scores each `(layer, token_position)` cell by patching the residual stream at that cell and comparing the result per example. The reference is set by `task.intervention_metric`: against the causal model's expected counterfactual label (`causal_label`, the default — does patching make the model emit the *counterfactual's target answer*? — or the lenient `string_match`), or against the base/pre-intervention output distribution (`output_shift` — how much did patching move the output?). With `resample_variable: "all"`, multiple input variables differ between original and counterfactual — so patching only *one* variable's position produces an output that reflects a mixture (e.g. `original_number + cf_entity`), which neither matches the CF's target label nor isolates a single variable's effect. Entity/number positions score near zero (label metrics) or diffuse (shift metric) even when the variable is clearly encoded there; only the last-token position scores high, because by then the full answer has been composed.
-
-**Rule:** `locate.mode: pairwise` is only informative when `task.resample_variable` is set to a single variable name — the variable whose representation you are trying to localize. Target that variable with both knobs together:
-
-```yaml
-task:
-  resample_variable: entity   # CFs differ from originals only in `entity`
-
-locate:
-  mode: pairwise              # default; scores how cleanly patching each cell
-                              # flips the model to the CF's answer
-```
-
-`pairwise` is now the default mode. Centroid mode (`locate.mode: centroid`) scores distributional KL to per-class references and remains meaningful under `resample_variable: "all"` — use it when you want a variable-agnostic localization pass.
-
-`balanced: true` takes precedence over `resample_variable` when both are set; if you need single-variable counterfactuals, leave `balanced: false`.
-
-### Required `task.*` keys
-
-Some analyses read `task.*` keys with no safe default — `intervention_metric` (direct attribute access) and `colormap` / `colormap2` (resolved through `${task.*}` interpolations baked into the analysis configs). Shipped `configs/task/*.yaml` set them, but a factory task resolved by name with no shipped YAML can omit them. Each analysis declares the keys it needs in a module-level `REQUIRED_TASK_KEYS` tuple (alongside `ANALYSIS_NAME`); the runner unions the requirements of the requested steps and calls `validate_task_config` (`runner/helpers.py`) before any step runs, failing fast with every missing key listed at once rather than crashing one at a time mid-run (#264). Membership — not truthiness — is the contract: an explicit `null` (e.g. `colormap2: null`) is present and valid. A task config resolved by name without a shipped YAML must still carry these keys; `REQUIRED_TASK_KEYS` is the single source of truth for which.
+| `configs/` | shipped documents: `protocols/` (flat), `runs/` (split into `application` + `method`, §1.1), `methods/` (reusable halves), `workflows/` — JSON, not code |
+
+**Dependency flow:** `tasks/` and `causal/` are independent. `protocol/` is torch-free and links against no execution engine — the CLI imports the reference engine lazily. `neural/engines/pytorch_hooks/` implements `protocol.engine.Engine`. `steps/` depends only on `protocol/` and is torch-free at module level: a step script's numerics are imported inside its `main`, so listing the shipped scripts and hashing one cost nothing but stdlib. `workflow/` depends on `protocol/`, drives whichever engines it is handed, and reaches `steps/` lazily when it runs a script step; the workflow loader likewise reaches the shipped-script directory through a function-local import, so `protocol/` keeps no module-level edge to anything that executes. `io/` depends only on `neural/`, `tasks/`, `causal/`. `tests/test_architecture_layering.py` enforces the static half of all this; `tests/protocol/test_load_is_torch_free.py` the behavioural half.
+
+## 2. The protocol layer (`causalab/protocol/`)
+
+The normative spec is [`docs/intervention_protocol.md`](intervention_protocol.md); this is the module map.
+
+| module | owns |
+|---|---|
+| `schema.py` | typed document model; closed vocabularies (components, `do` mechanisms, metric kinds) |
+| `loader.py` | strict load, `--set` overrides, the §5 validation checklist, column checks |
+| `canonical.py` | canonical form + digests (§7) |
+| `sweep.py` | axis expansion, point cap, coordinate labels (§3) |
+| `bundles.py` | addressing one entry inside a saved `.safetensors` bundle: key grammar, coordinate selection (§2.5, §2.6) |
+| `tables.py` | metric tables on disk — native JSON, an array of row objects. Torch-free and pandas-free, so the engine writes through it and step scripts read through it |
+| `plan.py` | model graph → forward groups, content dedup (§4) |
+| `engine.py` | `Engine` ABC, `ExecutionRequest`/`RunResult`, capability routing (§8) |
+| `resolve.py` | `ResolutionEnv`: the `DatasetResolver` contract (digest / columns / rows) with `FileDatasets` (JSON tables), `FileArtifacts`, `ArtifactIdentity` build/check |
+| `registry.py` | static model metadata (widths per component); built-in entries for the models the corpus and goldens name |
+| `workflow.py` | the workflow *document* model: parse, the 11-rule checklist, the locator+selector reference grammar, derived schedule, script hashing, digests |
+| `cli.py` | `causalab run/validate/explain/digest`, dispatching on document type; `--device/--dtype/--points/--resume` on `run` |
+
+Documents are pure data. Sweeps expand at load into point protocols; the campaign digest names the document, each point's digest is the provenance unit.
+
+## 3. The reference engine (`causalab/neural/engines/pytorch_hooks/`)
+
+Implements the §8 services with raw pytorch hooks, CPU or a single accelerator (`device`/`dtype` constructor args — `cuda`, `cuda:1`, `mps`):
+
+| module | service |
+|---|---|
+| `loading.py` | model+tokenizer bundles (left padding, eager attention, frozen weights) |
+| `sites.py` | component vocabulary → module taps; Llama-tree (Llama/Qwen/Mistral/Gemma) and GPT-2-tree families |
+| `encoding.py` | tokenization, char→token spans, `PositionFrame`, position specs → indices (chat-prefix lengths are a field, not a code path yet) |
+| `mechanisms.py` | the closed `do` set; absolute-then-additive order per address |
+| `featurizers.py` | featurizer kinds + error-term contract |
+| `metrics.py` | metric lowering over one lm_head read; single-token column resolution |
+| `executor.py` | one forward group per (model, input), whole batch at once; edit/read hook wiring |
+| `train.py` | the `train` loop for trainable featurizers |
+| `outputs.py` | JSON metric tables and safetensors tensor files, coordinate-keyed, identity-stamped |
+| `engine.py` | `PytorchHooksEngine`: capabilities `{grad, paired_forward, full_logits, pytorch_fn_local}` |
+
+Known limits (tracked in the intervention-protocol epic): one device per run (no `device_map` sharding), one batch per forward group (no microbatching), no `attention_probs`, no chat-template path.
+
+## 4. The workflow runner (`causalab/workflow/`)
+
+Executes workflow documents: topological step order from derived references, per-step output dirs under `<out-root>/<output_dir>/`, an artifact overlay so later steps resolve earlier steps' products, protocol and script steps, a `_step.json` record per step and a `workflow.json` run manifest. There is no publication step — the run tree *is* the publication (spec §0). The runner knows only the step graph: device/dtype live in the engines it is handed, and job dispatch is site tooling outside the repo (spec §8, "Execution scale").
+
+**Step scripts.** A `script` step names its code with a locator —
+`{"module": "causalab.analysis.fit_pca"}` or `{"path": "scripts/probe.py"}` — so
+the shipped ones are filed **by subject** rather than in one namespace:
+
+| module | what it holds |
+|---|---|
+| `causalab/analysis/` | numerical analysis: `fit_pca`, `harvest_difference`, `head_stats`, `paired_ttest`. Fits, statistics, and the operands an intervention consumes. Importable and testable without the workflow layer |
+| `causalab/io/plots/workflow_figures.py` | the heatmap/lines renderer, beside the other 17 plot modules and reusing `figure_format` for the png-over-pdf default |
+| `causalab/workflow/scripts/select.py` | the one script whose purpose *is* wiring: reduce a table to the values a later document's `set` reads |
+| `causalab/io/step_io.py` | what a script uses for IO: JSON tables and values objects, safetensors with `slot`/`entry` addressing, the identity a tensor output inherits |
+| `causalab/io/step_record.py` | the `_step.json` format — its writer (used by the runner), its reader, and the shared aggregation rule `select` and `workflow_figures` both call, so a figure and a chosen value never disagree about what a row is |
+| `causalab/workflow/isolate.py` | the entry point for an isolated (subprocess) step |
+
+A script is one function, `main(inputs, outputs) -> None`, that creates every
+output it declares. The runner verifies they arrived, checks a declared table's
+columns, and stamps ArtifactIdentity on safetensors outputs — so a script cannot
+forget provenance, which is what a later protocol step's identity check depends
+on. A script is **found and hashed, never imported** at load
+(`importlib.util.find_spec` resolves a module to a file without executing it):
+`validate`/`digest` stay torch-free, and the hash in the digest is what makes
+`--resume` correct.
+
+**Why two packages.** `protocol/` is the intervention protocol alone and must
+not import the workflow layer — that is what lets someone use it on its own, and
+`tests/test_architecture_layering.py` enforces it. The dependency runs
+`workflow/` → `io/` → `protocol/`, one way, and `causalab/cli.py` sits above
+both, dispatching on the document's `steps` section.
+
+## 5. Datasets are build products
+
+A document names a dataset ref; a resolver reads bytes (`protocol/resolve.py`). Nothing generates a table during a load, so `validate` / `explain` / `digest` need no task code, no tokenizer and no network, and a document's digest is a function of committed bytes. `causalab/tasks/serialize.py` + `scripts/build_task_dataset.py` are the other side: task package → deterministic table + a `<ref>.manifest.json` provenance sidecar. Everything per-row or task-semantic (answer forms, values that place a position per row) is a column written there, never a document-side computation (spec §2.2).
+
+## 6. Configs are documents
+
+`causalab/configs/protocols/*.json` are the shipped protocol documents (most are byte-identical to a corpus document under `tests/protocols/`; the exceptions are the presets with no corpus twin — `mean_harvest`, `mean_ablation`, `dbm_apply`); `causalab/configs/runs/weekdays_8b_interchange.json` carries the same experiment as one document split into its transferable and its input-bound halves, and `causalab/configs/methods/interchange.json` is that method on its own (spec §1.1, implemented in `protocol/method.py`); `causalab/configs/workflows/weekdays_8b.json` is the worked workflow. There is no Python config system: a "config" is a protocol or workflow document, overridden ad hoc with `--set` and promoted into a file when it matters.
+
+## 7. Tests
+
+See [`docs/TESTS.md`](TESTS.md) for the tier taxonomy and pinned-artifact discipline, and [`docs/test_migration.md`](test_migration.md) for the old-suite → new-suite ledger.

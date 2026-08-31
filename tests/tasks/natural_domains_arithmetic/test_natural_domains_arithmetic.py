@@ -452,7 +452,7 @@ class TestNaturalDomainsArithmeticFactoryBranchProperty:
         the ``N_entities`` score tokens the removed ``output_token_values`` used to
         encode (#296).
         """
-        from causalab.methods.output_tokens import form_groups
+        from causalab.causal.causal_utils import form_groups
 
         model, cfg = _grouped_weekdays_model()
         entities = list(cfg.result_entities or cfg.entities)

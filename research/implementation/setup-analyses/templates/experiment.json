@@ -1,0 +1,35 @@
+{
+  "version": "1",
+  "description": "Measure the original model's expected answer logit.",
+  "model": {
+    "key": "meta-llama/Llama-3.1-8B",
+    "revision": "main",
+    "dtype": "bf16"
+  },
+  "data": {
+    "base": {"dataset": "task/eval", "field": "input"}
+  },
+  "sites": {
+    "lm_head": {"component": "lm_head"}
+  },
+  "reads": {
+    "logits": {
+      "site": "lm_head",
+      "pos": -1,
+      "model": "original",
+      "input": "base"
+    }
+  },
+  "metrics": {
+    "metric": {"kind": "token_logit", "of": "logits", "token": "base_answer",
+               "token_form": "space_prefixed"}
+  },
+  "save": [
+    {
+      "value": "metric",
+      "model": "original",
+      "input": "base",
+      "file_path": "metric.json"
+    }
+  ]
+}

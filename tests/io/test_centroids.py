@@ -166,21 +166,3 @@ class TestErrorContract:
 
 class TestVizDoesNotHardCrash:
     """Subspace viz wrapper degrades to a warning on a categorical target."""
-
-    def test_save_features_visualization_skips_without_raising(self, tmp_path):
-        from causalab.analyses.subspace._visualization import (
-            save_features_visualization,
-        )
-
-        ds = _dataset(_categorical_model(), "letter", ["A", "B", "C"])
-        features = torch.randn(len(ds), 6)
-        # Each plot is best-effort; a categorical target must not propagate.
-        result = save_features_visualization(
-            features=features,
-            train_dataset=ds,
-            output_dir=str(tmp_path),
-            intervention_variable="letter",
-            embeddings=None,
-        )
-        assert result is None
-        assert (tmp_path / "visualization").is_dir()

@@ -1,0 +1,45 @@
+{
+  "version": "1",
+  "type": "method",
+  "description": "Interchange a counterfactual activation and score the patched output.",
+  "sites": {
+    "target": {"component": "block_output"},
+    "lm_head": {"component": "lm_head"}
+  },
+  "reads": {
+    "counterfactual_value": {
+      "site": "target",
+      "pos": -1,
+      "model": "original",
+      "input": "counterfactual"
+    },
+    "patched_logits": {
+      "site": "lm_head",
+      "pos": -1,
+      "model": "patched",
+      "input": "base"
+    }
+  },
+  "writes": {
+    "patch": {
+      "site": "target",
+      "pos": -1,
+      "do": {"swap": "counterfactual_value"}
+    }
+  },
+  "intervened_models": {
+    "patched": {"input": "base", "writes": ["patch"]}
+  },
+  "metrics": {
+    "iia": {"kind": "match", "of": "patched_logits", "expected": "label",
+            "token_form": "space_prefixed"}
+  },
+  "save": [
+    {
+      "value": "iia",
+      "model": "patched",
+      "input": "base",
+      "file_path": "iia.json"
+    }
+  ]
+}
