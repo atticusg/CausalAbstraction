@@ -1119,6 +1119,7 @@ runs the full pipeline, a split one composing its halves first.
 | `--device` (run) | reference-engine placement: any torch device string (`cpu` default, `cuda`, `cuda:1`, `mps`). Placement is execution; precision is not (§8) |
 | `--dtype` (run) | shorthand for `--set model.dtype=…` — it edits the document, so the run's digest is the overridden document's and the record never lies about what produced the numbers. Refused on a workflow, whose steps each declare their own |
 | `--points START:STOP` (run) | execute one half-open point-index shard of the expanded campaign (sec. 8, execution scale); document runs only — digests and stamps are unaffected |
+| `--register-from-hf` | resolve an unregistered `model.key` from its HF config before loading, instead of refusing `[V4]`. Opt-in, so without it a digest never depends on the network; `run` always does it. On a workflow it pre-registers **every** inner document's key |
 
 ## 10. Worked examples
 

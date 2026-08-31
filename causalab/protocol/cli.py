@@ -83,9 +83,9 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
         raw = dict(load_text(args.document))
         if document_type(raw) == "method":
             return _method_main(args, raw)
-        if args.verb == "run":
-            from causalab.cli import ensure_model_registered
+        from causalab.cli import ensure_model_registered, wants_hf_registration
 
+        if wants_hf_registration(args):
             ensure_model_registered(args)
         loaded = _load(args, env)
         if args.verb == "validate":

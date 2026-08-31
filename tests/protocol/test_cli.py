@@ -398,6 +398,131 @@ def _file_argv(verb: str, path, artifacts_root, *extra: str) -> list[str]:
     ]
 
 
+# --------------------------------------------------------------------------- #
+#  --register-from-hf: pre-flighting a document on an unregistered model        #
+# --------------------------------------------------------------------------- #
+
+
+class _StubConfig:
+    """Just the attributes :func:`model_info_from_hf_config` reads."""
+
+    num_attention_heads = 8
+    hidden_size = 64
+    num_hidden_layers = 40
+    num_key_value_heads = 8
+    head_dim = 8
+    intermediate_size = 128
+    vocab_size = 512
+    dtype = "bfloat16"
+
+
+def _unregistered_key(request) -> str:
+    """A key unique to the calling test.
+
+    ``register_model`` writes to a process-global registry, so a shared key
+    would leak: whichever test registered it first would make the others'
+    "still refuses" assertion vacuous.
+    """
+    return f"some-org/never-registered-40L-{abs(hash(request.node.name)):x}"
+
+
+@pytest.fixture
+def unregistered_document(tmp_path, request):
+    """Corpus 02 retargeted at a key the registry has never heard of."""
+    raw = json.loads((CORPUS_DIR / "02_interchange_im.json").read_text())
+    raw["model"]["key"] = _unregistered_key(request)
+    path = tmp_path / "unregistered_im.json"
+    path.write_text(json.dumps(raw, indent=2))
+    return path
+
+
+def _verb(verb: str, path: Path, artifacts_root, *extra: str) -> list[str]:
+    return [
+        verb,
+        str(path),
+        "--data-root",
+        str(FIXTURES / "data"),
+        "--artifacts-root",
+        str(artifacts_root),
+        *extra,
+    ]
+
+
+@pytest.mark.parametrize("verb", ["validate", "explain", "digest"])
+def test_a_pure_verb_refuses_an_unregistered_model_without_the_flag(
+    verb, unregistered_document, artifacts_root, capsys
+):
+    """The invariant: no flag, no network — so the refusal stands."""
+    code = main(_verb(verb, unregistered_document, artifacts_root))
+    assert code == 1
+    assert "[V4]" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("verb", ["validate", "explain", "digest"])
+def test_register_from_hf_lets_a_pure_verb_pre_flight_an_unregistered_model(
+    verb, unregistered_document, artifacts_root, capsys, monkeypatch
+):
+    """The gap all three A3B protocol runs hand-rolled a wrapper around.
+
+    The documented workaround — validate against a *similar* registered model —
+    produces a **false** refusal: `[V4] layer 36 out of range for the 36-layer
+    model 'Qwen/Qwen3-4B-Instruct-2507'` on a perfectly valid 40-layer
+    document. Pre-flighting has to be possible on the model the document names.
+    """
+    import transformers
+
+    monkeypatch.setattr(
+        transformers.AutoConfig,
+        "from_pretrained",
+        classmethod(lambda cls, key, **kw: _StubConfig()),
+    )
+    code = main(
+        _verb(verb, unregistered_document, artifacts_root, "--register-from-hf")
+    )
+    assert code == 0, capsys.readouterr().err
+
+
+def test_register_from_hf_pre_registers_every_inner_model_of_a_workflow(
+    tmp_path, artifacts_root, monkeypatch, capsys, request
+):
+    """A workflow names several documents, so registering only the outer one
+    would pre-flight nothing — which is why the runs' wrappers were
+    workflow-aware."""
+    import transformers
+
+    seen: list[str] = []
+
+    def fake(cls, key, **kw):
+        seen.append(key)
+        return _StubConfig()
+
+    monkeypatch.setattr(transformers.AutoConfig, "from_pretrained", classmethod(fake))
+    raw = json.loads((CORPUS_DIR / "02_interchange_im.json").read_text())
+    key = _unregistered_key(request)
+    raw["model"]["key"] = key
+    inner = tmp_path / "inner_im.json"
+    inner.write_text(json.dumps(raw, indent=2))
+    workflow = tmp_path / "wf.json"
+    workflow.write_text(
+        json.dumps(
+            {
+                "version": "1",
+                "output_dir": "out",
+                "steps": {
+                    "only": {
+                        "type": "intervention_protocol",
+                        "document": str(inner),
+                    }
+                },
+            },
+            indent=2,
+        )
+    )
+    code = main(_verb("validate", workflow, artifacts_root, "--register-from-hf"))
+    assert code == 0, capsys.readouterr().err
+    assert key in seen
+
+
 def test_validate_and_digest_work_on_a_method(capsys, artifacts_root):
     assert main(_file_argv("validate", SHIPPED_METHOD, artifacts_root)) == 0
     assert "method" in capsys.readouterr().out
