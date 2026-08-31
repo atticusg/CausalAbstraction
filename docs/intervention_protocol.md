@@ -684,18 +684,26 @@ Closed mechanism set (`do` has exactly one key):
 
 ### 2.10 `metrics`
 
-Closed vocabulary; `of` names a read; other value fields name dataset columns.
+Closed vocabulary; `of` names a read. The other value fields do **not** all
+mean the same thing, and the difference has cost real debugging time:
 
-| kind | fields | result per example |
-|---|---|---|
-| `logit_diff` | `of, a, b` | `logits[a] − logits[b]` |
-| `token_logit` | `of, token` | `logits[token]` |
-| `cross_entropy` | `of, target` | CE against target |
-| `kl` | `of, target` (a read) | KL between two reads' distributions |
-| `class_probs` | `of, groups` | summed probability per group |
-| `top_k` | `of, k, by` | the k top-ranked entries of the read (see below) |
-| `match` | `of, expected` (+ optional `mode`) | match indicator |
-| `decode` | `of` | the addressed tokens as text |
+- `a` / `b` / `token` / `target` / `expected` name **dataset columns** — the
+  answer is per row, so the document names the column and the table carries the
+  string.
+- `class_probs`'s `groups` holds **literal token strings**, `{name: [tokens]}`.
+  A class is a property of the answer *space*, one for the whole run, so there
+  is no column to read it from.
+
+| kind | fields | what the value fields name | result per example |
+|---|---|---|---|
+| `logit_diff` | `of, a, b` | columns | `logits[a] − logits[b]` |
+| `token_logit` | `of, token` | column | `logits[token]` |
+| `cross_entropy` | `of, target` | column | CE against target |
+| `kl` | `of, target` | a **read** | KL between two reads' distributions |
+| `class_probs` | `of, groups` | **literal token strings** | summed probability per group |
+| `top_k` | `of, k, by` | — | the k top-ranked entries of the read (see below) |
+| `match` | `of, expected` (+ optional `mode`) | column (of a string, or a **list** of equivalent forms) | match indicator |
+| `decode` | `of` | — | the addressed tokens as text |
 
 **Reads a kind may bind to.** Every kind but `kl` and `top_k` names *vocabulary
 entries* — an authored string resolved to a token id — so it binds to a *plain*
@@ -1146,6 +1154,7 @@ runs the full pipeline, a split one composing its halves first.
 | `digest <doc>` | the campaign digest |
 | `--set path=value` | ad-hoc override — exploration only; promote anything that matters into the file |
 | `--device` (run) | reference-engine placement: any torch device string (`cpu` default, `cuda`, `cuda:1`, `mps`). Placement is execution; precision is not (§8) |
+| `--engine` (run) | `auto` (default) is every installed engine with the reference **first**, routed by `choose_engine` (sec. 8); name one to pin it. A document never names an engine — it declares what it needs — so the default is routing rather than a choice the document did not make |
 | `--dtype` (run) | shorthand for `--set model.dtype=…` — it edits the document, so the run's digest is the overridden document's and the record never lies about what produced the numbers. Refused on a workflow, whose steps each declare their own |
 | `--points START:STOP` (run) | execute one half-open point-index shard of the expanded campaign (sec. 8, execution scale); document runs only — digests and stamps are unaffected |
 | `--register-from-hf` | resolve an unregistered `model.key` from its HF config before loading, instead of refusing `[V4]`. Opt-in, so without it a digest never depends on the network; `run` always does it. On a workflow it pre-registers **every** inner document's key |

@@ -153,7 +153,7 @@ config, so a digest never depends on connectivity. The A3B is not one of the
 six built-in entries, so a document naming it refuses:
 
 ```bash
-uv run causalab validate patch.json --data-root data --data
+uv run causalab validate patch.json --data-root data --artifacts-root . --data
 # refused: [V4] at model.key model 'Qwen/Qwen3.6-35B-A3B' is not in the protocol
 #          model registry — register its static config
 #          (causalab.protocol.registry.register_model, or model_info_from_hf_config
@@ -162,16 +162,31 @@ uv run causalab validate patch.json --data-root data --data
 
 Two ways forward, and which you want depends on what you are checking:
 
-- **checking the document** — point the pure verbs at a registered key. The
-  structure, the reference graph and the save manifest are model-independent;
-  only widths and layer bounds are not:
+- **pre-flighting on the real model** — `--register-from-hf` resolves the key
+  from its HF config first. Opt-in, because it is the one thing that makes a
+  pure verb touch the network:
 
   ```bash
-  uv run causalab validate patch.json --data-root data --data \
+  uv run causalab validate patch.json --data-root data --artifacts-root . \
+      --data --register-from-hf
+  # OK: patch.json — 1 point, digest …
+  ```
+
+  ⚠️ Do **not** substitute a similar registered model for this. It produces a
+  *false* refusal — `[V4] … layer 36 out of range for the 36-layer model
+  'Qwen/Qwen3-4B-Instruct-2507'` on a perfectly valid 40-layer A3B document.
+
+- **checking the document alone** — point the pure verbs at a registered key.
+  The structure, the reference graph and the save manifest are
+  model-independent; only widths and layer bounds are not, so read a
+  width-or-bounds refusal as being about the stand-in:
+
+  ```bash
+  uv run causalab validate patch.json --data-root data --artifacts-root . --data \
       --set model.key=Qwen/Qwen3-4B-Instruct-2507
   # OK: patch.json — 1 point, digest cc2e2500fac13029…
 
-  uv run causalab explain patch.json --data-root data \
+  uv run causalab explain patch.json --data-root data --artifacts-root . \
       --set model.key=Qwen/Qwen3-4B-Instruct-2507
   # digest    cc2e2500fac130298f0513e6f836da2d16056660147fdbd03f1e37e65427e4cf
   # model     Qwen/Qwen3-4B-Instruct-2507@main fp32
@@ -200,7 +215,8 @@ Smoke it on a tiny random model of the same architecture — four layers, hidden
 8, hybrid DeltaNet/attention tower, sparse MoE in every layer:
 
 ```bash
-uv run causalab run patch.json --data-root data --out runs/patch \
+uv run causalab run patch.json --data-root data --artifacts-root . \
+    --out runs/patch \
     --set model.key=tiny-random/qwen3.5-moe \
     --set sites.target.layer=1 \
     --device cpu
@@ -222,17 +238,19 @@ instead of picking one. Set the metric's `token_form` to `bare` or
 Then the real thing, on an accelerator:
 
 ```bash
-uv run causalab run patch.json --data-root data --out runs/patch \
-    --device cuda --dtype bf16 --engine auto
+uv run causalab run patch.json --data-root data --artifacts-root . \
+    --out runs/patch --device cuda --dtype bf16
 ```
 
 | flag | why |
 |---|---|
 | `--device` | placement is execution, not a document fact |
-| `--dtype` | shorthand for `--set model.dtype=…`; precision **is** a document fact, so it enters the digest |
-| `--engine` | `pytorch_hooks` (default), `nnsight`, or `auto` — see [§6](#6-engines-and-routing) |
+| `--dtype` | shorthand for `--set model.dtype=…`; precision **is** a document fact, so it enters the digest. Refused on a **workflow** — its steps each declare their own realization |
+| `--artifacts-root` | where a relative artifact `file_path` resolves. It merely *defaults* to `.`, so passing it is what keeps absolute machine paths out of a digest — pass it in every invocation |
+| `--engine` | `auto` (default: every installed engine, reference first, routed by `choose_engine`), or name one to pin it — see [§6](#6-engines-and-routing) |
 | `--points START:STOP` | execute one half-open slice of an expanded sweep; the seam to shard a campaign on |
 | `--resume` | reuse completed outputs whose inputs and code hash are unchanged |
+| `--register-from-hf` | resolve an unregistered `model.key` from its HF config instead of refusing `[V4]`; `run` always does this, the pure verbs only on request |
 
 
 ## 5. Hookpoints on Qwen3.6-35B-A3B
@@ -272,6 +290,20 @@ declared axes — `head·feature` means head-major and already flattened,
 mechanism the engine reaches it by, which is what the engine column follows
 from. *write* is the policy: a refusal names the alternative rather than just
 saying no.
+
+⚠️ **The engines column is information, not something to author.** It names
+engines the way `--engine` does — `pytorch_hooks`, `nnsight` — since those are
+the values the flag takes and the names the engines answer to. But a document
+never names an engine: it declares the components it addresses, `requires`
+derives the capabilities from those, and `choose_engine` picks (§8). So read a
+single engine in that column as "only this one serves that component today",
+and check the routing rather than copying the name:
+
+```bash
+uv run causalab explain patch.json --data-root data --artifacts-root . \
+    --engine auto
+# ... engine    nnsight
+```
 
 
 **Model boundary (no `layer`)**
@@ -329,17 +361,17 @@ saying no.
 | `delta_kv_mem` | DeltaNet (30) | `(batch, position, head, feature)` | delta-kernel boundary | `pytorch_hooks` | read-only — a memory readout, recomputed each step — write `delta_state` or `delta_value` |
 | `delta_state_update` | DeltaNet (30) | `(batch, position, head, feature)` | delta-kernel boundary | `pytorch_hooks` | read-only — lowers onto a state edit; deferred — write `delta_state` |
 | `delta_state` | DeltaNet (30) | `(batch, position[steps], head, state, state)` | delta-kernel boundary | `pytorch_hooks` | any mechanism |
-| `deltanet_qkv` | DeltaNet (30) | `(batch, position, feature)` | `.source` line (fused forward) | `nnsight_tracing` | any mechanism |
-| `deltanet_gate` | DeltaNet (30) | `(batch, position, head, feature)` | `.source` line (fused forward) | `nnsight_tracing` | any mechanism |
-| `deltanet_qkv_conv` | DeltaNet (30) | `(batch, feature, position)` | `.source` line (fused forward) | `nnsight_tracing` | any mechanism |
-| `deltanet_query` | DeltaNet (30) | `(batch, position, head, feature)` | `.source` line (fused forward) | `nnsight_tracing` | any mechanism |
-| `deltanet_key` | DeltaNet (30) | `(batch, position, head, feature)` | `.source` line (fused forward) | `nnsight_tracing` | any mechanism |
-| `deltanet_value` | DeltaNet (30) | `(batch, position, head, feature)` | `.source` line (fused forward) | `nnsight_tracing` | any mechanism |
-| `deltanet_beta` | DeltaNet (30) | `(batch, position, feature)` | `.source` line (fused forward) | `nnsight_tracing` | any mechanism |
-| `deltanet_decay` | DeltaNet (30) | `(batch, position, feature)` | `.source` line (fused forward) | `nnsight_tracing` | any mechanism |
-| `deltanet_core_out` | DeltaNet (30) | `(batch, position, head, feature)` | `.source` line (fused forward) | `nnsight_tracing` | any mechanism |
-| `deltanet_gated_out` | DeltaNet (30) | `(batch, position, head·feature)` | `.source` line (fused forward) | `nnsight_tracing` | any mechanism |
-| `deltanet_state` | DeltaNet (30) | `(batch, position[chunk], head, feature)` | `.source` line (fused forward) | `nnsight_tracing` | any mechanism |
+| `deltanet_qkv` | DeltaNet (30) | `(batch, position, feature)` | `.source` line (fused forward) | `nnsight` | any mechanism |
+| `deltanet_gate` | DeltaNet (30) | `(batch, position, head, feature)` | `.source` line (fused forward) | `nnsight` | any mechanism |
+| `deltanet_qkv_conv` | DeltaNet (30) | `(batch, feature, position)` | `.source` line (fused forward) | `nnsight` | any mechanism |
+| `deltanet_query` | DeltaNet (30) | `(batch, position, head, feature)` | `.source` line (fused forward) | `nnsight` | any mechanism |
+| `deltanet_key` | DeltaNet (30) | `(batch, position, head, feature)` | `.source` line (fused forward) | `nnsight` | any mechanism |
+| `deltanet_value` | DeltaNet (30) | `(batch, position, head, feature)` | `.source` line (fused forward) | `nnsight` | any mechanism |
+| `deltanet_beta` | DeltaNet (30) | `(batch, position, feature)` | `.source` line (fused forward) | `nnsight` | any mechanism |
+| `deltanet_decay` | DeltaNet (30) | `(batch, position, feature)` | `.source` line (fused forward) | `nnsight` | any mechanism |
+| `deltanet_core_out` | DeltaNet (30) | `(batch, position, head, feature)` | `.source` line (fused forward) | `nnsight` | any mechanism |
+| `deltanet_gated_out` | DeltaNet (30) | `(batch, position, head·feature)` | `.source` line (fused forward) | `nnsight` | any mechanism |
+| `deltanet_state` | DeltaNet (30) | `(batch, position[chunk], head, feature)` | `.source` line (fused forward) | `nnsight` | any mechanism |
 
 **Sparse MoE + shared expert — every layer**
 
@@ -348,7 +380,7 @@ saying no.
 | `router_logits` | every layer (40) | `(batch·position, feature)` | module output | both | read-only — the MoE block discards them — write `router_scores` or `expert_idx` |
 | `router_scores` | every layer (40) | `(batch·position, topk)` | module output | both | any mechanism |
 | `expert_idx` | every layer (40) | `(batch·position, topk)` | module output | both | `swap` only — integer expert ids: arithmetic on labels routes to arbitrary experts |
-| `expert_permutation` | every layer (40) | `(batch·position, topk)` | `.source` line (fused forward) | `nnsight_tracing` | read-only — the serving kernel's row bookkeeping — write `expert_idx` or `router_scores` |
+| `expert_permutation` | every layer (40) | `(batch·position, topk)` | `.source` line (fused forward) | `nnsight` | read-only — the serving kernel's row bookkeeping — write `expert_idx` or `router_scores` |
 | `expert_gate_proj` | every layer (40) | `(batch·position, topk·fused·feature)` | grouped-experts dispatch | both | any mechanism |
 | `expert_up_proj` | every layer (40) | `(batch·position, topk·fused·feature)` | grouped-experts dispatch | both | any mechanism |
 | `expert_activation` | every layer (40) | `(batch·position, topk·feature)` | grouped-experts dispatch | both | any mechanism |
@@ -378,7 +410,7 @@ forward (`delta_*`); the nnsight engine drills `.source` inside the fused
 forward (`deltanet_*`). 📐 Measured on the fixture and asserted in both test
 tiers, the pairs agree:
 
-| `pytorch_hooks` | `nnsight_tracing` | how they line up |
+| `pytorch_hooks` | `nnsight` | how they line up |
 |---|---|---|
 | `delta_qkv` `delta_conv` `delta_gate` `delta_value` `delta_beta` `delta_decay` `delta_kernel_output` `delta_premix` | `deltanet_qkv` `deltanet_qkv_conv` `deltanet_gate` `deltanet_value` `deltanet_beta` `deltanet_decay` `deltanet_core_out` `deltanet_gated_out` | identical — same shape, max abs diff 0.0 |
 | `delta_query` `delta_key` | `deltanet_query` `deltanet_key` | `delta_*` is **post** GVA `repeat_interleave` (32 value heads); `deltanet_*` is **pre** (16 key heads). Exact after tiling. |
@@ -403,9 +435,14 @@ real memory on the A3B:
 
 Two engines implement the same protocol. A document does not name one — it
 declares what it needs, and `choose_engine` takes the first engine in the list
-whose capabilities cover it (`--engine auto` puts the reference engine first).
+whose capabilities cover it. **`--engine auto` is the default**: every installed
+engine with the reference first. List order is preference, so anything the
+reference serves behaves exactly as pinning `pytorch_hooks` would — while a
+document only the nnsight engine can serve runs instead of refusing by name.
+Pinning one engine is then a deliberate act (a parity check, or reproducing a
+run that named one), not the thing you fall into by not passing a flag.
 
-| | `pytorch_hooks` | `nnsight_tracing` |
+| | `pytorch_hooks` | `nnsight` |
 |---|---|---|
 | how | `register_forward_hook` / pre-hook, plus global swaps for the delta kernel and the experts dispatch | one trace over an envoy tree, `.source` for fused-forward interiors |
 | capabilities | `grad` `paired_forward` `full_logits` `generate` `pytorch_fn_local` `quantized_weights` `writable_attention_probs` | `paired_forward` `full_logits` `generate` `pytorch_fn_local` `writable_attention_probs` |
@@ -436,8 +473,8 @@ scheduler. Sharding is `--points`, and job dispatch is site tooling.
 set -euo pipefail
 
 uv run causalab run patch.json \
-    --data-root data --out "runs/patch" \
-    --device cuda --dtype bf16 --engine auto
+    --data-root data --artifacts-root . --out "runs/patch" \
+    --device cuda --dtype bf16
 ```
 
 Shard a sweep by point range — `explain` tells you how many there are:
@@ -446,7 +483,8 @@ Shard a sweep by point range — `explain` tells you how many there are:
 #SBATCH --array=0-9           # explain says 40 points -> 10 shards of 4
 START=$(( SLURM_ARRAY_TASK_ID * 4 ))
 uv run causalab run scan.json \
-    --data-root data --out "runs/scan/shard_${SLURM_ARRAY_TASK_ID}" \
+    --data-root data --artifacts-root . \
+    --out "runs/scan/shard_${SLURM_ARRAY_TASK_ID}" \
     --points "${START}:$(( START + 4 ))" \
     --device cuda --dtype bf16
 ```
@@ -467,7 +505,7 @@ subspace sweep, select the best `k`, apply it — with two figures along the way
 
 ```bash
 uv run causalab explain causalab/configs/workflows/weekdays_8b.json \
-    --data-root tests/protocol/fixtures/data
+    --data-root tests/protocol/fixtures/data --artifacts-root .
 # digest    2cf5fd55f79d4c97fa70993248db3734255ad137ea32903cd287d06b584d71da
 # schedule  5 levels
 #   level 0: locate
@@ -484,9 +522,17 @@ uv run causalab explain causalab/configs/workflows/weekdays_8b.json \
 #   iia_by_k: script causalab.io.plots.workflow_figures -> iia_by_k.json, iia_by_k.png
 
 uv run causalab run causalab/configs/workflows/weekdays_8b.json \
-    --data-root tests/protocol/fixtures/data \
-    --out runs/weekdays --device cuda --dtype bf16
+    --data-root tests/protocol/fixtures/data --artifacts-root . \
+    --out runs/weekdays --device cuda
 ```
+
+⚠️ No `--dtype` on that command, and that is not an omission: a workflow's
+steps each declare their own realization, so `--dtype` is **refused** on one
+(`refused: --dtype sets model.dtype on one protocol document; a workflow's steps
+each declare their own realization`). Precision for a workflow goes in the
+step's document, or in that step's own `set` block — and the earlier version of
+this example printed the refused command, which cost one SLURM job (1434148) to
+find out.
 
 `explain` on a workflow is the same pre-flight as on a document, one level up:
 the schedule is derived from the steps' references, so a level is what can run

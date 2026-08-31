@@ -291,6 +291,43 @@ def test_explain_without_the_flag_loads_no_engine(artifacts_root, capsys):
     assert "engine" not in capsys.readouterr().out
 
 
+def test_the_engine_default_is_auto(capturing_engine, artifacts_root, tmp_path):
+    """Routing is §8's own answer, so not passing `--engine` must not silently
+    pin one.
+
+    `auto` is every installed engine with the reference **first**, and list
+    order is preference — so anything the reference serves behaves exactly as
+    the old `pytorch_hooks` default did. What changes is the other case: a
+    document only the nnsight engine can serve now runs instead of refusing by
+    name a document nothing in the list served.
+    """
+    assert main(_run_argv("01_harvest_im.json", artifacts_root, tmp_path)) == 0
+    assert capturing_engine.last is not None  # the reference still wins
+
+
+def test_the_default_falls_through_to_the_engine_that_can_serve(
+    capturing_engine, artifacts_root, tmp_path, monkeypatch
+):
+    """The behaviour the default buys: the reference cannot serve it, and the
+    run routes on instead of refusing."""
+    import sys as _sys
+    import types
+
+    class _Nnsight(_CapturingEngine):
+        name = "nnsight"
+        # its own set, so emptying the base class's below does not follow it
+        capabilities = frozenset(_CapturingEngine.capabilities)
+
+    monkeypatch.setattr(capturing_engine, "capabilities", frozenset())
+    stub = types.ModuleType("causalab.neural.engines.nnsight_tracing")
+    stub.NnsightEngine = _Nnsight
+    monkeypatch.setitem(_sys.modules, "causalab.neural.engines.nnsight_tracing", stub)
+    _Nnsight.last = None
+
+    assert main(_run_argv("02_interchange_im.json", artifacts_root, tmp_path)) == 0
+    assert _Nnsight.last is not None and _Nnsight.last.name == "nnsight"
+
+
 def test_run_defaults_stay_cpu_fp32(capturing_engine, artifacts_root, tmp_path):
     assert main(_run_argv("02_interchange_im.json", artifacts_root, tmp_path)) == 0
     assert capturing_engine.last.device == "cpu"

@@ -140,11 +140,14 @@ def _build_parser() -> argparse.ArgumentParser:
             p.add_argument(
                 "--engine",
                 choices=("pytorch_hooks", "nnsight", "auto"),
-                default="pytorch_hooks",
-                help="execution engine: the reference (default), the nnsight "
-                "tracing engine (needs the 'nnsight' extra), or 'auto' — "
-                "every installed engine, reference first, routed by "
-                "choose_engine (§8)",
+                default="auto",
+                help="execution engine: 'auto' (default) is every installed "
+                "engine with the reference FIRST, routed by choose_engine "
+                "(§8); name one to pin it. Routing is §8's own answer, and "
+                "list order is preference, so anything the reference serves "
+                "behaves exactly as a pinned 'pytorch_hooks' would — while a "
+                "document only the nnsight engine can serve now runs instead "
+                "of refusing by name",
             )
             p.add_argument(
                 "--dtype",
