@@ -511,10 +511,16 @@ def compute_metric(
     if kind == "top_k":
         return _top_k(metric, dense, tokenizer, vocab_axis=vocab_axis)
     if kind == "class_probs":
+        # ⚠️ `groups` is the one value field that is NOT a column name: a class
+        # is a property of the answer *space*, one for the whole run, so the
+        # members are literal token strings (§2.10). Every other kind's `a`,
+        # `b`, `token`, `target`, `expected` name a dataset column.
         groups = metric.fields["groups"]
         if not isinstance(groups, Mapping):
             raise ProtocolError(
-                "P2", "class_probs groups is a {name: [tokens]} mapping"
+                "P2",
+                "class_probs groups is a {name: [token strings]} mapping — "
+                "literal tokens, not a dataset column name",
             )
         probs = torch.softmax(logits, dim=-1)
         group_ids = {

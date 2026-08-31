@@ -111,7 +111,7 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
         result = _run(
             loaded,
             env,
-            load_engines(getattr(args, "engine", "pytorch_hooks"), args.device),
+            load_engines(getattr(args, "engine", "auto"), args.device),
             args.out,
             points=args.points,
         )
