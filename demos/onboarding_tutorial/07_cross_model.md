@@ -295,9 +295,11 @@ intervention. Whatever the next section says, it is not about the plumbing.
 ✓ `survived` is **0.0000** — 0 of 64. The model never keeps its own answer.
 
 0.9688 + 0.0000 = 0.9688, so on 2 of 64 pairs the model said a *third* thing,
-neither its own answer nor the counterfactual's. `said.json` is in the run tree
-for exactly that reason: two binary metrics cannot describe three outcomes, and
-this is the demo where the third one shows up.
+neither its own answer nor the counterfactual's. `said.json` names them: pair 18
+answered `" D"` at probability 0.377 and pair 53 answered `" yellow"` at 0.399 —
+a symbol that appears in neither prompt, and a colour rather than a symbol at
+all. Two binary metrics cannot describe three outcomes, which is why `top_k` is
+in the document, and this is the demo where the third outcome shows up.
 
 **Verdict.** No. The graft replaces the answer rather than perturbing it.
 
