@@ -223,6 +223,63 @@ def test_08_seed_sweep_fits_three_genuinely_different_rotations(roots, tmp_path)
             )
 
 
+def test_the_train_eval_score_reaches_the_run_tree(roots, tmp_path):
+    """``train.eval`` is computed, so it must be saved (§2.12).
+
+    Corpus 08 declares ``eval: {split: weekdays/test, metrics: [iia]}`` and
+    saves ``iia`` to ``iia.json``. Before this fix ``_run_eval``'s return value
+    was consumed only inside the ``early_stop`` branch and then dropped, so
+    ``iia.json`` held the **train** score under a name every reader took for
+    the eval one — and the causal protocol's "report training and evaluation
+    results together" was unsatisfiable without re-running the fit as five
+    extra apply documents.
+
+    The eval score is a sibling record, not a column: it is measured on a
+    different split, i.e. a different population from ``iia.json``'s rows.
+    """
+    out = tmp_path / "eval_reaches"
+    code = _run(
+        "08_weekdays_das_sweep_im.json",
+        roots,
+        out,
+        "sites.target.layer=1",
+        "featurizers.rot.k=4",
+        'train.steps={"epochs": 1}',
+        'train.batch={"pairs": 2}',
+    )
+    assert code == 0
+
+    records = json.loads((out / "train_eval.json").read_text())
+    assert len(records) == 3  # one per seed in the sweep
+    for record in records:
+        assert record["split"] == "weekdays/test"
+        assert record["passes"] == 1
+        assert record["featurizers"] == ["rot"]
+        assert isinstance(record["metrics"]["iia"], float)
+
+    # the join to the metric table is the point digest, and the two numbers
+    # are different populations — so at least one must actually differ, or
+    # the "eval" score is just the train score wearing a different name
+    train = table_frame(out / "iia.json")
+    train_mean = train[train["metric"] == "iia"].groupby("produced_by")["value"].mean()
+    assert set(record["point"] for record in records) == set(train_mean.index)
+    assert any(
+        record["metrics"]["iia"] != pytest.approx(train_mean[record["point"]])
+        for record in records
+    )
+
+
+def test_a_document_without_train_eval_writes_no_eval_record(roots, tmp_path):
+    """No ``train.eval``, no file — the run tree never carries an empty record
+    a reader would have to interpret."""
+    out = tmp_path / "no_eval"
+    code = _run(
+        "01_harvest_im.json", roots, out, "sites.L8.layer=0", "sites.L24.layer=1"
+    )
+    assert code == 0
+    assert not (out / "train_eval.json").exists()
+
+
 def test_explain_and_digest_work_on_every_corpus_file(roots, capsys):
     data_root, artifacts_root = roots
     for path in sorted(CORPUS_DIR.glob("*_im.json")):

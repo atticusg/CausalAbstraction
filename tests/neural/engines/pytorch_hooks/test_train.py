@@ -124,10 +124,10 @@ def _fit(doc_raw: dict) -> dict[str, torch.Tensor]:
         env=ResolutionEnv(datasets=_NoDatasets(), artifacts=None),  # type: ignore[arg-type]
         output_dir=None,  # type: ignore[arg-type]
     )
-    stages = run_training(executor.doc, executor, request)
+    outcome = run_training(executor.doc, executor, request)
     return {
         f"{name}.{slot}": param.detach().clone()
-        for name, stage in stages.items()
+        for name, stage in outcome.stages.items()
         for slot, param in stage.slot_params().items()
     }
 
@@ -229,8 +229,7 @@ def test_dbm_fit_trains_theta_and_anneals_temperature():
         env=ResolutionEnv(datasets=_NoDatasets(), artifacts=None),  # type: ignore[arg-type]
         output_dir=None,  # type: ignore[arg-type]
     )
-    stages = run_training(executor.doc, executor, request)
-    gate = stages["gate"]
+    gate = run_training(executor.doc, executor, request).stages["gate"]
     assert not torch.allclose(gate.theta, torch.zeros_like(gate.theta))
     assert gate.temperature < 1.0  # the anneal ran
     assert not gate.training  # left in (hard) eval mode
