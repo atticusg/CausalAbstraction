@@ -13,7 +13,7 @@ drift apart on what a read means.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 import torch
 
@@ -48,11 +48,14 @@ from causalab.protocol.schema import (
     Document,
     PositionSpec,
     ReadSpec,
+    SiteSpec,
     WriteSpec,
 )
 
 __all__ = [
     "ExecutorBase",
+    "ForwardCache",
+    "Interning",
     "RaggedValue",
     "TapKey",
     "document_seed",
@@ -132,6 +135,67 @@ def tap_key(site: ResolvedSite, source: Any = None) -> TapKey:
             source.tuple_index,
         ),
     )
+
+
+@dataclasses.dataclass(frozen=True)
+class ForwardCache:
+    """The campaign-wide store that makes §3's interning real at run time.
+
+    The planner already says which forward groups a swept document shares: a
+    group's ``digest`` is the content identity of everything that determines
+    its activations, and taps are deliberately **not** part of it, because
+    reading layer 3 or layer 23 of the same un-intervened forward is the same
+    forward. A per-point loop ignores that and re-runs the shared group once
+    per point; this is where the plan's guarantee gets claimed.
+
+    ``wanted`` is the union of tap sites the **whole campaign** asks of each
+    digest, so the first point to reach a group captures every address a later
+    point will want. ``captured`` holds those activations *raw* — before the
+    positional gather and before any featurizer — which is why points tapping
+    one address through different featurizers, dims or positions still share
+    a single forward. ``routing`` carries the experts-interface sub-axis table
+    beside them: an interface capture without the dispatch indices it joins on
+    is not a replayable value, so the two travel together or not at all.
+
+    The trade is compute for memory: a 32-layer harvest shared by 32 points
+    holds 32 captures at once where the per-point loop held one. That is
+    inherent in making one pass serve the union, and it is still a large net
+    win — 32 separate passes cost ~16x one full pass even when each is elided
+    at its own tap.
+
+    The store is keyed by group digest and :data:`TapKey`, both engine-neutral,
+    but only an engine whose ``_run_group`` consults it actually interns;
+    :attr:`~causalab.protocol.engine.RunResult.forwards` then reports
+    ``len(executed)``.
+    """
+
+    #: group digest -> every site the campaign taps in that group's forward
+    wanted: Mapping[str, tuple[SiteSpec, ...]] = dataclasses.field(default_factory=dict)
+    #: group digest -> the raw activations one forward left, per tap
+    captured: dict[str, dict[TapKey, torch.Tensor]] = dataclasses.field(
+        default_factory=dict
+    )
+    #: group digest -> the experts routing table beside those captures
+    routing: dict[str, dict[TapKey, torch.Tensor]] = dataclasses.field(
+        default_factory=dict
+    )
+    #: one entry per forward group actually run, in order — the number
+    #: :attr:`~causalab.protocol.engine.RunResult.forwards` reports
+    executed: list[str] = dataclasses.field(default_factory=list)
+
+
+@dataclasses.dataclass(frozen=True)
+class Interning:
+    """One point's handle on a shared :class:`ForwardCache`.
+
+    ``digests`` maps this point's ``(model, input)`` groups to the plan
+    digests they key into; the cache itself belongs to the whole campaign.
+    An executor built without one runs every group itself, which is what the
+    training minibatches and the unit tests want — their row slices are not
+    the campaign's, so they must never read or write the shared store."""
+
+    digests: Mapping[tuple[str, str], str]
+    cache: ForwardCache
 
 
 def whole_native_tensor(
@@ -264,6 +328,7 @@ class ExecutorBase:
         stage_cache: dict[str, Stage] | None = None,
         grad_enabled: bool = False,
         coords: Mapping[str, Any] | None = None,
+        interning: Interning | None = None,
     ) -> None:
         self.doc = doc
         self.bundle = bundle
@@ -274,6 +339,10 @@ class ExecutorBase:
             stage_cache if stage_cache is not None else {}
         )
         self.grad_enabled = grad_enabled
+        #: the campaign's shared forward groups, or ``None`` to run every
+        #: group this point declares (§3 interning is opt-in per executor
+        #: because only the campaign loop knows the points share one row set)
+        self.interning = interning
         # the seed every freshly built featurizer initialises from; the stage
         # cache is keyed by name alone, so it belongs to this one point
         self.seed = document_seed(doc)
@@ -485,6 +554,65 @@ class ExecutorBase:
         """Run one (model, input role) forward group: land its writes and
         fill ``self._read_values`` for its reads."""
         raise NotImplementedError
+
+    # ------------------------------------------------------------------ #
+    # cross-point interning (§3) — the half an engine's _run_group consults
+    # ------------------------------------------------------------------ #
+
+    def _group_digest(self, model: str, input_role: str) -> str | None:
+        """This group's plan digest, or ``None`` when the executor was built
+        without a shared cache to key into."""
+        if self.interning is None:
+            return None
+        return self.interning.digests.get((model, input_role))
+
+    def _interned(
+        self, digest: str | None, keys: Iterable[TapKey]
+    ) -> tuple[dict[TapKey, torch.Tensor], dict[TapKey, torch.Tensor]] | None:
+        """This group's raw captures (and their routing tables) if an earlier
+        point already produced **every** address it taps under the same
+        digest, else ``None``.
+
+        All-or-nothing on purpose: a partial hit would still have to run the
+        forward for the addresses it missed, and the pass it runs captures the
+        campaign's whole union anyway."""
+        if digest is None or self.interning is None:
+            return None
+        captured = self.interning.cache.captured.get(digest)
+        if captured is None:
+            return None
+        wanted = set(keys)
+        if not wanted or any(key not in captured for key in wanted):
+            return None
+        routing = self.interning.cache.routing.get(digest, {})
+        return (
+            {key: captured[key] for key in wanted},
+            {key: routing[key] for key in wanted if key in routing},
+        )
+
+    def _publish(
+        self,
+        digest: str | None,
+        label: str,
+        capture: Mapping[TapKey, torch.Tensor],
+        routing: Mapping[TapKey, torch.Tensor],
+    ) -> None:
+        """Record that one forward group ran, and hand its raw captures to
+        the points that share its digest.
+
+        Called once per pass an engine actually executes, so
+        ``len(cache.executed)`` is what the run paid against what
+        :func:`~causalab.protocol.plan.interned_groups` says it owed."""
+        if self.interning is None:
+            return
+        self.interning.cache.executed.append(digest or label)
+        if digest is None:
+            return
+        # only what a tap actually filled: publishing an address whose module
+        # never ran would hand a later point an empty capture instead of
+        # letting it run the forward
+        self.interning.cache.captured.setdefault(digest, {}).update(capture)
+        self.interning.cache.routing.setdefault(digest, {}).update(routing)
 
     # ------------------------------------------------------------------ #
     # shared plumbing

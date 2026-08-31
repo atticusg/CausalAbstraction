@@ -14,8 +14,9 @@ from __future__ import annotations
 import dataclasses
 import json
 from pathlib import Path
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol, Sequence
 
+from causalab.neural.shared.executor_base import ForwardCache, Interning
 from causalab.neural.shared.metrics import compute_metric, compute_windowed_metric
 from causalab.neural.shared.outputs import (
     MetricTable,
@@ -27,10 +28,12 @@ from causalab.neural.shared.services import site_identity
 from causalab.protocol.canonical import canonical_model
 from causalab.protocol.engine import ExecutionRequest, RunResult
 from causalab.protocol.errors import ProtocolError
+from causalab.protocol.plan import PointPlan, generated_budget, plan_point
 from causalab.protocol.schema import (
     METRIC_DOMAINS,
     WHOLE_WINDOW_METRIC_KINDS,
     Document,
+    SiteSpec,
     metric_reads_vocabulary,
     parse_document,
 )
@@ -40,6 +43,7 @@ __all__ = [
     "MASK_DECISIVE_MARGIN",
     "TrainEvalScore",
     "TrainOutcome",
+    "campaign_plans",
     "execute_request",
     "featurizer_identity",
 ]
@@ -137,31 +141,108 @@ class _Windowed:
     matched: list[bool]
 
 
+def campaign_plans(docs: Sequence[Document]) -> tuple[PointPlan, ...]:
+    """The per-point plans a campaign executes from.
+
+    Public because the interning claim is checkable arithmetic:
+    :func:`~causalab.protocol.plan.interned_groups` over these plans is how
+    many forward groups a run *owes*, and
+    :attr:`~causalab.protocol.engine.RunResult.forwards` is what it paid. One
+    derivation, so the number a caller verifies against is the number
+    execution keyed on.
+    """
+    return tuple(plan_point(doc, data_identity=_data_identity(doc)) for doc in docs)
+
+
+def _data_identity(doc: Document) -> dict[str, str]:
+    """Input role → the identity of the rows that role will be encoded from.
+
+    Folded into every forward-group digest so two points reading *different*
+    data on the same role never intern together. ``(dataset, field)`` is
+    exactly what determines a role's batch —
+    :func:`~causalab.neural.shared.services.resolve_roles` resolves rows by
+    dataset name and selects one field, and the executor tokenizes nothing
+    else — so this is neither coarser nor finer than the thing being shared.
+    The role names mirror ``resolve_roles`` (``counterfactual[0]`` for a
+    tuple-valued role) so the keys line up with the plan's ``input``.
+    """
+    identity: dict[str, str] = {}
+    for role, value in doc.data.items():
+        entries = value if isinstance(value, tuple) else (value,)
+        for j, role_spec in enumerate(entries):
+            role_name = role if not isinstance(value, tuple) else f"{role}[{j}]"
+            identity[role_name] = f"{role_spec.dataset}#{role_spec.field}"
+    return identity
+
+
+def _tap_union(
+    docs: Sequence[Document], plans: Sequence[PointPlan]
+) -> dict[str, tuple[SiteSpec, ...]]:
+    """Forward-group digest → every site the campaign taps in that group.
+
+    The union *is* the interning. Taps are deliberately absent from a group's
+    digest, so the single pass a shared digest earns has to capture every
+    address any point will ask of it — for a 32-layer scan that is one
+    counterfactual forward with 32 taps instead of 32 forwards with one each.
+
+    Continuation reads are excluded: those are served by the decode's
+    per-step accumulation, not by the prefill capture this store holds, so a
+    decoding group contributes only its prompt-frame taps (and can therefore
+    still hand its prefill to a non-decoding point that shares the digest).
+    """
+    union: dict[str, dict[str, SiteSpec]] = {}
+    for doc, plan in zip(docs, plans):
+        for group in plan.groups:
+            wanted = union.setdefault(group.digest, {})
+            for tap in group.taps:
+                read = doc.reads[tap.read]
+                if generated_budget(doc, read.pos) is not None:
+                    continue
+                spec = doc.sites[tap.site]
+                wanted[json.dumps(site_identity(doc, tap.site), sort_keys=True)] = spec
+    return {digest: tuple(specs.values()) for digest, specs in union.items()}
+
+
 def execute_request(
     request: ExecutionRequest,
     *,
     engine_name: str,
     executor_factory: Callable[
-        [Document, ExecutionRequest, Mapping[str, Any]], ExecutorSurface
+        [Document, ExecutionRequest, Mapping[str, Any], "Interning | None"],
+        ExecutorSurface,
     ],
     train_runner: Callable[[Document, Any, ExecutionRequest], TrainOutcome]
     | None = None,
+    intern_forwards: bool = False,
 ) -> RunResult:
     """Run one :class:`ExecutionRequest` through one engine's executors.
 
     ``train_runner`` is the engine's train loop; an engine without one (its
     ``grad`` capability absent, so routing never sends it a ``train``
     document) refuses loudly if a train document reaches it anyway.
+
+    ``intern_forwards`` says this engine's executor consults the shared
+    :class:`~causalab.neural.shared.executor_base.ForwardCache` (§3), so
+    :attr:`~causalab.protocol.engine.RunResult.forwards` reports what the run
+    paid. An engine that has not claimed the interning leaves it False and
+    reports 0 — "not measured" rather than a number it did not count.
     """
+    # The whole campaign is planned before anything runs, because §3's
+    # interning is a property of the point *set*: a forward group can only be
+    # shared once you know which other points share it, and the union of taps
+    # it must capture only exists across all of them.
+    docs = tuple(parse_document(point_raw) for point_raw in request.points)
+    plans = campaign_plans(docs) if intern_forwards else ()
+    cache = ForwardCache(wanted=_tap_union(docs, plans) if intern_forwards else {})
+
     tensor_files: dict[str, TensorFile] = {}
     metric_files: dict[str, MetricTable] = {}
     train_evals: list[Mapping[str, Any]] = []
     fit_diagnostics: list[Mapping[str, Any]] = []
     summaries: list[Mapping[str, Any]] = []
-    for point_raw, coords, digest in zip(
-        request.points, request.coords, request.digests
+    for i, (doc, coords, digest) in enumerate(
+        zip(docs, request.coords, request.digests)
     ):
-        doc = parse_document(point_raw)
         summary = _execute_point(
             doc,
             request,
@@ -174,9 +255,20 @@ def execute_request(
             executor_factory=executor_factory,
             train_runner=train_runner,
             engine_name=engine_name,
+            interning=(
+                Interning(
+                    digests={
+                        (group.model, group.input): group.digest
+                        for group in plans[i].groups
+                    },
+                    cache=cache,
+                )
+                if intern_forwards
+                else None
+            ),
         )
         summaries.append(summary)
-    first_doc = parse_document(request.points[0])
+    first_doc = docs[0]
     first_realization = canonical_model(first_doc.raw["model"])
     # implementation requirements the points' addresses imposed (§7.3, e.g.
     # "attn_eager") — execution metadata beside the engine name, never
@@ -206,7 +298,9 @@ def execute_request(
         train_evals=train_evals,
         fit_diagnostics=fit_diagnostics,
     )
-    return RunResult(files=files, summaries=tuple(summaries))
+    return RunResult(
+        files=files, summaries=tuple(summaries), forwards=len(cache.executed)
+    )
 
 
 def _execute_point(
@@ -220,12 +314,14 @@ def _execute_point(
     train_evals: list[Mapping[str, Any]],
     fit_diagnostics: list[Mapping[str, Any]],
     executor_factory: Callable[
-        [Document, ExecutionRequest, Mapping[str, Any]], ExecutorSurface
+        [Document, ExecutionRequest, Mapping[str, Any], "Interning | None"],
+        ExecutorSurface,
     ],
     train_runner: Callable[[Document, Any, ExecutionRequest], TrainOutcome] | None,
     engine_name: str,
+    interning: "Interning | None" = None,
 ) -> Mapping[str, Any]:
-    executor = executor_factory(doc, request, coords)
+    executor = executor_factory(doc, request, coords, interning)
     trained_stages: dict[str, Any] = {}
     if doc.train is not None:
         if train_runner is None:

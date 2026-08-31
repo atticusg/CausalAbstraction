@@ -228,6 +228,9 @@ def run_training(
     best_score: dict[str, float] | None = None
     order_rng = torch.Generator().manual_seed(seed)
 
+    # No `interning=`: a minibatch's rows are a *slice* of the campaign's, so
+    # its forwards must never be published to — or served from — the shared
+    # ForwardCache, whose digests are keyed on the whole role's rows (§3).
     minibatch_executors = [
         PointExecutor(
             doc,
@@ -479,6 +482,7 @@ def _run_eval(
     role_rows = {role: split_rows for role in executor.role_rows}
     for stage in executor.stage_cache.values():
         stage.eval()
+    # likewise un-interned: the eval split is not the campaign's rows either
     eval_executor = PointExecutor(
         doc,
         executor.bundle,

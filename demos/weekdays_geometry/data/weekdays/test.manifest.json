@@ -1,0 +1,31 @@
+{
+ "answer_variable": "result",
+ "built_by": "causalab.tasks.serialize",
+ "causalab_commit": "b6fc9aa90f83be554378eb8719b931d7b4708528",
+ "columns": [
+  "base_answer",
+  "base_answer_forms",
+  "cf_answer",
+  "cf_answer_forms",
+  "counterfactual_inputs",
+  "counterfactual_inputs_variables",
+  "entity",
+  "input",
+  "label",
+  "label_forms",
+  "number",
+  "result"
+ ],
+ "digest": "46b3438bae1dc447e8b6f67756dd65bd3935f1bdbf8ac47274dd8a02de249d61",
+ "generator": "generate_dataset",
+ "n": 32,
+ "n_rows": 32,
+ "seed": 1,
+ "target_variables": [
+  "result"
+ ],
+ "task": "natural_domains_arithmetic",
+ "task_cfg": {
+  "domain_type": "weekdays"
+ }
+}
