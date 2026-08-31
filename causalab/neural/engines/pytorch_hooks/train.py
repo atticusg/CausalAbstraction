@@ -145,6 +145,13 @@ def run_training(
     were unsatisfiable. :class:`~causalab.neural.shared.execution.TrainOutcome`
     carries it to the run tree as a sibling record — never as a column in the
     metric table, whose rows are a different split.
+
+    **Which weights the returned stages hold.** With ``train.early_stop`` the
+    loop selects a fit by its eval score, so the returned stages are the
+    *best-scoring* ones, restored from a snapshot taken at each improvement.
+    Without ``early_stop`` there is nothing selecting, and they are the last
+    ones. ``TrainOutcome.eval_score.selected`` says which, and its ``metrics``
+    always describe the weights actually returned.
     """
     train = doc.train
     assert train is not None
@@ -209,6 +216,12 @@ def run_training(
     stale = 0
     eval_passes = 0
     last_score: dict[str, float] | None = None
+    # `early_stop` selects a fit by its eval score, so the fit it selected is
+    # the one that must be saved. Without a snapshot the loop returned the
+    # *last* stages — after `patience` non-improving evals, the worst of the
+    # tail — and nothing in the saved bundle said which you had.
+    best_state: dict[str, dict[str, torch.Tensor]] | None = None
+    best_score: dict[str, float] | None = None
     order_rng = torch.Generator().manual_seed(seed)
 
     minibatch_executors = [
@@ -287,10 +300,17 @@ def run_training(
                 )
                 if improved:
                     best, stale = value, 0
+                    best_state = _snapshot(stages)
+                    best_score = dict(score)
                 else:
                     stale += 1
                     if stale > concrete_int(train.early_stop["patience"], "patience"):
                         break
+    selected = "last"
+    if best_state is not None:
+        _restore(stages, best_state)
+        last_score = best_score
+        selected = "early_stop.best"
     for stage in stages.values():
         stage.eval()
     eval_score = None
@@ -300,11 +320,37 @@ def run_training(
             metrics=dict(last_score),
             passes=eval_passes,
             featurizers=tuple(trained_names),
+            selected=selected,
         )
     return TrainOutcome(
         stages={name: stages[name] for name in trained_names},
         eval_score=eval_score,
     )
+
+
+def _snapshot(stages: Mapping[str, Stage]) -> dict[str, dict[str, torch.Tensor]]:
+    """Detached copies of every trained stage's parameters.
+
+    ``state_dict`` rather than ``slot_params`` on purpose: a ``subspace``
+    stage's ``weight`` is *computed* by an orthogonal parametrization, so the
+    tensor the optimizer actually steps is
+    ``parametrizations.weight.original``. Restoring the materialized weight
+    would restore nothing.
+    """
+    return {
+        name: {key: value.detach().clone() for key, value in stage.state_dict().items()}
+        for name, stage in stages.items()
+    }
+
+
+def _restore(
+    stages: Mapping[str, Stage], snapshot: Mapping[str, Mapping[str, torch.Tensor]]
+) -> None:
+    """Put the snapshotted parameters back, in place."""
+    for name, stage in stages.items():
+        state = snapshot.get(name)
+        if state is not None:
+            stage.load_state_dict(dict(state))
 
 
 def _build_optimizer(
