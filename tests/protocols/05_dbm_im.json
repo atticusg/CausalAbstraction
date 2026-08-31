@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "description": "DBM: a plain swap through a gate featurizer computes sigma(theta)*x_src + (1-sigma(theta))*x_base; theta trained under L1 with a temperature anneal. Gate width derived from (model, site); note anneal's value IS a list (start, end, frac) - list-typed fields are never sweep axes.",
+  "description": "DBM: a plain swap through a gate featurizer computes sigma(theta)*x_src + (1-sigma(theta))*x_base; theta trained under L1 with a temperature anneal. Gate width derived from (model, site); note anneal's value IS a list (start, end, frac) - list-typed fields are never sweep axes. WARNING, measured and unresolved: at l1=0.01 against ce=1.0, an A3B run at layer 38 left 0 of 2048 dimensions outside [0.1, 0.9] and still scored 1.000 - because Gate._mask is a HARD theta>0 mask in eval mode, so an unseparated theta makes the mask a coin flip on gradient noise and about half the dimensions swap, which at the readout layer scores 1.000. Read fit_diagnostics.json before believing a DBM number: decisive_fraction near 0 means the gate never committed and the score describes noise. Retuning l1/anneal so theta separates needs a GPU run to validate and has not been done, so these values are the pre-refactor ones, not endorsed ones.",
   "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main", "dtype": "bf16"},
   "data": {
     "base":   {"dataset": "weekdays/train", "field": "input"},

@@ -269,6 +269,28 @@ def test_the_train_eval_score_reaches_the_run_tree(roots, tmp_path):
     )
 
 
+def test_a_gate_fit_writes_its_mask_diagnostic_to_the_run_tree(roots, tmp_path):
+    """The report has to reach the run's outputs, not just the return value —
+    the whole point is that a non-mask is never again invisible to whoever
+    reads the run later."""
+    out = tmp_path / "dbm"
+    code = _run(
+        "05_dbm_im.json",
+        roots,
+        out,
+        "sites.target.layer=1",
+        'train.steps={"epochs": 1}',
+        'train.batch={"pairs": 2}',
+    )
+    assert code == 0
+    (record,) = json.loads((out / "fit_diagnostics.json").read_text())
+    report = record["featurizers"]["gate"]
+    assert report["width"] > 0
+    assert 0.0 <= report["decisive_fraction"] <= 1.0
+    assert 0 <= report["hard_mask_size"] <= report["width"]
+    assert record["point"]  # joins to the bundle and the metric table
+
+
 def test_a_document_without_train_eval_writes_no_eval_record(roots, tmp_path):
     """No ``train.eval``, no file — the run tree never carries an empty record
     a reader would have to interpret."""
