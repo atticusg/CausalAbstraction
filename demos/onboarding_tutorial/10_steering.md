@@ -325,10 +325,11 @@ is not on the floor.*
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | accuracy | 0.047 | 0.000 | 0.000 | 0.031 | 0.000 | 0.000 | 0.016 | 0.016 | 0.000 | 0.000 | 0.000 | 0.000 | **0.469** | 0.000 | 0.000 | 0.000 |
 
-**Finding.** Ten of sixteen layers give exactly **0.000** — the model answers
-correctly on none of 64 pairs — and five more are at or below 0.047. Zeroing the
-last token's residual anywhere is close to fatal, which says the answer slot is
-a bottleneck at every depth rather than only where the answer arrives.
+**Finding.** Eleven of sixteen layers give exactly **0.000** — the model answers
+correctly on none of 64 pairs — and the four others besides L12 are at or below
+0.047. Zeroing the last token's residual anywhere is close to fatal, which says
+the answer slot is a bottleneck at every depth rather than only where the answer
+arrives.
 
 **Verdict.** Fifteen of sixteen. The exception is L12.
 
