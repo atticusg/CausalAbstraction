@@ -18,7 +18,12 @@ import pytest
 
 from causalab.protocol.engine import component_capability, requires
 from causalab.protocol.loader import load
-from causalab.protocol.plan import closure_digest, plan_point
+from causalab.protocol.plan import (
+    COMPONENT_RANK,
+    closure_digest,
+    interned_groups,
+    plan_point,
+)
 
 from tests.protocol._env import CORPUS_DIR
 
@@ -182,6 +187,39 @@ class TestCorpusUnit:
             if group.model == "original"
         }
         assert len(harvest) == 1
+
+    def test_locate_scan_owes_65_forwards_not_128(self, env):
+        """07's own description, as arithmetic: "64 patched forwards plus one
+        shared counterfactual-harvest forward".
+
+        64 points x 2 groups is 128 group *instances*; interning collapses
+        them to 65, because the patched forwards are genuinely distinct (each
+        patches a different layer with a differently-tapped value) while the
+        harvest depends on nothing swept. The merged harvest carries one tap
+        per layer, so an eliding backend may stop it at the deepest of those —
+        never at one point's."""
+        loaded = load(CORPUS_DIR / "07_weekdays_locate_scan_im.json", env)
+        identity = {"base": "d", "counterfactual": "d"}
+        plans = [
+            plan_point(pdoc, data_identity=identity) for pdoc in loaded.point_documents
+        ]
+        assert sum(plan.num_forwards for plan in plans) == 128
+        groups = interned_groups(plans)
+        assert len(groups) == 65
+        (harvest,) = [group for group in groups if group.model == "original"]
+        patched = [group for group in groups if group.model != "original"]
+        assert len(patched) == 64
+        # 32 layers x 2 positions, and the position axis moves the gather
+        # rather than the forward — so 32 taps, not 64
+        assert len(harvest.taps) == 32
+        assert harvest.stop_after == (31, COMPONENT_RANK["block_output"])
+
+    def test_interning_a_single_point_is_the_point_plan(self, env):
+        """With one point there is nothing to share, so interning must be the
+        identity — the guard against a merge that quietly drops a group."""
+        loaded = load(CORPUS_DIR / "06_hydra_effect_im.json", env)
+        plan = plan_point(loaded.point_documents[0])
+        assert len(interned_groups([plan])) == plan.num_forwards == 7
 
 
 class TestCorpusCompleteness:

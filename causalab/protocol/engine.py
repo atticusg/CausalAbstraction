@@ -171,6 +171,14 @@ class RunResult:
 
     files: Mapping[str, Path]
     summaries: tuple[Mapping[str, Any], ...] = ()
+    #: Forward groups the engine actually ran across the whole campaign.
+    #: ``num_forwards`` (§4) is what the *plan* derives per point; this is what
+    #: execution cost, so the two together say how much of §3's cross-point
+    #: interning an engine claimed. An engine that shares nothing reports
+    #: points × groups; one that interns fully reports the campaign's distinct
+    #: group digests (:func:`causalab.protocol.plan.interned_groups`). The
+    #: inner passes of a fit are not forward groups and are not counted.
+    forwards: int = 0
 
 
 class Engine(abc.ABC):

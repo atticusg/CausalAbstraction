@@ -21,7 +21,7 @@ from __future__ import annotations
 import functools
 from typing import Any, Mapping
 
-from causalab.neural.engines.pytorch_hooks.executor import PointExecutor
+from causalab.neural.engines.pytorch_hooks.executor import Interning, PointExecutor
 from causalab.neural.engines.pytorch_hooks.loading import load_model
 from causalab.neural.shared.execution import execute_request
 from causalab.neural.shared.services import load_tensors, resolve_roles
@@ -80,10 +80,13 @@ class PytorchHooksEngine(Engine):
         return execute_request(
             request,
             engine_name=self.name,
-            executor_factory=lambda doc, req, coords: self._executor(
-                doc, req, coords=coords
+            executor_factory=lambda doc, req, coords, interning: self._executor(
+                doc, req, coords=coords, interning=interning
             ),
             train_runner=run_training,
+            # this engine's executor consults the shared ForwardCache, so it
+            # claims §3's cross-point interning and can report what it paid
+            intern_forwards=True,
         )
 
     # ------------------------------------------------------------------ #
@@ -95,6 +98,7 @@ class PytorchHooksEngine(Engine):
         *,
         grad_enabled: bool = False,
         coords: Mapping[str, Any] | None = None,
+        interning: Interning | None = None,
     ) -> PointExecutor:
         realization = canonical_model(doc.raw["model"])
         bundle = load_model(
@@ -113,6 +117,7 @@ class PytorchHooksEngine(Engine):
             load_tensors=functools.partial(load_tensors, request),
             grad_enabled=grad_enabled,
             coords=coords,
+            interning=interning,
         )
 
 
