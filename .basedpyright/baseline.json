@@ -1,35 +1,321 @@
 {
     "files": {
-        "./causalab/neural/pipeline.py": [
+        "./causalab/causal/causal_model.py": [
             {
-                "code": "reportIncompatibleMethodOverride",
+                "code": "reportUnnecessaryIsInstance",
                 "range": {
-                    "startColumn": 8,
-                    "endColumn": 12,
+                    "startColumn": 11,
+                    "endColumn": 42,
                     "lineCount": 1
                 }
             },
+            {
+                "code": "reportUnnecessaryIsInstance",
+                "range": {
+                    "startColumn": 15,
+                    "endColumn": 40,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportUnnecessaryIsInstance",
+                "range": {
+                    "startColumn": 19,
+                    "endColumn": 42,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportUnnecessaryIsInstance",
+                "range": {
+                    "startColumn": 16,
+                    "endColumn": 34,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./causalab/io/sae_checkpoints.py": [
+            {
+                "code": "reportUnnecessaryIsInstance",
+                "range": {
+                    "startColumn": 11,
+                    "endColumn": 35,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 21,
+                    "endColumn": 22,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 23,
+                    "endColumn": 78,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 23,
+                    "endColumn": 78,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 12,
+                    "endColumn": 88,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 12,
+                    "endColumn": 88,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 12,
+                    "endColumn": 82,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 12,
+                    "endColumn": 82,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./causalab/io/viewer_spec_merge.py": [
+            {
+                "code": "reportPrivateUsage",
+                "range": {
+                    "startColumn": 40,
+                    "endColumn": 54,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./causalab/neural/token_positions.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 60,
+                    "endColumn": 64,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 75,
+                    "endColumn": 79,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportUnusedVariable",
+                "range": {
+                    "startColumn": 4,
+                    "endColumn": 17,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 69,
+                    "endColumn": 74,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportPrivateUsage",
+                "range": {
+                    "startColumn": 54,
+                    "endColumn": 78,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./causalab/tasks/MCQA/demo.ipynb#2": [
+            {
+                "code": "reportAbstractUsage",
+                "range": {
+                    "startColumn": 11,
+                    "endColumn": 47,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 22,
+                    "endColumn": 28,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./causalab/tasks/graph_walk/demo.ipynb#3": [
+            {
+                "code": "reportAbstractUsage",
+                "range": {
+                    "startColumn": 11,
+                    "endColumn": 63,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 22,
+                    "endColumn": 28,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./causalab/tasks/hierarchical_equality/demo.ipynb#1": [
+            {
+                "code": "reportPrivateUsage",
+                "range": {
+                    "startColumn": 4,
+                    "endColumn": 26,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./causalab/tasks/hierarchical_equality/demo.ipynb#3": [
+            {
+                "code": "reportAbstractUsage",
+                "range": {
+                    "startColumn": 11,
+                    "endColumn": 64,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 22,
+                    "endColumn": 28,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./causalab/tasks/identity_naming/demo.ipynb#3": [
+            {
+                "code": "reportAbstractUsage",
+                "range": {
+                    "startColumn": 11,
+                    "endColumn": 47,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 22,
+                    "endColumn": 28,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./causalab/tasks/loader.py": [
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 24,
+                    "endColumn": 34,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 25,
+                    "endColumn": 35,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 25,
+                    "endColumn": 35,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 24,
+                    "endColumn": 31,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 25,
+                    "endColumn": 32,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 21,
+                    "endColumn": 33,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 33,
+                    "endColumn": 45,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./causalab/tasks/natural_domains_arithmetic/causal_models.py": [
             {
                 "code": "reportPossiblyUnboundVariable",
                 "range": {
-                    "startColumn": 42,
-                    "endColumn": 59,
+                    "startColumn": 31,
+                    "endColumn": 39,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./causalab/tasks/natural_domains_arithmetic/demo.ipynb#3": [
+            {
+                "code": "reportAbstractUsage",
+                "range": {
+                    "startColumn": 11,
+                    "endColumn": 47,
                     "lineCount": 1
                 }
             },
             {
-                "code": "reportAssignmentType",
+                "code": "reportCallIssue",
                 "range": {
-                    "startColumn": 27,
-                    "endColumn": 84,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportIncompatibleMethodOverride",
-                "range": {
-                    "startColumn": 8,
-                    "endColumn": 16,
+                    "startColumn": 22,
+                    "endColumn": 28,
                     "lineCount": 1
                 }
             }

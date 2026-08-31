@@ -1,17 +1,7 @@
 from .score_heatmap import (
     plot_attention_head_heatmap,
     plot_residual_stream_heatmap,
-    plot_score_heatmap,
     plot_variable_localization_heatmap,
-)
-from causalab.neural.activations.site_grids import (
-    extract_grid_dimensions_from_targets,
-    grid_component,
-)
-from .string_heatmap import (
-    plot_residual_stream_intervention_heatmap,
-    plot_single_pair_trace_heatmap,
-    build_token_labels,
 )
 from .binary_mask import (
     # Unified dispatchers
@@ -27,11 +17,8 @@ from .binary_mask import (
     get_selected_mlps,
 )
 from .grid_cells import (
-    # Structured grid-cell records — the retired unit-id parsing's successor
     GridCell,
     cell_grid_dimensions,
-    cells_from_site_grid,
-    cells_from_specs,
 )
 from .feature_masks import (
     # Feature count plotting (DBM with tie_masks=False)
@@ -58,7 +45,6 @@ from .figure_format import (
     FigureFormat,
     normalize_figure_format,
     path_with_figure_format,
-    resolve_figure_format_from_analysis,
 )
 from .causal_graph import (
     DEFAULT_COLORS,
@@ -78,15 +64,7 @@ __all__ = [
     # Score heatmaps
     "plot_attention_head_heatmap",
     "plot_residual_stream_heatmap",
-    "plot_score_heatmap",
     "plot_variable_localization_heatmap",
-    # Component type detection and grid extraction utilities
-    "grid_component",
-    "extract_grid_dimensions_from_targets",
-    # String heatmaps
-    "plot_residual_stream_intervention_heatmap",
-    "plot_single_pair_trace_heatmap",
-    "build_token_labels",
     # Binary mask heatmaps (unified)
     "plot_binary_mask",
     "get_selected_units",
@@ -96,11 +74,9 @@ __all__ = [
     "get_selected_heads",
     "get_selected_residual_positions",
     "get_selected_mlps",
-    # Structured grid-cell records (unit-id parsing retired)
+    # Structured grid-cell records
     "GridCell",
     "cell_grid_dimensions",
-    "cells_from_site_grid",
-    "cells_from_specs",
     # Feature count plotting (DBM with tie_masks=False)
     "plot_feature_counts",
     "plot_attention_head_feature_counts",
@@ -123,7 +99,6 @@ __all__ = [
     "FigureFormat",
     "normalize_figure_format",
     "path_with_figure_format",
-    "resolve_figure_format_from_analysis",
     # Causal graph visualization (Dash + matplotlib)
     "DEFAULT_COLORS",
     "build_forward_pass_app",

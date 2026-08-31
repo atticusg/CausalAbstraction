@@ -1,0 +1,5 @@
+[
+  {"input": "The capital of France is", "resample_input": "The best kind of cheese is", "ml_token": " Paris"},
+  {"input": "Water boils at one hundred", "resample_input": "The tallest mountain is Mount", "ml_token": " degrees"},
+  {"input": "The opposite of hot is", "resample_input": "A group of lions is called a", "ml_token": " cold"}
+]

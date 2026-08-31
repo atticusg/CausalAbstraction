@@ -1,0 +1,43 @@
+{
+  "version": "1",
+  "description": "Locate the answer-symbol variable across the population: the same interchange as the single-pair trace, over 64 pairs, scored by IIA at a 16-layer x 8-position grid. Positions are fixed negative indices, not names: every prompt this task template emits is 22 tokens with the same tail, so counting back from the end resolves to the same token in every row -- which a symbol *letter* does not (a row whose symbol is 'W' has a second 'W' inside 'What').",
+  "model": {"key": "meta-llama/Llama-3.2-1B-Instruct", "revision": "main", "dtype": "bf16"},
+  "data": {
+    "base":           {"dataset": "mcqa/pairs_n64_s0", "field": "input"},
+    "counterfactual": {"dataset": "mcqa/pairs_n64_s0", "field": "counterfactual_inputs[0]"}
+  },
+  "positions": {
+    "tap": {"sweep": [
+      {"index": -11},
+      {"index": -10},
+      {"index": -9},
+      {"index": -8},
+      {"index": -6},
+      {"index": -5},
+      {"index": -4},
+      {"index": -1}
+    ]}
+  },
+  "sites": {
+    "target":  {"component": "block_output", "layer": {"sweep": {"range": [0, 16]}}},
+    "lm_head": {"component": "lm_head"}
+  },
+  "reads": {
+    "v_cf":   {"site": "target",  "pos": "tap", "model": "original", "input": "counterfactual"},
+    "logits": {"site": "lm_head", "pos": -1,    "model": "patched",  "input": "base"}
+  },
+  "writes": {
+    "patch": {"site": "target", "pos": "tap", "do": {"swap": "v_cf"}}
+  },
+  "intervened_models": {
+    "patched": {"input": "base", "writes": ["patch"]}
+  },
+  "metrics": {
+    "iia":        {"kind": "match",      "of": "logits", "expected": "cf_answer", "token_form": "space_prefixed"},
+    "logit_diff": {"kind": "logit_diff", "of": "logits", "a": "cf_answer", "b": "base_answer", "token_form": "space_prefixed"}
+  },
+  "save": [
+    {"value": "iia",        "model": "patched", "input": "base", "file_path": "iia.json"},
+    {"value": "logit_diff", "model": "patched", "input": "base", "file_path": "logit_diff.json"}
+  ]
+}

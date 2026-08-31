@@ -1,0 +1,22 @@
+{
+  "version": "1",
+  "description": "Apply the reusable interchange method to one model and dataset.",
+  "application": {
+    "model": {
+      "key": "meta-llama/Llama-3.1-8B",
+      "revision": "main",
+      "dtype": "bf16"
+    },
+    "data": {
+      "base": {"dataset": "task/eval", "field": "input"},
+      "counterfactual": {
+        "dataset": "task/eval",
+        "field": "counterfactual_inputs[0]"
+      }
+    },
+    "sites": {
+      "target": {"layer": 18}
+    }
+  },
+  "method": "method.json"
+}

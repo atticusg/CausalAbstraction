@@ -1,126 +1,80 @@
 # Causalab Testing Conventions
 
-Causalab is a codebase for trusted mechanistic interpretability experiments. It contains tested primitives of interpretability methods and analyses, which can be chained together to answer research questions. The tests must be held to a high standard to create confidence in the results. Trustworthiness and reputation is the most valuable asset of us researchers, we need to back it up with consistently correct experiments.
+Causalab is a codebase for trusted mechanistic interpretability experiments. It contains tested primitives of interpretability methods, expressed as serializable intervention protocols (docs/intervention_protocol.md) executed by engines. The tests must be held to a high standard to create confidence in the results. Trustworthiness and reputation is the most valuable asset of us researchers, we need to back it up with consistently correct experiments.
 
 
 ## Quick Start
 
-Run all tests via `uv run pytest`. Select tiers with pytest markers — for example `uv run pytest -m "not golden"` runs every CPU tier and skips the GPU-only `golden` tier, and `uv run pytest -m golden` runs only the golden tier (which needs a GPU).
+Run all CPU tests via `uv run pytest -m "not golden"` (what CI runs). `uv run pytest -m golden` runs only the golden tier, which needs an accelerator and real model weights (see [Golden](#golden)).
 
 ## Overview of test types
 
-Every test belongs to exactly one tier, declared via a pytest marker. The five markers fall into two families: **unit tests** — CPU-only, fast, narrow functionality (`numerical_unit`, `property`, `unit`) — and **end-to-end tests** — user-facing experiment behavior (`smoke`, `golden`).
+Every test belongs to exactly one tier, declared via a pytest marker. The five markers fall into two families: **unit tests** — CPU-only, fast, narrow functionality (`numerical_unit`, `property`, `unit`) — and **end-to-end tests** — user-facing behavior through the real CLI (`smoke`, `golden`).
 
-| Tier | Marker | What it asserts | Required for (`causalab/` subdir) | Wall budget |
-| --- | --- | --- | --- | --- |
-| `numerical_unit` | `@pytest.mark.numerical_unit` | Expected input–output pairs pinned on fixed seeds — losses, metric values, sample outputs at known inputs (CPU); catches sign flips. This tier covers the CPU task-numerical-pin and module-level value tests; runner-level value pinning is the `golden` tier, not this one. | `methods`, `tasks` | <2 min total |
-| `property` | `@pytest.mark.property` | Object properties: shape & dtype contracts at module boundaries; invariances / equivariances / determinism (same seed → byte-identical artifact). For `tasks/`, also hypothesis-driven, LM-free causal-model invariants — counterfactual roundtrip, off-path no-ops, mechanism determinism. | `causal`, `methods`, `neural`, `tasks` | <1 min total |
-| `unit` | `@pytest.mark.unit` | Pure-function tests, parsers, small utilities (the "else" bucket). The default tier — marker still required (enforcement does not infer it). | `causal`, `io`, `neural`, `runner` | <5 min total |
-| `smoke` | `@pytest.mark.smoke` | Tiny-config end-to-end runs of every smoke runner survive on `tiny-random` (CPU): fixed seed, smallest model, ≤8 examples. Asserts only that the declared `expected_artifacts` are produced — output content is garbage, no numerical checks (use `assert_runner_completed`). | `analyses`, `methods`, `tasks` | <30s per runner, <5 min total |
-| `golden` | `@pytest.mark.golden` | Value-pinned full-pipeline runner goldens on the real, open-weight coherent model (`chat-coherent`, GPU) — the **sole GPU tier**; results must replicate within tolerance. Auto-discovered by `tests/end_to_end/test_goldens.py` from `tests/end_to_end/goldens/*.json`; new goldens need only a config + bootstrapped JSON, no new test code. | `analyses`, `methods` | <10 min total |
+| Tier | Marker | What it asserts | Wall budget |
+| --- | --- | --- | --- |
+| `numerical_unit` | `@pytest.mark.numerical_unit` | Expected input–output pairs pinned on fixed seeds (CPU): the frozen parity goldens (`tests/neural/parity/goldens/*.json` replayed through protocol documents on tiny-random), task numerical pins (`tests/tasks/<task>/pinned_samples.json`), metric/train-loop values, and the task-driven end-to-end IIA pin (`tests/neural/engines/pytorch_hooks/test_end_to_end_iia.py` — a serialized task table driven through the CLI). Catches sign flips. | <2 min total |
+| `property` | `@pytest.mark.property` | Object properties: shape & dtype contracts, invariances / equivariances / determinism (load twice → same digests and canonical form), causal-model invariants. | <1 min total |
+| `unit` | `@pytest.mark.unit` | Pure-function tests, parsers, validation rules, small utilities (the "else" bucket). The default tier — marker still required (enforcement does not infer it). Includes the golden tier's CPU structural guard (`tests/golden/test_structural.py`). | <5 min total |
+| `smoke` | `@pytest.mark.smoke` | Corpus documents execute end-to-end on `tiny-random` through the real CLI (`tests/neural/engines/pytorch_hooks/test_run_corpus.py`, `test_workflow_run.py`): artifact existence, shapes, indicator ranges — no numerical pins. | <5 min total |
+| `golden` | `@pytest.mark.golden` | Real-model runs on an accelerator — the **sole GPU tier**, two sub-tiers under `tests/golden/` with opposite provenance (see [Golden](#golden)). | model-bound; run per document set |
 
 All five markers are registered in `pyproject.toml`. `tests/conftest.py` installs a `pytest_collection_modifyitems` hook that **fails the run** with a `pytest.UsageError` listing offending nodeids if any test lacks a tier marker.
-
-The **Required for** column names the `causalab/` subdirs whose modules must reach that tier. `unit` / `numerical_unit` / `property` are required **direct** (a test written for the module); `smoke` / `golden` are required **transitive** (a passing end-to-end runner touches the module — neither has a per-module form). Two subdirs are unlisted on purpose: `configs/` is exempt (it has no importable modules of its own — its behavior is exercised by the end-to-end config tests) and `__init__.py` files are excluded.
-
 
 ## Conventions
 
 ### Mocking policy
 
-1. **Tiny real over mocks.** Use the smallest real implementations: `tiny_random_model()` instead of mocking a neural network, tiny datasets, ...
-2. **Mock only at system boundaries.** Reserve mocks for transactional dependencies CI shouldn't hit: SLURM, wandb, HTTP APIs, paid services, time/random, forced error paths.
+1. **Tiny real over mocks.** Use the smallest real implementations: `hf-internal-testing/tiny-random-*` checkpoints instead of mocking a neural network, tiny committed fixture datasets, ...
+2. **Mock only at system boundaries.** Reserve mocks for transactional dependencies CI shouldn't hit: HTTP APIs, paid services, time/random, forced error paths. (The CLI's lazily-imported execution engine is stubbed via `sys.modules` in `tests/protocol/test_cli.py` — the same idea.)
 
 ### Unit tests
 
-1. **Required tiers by subdir.** [Overview of test types](#overview-of-test-types) describes tiers a script must carry.
-2. **Test file location.** A test for `causalab/<subdir>/<stem>.py` belongs at `tests/<subdir>/test_<stem>.py`. Tier is declared via marker (`pytestmark = pytest.mark.<tier>`, at module, class, or function scope).
-3. **One class per tier.** A single file may hold multiple tiers; the typical pattern is one class each:
+1. **Test file location.** A test for `causalab/<subdir>/<stem>.py` belongs at `tests/<subdir>/test_<stem>.py`. Tier is declared via marker (`pytestmark = pytest.mark.<tier>`, at module, class, or function scope).
+2. **One class per tier.** A single file may hold multiple tiers; the typical pattern is one class each.
+3. **Task numerical pin.** Guard each task with an LM-free symbolic pin on a task's `CausalModel` and counterfactual generator, as a sidecar `tests/tasks/<task>/pinned_samples.json`. Update via `scripts/update_task_pins.py --task=<name>`, review the diff, then if correct rerun with `--i-have-reviewed-the-diff`.
 
-   ```python
-   class TestThingUnit:
-       pytestmark = pytest.mark.unit
-       def test_returns_expected_shape(self): ...
+### Pinned-artifact discipline
 
-   class TestThingNumericalUnit:
-       pytestmark = pytest.mark.numerical_unit
-       def test_loss_at_fixed_seed(self): ...
-   ```
+Every pinned file follows the same rule: **regenerate via its script, review the diff, never hand-edit.**
 
-4. **Cross-cutting end-to-end tests.** The four of them live under `tests/end_to_end/` because they parametrize over every YAML in `tests/end_to_end/configs/`, not a single source module. When adding coverage, add per-module test files under `tests/` mirroring the `causalab/` layout, covering the tiers required for that subdir.
+| Pin | Script | What a diff means |
+|---|---|---|
+| `tests/protocol/corpus_digests.json` | `tests/protocol/update_corpus_digests.py` | the canonical form changed — spec §7 treats it as a loader migration |
+| `tests/protocol/workflow_digests.json` | `tests/protocol/update_workflow_digests.py` | a shipped workflow's canonical form changed (workflow spec §7). It is also what makes "adding a step type changed no existing document" a check rather than a claim |
+| `tests/golden/golden_digests.json` | `tests/golden/update_golden_digests.py` | a golden document or its fixture dataset changed (dataset content digests are part of the canonical form) |
+| `tests/golden/drift/drift_goldens.json` | `tests/golden/drift/update_drift_goldens.py` (GPU) | the stack's real-model numerics moved |
+| `tests/tasks/<task>/pinned_samples.json` | `scripts/update_task_pins.py` | task prompt/causal-model semantics changed |
+| `tests/neural/parity/goldens/*.json` | none — **deliberately frozen** pre-migration captures | do not regenerate; recapturing from the new stack would defeat the anchor |
+| `tests/protocol/fixtures/data/weekdays/task_n4_s0.json` | `scripts/build_task_dataset.py` (parameters in its `.manifest.json` sidecar; `--check` verifies without writing) | the task's generator or causal model changed — a committed table is a build product, so the manifest is the recipe |
 
-5. **Task numerical pin.** Guard each task with an LM-free symbolic pin on a task's `CausalModel` and counterfactual generator. It lives beside the task's tests as a sidecar `tests/tasks/<task>/pinned_samples.json`:
+## End-to-end tests
 
-   ```json
-   {
-     "task": "MCQA",
-     "seeds": [0, 1, 2, 3, 4],
-     "samples": [
-       {"seed": 0,
-        "input": {"raw_input": "...", "raw_output": "...", "...": "..."},
-        "counterfactual_inputs": [{"raw_input": "...", "...": "..."}]}
-     ]
-   }
-   ```
-   Update task numerical pins via `scripts/update_task_pins.py --task=<name>`, review the diff, then if correct rerun with `--i-have-reviewed-the-diff`.
-6. **Factory-task gap.** `graph_walk`, `identity_naming`, and `natural_domains_arithmetic` have no task numerical pin yet — `walk_task_samples` raises `NotImplementedError` for them until a serialisable `task_cfg` shim lands, so they carry no `numerical_unit` direct coverage until then.
+### Smoke
 
-### End-to-end tests
+Corpus documents (`tests/protocols/*_im.json`) run through the real CLI on `hf-internal-testing/tiny-random-LlamaForCausalLM` with `--set` overrides retargeting layers/model at tiny scale. Assertions are existence/shape/dtype only — tiny-random output content is garbage by design. The workflow capstone (`tests/neural/engines/pytorch_hooks/test_workflow_run.py`) runs the whole weekdays pipeline shape the same way, and `test_bundle_entries_run.py` covers the two tensor handoffs between steps: a *swept* fit applied at one selected coordinate (the capstone deliberately collapses that sweep, which is how the gap went unseen) and a mean-ablation harvest reduced at save time. `test_script_step_run.py` is the `script`-step capstone, covering both of its directions in one pipeline: protocol → script → script, and protocol → script → protocol (a fitted basis re-entering a model-touching run, with its ArtifactIdentity checked). The capstone also pins `--resume`: an edit to a step's *script* busts the reuse, which is why the script's content hash is in the digest.
 
-Config driven end to end tests checking pipeline behavior. Each config is scored against up to four gates (cheapest first):
+Step scripts themselves are unit-tested under `tests/steps/`: each shipped script against a hand-computed oracle plus a determinism assertion (`numerical_unit`), the `select`/`plot` reductions and their refusals (`unit`), and the isolation path proved by comparing pids. That a real `causalab validate` of a workflow whose script imports torch never itself imports torch is checked in a subprocess (`tests/protocol/test_load_is_torch_free.py`), since `tests/conftest.py` imports torch at session scope.
 
-| Gate | Dir | Model | Asserts | Breadth | CI job |
-|---|---|---|---|---|---|
-| **compose** | `configs/{smoke,golden}/*` | — | Hydra composes the full config tree without error (`tests/end_to_end/test_compose.py`) | every e2e config; <10 s CPU | `test` (`not golden`) |
-| **dispatch** | `configs/{smoke,golden}/*` | — | `_iter_analysis_steps` names an importable `causalab.analyses.<name>.main` (same file) | every e2e config | `test` (`not golden`) |
-| **smoke** | `configs/smoke/*` | `tiny-random` (CPU) | each config's declared `expected_artifacts` exist | broad: every task baseline + every tiny-random-able analysis chain | `test` (`not golden`) |
-| **golden** | `configs/golden/*` | `chat-coherent` (GPU) | value pins (accuracy and/or extracted analysis scalars) within tolerance | narrow: tasks/chains a real model handles | GPU (run manually) |
+### Golden
 
-#### Smoke
+The sole accelerator tier, under `tests/golden/`, in two sub-tiers with **opposite provenance rules**:
 
-1. **Model and resources.** Every `configs/smoke/*` config executes end-to-end at tiny scale on the random-init Llama stub (`tests/end_to_end/test_smoke.py::test_runner_smoke`) on CPU. Each config pins `/model: tiny-random`, bakes its own task scale, and declares its `expected_artifacts:`; the test only fixes `experiment_root`.
-2. **Coverage.** One smoke config per shipped task baseline, plus the analysis chains `tiny-random` can express.
-3. **Needs coherent English or real activation structure → golden.** Any test needing a model that generates coherent English (or real activation structure) should be a golden, not a smoke: e.g. `output_manifold` and `pullback` are mathematically undefined on random-init weights (`causalab/methods/spline/cubic.py:106-110`), so they're golden-only.
+1. **Paper goldens** (`tests/golden/test_paper_goldens.py`): protocol documents on real open models (gpt2, gpt2-xl, Llama-3.1-8B, gemma-2-2b-it), asserted against values from **published papers or the VeriFires task packages** (`tests/golden/paper_goldens.json`, one provenance entry per value — paper quote, VeriFires task + leaf id, sidedness, band/floor). No value in that file may come from running this stack. Fixture datasets are seeded, committed JSON from `tests/golden/fixtures/generators/`.
+2. **Drift pins** (`tests/golden/drift/`): the successor of the retired chat-coherent tier — Qwen3-4B documents whose values **are** pinned from a reviewed run of this stack on the canonical cuda box (`update_drift_goldens.py --i-have-reviewed-the-diff`), replayed within tolerance for run-to-run drift detection. Baseline gate: accuracy ≥ 0.9. Until the first capture lands the replay skips. Fidelity gap vs the retired tier, recorded here: protocol v1 has no chat-template path, so the drift documents use raw completions (the old tier's chat template + answer directive is not reproduced).
 
-#### Golden
-A runner-scope, full-pipeline, real-model end-to-end pin under `tests/end_to_end/goldens/<runner>.json` — the output of a small model that reliably solves the task at a fixed seed. The only test class that uses a GPU.
+Practicalities:
 
-1. **Model and resources.** The sole coherent fixture is `chat-coherent` = `Qwen/Qwen3-4B-Instruct-2507`: ungated on HuggingFace, a standard decoder-only architecture, and (chat template + a terse answer directive) clears the `0.9` gate on every shipped golden task.
-2. **Numeric gate** (`tests/end_to_end/test_goldens.py`) — pinned values must re-run within tolerance; the backstop against a refactor silently shifting a loss or tensor layout. For baseline: `accuracy ≥ 0.9` on `n_samples ≥ 30` at the pinned seed, `prob_accuracy` defined (not `null`), and the per-key reductions (`mean/std/first/last`) reproduce within tolerance on rerun.
-3. **Sample size.** `n_samples ∈ {30, 50, 100}` (upper bound = the `numerical_unit` wall budget), set via `cfg.task.n_train` — the baseline analysis measures accuracy on the *train* split (`causalab/analyses/baseline/main.py:209`), not `n_test`.
-4. **Golden test format.** Each golden runner has a JSON in `tests/end_to_end/goldens/<runner>.json`:
-
-   ```json
-   {
-     "runner": "golden/mcqa",
-     "seed": 0,
-     "model": "chat-coherent",
-     "deterministic": false,
-     "tolerance": {"default": 1e-5, "<metric_name>": 1e-3},
-     "values": {"accuracy.accuracy": 1.0, "metric_a": 0.0}
-   }
-   ```
-
-5. **Comparison.** `extract_values` walks the whole output tree — baseline `accuracy.json` metrics plus every `*.safetensors` as a `.sha256` and per-tensor `mean/std/first/last/shape` (non-finite reductions dropped, only `shape` anchors them). Each value must reproduce within its `tolerance`: a flat `{key: tolerance}` map, missing keys → `default` (`1e-5`); `accuracy.accuracy` → `0` (exact ratio), `accuracy.prob_accuracy` → `1e-4` (BLAS/CUDA drift), reductions → `1e-5`. Absolute, not relative (`tests/end_to_end/test_goldens.py:72`).
-6. **Determinism is not a gate on GPU.** All goldens run on GPU (non-deterministic), so `.sha256` is logged for completeness but not asserted in practice.
-7. **Updating goldens.** `tests/end_to_end/update_goldens.py` prints a rich diff and refuses to write without `--i-have-reviewed-the-diff`:
-
-   ```bash
-   # inspect current vs new (no writes):
-   uv run python tests/end_to_end/update_goldens.py --baseline golden/age
-
-   # accept the diff (writes the JSON):
-   uv run python tests/end_to_end/update_goldens.py --baseline golden/age \
-       --i-have-reviewed-the-diff
-   ```
-8. **VRAM reclamation is gc-driven — no per-test model teardown needed.** A dropped nnterp `StandardizedTransformer` is never freed by refcount alone (its `__init__` accessors, e.g. `layers_output`, hold strong back-references — an instance↔accessor cycle), so a golden test's dead backbone survives until a cycle-collector pass. `tests/conftest.py::pytest_runtest_teardown` runs `gc.collect()` + `torch.cuda.empty_cache()` after every `golden`-marked test — the single chokepoint that keeps a serial one-process `pytest -m golden` run within VRAM. Guard: `tests/neural/test_pipeline.py::TestModelReclamationUnit` fails per-PR on CPU if a dep bump adds a global pin gc cannot reclaim.
-
+- Run with `uv run pytest tests/golden -m golden` on a box with an accelerator. Gated models (`meta-llama/Llama-3.1-8B`, `google/gemma-2-2b-it`) need a licensed `HF_TOKEN` — without one the load 401s with nothing naming the cause.
+- The reference engine runs each (model, input) forward group as **one batch**; the largest paper-golden document (hours, 1,152 rows on Llama-8B) wants ~35GB free in bf16.
+- A CPU structural guard (`tests/golden/test_structural.py`, tier `unit`, runs in CI) keeps the tier honest without loading models: documents load and digest to their pins, every non-pending goldens entry is claimed by exactly one test, provenance fields are present.
+- VRAM reclamation: `tests/conftest.py::pytest_runtest_teardown` runs `gc.collect()` + `torch.cuda.empty_cache()` after every `golden`-marked test.
 
 ## GitHub CI
 
 `.github/workflows/test.yml` runs on every pull request and on push to `main`, on GitHub-hosted CPU runners. Two jobs:
 
 1. **`lint`** — `uv run pre-commit run --all-files` (ruff + the stack); fails the job on any finding.
-2. **`test`** — `uv run pytest` over the CPU tiers (`unit` / `numerical_unit` / `property` / `smoke`), publishing a JUnit report.
+2. **`test`** — `uv run pytest -m "not golden"` over the CPU tiers (`unit` / `numerical_unit` / `property` / `smoke`), publishing a JUnit report.
 
-The `golden` tier is the sole GPU tier and is not part of the CPU pull-request pipeline; run it on a GPU node with `uv run pytest -m golden` (see [Golden](#golden)).
+The `golden` tier is the sole accelerator tier and is not part of the CPU pull-request pipeline; run it on a GPU node with `uv run pytest -m golden` (see [Golden](#golden)).

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from causalab.neural.pipeline import LMPipeline
+from causalab.neural.token_positions import LMPipeline
 from causalab.neural.token_positions import TokenPosition, build_token_positions
 
 from .causal_models import TEMPLATE

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from causalab.neural.pipeline import LMPipeline
+from causalab.neural.token_positions import LMPipeline
 from causalab.neural.token_positions import (
     TokenPosition,
     build_token_positions,

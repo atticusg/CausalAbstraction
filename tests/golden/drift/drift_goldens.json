@@ -1,0 +1,40 @@
+{
+  "_role": "Value pins of the chat-coherent drift tier: run-to-run drift detection on a real model, successor to the retired tests/end_to_end goldens. Unlike tests/golden/paper_goldens.json (paper-provenance values), these ARE pinned from a reviewed run of this stack on the canonical GPU - that is their job.",
+  "model": {
+    "key": "Qwen/Qwen3-4B-Instruct-2507",
+    "revision": "main"
+  },
+  "capture": {
+    "device": "cuda",
+    "dtype": "bf16"
+  },
+  "deterministic": false,
+  "tolerance": {
+    "default": 0.002,
+    "interchange.acc.mean": 0.016,
+    "interchange.iia.mean": 0.016,
+    "_comment": "discrete match metrics tolerate one flipped row of 64; continuous keys use the default. Tighten after the first captures establish observed drift."
+  },
+  "values": {
+    "interchange.acc.mean": 1.0,
+    "interchange.iia.mean": 0.421875,
+    "interchange.ld.mean": -1.130859375,
+    "interchange.ld.std": 2.8899224264163847,
+    "interchange.acts_mid.mean": 0.02062584087252617,
+    "interchange.acts_mid.std": 3.287400484085083,
+    "interchange.acts_mid.first": 77.5,
+    "interchange.acts_mid.last": 1.4375,
+    "interchange.acts_mid.shape": [
+      64,
+      1,
+      2560
+    ],
+    "scan.iia.sites.target.layer=6.mean": 0.0,
+    "scan.iia.sites.target.layer=10.mean": 0.0,
+    "scan.iia.sites.target.layer=14.mean": 0.0,
+    "scan.iia.sites.target.layer=18.mean": 0.0,
+    "scan.iia.sites.target.layer=22.mean": 0.0,
+    "scan.iia.sites.target.layer=26.mean": 0.421875,
+    "scan.iia.sites.target.layer=30.mean": 1.0
+  }
+}
