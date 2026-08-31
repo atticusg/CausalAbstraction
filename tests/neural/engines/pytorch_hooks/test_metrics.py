@@ -321,14 +321,24 @@ def test_the_two_forms_collapse_on_sentencepiece(tokenizer):
     )
 
 
-def test_match_scores_a_punctuation_answer_only_under_bare(gpt2_tokenizer):
-    """The end-to-end regression, at the metric level: the model emits "?"
-    (token 30); `auto` scores token 5633 and reads 0.0, `bare` reads 1.0."""
+def test_match_refuses_a_punctuation_answer_under_auto_and_scores_it_under_bare(
+    gpt2_tokenizer,
+):
+    """The end-to-end regression, at the metric level.
+
+    The model emits "?" (token 30). `auto` resolved the space-prefixed form,
+    token 5633, and read **0.0** — a wrong number that a pipeline gate scores
+    as a dead stage. It warned while doing it and nobody read the warning, so
+    the warning is now the refusal; `bare` still reads 1.0.
+    """
     logits = torch.zeros(1, 1, gpt2_tokenizer.vocab_size)
     logits[0, 0, 30] = 4.0  # what the model actually emits
 
     metric = MetricSpec(kind="match", of="logits", fields={"expected": "ans"})
-    assert compute_metric(metric, logits, [{"ans": "?"}], gpt2_tokenizer) == [0.0]
+    with pytest.raises(ProtocolError) as err:
+        compute_metric(metric, logits, [{"ans": "?"}], gpt2_tokenizer)
+    assert err.value.code == "P2"
+    assert "ambiguous under this tokenizer" in str(err.value)
 
     fixed = MetricSpec(
         kind="match", of="logits", fields={"expected": "ans"}, token_form="bare"
@@ -336,24 +346,37 @@ def test_match_scores_a_punctuation_answer_only_under_bare(gpt2_tokenizer):
     assert compute_metric(fixed, logits, [{"ans": "?"}], gpt2_tokenizer) == [1.0]
 
 
-def test_auto_warns_once_per_column_when_the_forms_disagree(gpt2_tokenizer):
-    """`auto` stays the default, but it no longer guesses in silence."""
-    with pytest.warns(UserWarning, match="ambiguous under this tokenizer"):
+def test_auto_refuses_once_per_column_when_the_forms_disagree(gpt2_tokenizer):
+    """`auto` stays the default, but it no longer guesses — at all.
+
+    Aggregated per column: half the IOI name vocabulary is ambiguous on gpt2,
+    and a per-value refusal would name one of them and hide the rest.
+    """
+    with pytest.raises(ProtocolError) as err:
         column_token_ids(gpt2_tokenizer, ["?", "?", ".", "!"])
+    assert err.value.code == "P2"
+    assert "3 of 3 distinct answers are ambiguous" in str(err.value)
 
 
-def test_auto_is_silent_when_there_is_nothing_to_disambiguate(tokenizer, recwarn):
+def test_auto_is_accepted_when_there_is_nothing_to_disambiguate(tokenizer):
     """📐 Under transformers 5.16.1 this tokenizer encodes " Monday" and "Monday"
-    to the SAME id, so the two forms cannot disagree — no choice was made and no
-    warning is owed. (Under 4.x the same silence held for the opposite reason:
-    the spaced form was two pieces, so only the bare form resolved.)"""
-    column_token_ids(tokenizer, [" Monday", "Monday"])
-    assert [w for w in recwarn if issubclass(w.category, UserWarning)] == []
+    to the SAME id, so the two forms cannot disagree — no choice was made, so
+    nothing is refused. (Under 4.x the same silence held for the opposite
+    reason: the spaced form was two pieces, so only the bare form resolved.)"""
+    assert len(column_token_ids(tokenizer, [" Monday", "Monday"])) == 2
 
 
-def test_a_pinned_form_never_warns(gpt2_tokenizer, recwarn):
-    column_token_ids(gpt2_tokenizer, ["?", "."], token_form="bare")
-    assert [w for w in recwarn if issubclass(w.category, UserWarning)] == []
+def test_a_pinned_form_is_never_refused(gpt2_tokenizer):
+    """`bare` and `space_prefixed` are unchanged: the author has said which
+    form the model emits, so there is nothing left to guess."""
+    assert column_token_ids(gpt2_tokenizer, ["?", "."], token_form="bare") == [
+        30,
+        13,
+    ]
+    assert (
+        len(column_token_ids(gpt2_tokenizer, ["?", "."], token_form="space_prefixed"))
+        == 2
+    )
 
 
 #  match: answer-form groups and first-token grading (§2.10)                   #
@@ -405,6 +428,84 @@ def test_first_token_mode_credits_a_multi_token_answer(tokenizer):
     with pytest.raises(ProtocolError):
         compute_metric(exact, logits, [{"ans": " Thursday"}], tokenizer)
     assert compute_metric(first, logits, [{"ans": " Thursday"}], tokenizer) == [1.0]
+
+
+class _FormSplitTokenizer:
+    """A tokenizer whose two surface forms credit *different* first tokens.
+
+    The case `_ambiguous_under_auto` structurally cannot see: neither form is a
+    single token, so by its definition nothing is "ambiguous" — while `auto`
+    still picked a form, and under `first_token` the form decides which piece
+    gets the credit.
+    """
+
+    _PIECES = {1: "Th", 2: "urs", 3: "day", 4: " Thu", 5: "rsday"}
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        return [4, 5] if text.startswith(" ") else [1, 2, 3]
+
+    def decode(self, ids) -> str:
+        return "".join(self._PIECES[int(i)] for i in ids)
+
+
+def test_auto_refuses_a_multi_token_value_whose_forms_credit_different_pieces():
+    """The silent half of the `auto` trap, and the one the aggregated column
+    check cannot reach. Pinning either form is accepted."""
+    tok = _FormSplitTokenizer()
+    with pytest.raises(ProtocolError) as err:
+        column_first_token_id(tok, " Thursday")
+    assert err.value.code == "P2"
+    assert "credit different first tokens" in str(err.value)
+
+    assert column_first_token_id(tok, " Thursday", token_form="bare") == 1
+    assert column_first_token_id(tok, " Thursday", token_form="space_prefixed") == 4
+
+
+def test_first_token_refuses_an_answer_space_that_is_not_first_token_distinct(
+    tokenizer,
+):
+    """``first_token`` credits a *prefix*, so it means "the model answered"
+    only where different answers begin with different tokens.
+
+    Where they do not it over-credits in silence: ``" 85"`` is
+    ``[220, "8", "5"]`` on Qwen, so a model emitting ``87`` scores 1.000
+    against an expected ``85`` and nothing in the run says so. The two answers
+    below share a first piece on this tokenizer for the same reason.
+    """
+    first = MetricSpec(
+        kind="match",
+        of="logits",
+        fields={"expected": "ans", "mode": "first_token"},
+        token_form="bare",
+    )
+    a, b = "Thursday", "Thursdays"
+    assert column_first_token_id(tokenizer, a, token_form="bare") == (
+        column_first_token_id(tokenizer, b, token_form="bare")
+    ), "witness moved: these two answers no longer share a first token"
+
+    logits = torch.zeros(2, 1, 32000)
+    with pytest.raises(ProtocolError) as err:
+        compute_metric(first, logits, [{"ans": a}, {"ans": b}], tokenizer)
+    assert err.value.code == "P2"
+    assert "not first-token distinct" in str(err.value)
+
+
+def test_first_token_accepts_a_distinct_answer_space(tokenizer):
+    """The weekdays answer space *is* distinct, so nothing is refused — the
+    check is a guard on the metric's honesty, not a ban on prefix grading."""
+    first = MetricSpec(
+        kind="match",
+        of="logits",
+        fields={"expected": "ans", "mode": "first_token"},
+        token_form="bare",
+    )
+    logits = torch.zeros(2, 1, 32000)
+    monday = column_first_token_id(tokenizer, "Monday", token_form="bare")
+    logits[0, 0, monday] = 4.0
+    scores = compute_metric(
+        first, logits, [{"ans": "Monday"}, {"ans": "Friday"}], tokenizer
+    )
+    assert scores == [1.0, 0.0]
 
 
 class _LoneSpacePieceTokenizer:

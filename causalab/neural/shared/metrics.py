@@ -27,14 +27,16 @@ tokens, so ``auto`` scores 5633 while the model emits 30 — a ``match`` metric
 then reads a flat 0.000 with no error anywhere. That is why a §2.10 metric
 carries ``token_form``: set ``"bare"`` or ``"space_prefixed"`` to pin the
 form instead of letting the tokenizer's vocabulary decide. Under ``auto``,
-:func:`column_token_ids` warns once per column when both forms are single
-tokens and disagree — exactly the condition under which it can be silently
-wrong.
+:func:`refuse_ambiguous_auto` **refuses** the column when both forms are single
+tokens and disagree — exactly the condition under which ``auto`` can be
+silently wrong. It used to warn; the warning printed, nobody read it, and the
+run produced the wrong number anyway. A default whose failure mode is a wrong
+number is a refusal, not a warning.
 
-📐 One limit of that warning, introduced by the transformers 5 bump: a
+📐 One limit of that refusal, introduced by the transformers 5 bump: a
 sentencepiece family that has dropped the legacy dummy prefix encodes ``" X"``
 and ``"X"`` to the *same* id, so the two forms can never disagree there. On such
-a tokenizer ``token_form`` has only one row to name, the warning is structurally
+a tokenizer ``token_form`` has only one row to name, the check is structurally
 dark, and neither is a defect — but it does mean the punctuation trap above is a
 BPE-family hazard, and a document cannot be checked against it by pinning
 ``token_form`` on a sentencepiece model.
@@ -45,11 +47,17 @@ forms (synonyms, casings), and ``"mode": "first_token"`` credits a form's
 first token instead of demanding the form be one token. Both are
 task-data decisions — the table says which forms count, the document says
 whether a prefix counts — so neither can happen by accident.
+
+Crediting a prefix is only honest when the answer space is first-token
+distinct, so ``first_token`` refuses a row set where two different answers
+begin with the same token (:func:`_refuse_indistinct_first_tokens`). ``" 85"``
+is ``[220, "8", "5"]`` on Qwen, and a model emitting ``87`` would otherwise
+score 1.000 against an expected ``85``, with nothing in the run's outputs
+saying so.
 """
 
 from __future__ import annotations
 
-import warnings
 from typing import Any, Mapping, Sequence
 
 import torch
@@ -65,6 +73,7 @@ __all__ = [
     "column_first_token_id",
     "column_token_id",
     "column_token_ids",
+    "refuse_ambiguous_auto",
     "compute_metric",
     "compute_windowed_metric",
 ]
@@ -132,6 +141,44 @@ def _ambiguous_under_auto(tokenizer: Any, value: str) -> tuple[int, int] | None:
     return spaced_id, bare_id
 
 
+def refuse_ambiguous_auto(
+    tokenizer: Any, values: Sequence[str], *, where: str = "metric column"
+) -> None:
+    """Refuse a column ``token_form: "auto"`` would have to guess at.
+
+    The condition is the one :func:`_ambiguous_under_auto` names: both surface
+    forms are single tokens and they name *different* vocabulary rows, so the
+    space-prefixed-first rule picks one and the author never said which.
+
+    This used to be a ``UserWarning``. It printed, nobody read it, and the run
+    scored a flat 0.000 at all 48 layers of a real gpt2-xl scan — a wrong
+    number, which a pipeline gate reads as a dead stage rather than an error.
+    A default whose failure mode is a wrong number has to be a refusal.
+
+    Aggregated per column on purpose: per-value refusals would name one of
+    half the IOI name vocabulary and hide how wide the problem is.
+    """
+    ambiguous = {
+        v: pair
+        for v in dict.fromkeys(values)
+        if (pair := _ambiguous_under_auto(tokenizer, v))
+    }
+    if not ambiguous:
+        return
+    examples = ", ".join(
+        f"{v!r} → {spaced} (space-prefixed) vs {bare} (bare)"
+        for v, (spaced, bare) in list(ambiguous.items())[:3]
+    )
+    raise ProtocolError(
+        "P2",
+        f"{where}: {len(ambiguous)} of {len(set(values))} distinct answers are "
+        f"ambiguous under this tokenizer — both forms are single tokens and they "
+        f"name different rows ({examples}). token_form='auto' cannot know which "
+        "one the model emits; set the metric's token_form to 'bare' or "
+        "'space_prefixed' to say so",
+    )
+
+
 def column_token_ids(
     tokenizer: Any,
     values: Sequence[str],
@@ -139,37 +186,10 @@ def column_token_ids(
     token_form: str = "auto",
     where: str = "metric column",
 ) -> list[int]:
-    """Resolve a whole metric column, warning **once** if ``auto`` had to guess.
-
-    Per-value warnings would fire on half the IOI name vocabulary every run, so
-    the check is aggregated here rather than in :func:`column_token_id`: one
-    message per column, naming a few examples. Staying silent is what let a
-    punctuation ``match`` read a flat 0.000 at all 48 layers of a real gpt2-xl
-    scan — a wrong answer a pipeline gate scores as a dead stage, not an error.
-    """
-    ids = [column_token_id(tokenizer, v, token_form=token_form) for v in values]
-    if token_form != "auto":
-        return ids
-    ambiguous = {
-        v: pair
-        for v in dict.fromkeys(values)
-        if (pair := _ambiguous_under_auto(tokenizer, v))
-    }
-    if ambiguous:
-        examples = ", ".join(
-            f"{v!r} → {spaced} (space-prefixed) vs {bare} (bare)"
-            for v, (spaced, bare) in list(ambiguous.items())[:3]
-        )
-        warnings.warn(
-            f"{where}: {len(ambiguous)} of {len(set(values))} distinct answers are "
-            f"ambiguous under this tokenizer — both forms are single tokens and "
-            f"they name different rows ({examples}). token_form='auto' took the "
-            "space-prefixed form; set the metric's token_form to 'bare' or "
-            "'space_prefixed' to say which one the model actually emits.",
-            UserWarning,
-            stacklevel=2,
-        )
-    return ids
+    """Resolve a whole metric column, refusing if ``auto`` would have to guess."""
+    if token_form == "auto":
+        refuse_ambiguous_auto(tokenizer, values, where=where)
+    return [column_token_id(tokenizer, v, token_form=token_form) for v in values]
 
 
 def column_first_token_id(
@@ -201,21 +221,100 @@ def column_first_token_id(
     What this cannot know is whether the table's answer space is
     first-token-distinct — two answers sharing a first piece would both score.
     That is a property of the dataset, checked where the dataset is built."""
+    candidates = _candidates(value, token_form)
     encoded = [
         tokenizer.encode(candidate, add_special_tokens=False)
-        for candidate in _candidates(value, token_form)
+        for candidate in candidates
     ]
     for ids in encoded:
         if len(ids) == 1:
             return int(ids[0])
+    if token_form == "auto" and len(candidates) > 1:
+        # The case `_ambiguous_under_auto` structurally cannot see: it asks
+        # whether the two forms are *different single tokens*, so a value that
+        # is single-token in neither form is not "ambiguous" by its definition
+        # and nothing fired — while `auto` still silently picked a form, and
+        # under `first_token` the form decides which piece gets credited.
+        firsts = [_first_content_id(tokenizer, ids) for ids in encoded]
+        distinct = {f for f in firsts if f is not None}
+        if len(distinct) > 1:
+            pieces = " vs ".join(
+                f"{candidate!r} → {[tokenizer.decode([int(i)]) for i in ids]}"
+                for candidate, ids in zip(candidates, encoded)
+            )
+            raise ProtocolError(
+                "P2",
+                f"metric column value {value!r} is multi-token and its two "
+                f"surface forms credit different first tokens ({pieces}) — "
+                "token_form='auto' cannot know which one the model emits; set "
+                "the metric's token_form to 'bare' or 'space_prefixed'",
+            )
     for ids in encoded:
-        for token_id in ids:
-            if tokenizer.decode([int(token_id)]).strip():
-                return int(token_id)
+        first = _first_content_id(tokenizer, ids)
+        if first is not None:
+            return first
     raise ProtocolError(
         "P2",
         f"metric column value {value!r} encodes to no content tokens under "
         "this tokenizer — nothing to compare an argmax against",
+    )
+
+
+def _first_content_id(tokenizer: Any, ids: Sequence[int]) -> int | None:
+    """The first piece of ``ids`` that decodes to text, or ``None``.
+
+    Written as a property of the piece rather than of a known value because
+    which values carry a whitespace-only first piece is tokenizer- and
+    version-dependent (see :func:`column_first_token_id`).
+    """
+    for token_id in ids:
+        if tokenizer.decode([int(token_id)]).strip():
+            return int(token_id)
+    return None
+
+
+def _refuse_indistinct_first_tokens(
+    groups: Sequence[Sequence[str]],
+    resolved: Sequence[set[int]],
+    *,
+    where: str,
+) -> None:
+    """Refuse a ``first_token`` metric whose answer space is not first-token
+    distinct.
+
+    ``first_token`` credits a *prefix*, so it means "the model answered" only
+    when different answers begin with different tokens. Where they do not, the
+    metric over-credits silently: ``" 85"`` tokenizes to ``[220, "8", "5"]`` on
+    Qwen, so a model emitting ``87`` scores 1.000 against an expected ``85``.
+    Nothing in a run's saved outputs says so — the number is simply wrong.
+
+    The distinctness of a *dataset's* answer space is checked where the dataset
+    is built (:func:`column_first_token_id`); this is the same claim asserted
+    against the rows a metric was actually handed, which is the last place it
+    can be checked before a number is produced.
+    """
+    by_first: dict[int, set[str]] = {}
+    for forms, ids in zip(groups, resolved):
+        answer = "/".join(sorted(form.strip() for form in forms))
+        for token_id in ids:
+            by_first.setdefault(token_id, set()).add(answer)
+    collisions = {
+        token_id: sorted(answers)
+        for token_id, answers in by_first.items()
+        if len(answers) > 1
+    }
+    if not collisions:
+        return
+    shown = ", ".join(
+        f"{answers} share first token {token_id}"
+        for token_id, answers in list(collisions.items())[:3]
+    )
+    raise ProtocolError(
+        "P2",
+        f"{where}: mode='first_token' credits a prefix, and this answer space "
+        f"is not first-token distinct ({shown}) — the metric would score a "
+        "wrong answer as correct. Use mode='exact', or an answer space whose "
+        "members begin with different tokens",
     )
 
 
@@ -391,14 +490,24 @@ def compute_metric(
         # `token_form` decides which surface form resolves. Independent knobs.
         mode = str(metric.fields.get("mode", "exact"))
         resolve = column_first_token_id if mode == "first_token" else column_token_id
-        argmax = logits.argmax(dim=-1)
-        return [
-            float(
-                int(argmax[i])
-                in {resolve(tokenizer, f, token_form=token_form) for f in forms}
+        groups = form_groups("expected")
+        if token_form == "auto":
+            # `match` resolves form by form, so it never reached the aggregated
+            # column check — the one kind whose answers are most often bare
+            # punctuation, which is where `auto` guesses worst.
+            refuse_ambiguous_auto(
+                tokenizer,
+                [form for forms in groups for form in forms],
+                where=f"metric {kind}.expected",
             )
-            for i, forms in enumerate(form_groups("expected"))
+        resolved = [
+            {resolve(tokenizer, f, token_form=token_form) for f in forms}
+            for forms in groups
         ]
+        if mode == "first_token":
+            _refuse_indistinct_first_tokens(groups, resolved, where=f"metric {kind}")
+        argmax = logits.argmax(dim=-1)
+        return [float(int(argmax[i]) in ids) for i, ids in enumerate(resolved)]
     if kind == "top_k":
         return _top_k(metric, dense, tokenizer, vocab_axis=vocab_axis)
     if kind == "class_probs":

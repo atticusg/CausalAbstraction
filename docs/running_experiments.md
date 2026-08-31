@@ -213,11 +213,11 @@ that the document loads, plans, executes and saves. `--set` is for exploration
 only: anything that matters about an experiment belongs in the file, where it
 enters the digest.
 
-That run also prints a warning worth reading rather than skipping: MCQA's
-answers are single letters, and ` Z` and `Z` are *different* tokens that both
-exist. `token_form="auto"` takes the space-prefixed form and says so; set the
-metric's `token_form` to `bare` or `space_prefixed` once you know which one the
-model actually emits.
+That run also **refuses**, and the refusal is the point: MCQA's answers are
+single letters, and ` Z` and `Z` are *different* tokens that both exist.
+`token_form="auto"` cannot know which one the model emits, so it says so
+instead of picking one. Set the metric's `token_form` to `bare` or
+`space_prefixed` and run it again.
 
 Then the real thing, on an accelerator:
 
