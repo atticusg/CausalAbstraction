@@ -743,14 +743,8 @@ pairs, rendered by the workflow's own `locate_heatmap` step from `iia.json`. The
 one bright row is `{"index": -1}`, the answer slot; the `entity` and `number`
 rows never leave the floor.*
 
-The answer-slot column, every layer:
-
-```
-  L0-L11  0.219   L15  0.141   L18  0.891   L21-L24  0.922
-  L12     0.203   L16  0.266   L19  0.875   L25      0.938
-  L13     0.219   L17  0.281   L20  0.844   L26-L31  0.953
-  L14     0.234
-```
+The bright row is the whole of RQ2: flat at the floor for two thirds of the
+stack, one sharp step, then a plateau to the end.
 
 ✓ **The L18 handoff is confirmed to the layer.** 0.281 at L17, **0.891 at L18** —
 one layer, and the answer has arrived at the slot the unembedding reads. That was

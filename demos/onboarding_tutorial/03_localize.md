@@ -89,70 +89,10 @@ together: the counterfactual harvest is shared by content across every point
 that reads the same value, where 128 separate runs would have re-loaded the
 model 128 times.
 
-### As a workflow
-
-Scanning is only half of it — the grid has to be rendered and reduced to the
-cell a next stage would use. [`workflows/mcqa_locate.json`](workflows/mcqa_locate.json)
-adds both, and the file is inlined here the same way — verbatim, so
-`tests/demos/test_demos.py` can hold this copy to it:
-
-```json
-{
-  "version": "1",
-  "description": "The 03_localize demo end to end: scan the (layer x position) grid, render it, and reduce it to the one cell the next stage would target. Nothing orders these steps -- `heatmap` and `best` both reference `scan`, so the runner derives that they may run together the moment the scan finishes.",
-  "output_dir": "mcqa_locate",
-  "steps": {
-    "scan": {
-      "type": "intervention_protocol",
-      "document": "../protocols/mcqa_locate_scan.json"
-    },
-    "heatmap": {
-      "type": "script",
-      "script": {"module": "causalab.io.plots.workflow_figures"},
-      "inputs": {
-        "table": {"step": "scan", "file": "iia.json"},
-        "plot": "heatmap",
-        "x": "sites.target.layer",
-        "y": "positions.tap"
-      },
-      "outputs": {
-        "figure": "iia_heatmap.png",
-        "plotted": {"file": "iia_heatmap.json"}
-      }
-    },
-    "best": {
-      "type": "script",
-      "script": {"module": "causalab.workflow.scripts.select"},
-      "inputs": {
-        "table": {"step": "scan", "file": "iia.json"},
-        "choose": "max",
-        "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}
-      },
-      "outputs": {
-        "values": {
-          "file": "values.json",
-          "keys": {"best_layer": 0, "best_pos": {"index": -6}}
-        }
-      }
-    }
-  }
-}
-```
-
-```mermaid
-flowchart LR
-  S["scan<br/>128 points"] --> H["heatmap<br/>iia_heatmap.png"]
-  S --> B["best<br/>values.json"]
-```
-
-Nothing in the document orders those steps. `heatmap` and `best` each reference
-`scan`'s `iia.json`, and that reference *is* the dependency edge — so the runner
-derives two levels and may run the second one's steps together.
-
-The `keys` block is load-bearing rather than documentation: a later document
-whose `set` pulls `best_layer` out of this step cannot resolve it before the run,
-so the loader validates that document against the declared representative and
-substitutes the real value at run time.
+Scanning is only half of the demo, though, so what `Run it` runs is a **workflow**
+that wraps this protocol and adds the two steps that render the grid and reduce
+it to one cell. That document is inlined beside the picture it produces, in
+[Results](#q1--yes).
 
 ## Run it
 
@@ -253,34 +193,71 @@ per-example records over 128 cells (64 pairs each), which `heatmap` and `best`
 aggregate identically — both call `causalab.io.step_record.aggregate`, and the
 aggregate was checked to be the mean of the 64 per-example values in every cell.
 
-The whole grid, IIA per (layer, position):
-
-```
-  L | symbol0(-10)   symbol1(-6)   answer slot(-1)   the other five
-  0 |        0.453         0.531             0.000            0.000
-  1 |        0.391         0.531             0.000            0.000
-  2 |        0.375         0.531             0.000            0.000
-  3 |        0.297         0.531             0.000            0.000
-  4 |        0.250         0.531             0.000            0.000
-  5 |        0.234         0.531             0.000            0.000
-  6 |        0.250         0.531             0.000            0.000
-  7 |        0.266         0.531             0.000            0.000
-  8 |        0.266         0.531             0.000            0.000
-  9 |        0.156         0.469             0.000            0.000
- 10 |        0.094         0.422             0.000            0.000
- 11 |        0.094         0.359             0.047            0.000
- 12 |        0.031         0.250             0.172            0.000
- 13 |        0.031         0.234             0.188            0.000
- 14 |        0.000         0.000             0.969            0.000
- 15 |        0.000         0.000             0.969            0.000
-```
-
-The five positions that are not a symbol or the answer slot — `?\n`, both
-periods, and both choice words — are **0.000 at all 16 layers**, all 80 cells.
-That is what a cell carrying nothing looks like when the metric is IIA rather
-than an accuracy with a floor.
-
 ### Q1 — yes
+
+Scanning is only half of it — the grid has to be rendered and reduced to the
+cell a next stage would use, and the picture below is what the rendering step
+emits. [`workflows/mcqa_locate.json`](workflows/mcqa_locate.json) adds both, and
+the file is inlined here verbatim, so `tests/demos/test_demos.py` can hold this
+copy to it:
+
+```json
+{
+  "version": "1",
+  "description": "The 03_localize demo end to end: scan the (layer x position) grid, render it, and reduce it to the one cell the next stage would target. Nothing orders these steps -- `heatmap` and `best` both reference `scan`, so the runner derives that they may run together the moment the scan finishes.",
+  "output_dir": "mcqa_locate",
+  "steps": {
+    "scan": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_locate_scan.json"
+    },
+    "heatmap": {
+      "type": "script",
+      "script": {"module": "causalab.io.plots.workflow_figures"},
+      "inputs": {
+        "table": {"step": "scan", "file": "iia.json"},
+        "plot": "heatmap",
+        "x": "sites.target.layer",
+        "y": "positions.tap"
+      },
+      "outputs": {
+        "figure": "iia_heatmap.png",
+        "plotted": {"file": "iia_heatmap.json"}
+      }
+    },
+    "best": {
+      "type": "script",
+      "script": {"module": "causalab.workflow.scripts.select"},
+      "inputs": {
+        "table": {"step": "scan", "file": "iia.json"},
+        "choose": "max",
+        "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}
+      },
+      "outputs": {
+        "values": {
+          "file": "values.json",
+          "keys": {"best_layer": 0, "best_pos": {"index": -6}}
+        }
+      }
+    }
+  }
+}
+```
+
+```mermaid
+flowchart LR
+  S["scan<br/>128 points"] --> H["heatmap<br/>iia_heatmap.png"]
+  S --> B["best<br/>values.json"]
+```
+
+Nothing in the document orders those steps. `heatmap` and `best` each reference
+`scan`'s `iia.json`, and that reference *is* the dependency edge — so the runner
+derives two levels and may run the second one's steps together.
+
+The `keys` block is load-bearing rather than documentation: a later document
+whose `set` pulls `best_layer` out of this step cannot resolve it before the run,
+so the loader validates that document against the declared representative and
+substitutes the real value at run time.
 
 ![Locate grid](figures/03_locate_grid.png)
 
@@ -291,7 +268,11 @@ the eight positions, columns the 16 layers. The bright cell at the right of the
 `{"index": -6}`, symbol1, decaying with depth.*
 
 The grid is far from flat: **max IIA 0.969 at (L14, answer slot)**, grid mean
-0.094, grid min 0.000.
+0.094, grid min 0.000. The five positions that are neither a symbol nor the
+answer slot — `?\n`, both periods, and both choice words — are **0.000 at all 16
+layers**, all 80 cells, which is the dark bulk of the picture. That is what a
+cell carrying nothing looks like when the metric is IIA rather than an accuracy
+with a floor.
 
 **Verdict.** Yes — the variable is movable by an interchange, and the cells that
 move it are a small minority: **95 of 128 cells are exactly 0.000**, 33 are
