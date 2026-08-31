@@ -102,6 +102,15 @@ def _build_parser() -> argparse.ArgumentParser:
             p.add_argument(
                 "--data", action="store_true", help="also check column references"
             )
+        if verb == "explain":
+            p.add_argument(
+                "--engine",
+                choices=("pytorch_hooks", "nnsight", "auto"),
+                default=None,
+                help="also route the document and print which engine would "
+                "serve it (or the §8 refusal). Loads engines, so `explain` "
+                "without it stays torch-free",
+            )
         if verb == "run":
             p.add_argument(
                 "--out",

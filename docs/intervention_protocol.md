@@ -1142,6 +1142,7 @@ runs the full pipeline, a split one composing its halves first.
 | `run <doc>` | validate, expand, plan, execute, stamp; writes `<out>/protocol.json` — the canonical document, its digest, the per-point provenance digests, and the method it was composed from |
 | `validate <doc> [--data]` | sec. 5 checks; `--data` also checks column references |
 | `explain <doc>` | models + forward plan, expanded point count, derived `requires`, resolved bindings, digest, what `save` produces |
+| `--engine` (explain) | also route the document and print which engine would serve it, or the sec. 8 refusal. Opt-in: engines are heavy, and without it `explain` stays torch-free |
 | `digest <doc>` | the campaign digest |
 | `--set path=value` | ad-hoc override — exploration only; promote anything that matters into the file |
 | `--device` (run) | reference-engine placement: any torch device string (`cpu` default, `cuda`, `cuda:1`, `mps`). Placement is execution; precision is not (§8) |
