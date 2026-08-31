@@ -31,7 +31,7 @@
         "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}
       },
       "outputs": {
-        "values": {"file": "values.json", "keys": {"best_layer": 18, "best_pos": {"index": -1}}}
+        "values": {"file": "values.json", "keys": {"best_layer": 26, "best_pos": {"index": -1}}}
       }
     },
     "harvest": {
