@@ -26,6 +26,28 @@ the complete contribution of exactly one head.
 > standard `gate` featurizer is not an acceptable substitute because it selects
 > coordinates within heads rather than whole heads.
 
+
+## Non-Llama towers
+
+Check the model's hookpoint table before choosing the band width, because
+`attention_premix` is not present at every layer of a hybrid stack.
+
+- **On a hybrid attention/linear-attention tower, only the full-attention layers
+  have heads.** Qwen3.6-35B-A3B is 40 layers, 10 of them full attention (at 3,
+  7, … 39) and 30 Gated DeltaNet. `attention_premix` exists on those 10 only, so
+  a "contiguous band of five layers" contains **one or two** attention layers,
+  and 30 layers contribute nothing to a head mask. Define the bands over the
+  attention layers that exist rather than over depth indices, and say which
+  layers a band actually covered.
+- **`attention_output` does exist tower-wide**, so the parent full-output
+  patching experiment is well defined on such a model even where the interior is
+  not. When the interior is unavailable, the parent result is the evidence, and
+  the report should say the head-level decomposition was not attempted rather
+  than reporting an empty one.
+- The linear-attention layers have their own interior (`delta_*` components).
+  Masking it is a different experiment with a different unit, not a
+  drop-in substitute for a head mask.
+
 ## Data and objective
 
 Use the same single-token counterfactual dataset and direction as the parent
@@ -54,8 +76,38 @@ Include:
 - three seeds;
 - a mask-size versus effect curve.
 
-The mask is not meaningful if the full-output positive control fails or if
-matched random head sets perform equally well.
+The mask is not meaningful if the full-output positive control fails **at the
+readout cell** — below it, a full swap scoring under a sparse mask is an
+expected finding, not a broken control — or if matched random head sets perform
+equally well.
+
+Report the **null** and the **measured ceiling** beside every fit. Beating a
+matched random mask is necessary and not sufficient — a fit can clear its random
+control and still sit below the score with nothing intervened on at all.
+
+## Where the held-out number comes from
+
+A DBM **fit** document's own `iia.json` is its *training* score, computed on the
+split it trained on. The held-out number is one of two other files:
+
+- `train_eval.json`, written per evaluation round when the fit declares
+  `train.eval` with a split;
+- the score of an **apply** document —
+  `causalab/configs/protocols/dbm_apply.json` — which loads the fitted `theta`
+  by `file_path`, carries no `train` block, and reproduces the fit's hard
+  `θ > 0` mask exactly. Point it at any split or condition; its ArtifactIdentity
+  check refuses a gate fitted at another model, dtype or site.
+
+Cross-dataset and cross-condition evaluation needs the apply document; a fit
+cannot answer for a split it never declared. Never report a fit's `iia.json` as
+a localization result.
+
+**Read `fit_diagnostics.json` before believing any DBM number.** A gate is a
+*hard* `θ > 0` mask in eval mode, so an unseparated θ makes the mask a coin flip
+on gradient noise — roughly half the coordinates swap, which at the readout
+layer can score 1.000 while meaning nothing. `decisive_fraction` near 0 says the
+gate never committed. Report `hard_mask_size` beside every effect: a mask is a
+claim about *how few* coordinates carry the variable.
 
 ## Report contract
 
@@ -65,8 +117,11 @@ self-contained explorer. It must provide:
 - a layer-by-head map of learned mask values and hard selections;
 - selectors for supervised input or output variable, parent band, token position
   or span, regularization, seed, and data split;
-- held-out effect and mask size for every fit;
-- the full-output positive control and matched random-head controls;
+- held-out effect and mask size for every fit, and the file each came from
+  (`train_eval.json` or an apply document — never a fit's `iia.json`);
+- `decisive_fraction` from `fit_diagnostics.json` beside every effect;
+- the full-output positive control, the null, the measured ceiling, and matched
+  random-head controls;
 - mask-size versus effect curves;
 - exact examples and intervened outputs for selected fits;
 - stability of selected heads across seeds;

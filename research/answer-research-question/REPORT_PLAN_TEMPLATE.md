@@ -43,10 +43,12 @@ distinct evidence. Represent repetitive sweeps with a table and artifact link.
 
 ## Final handoff checklist
 
-- `result/report.tex` contains the concise causal story and no more than 20 main
+- `result/report.md` contains the concise causal story and no more than 20 main
   figures.
-- `result/report.pdf` compiles from `report.tex` without manual edits.
-- `result/figures/` contains every main and appendix figure referenced by LaTeX.
+- `result/report.html` is a self-contained rendering of `report.md` — one file,
+  no external assets.
+- `result/figures/` contains every main and appendix figure the report
+  references.
 - `result/experiment-index.json` identifies every experiment and its artifacts.
 - The appendix indexes every completed experiment and may contain many more
   figures, including roughly 100 when the investigation warrants them.

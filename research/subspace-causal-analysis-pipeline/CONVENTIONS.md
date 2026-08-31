@@ -1,5 +1,19 @@
 # Subspace causal-analysis pipeline — conventions
 
+> **Stale — predates the protocol refactor.** This document was written against
+> the Hydra runner (`scripts/run_exp.sh`), the `causalab/analyses/` tree,
+> `methods/` as Python, and SLURM dispatch, all of which were retired in PR #20.
+> `causalab/io/pipelines.py`, named twice below, no longer exists. The
+> scientific guidance remains correct, but the commands, configuration formats,
+> and code paths are no longer valid. Rewriting it is tracked as future work.
+> For the current protocol, start at
+> [`../answer-research-question/answer-research-question.md`](../answer-research-question/answer-research-question.md).
+>
+> It carries the same banner as its entry document
+> ([`subspace-causal-analysis-pipeline.md`](subspace-causal-analysis-pipeline.md))
+> because it is read on its own: a reference file with no banner reads as
+> current.
+
 Reference material for [`subspace-causal-analysis-pipeline.md`](subspace-causal-analysis-pipeline.md). The workflow lives there; this file holds the lifecycle map, the gate-read contracts, the viewer-merge fragment, and the restrictions.
 
 ## Input and posture

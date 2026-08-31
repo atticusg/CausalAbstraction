@@ -178,11 +178,14 @@ shard manifests contains every expected point exactly once. Assemble report data
 by point digest and sweep coordinates.
 
 A simultaneous five-layer or ten-layer patch contains several dependent writes:
-the chosen start layer determines every layer in the band. The current protocol
-sweep language cannot express that dependency as one axis. Author one protocol
-document for each explicit band, keep every document under the same method
-experiment directory, and shard each document over its remaining position and
-data axes. These documents are separate campaigns but one reported experiment.
+the chosen start layer determines every layer in the band. The sweep language
+cannot express that dependency as one axis — but `intervened_models` (§2.9) can,
+because an entry names the *set* of writes in force for one forward. Author
+**one** document holding one write per layer and one `intervened_models` entry
+per band, and shard its remaining position and data axes with `--points`. Every
+band then shares one model load and one counterfactual-harvest forward.
+`causalab/configs/protocols/attention_band_patch.json` is the worked shape; the
+per-method guides carry the full example.
 
 `--points` applies to protocol documents, not workflow documents. If a workflow
 contains a large method, shard that method's protocol experiment directly and

@@ -103,8 +103,33 @@ localize an input or output variable during exploration.
 
 Use the dataset that hypothesis generation showed can distinguish each comparison
 and report its CPU baseline. Run complete representation patching as the positive
-control. If it does not reach its measured maximum, stop and repair the test. Use
-the null and a site that should not contain the target as negative controls.
+control. Use the null and a site that should not contain the target as negative
+controls.
+
+**The stop rule is scoped to the readout cell.** At the cell where the answer is
+read out, a full-vector swap that does not reach its measured maximum means the
+test is broken: stop and repair it. **Anywhere else in the tower it means
+nothing of the kind.** A mid-tower full swap transplants everything at that
+address, including content the later blocks use to argue the original answer
+back; a low-rank edit does not. So a rank-2 subspace beating a full swap at a
+mid-tower cell is an ordinary, expected finding — a *sharper* result, not a
+failed control.
+
+This is not a theoretical caveat. Applied literally, the unscoped rule fired
+wrongly four times across three independent A3B investigations: 0.81 full swap
+against 1.000 for rank-2 DAS; 0.906 against 0.945 for rank-32; 0.221 against
+0.117 on a carry variable; and in the refusal study a k=2 subspace scored 0.98
+where the full swap scored 0.07 — there the rule would have deleted the only
+experiment that separated the decision from the symbol.
+
+It also contradicts the handbook, which treats an inert full transplant as the
+*tool* rather than the fault: a counterfactual that leaves the whole-output
+transplant inert is precisely how you guarantee that any output movement came
+from an internal variable, and so how you probe an internal pathway
+([`../../causal-handbook.md`](../../causal-handbook.md), "The null↔all
+relationship is set by the counterfactual, and that is a tool"). Read a
+full-swap score below the low-rank score as evidence about *where* the
+information is, and report both.
 
 DAS and DBM must report training and held-out evaluation results for all three
 seeds. Select dimensions and masks using a rule fixed before inspecting the final
@@ -123,9 +148,16 @@ Evidence for the intermediate variable requires a result that:
 The protocol presets live in `causalab/configs/protocols/`. Start from
 `interchange.json`, `weekdays_locate_scan.json`, `das.json`,
 `weekdays_das_sweep.json`, `weekdays_das_apply.json`, `dbm.json`,
-`path_patching.json`, `hydra_effect.json`, or `harvest.json` as appropriate. The
-worked locate-to-fit-to-apply workflow is
+`dbm_apply.json`, `attention_band_patch.json`, `path_patching.json`,
+`hydra_effect.json`, or `harvest.json` as appropriate. The worked
+locate-to-fit-to-apply workflow is
 `causalab/configs/workflows/weekdays_8b.json`.
+
+A **fit** document's own saved score is a *training* score. `weekdays_das_sweep`
+and `dbm` write `iia.json` over the split they trained on; the held-out number
+comes from the matching `*_apply` document (`weekdays_das_apply.json`,
+`dbm_apply.json`), or from the fit's `train_eval.json` when `train.eval`
+declares a split. Never report a fit's `iia.json` as a localization result.
 
 Use `causalab explain <doc>` and `causalab validate <doc> --data` before launching
 a sweep. Use the implementation report guidance at
@@ -162,6 +194,6 @@ Return to
 [exploratory experimentation](../exploratory-experimentation/exploratory-experimentation.md)
 when a new internal explanation requires more evidence first.
 
-Before routing backward, confirm that the positive control worked and that the
-dataset had enough power to distinguish the target. Record the result and routing
+Before routing backward, confirm that the positive control worked *at the
+readout cell* and that the dataset had enough power to distinguish the target. Record the result and routing
 decision in `ROADMAP.md`. Refutations remain part of the final causal account.

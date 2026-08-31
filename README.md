@@ -54,6 +54,7 @@ The golden-corpus documents ship as user-facing presets in [`causalab/configs/pr
 | `harvest` | activation harvesting at named sites/positions |
 | `interchange` | interchange intervention + IIA scoring |
 | `path_patching` | sender→receiver path patching with off-path freezing |
+| `attention_band_patch` | contiguous layer bands in one forward, several bands per document |
 | `multi_position_patch` | several writes on one site at disjoint positions |
 | `mean_harvest` / `mean_ablation` | harvest a corpus mean at save time, then swap it in |
 | `das` | trained orthogonal-subspace interchange (DAS) |

@@ -10,18 +10,29 @@ report, and the experiment artifacts. Produce:
 
 ```text
 $WORKDIR/result/
-├── report.tex
-├── report.pdf
+├── report.md
+├── report.html
 ├── experiment-index.json
 └── figures/
 ```
 
-`report.tex` is the source of truth, and `report.pdf` must compile from it without
-manual edits. Copy every referenced figure into `figures/`. The machine-readable
-index must identify every experiment by its canonical identity, method, output
-target, variable, status, report, run artifacts, and figure paths. Use the Silico
-experiment `eid` when one exists and the CausaLab document or point digest for
-CausaLab runs.
+`report.md` is the source of truth and `report.html` is the self-contained
+rendering of it — one file, figures inlined or referenced under `figures/`, no
+external assets. Copy every referenced figure into `figures/`. The
+machine-readable index must identify every experiment by its canonical identity,
+method, output target, variable, status, report, run artifacts, and figure
+paths. Use the Silico experiment `eid` when one exists and the CausaLab document
+or point digest for CausaLab runs.
+
+> **Why not LaTeX.** This contract used to require `report.tex` plus a
+> `report.pdf` that "must compile from it without manual edits". **There is no
+> LaTeX toolchain on the cluster** — no `pdflatex`, `xelatex`, `latexmk`,
+> `tectonic` or `lualatex`, on login or compute nodes — and the cluster is the
+> only environment these runs execute in, so the contract required a deliverable
+> the executor could not produce. `report.md` + `report.html` +
+> `experiment-index.json` satisfies it. If a venue needs LaTeX, convert at that
+> point, on a machine that has it; do not make a machine-checkable contract
+> depend on a toolchain the machine lacks.
 
 ## Main report
 
