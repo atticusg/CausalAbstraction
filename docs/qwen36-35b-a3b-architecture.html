@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qwen3.6-35B-A3B: internal architecture</title>
+<!-- Companion to transformerlens-architecture.html, same visual language.
+     Ground truth: transformers 5.16.0 models/qwen3_5_moe/modeling_qwen3_5_moe.py.
+     Every weight in print(model) appears exactly once as a gray edge label;
+     lavender boxes are hidden states worth hooking for mech interp. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  body { background:#fff; margin:0; padding:24px; }
+  #wrap { max-width:2600px; margin:0 auto; }
+  svg { width:100%; height:auto; display:block; }
+  .credit { font:12px/1.5 'Trebuchet MS',Helvetica,Arial,sans-serif; color:#888; margin-top:8px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <svg id="fig" viewBox="0 0 2600 3800" xmlns="http://www.w3.org/2000/svg" role="img"
+       aria-label="Qwen3.6-35B-A3B internal architecture diagram"></svg>
+  <p class="credit">Dataflow verified against
+     <code>models/qwen3_5_moe/modeling_qwen3_5_moe.py in transformers 5.16.0</code>.
+     Style inspired by Callum McDougall's Transformer Architecture Excalidraw diagram.</p>
+</div>
+<script>
+(function () {
+  var NS = 'http://www.w3.org/2000/svg';
+  var svg = document.getElementById('fig');
+
+  var HAND = "'Kalam','Chalkboard SE','Comic Sans MS','Segoe Print',cursive";
+  var MONO = "ui-monospace,'SF Mono',Menlo,Consolas,monospace";
+  var SANS = "'Trebuchet MS','Segoe UI',Helvetica,Arial,sans-serif";
+  var ORANGE = '#f08c00', RED = '#e03131';
+  var NODE_FILL = '#ECECFF', NODE_STROKE = '#9370DB', SHAPE_RED = '#cc1111';
+  // Box kinds — the diagram's contract with docs/running_experiments.md:
+  // **a lavender box is a hookpoint some engine exposes, and nothing else is.**
+  //   `module`   solid lavender  — an addressable component, readable and writable
+  //   `readonly` dashed lavender — an addressable component a write may not target
+  //                                (derived, or kernel bookkeeping: the refusal
+  //                                names the alternative)
+  //   `blocked`  gray            — a real tensor in this forward that the
+  //                                component vocabulary does not name
+  // `module` is the default, so an unmarked box is an ordinary hookpoint.
+  var BLOCKED_STROKE = '#9a9a9a', BLOCKED_FILL = '#f2f2f2';
+  var NODE_KINDS = {
+    module:   { fill: NODE_FILL,    stroke: NODE_STROKE,    dash: 'none' },
+    readonly: { fill: NODE_FILL,    stroke: NODE_STROKE,    dash: '5 4'  },
+    blocked:  { fill: BLOCKED_FILL, stroke: BLOCKED_STROKE, dash: '2 3'  }
+  };
+  var PANEL_FILL = '#ffffde', PANEL_STROKE = '#aaaa33';
+  var EDGE = '#333', LABEL_BG = '#e8e8e8';
+
+  function el(name, attrs, parent) {
+    var e = document.createElementNS(NS, name);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    (parent || svg).appendChild(e);
+    return e;
+  }
+  var defs = el('defs', {});
+  function marker(id, color) {
+    var m = el('marker', { id: id, markerWidth: 9, markerHeight: 9, refX: 7.5, refY: 4, orient: 'auto', markerUnits: 'userSpaceOnUse' }, defs);
+    el('path', { d: 'M0,0 L8,4 L0,8 Z', fill: color }, m);
+  }
+  marker('arr', EDGE);
+  marker('arrR', RED);
+
+  var gPanels = el('g', {}), gEdges = el('g', {}), gLabels = el('g', {}),
+      gNodes = el('g', {}), gAnn = el('g', {});
+
+  function text(x, y, str, o, parent) {
+    o = o || {};
+    var t = el('text', {
+      x: x, y: y,
+      'font-family': o.font || SANS,
+      'font-size': o.size || 13,
+      'font-weight': o.weight || 'normal',
+      fill: o.fill || '#333',
+      'text-anchor': o.anchor || 'middle'
+    }, parent || gAnn);
+    t.textContent = str;
+    return t;
+  }
+  function group(x, y, w, h, label, outer) {
+    el('rect', { x: x, y: y, width: w, height: h, rx: 4, fill: PANEL_FILL, stroke: PANEL_STROKE, 'stroke-width': outer ? 1.4 : 1 }, gPanels);
+    text(x + 10, y + 21, label, { size: outer ? 15 : 14, weight: outer ? 'bold' : 'normal', anchor: 'start', fill: '#333' }, gPanels);
+  }
+  var nodes = {};
+  function node(id, cx, cy, name, shape, kind, opts) {
+    opts = opts || {};
+    var w, h;
+    if (kind === 'plain') {
+      w = opts.w || Math.round(name.length * 7.6 + 20);
+      h = 30;
+      if (!opts.nohl)
+        el('rect', { x: cx - w / 2 - 8, y: cy - h / 2 - 6, width: w + 16, height: h + 12, fill: 'none', stroke: PANEL_STROKE, 'stroke-width': 1.2 }, gNodes);
+      el('rect', { x: cx - w / 2, y: cy - h / 2, width: w, height: h, fill: '#fff', stroke: '#666', 'stroke-width': 1 }, gNodes);
+      text(cx, cy + 5, name, { size: 14 }, gNodes);
+      nodes[id] = { cx: cx, cy: cy, w: w, h: h };
+    } else {
+      w = opts.w || Math.max(64, Math.round(name.length * 8 + 16), shape ? Math.round(shape.length * 6.9 + 12) : 0);
+      h = 46;
+      var st = NODE_KINDS[kind] || NODE_KINDS.module;
+      el('rect', { x: cx - w / 2, y: cy - h / 2, width: w, height: h, rx: 3, fill: st.fill, stroke: st.stroke, 'stroke-width': 1, 'stroke-dasharray': st.dash }, gNodes);
+      text(cx, cy - 6, name, { size: 14 }, gNodes);
+      el('line', { x1: cx - w / 2, y1: cy + 1, x2: cx + w / 2, y2: cy + 1, stroke: st.stroke, 'stroke-width': 1 }, gNodes);
+      text(cx, cy + 16, shape, { size: 11, font: MONO, fill: SHAPE_RED }, gNodes);
+      nodes[id] = { cx: cx, cy: cy, w: w, h: h };
+    }
+    var n = nodes[id];
+    n.top = [cx, cy - h / 2]; n.bottom = [cx, cy + h / 2];
+    n.left = [cx - w / 2, cy]; n.right = [cx + w / 2, cy];
+    return n;
+  }
+  function path(d, o) {
+    o = o || {};
+    return el('path', {
+      d: d, fill: 'none',
+      stroke: o.stroke || EDGE,
+      'stroke-width': o.width || 1.3,
+      'stroke-dasharray': o.dash || 'none',
+      'marker-end': o.arrow ? 'url(#' + o.arrow + ')' : 'none'
+    }, o.layer || gEdges);
+  }
+  function edge(d) { return path(d, { arrow: 'arr' }); }
+  function label(cx, cy, str) {
+    var w = Math.round(str.length * 6.4 + 12);
+    el('rect', { x: cx - w / 2, y: cy - 9, width: w, height: 18, rx: 2, fill: LABEL_BG, 'fill-opacity': 0.95 }, gLabels);
+    text(cx, cy + 4, str, { size: 12 }, gLabels);
+  }
+  function vedge(a, b, lbl, lblY) {
+    var A = nodes[a].bottom, B = nodes[b].top, my = (A[1] + B[1]) / 2;
+    edge('M' + A[0] + ' ' + A[1] + ' C ' + A[0] + ' ' + my + ', ' + B[0] + ' ' + my + ', ' + B[0] + ' ' + (B[1] - 2));
+    if (lbl) label((A[0] + B[0]) / 2, lblY || my, lbl);
+  }
+  function mergeInto(sources, mergePt, target, lbl, lblY) {
+    var mx = mergePt[0], my = mergePt[1];
+    sources.forEach(function (s) {
+      if (s.d) { path(s.d); return; }
+      var A = nodes[s.id].bottom, k = (A[1] + my) / 2;
+      path('M' + A[0] + ' ' + A[1] + ' C ' + A[0] + ' ' + k + ', ' + mx + ' ' + k + ', ' + mx + ' ' + my);
+    });
+    var B = nodes[target].top;
+    edge('M' + mx + ' ' + my + ' L' + B[0] + ' ' + (B[1] - 2));
+    if (lbl) label(mx, lblY, lbl);
+  }
+  function redArrow(d) { path(d, { stroke: RED, width: 1.6, dash: '7 6', arrow: 'arrR', layer: gAnn }); }
+  function dashline(d) { path(d, { width: 1.5, dash: '9 7', layer: gEdges }); }
+  function ann(x, y, lines, size, lh) {
+    size = size || 15; lh = lh || 22;
+    lines.forEach(function (ln, i) {
+      if (ln) text(x, y + i * lh, ln, { size: size, font: HAND, fill: RED, anchor: 'start' });
+    });
+  }
+  function orange(x, y, lines, size, lh) {
+    lines.forEach(function (ln, i) {
+      if (ln) text(x, y + i * lh, ln, { size: size, font: HAND, fill: ORANGE, anchor: 'start' });
+    });
+  }
+
+  // =====================================================================
+  // Title + subtitle
+  // =====================================================================
+  text(25, 170, 'Qwen3.6-35B-A3B: internal architecture', { size: 40, font: HAND, weight: 'bold', fill: ORANGE, anchor: 'start' });
+  orange(25, 235, [
+    'This diagram is for Qwen3.6-35B-A3B (HF model_type qwen3_5_moe): a hybrid of',
+    'Gated DeltaNet linear attention (30 layers) and gated full attention (10 layers),',
+    'with a sparse mixture of experts in every layer.',
+    'Shapes are per token position; the batch dimension is omitted.'
+  ], 19, 28);
+
+  // =====================================================================
+  // Key box
+  // =====================================================================
+  el('rect', { x: 1700, y: 20, width: 860, height: 470, rx: 14, fill: '#fff', stroke: '#333', 'stroke-width': 1.5, 'stroke-dasharray': '8 7' }, gPanels);
+  text(1735, 60, 'Key', { size: 21, font: HAND, fill: ORANGE, anchor: 'start' });
+  var mono = function (y, s) { text(1735, y, s, { size: 13, font: MONO, fill: '#333', anchor: 'start' }); };
+  mono(98,  'Qwen/Qwen3.6-35B-A3B  ->  Qwen3_5MoeForCausalLM   (text tower)');
+  mono(120, '34.66 B params (69.3 GB bf16); lm_head untied (0.51 B)');
+  mono(142, 'd_model 2048, vocab 248320, 40 layers');
+  mono(164, 'layer_types = ([linear_attention] * 3 + [full_attention]) * 10');
+  mono(204, 'full attention:  16 q-heads / 2 kv-heads (GQA), head_dim 256,');
+  mono(226, '                 RoPE on 64 of 256 dims, per-channel output gate');
+  mono(248, 'gated DeltaNet:  32 v-heads x 128, 16 k-heads x 128 (q,k tiled 2x),');
+  mono(270, '                 depthwise causal conv (k=4) on packed qkv');
+  mono(292, 'MoE, every layer: 256 experts, top-8 (renormalized) + 1 shared,');
+  mono(314, '                 d_expert 512');
+  orange(1735, 360, [
+    'Lavender boxes are hidden states to hook for mech-interp;',
+    'gray labels carry the weights between them. Every weight in',
+    'print(model) appears exactly once. Highlighted white boxes',
+    'zoom out into their own panel (dashed lines).'
+  ], 15, 24);
+
+  // Which lavender boxes a backend can actually address. A solid box is a real
+  // module boundary; a dashed one has to be computed from its neighbours, so it
+  // is not a component and there is nothing to register a hook on.
+  var legend = function (x, y, kind, label) {
+    var st = NODE_KINDS[kind];
+    el('rect', { x: x, y: y - 12, width: 30, height: 19, rx: 3, fill: st.fill,
+                 stroke: st.stroke, 'stroke-width': 1,
+                 'stroke-dasharray': st.dash }, gPanels);
+    text(x + 38, y + 3, label, { size: 12.5, font: SANS, fill: '#333',
+                                 anchor: 'start' }, gPanels);
+  };
+  legend(1660, 468, 'module',   'hookpoint - read and write');
+  legend(1990, 468, 'readonly', 'hookpoint - read only');
+  legend(2290, 468, 'blocked',  'not in the component vocabulary');
+
+  // =====================================================================
+  // Panels
+  // =====================================================================
+  group(20, 500, 300, 730, 'Qwen3_5MoeForCausalLM', true);
+  group(460, 380, 360, 1420, 'DecoderLayer', true);
+  group(950, 200, 690, 1190, 'self_attn — gated full attention (10 layers)', true);
+  group(950, 1490, 800, 1300, 'linear_attn — Gated DeltaNet (30 layers)', true);
+  group(950, 2880, 1090, 780, 'mlp — SparseMoeBlock (every layer)', true);
+
+  // =====================================================================
+  // Panel 1 — Qwen3_5MoeForCausalLM
+  // =====================================================================
+  node('input_ids', 160, 570, 'input_ids', '(seq,)', 'readonly');
+  node('embed', 185, 720, 'embed', '(seq, 2048)');
+  node('rotary', 75, 720, 'rotary_emb', '', 'plain', { w: 90, nohl: true });
+  node('block', 160, 850, 'DecoderLayer * 40', '', 'plain');
+  node('fnorm', 160, 1010, 'normalized', '(seq, 2048)');
+  node('logits', 160, 1150, 'logits', '(seq, 248320)');
+
+  vedge('input_ids', 'embed', 'embed_tokens (248320 x 2048)', 650);
+  vedge('embed', 'block');
+  edge('M128 591 C 95 625, 78 655, 76 702');
+  label(80, 680, 'position_ids');
+  edge('M75 735 C 75 795, 118 825, 143 833');
+  label(97, 782, 'cos, sin (seq, 64)');
+  vedge('block', 'fnorm', 'model.norm - RMSNorm (2048,)');
+  vedge('fnorm', 'logits', 'lm_head (248320 x 2048)');
+
+  // =====================================================================
+  // Panel 2 — DecoderLayer
+  // =====================================================================
+  node('resid_pre', 578, 450, 'resid_pre', '(seq, 2048)');
+  node('ln_in', 630, 610, 'normalized', '(seq, 2048)');
+  node('self_attn', 555, 760, 'self_attn', '', 'plain');
+  node('linear_attn', 730, 760, 'linear_attn', '', 'plain');
+  node('attn_out', 600, 900, 'attn_out', '(seq, 2048)');
+  node('resid_mid', 578, 1060, 'resid_mid', '(seq, 2048)');
+  node('ln_post', 630, 1220, 'normalized', '(seq, 2048)');
+  node('moe', 600, 1390, 'mlp (MoE)', '', 'plain', { w: 100 });
+  node('mlp_out', 600, 1540, 'mlp_out', '(seq, 2048)');
+  node('resid_post', 578, 1720, 'resid_post', '(seq, 2048)');
+
+  vedge('resid_pre', 'ln_in', 'input_layernorm - RMSNorm (2048,)');
+  vedge('ln_in', 'self_attn');
+  vedge('ln_in', 'linear_attn');
+  label(643, 690, 'one of the two, by layer index');
+  mergeInto([{ id: 'self_attn' }, { id: 'linear_attn' }], [600, 855], 'attn_out');
+  mergeInto([{ d: 'M564 472 C480 580, 480 880, 578 1012' }, { id: 'attn_out' }],
+            [578, 1012], 'resid_mid', 'add', 1026);
+  vedge('resid_mid', 'ln_post', 'post_attention_layernorm - RMSNorm (2048,)');
+  vedge('ln_post', 'moe');
+  vedge('moe', 'mlp_out');
+  mergeInto([{ d: 'M564 1082 C480 1200, 480 1540, 578 1668' }, { id: 'mlp_out' }],
+            [578, 1668], 'resid_post', 'add', 1685);
+  // layer-pattern note, parked under panel 1 so the zoom dashes stay clear
+  ann(30, 1330, [
+    'Every layer exposes the same residual-',
+    'stream hookpoints: resid_pre -> attn_out',
+    '-> resid_mid -> mlp_out -> resid_post.',
+    '',
+    'layer_types = ([linear]x3 + [full]) x 10:',
+    'layers 3, 7, 11, ..., 39 use self_attn,',
+    'the other 30 use linear_attn. Both write',
+    'into the same slot of the residual stream.'
+  ], 15, 23);
+  redArrow('M375 1345 C 440 1250, 485 1150, 518 1090');
+
+  // =====================================================================
+  // Panel 3 — self_attn (gated full attention)
+  // =====================================================================
+  node('a_norm', 1230, 265, 'normalized', '(seq, 2048)');
+  node('q_pre', 1080, 430, 'q_pre_rope', '(seq, 16, 256)');
+  node('k_pre', 1300, 430, 'k_pre_rope', '(seq, 2, 256)');
+  node('q', 1080, 560, 'q', '(seq, 16, 256)');
+  node('k', 1300, 560, 'k', '(seq, 2, 256)');
+  node('v', 1490, 560, 'v', '(seq, 2, 256)');
+  node('gate', 1080, 700, 'gate', '(seq, 4096)');
+  node('scores', 1190, 790, 'attn_scores', '(16, seqQ, seqK)');
+  node('pattern', 1190, 910, 'pattern', '(16, seqQ, seqK)');
+  node('z', 1330, 1030, 'z', '(seq, 16, 256)');
+  node('z_gated', 1170, 1140, 'z_gated', '(seq, 16, 256)');
+  node('result', 1170, 1240, 'result', '(seq, 16, 2048)', 'readonly');
+  node('attn_out3', 1170, 1340, 'attn_out', '(seq, 2048)');
+
+  vedge('a_norm', 'q_pre', 'q_proj (8192 x 2048): chunk[0]', 332);
+  edge('M1176 275 C 985 330, 975 540, 1076 675');
+  label(1008, 470, 'q_proj: chunk[1]');
+  vedge('a_norm', 'k_pre', 'k_proj (512 x 2048)', 368);
+  edge('M1285 258 C 1470 280, 1490 380, 1490 535');
+  label(1520, 330, 'v_proj (512 x 2048)');
+  vedge('q_pre', 'q', 'q_norm (256,) + RoPE');
+  vedge('k_pre', 'k', 'k_norm (256,) + RoPE');
+  mergeInto([{ id: 'q' }, { id: 'k' }], [1190, 730], 'scores',
+            'q k / sqrt(256), causal mask; GQA 2 kv -> 16 q', 748);
+  vedge('scores', 'pattern', 'softmax');
+  mergeInto([{ id: 'pattern' }, { id: 'v' }], [1330, 985], 'z',
+            'weighted avg of v', 996);
+  mergeInto([{ id: 'z' }, { id: 'gate' }], [1170, 1100], 'z_gated',
+            'z * sigmoid(gate)', 1108);
+  vedge('z_gated', 'result', 'o_proj (2048 x 4096), per-head slices');
+  vedge('result', 'attn_out3', 'sum over heads');
+
+  // =====================================================================
+  // Panel 4 — linear_attn (Gated DeltaNet)
+  // =====================================================================
+  node('d_norm', 1180, 1555, 'normalized', '(seq, 2048)');
+  node('qkv', 1180, 1685, 'qkv', '(seq, 8192)');
+  node('qkv_conv', 1180, 1815, 'qkv_conv', '(seq, 8192)');
+  node('dq', 1030, 1955, 'q', '(seq, 32, 128)');
+  node('dk', 1200, 1955, 'k', '(seq, 32, 128)');
+  node('dv', 1370, 1955, 'v', '(seq, 32, 128)');
+  node('dbeta', 1630, 2255, 'beta', '(seq, 32)');
+  node('dg', 1630, 2385, 'g (decay)', '(seq, 32)');
+  node('dz', 1630, 2500, 'z (out gate)', '(seq, 32, 128)');
+  group(1000, 2040, 520, 520, 'gated delta rule, per step t');
+  node('dkv_mem', 1240, 2125, 'kv_mem', '(seq, 32, 128)', 'readonly');
+  node('ddelta', 1240, 2255, 'delta', '(seq, 32, 128)', 'readonly');
+  node('dS', 1240, 2385, 'state S', '(32, 128, 128)');
+  node('do', 1240, 2515, 'core_attn_out', '(seq, 32, 128)');
+  node('do_gated', 1240, 2650, 'o_gated', '(seq, 32, 128)');
+  node('attn_out4', 1240, 2740, 'attn_out', '(seq, 2048)');
+
+  vedge('d_norm', 'qkv', 'in_proj_qkv (8192 x 2048)');
+  vedge('qkv', 'qkv_conv', 'conv1d (8192 x 1 x 4), causal + silu');
+  vedge('qkv_conv', 'dq');
+  label(1085, 1880, 'split q; l2norm, tile 2x');
+  vedge('qkv_conv', 'dk');
+  label(1200, 1900, 'split k; l2norm, tile 2x');
+  vedge('qkv_conv', 'dv');
+  label(1345, 1872, 'split v');
+  // side projections routed down the right-hand corridor
+  edge('M1234 1548 C 1720 1590, 1725 2180, 1634 2360');
+  label(1630, 2310, 'in_proj_a (32 x 2048)');
+  edge('M1234 1562 C 1690 1620, 1700 2080, 1633 2230');
+  label(1630, 2208, 'in_proj_b (32 x 2048), sigmoid');
+  edge('M1234 1576 C 1690 1660, 1705 2300, 1633 2477');
+  label(1630, 2452, 'in_proj_z (4096 x 2048)');
+  label(1630, 2335, 'g = -exp(A_log)*softplus(a+dt_bias)');
+  // the recurrence as a top-to-bottom pipeline: read -> delta -> update -> readout
+  vedge('dk', 'dkv_mem');
+  label(1252, 2072, 'read: S_(t-1) k');
+  edge('M1183 2378 C 1070 2350, 1070 2180, 1162 2130');   // S feeds back into the read
+  label(1062, 2255, 'S_(t-1)');
+  edge('M1370 1978 C 1400 2080, 1380 2170, 1298 2230');    // v joins the delta
+  vedge('dkv_mem', 'ddelta', 'delta = beta * (v - kv_mem)');
+  edge('M1585 2255 C 1480 2255, 1400 2255, 1320 2255');    // beta from the side
+  vedge('ddelta', 'dS', 'S_t = exp(g)*S_(t-1) + k (x) delta');
+  edge('M1583 2385 C 1480 2385, 1400 2385, 1301 2385');    // g from the side
+  label(1450, 2367, 'decay exp(g)');
+  vedge('dS', 'do', 'readout: o = S_t q / sqrt(128)');
+  edge('M1030 1998 C 1012 2250, 1012 2420, 1178 2510');    // q joins the readout
+  mergeInto([{ id: 'do' }, { d: 'M1630 2523 C 1630 2585, 1400 2608, 1246 2608' }],
+            [1240, 2612], 'do_gated', 'norm(o) * silu(z), norm.weight (128,)', 2585);
+  vedge('do_gated', 'attn_out4', 'out_proj (2048 x 4096)');
+
+  // =====================================================================
+  // Panel 5 — mlp (SparseMoeBlock)
+  // =====================================================================
+  node('m_norm', 1420, 2945, 'normalized', '(seq, 2048)');
+  node('r_logits', 1090, 3075, 'router_logits', '(seq, 256)', 'readonly');
+  node('r_probs', 1090, 3195, 'router_probs', '(seq, 256)', 'blocked');
+  node('r_scores', 1010, 3330, 'router_scores', '(seq, 8)');
+  node('r_idx', 1190, 3330, 'expert_idx', '(seq, 8)');
+  node('gu_e', 1400, 3075, 'gate_up_e', '(seq, 8, 1024)');
+  node('gate_e', 1320, 3195, 'gate_e', '(seq, 8, 512)');
+  node('up_e', 1490, 3195, 'up_e', '(seq, 8, 512)');
+  node('hidden_e', 1400, 3320, 'hidden_e', '(seq, 8, 512)', 'blocked');
+  node('expert_out', 1400, 3440, 'expert_out', '(seq, 8, 2048)');
+  node('routed', 1400, 3540, 'routed_out', '(seq, 2048)');
+  node('gate_s', 1720, 3110, 'gate_s', '(seq, 512)');
+  node('up_s', 1880, 3110, 'up_s', '(seq, 512)');
+  node('g_s', 1975, 3235, 'g_s', '(seq, 1)');
+  node('hidden_s', 1795, 3235, 'hidden_s', '(seq, 512)');
+  node('shared_out', 1795, 3355, 'shared_out', '(seq, 2048)');
+  node('shared_gated', 1795, 3475, 'shared_gated', '(seq, 2048)', 'blocked');
+  node('moe_out', 1600, 3625, 'mlp_out', '(seq, 2048)');
+
+  vedge('m_norm', 'r_logits', 'router: gate.weight (256 x 2048)', 2998);
+  vedge('r_logits', 'r_probs', 'softmax');
+  vedge('r_probs', 'r_scores', 'top-8, renorm');
+  vedge('r_probs', 'r_idx', 'top-8 indices');
+  vedge('m_norm', 'gu_e', 'experts.gate_up_proj (256, 1024, 2048)', 3030);
+  edge('M1225 3308 C 1290 3200, 1320 3120, 1348 3055');
+  label(1258, 3140, 'gather e in top-8');
+  vedge('gu_e', 'gate_e', 'chunk[0]');
+  vedge('gu_e', 'up_e', 'chunk[1]');
+  // `expert_activation` names silu(gate_e) ALONE — the shared act_fn's output,
+  // before the `* up_e` multiply. The product below it is the down-projection's
+  // input, which the vocabulary does not name.
+  node('act_e', 1240, 3258, 'act_e', '(seq, 8, 512)');
+  edge('M1288 3216 C 1268 3228, 1252 3234, 1242 3236');
+  label(1210, 3226, 'silu');
+  mergeInto([{ id: 'act_e' }, { id: 'up_e' }], [1400, 3288], 'hidden_e',
+            'x up_e', 3294);
+  vedge('hidden_e', 'expert_out', 'experts.down_proj (256, 2048, 512)');
+  vedge('expert_out', 'routed', 'x router_scores, sum 8 experts');
+  edge('M1010 3352 C 1010 3460, 1240 3515, 1340 3528');
+  edge('M1500 2960 C 1720 2985, 1720 3030, 1720 3085');
+  label(1720, 3042, 'shared_expert.gate_proj (512 x 2048)');
+  edge('M1500 2945 C 1880 2965, 1880 3020, 1880 3085');
+  label(1985, 3060, 'up_proj (512 x 2048)');
+  edge('M1500 2975 C 1975 3050, 1975 3130, 1975 3210');
+  label(2065, 3140, 'shared_expert_gate (1 x 2048)');
+  mergeInto([{ id: 'gate_s' }, { id: 'up_s' }], [1795, 3195], 'hidden_s',
+            'silu(gate_s) * up_s', 3172);
+  vedge('hidden_s', 'shared_out', 'shared_expert.down_proj (2048 x 512)');
+  mergeInto([{ id: 'shared_out' }, { id: 'g_s' }], [1795, 3430], 'shared_gated',
+            'x sigmoid(g_s)', 3442);
+  mergeInto([{ id: 'routed' }, { id: 'shared_gated' }], [1600, 3585], 'moe_out', 'add', 3593);
+
+  // =====================================================================
+  // Zoom connectors (dashed)
+  // =====================================================================
+  dashline('M243 829 L460 382');    // DecoderLayer*40 -> DecoderLayer panel
+  dashline('M243 871 L460 1798');
+  dashline('M607 739 L950 202');    // self_attn -> attention panel
+  dashline('M607 781 L950 1388');
+  dashline('M794 739 L950 1492');   // linear_attn -> deltanet panel
+  dashline('M794 781 L950 2788');
+  dashline('M666 1369 L950 2882');  // mlp -> MoE panel
+  dashline('M666 1411 L950 3658');
+
+  // =====================================================================
+  // Red handwritten annotations
+  // =====================================================================
+  ann(1700, 560, [
+    'q_proj packs query and output gate in one',
+    'matmul: out 8192 = 16 heads x (256 q + 256 gate),',
+    'chunked into q_pre_rope and gate right after.',
+    'The gate never sees RoPE or attention; it',
+    'multiplies the heads output per channel:',
+    'z * sigmoid(gate) - hookable as (seq, 4096).'
+  ]);
+  redArrow('M1128 692 C 1300 650, 1500 600, 1692 572');
+
+  ann(1700, 790, [
+    'q_norm / k_norm are RMSNorms over head_dim',
+    'only. RoPE is partial: just the first 64 of',
+    '256 dims rotate (partial_rotary_factor 0.25).',
+    'cos, sin come from rotary_emb - a function',
+    'of position only, not of token values.'
+  ]);
+  redArrow('M1349 575 C 1480 690, 1600 755, 1692 788');
+
+  ann(1700, 1100, [
+    'result is the per-head write into the residual',
+    'stream (z_gated[h] through the h-th slice of',
+    'o_proj) - the "attention head output" hook.',
+    'pattern is the post-softmax attention pattern.'
+  ]);
+  redArrow('M1262 1230 C 1450 1195, 1580 1140, 1692 1106');
+
+  ann(1790, 1905, [
+    'The recurrent state S is the linear-attention',
+    'analogue of the KV cache: a per-head 128 x 128',
+    'associative memory. It decays (exp(g) in (0,1)),',
+    'then gets a rank-1 write k (x) delta each step.',
+    'Probe / patch it like any hidden state.'
+  ]);
+  redArrow('M1302 2368 C 1500 2180, 1680 2050, 1782 1958');
+
+  ann(1790, 2145, [
+    'delta = beta * (v - kv_mem) is the write into',
+    'memory. Its two components: the incoming',
+    'value v and the memory readout kv_mem = S k',
+    '(what the memory currently predicts for k).',
+    'beta = sigmoid(b) is a per-head write strength;',
+    'q, k are L2-normalized inside the kernel.'
+  ]);
+  redArrow('M1322 2248 C 1500 2200, 1650 2170, 1782 2150');
+
+  ann(2090, 2990, [
+    'Expert activations keep an explicit experts',
+    'dimension: index hidden_e[:, j] to probe the',
+    'j-th routed expert. The weights are 3D',
+    'tensors - gate_up_proj (256, 1024, 2048),',
+    'down_proj (256, 2048, 512) - gathered by',
+    'expert_idx.'
+  ]);
+  redArrow('M1458 3068 C 1600 3030, 1850 2995, 2082 2988');
+
+  ann(2090, 3300, [
+    'router_probs (softmax, pre-top-k) is the',
+    'router value that decides which experts',
+    'fire; the top-8 scores are renormalized',
+    'to sum to 1 before weighting expert_out.'
+  ]);
+  redArrow('M1148 3205 C 1350 3280, 1650 3350, 2082 3308');
+
+  ann(2090, 3450, [
+    'Routed vs shared: the 256 routed experts are',
+    'sparse - each token runs only its top-8, so',
+    'their activations carry the extra experts dim.',
+    'The shared expert is one dense MLP that runs',
+    'on every token (seq, 512), gated by its own',
+    'sigmoid(g_s) instead of router scores.'
+  ]);
+  redArrow('M1872 3368 C 1960 3415, 2030 3445, 2082 3462');
+
+  ann(2090, 3620, [
+    'Four different "gates" live in this layer:',
+    '- gate.weight is the router: it picks which',
+    '  experts run (-> router_probs / scores);',
+    '- gate_e / gate_s are SwiGLU gates inside the',
+    '  expert MLPs: silu(gate) * up, elementwise;',
+    '- shared_expert_gate -> g_s is a per-token',
+    '  scalar that scales the shared-expert output.'
+  ]);
+
+})();
+</script>
+</body>
+</html>

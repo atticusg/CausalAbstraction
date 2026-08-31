@@ -9,7 +9,7 @@ Across the points of a swept document, the planner **content-dedups**: a
 forward group's identity is the digest of its full dependency closure
 (model + in-force writes + their operand reads' closures + input binding),
 so a harvest shared by nine fits interns to one group and the sharing falls
-out of value identity, not scheduling cleverness (§3). Backends consume
+out of value identity, not scheduling cleverness (§3). Engines consume
 this plan as data; fusion, batching and staging stay their call (§8).
 """
 
@@ -29,6 +29,7 @@ from causalab.protocol.schema import (
 
 __all__ = [
     "COMPONENT_RANK",
+    "UNRANKED",
     "ForwardGroup",
     "Materialization",
     "PointPlan",
@@ -39,24 +40,139 @@ __all__ = [
     "closure_digest",
 ]
 
-#: Intra-block execution order of the component vocabulary — backend-free
+#: Intra-block execution order of the component vocabulary — engine-free
 #: data used only to find a group's deepest tap (elision, §4). ``ln_final``
 #: and ``lm_head`` sort after every block.
+#:
+#: **Numbered in hundreds, with the attention band deliberately spread.** The
+#: values are ordinal and nothing outside this table reads them, but changing
+#: one changes group elision and therefore every closure digest — so the point
+#: of the spacing is that inserting a component never renumbers an existing one.
+#: The attention interior is where the vocabulary is still growing (round 2 adds
+#: the pre-RoPE projections, the gate, the post-RoPE q/k, the scores, the mixer
+#: output and the per-head result), and the reserved slots below say where each
+#: goes so that each PR is an insertion rather than a re-pin.
+#:
+#: Every slot the round reserved is now claimed; the gaps that remain are for
+#: whatever the MoE and DeltaNet interiors need (follow-ups F2 and F3).
 COMPONENT_RANK: dict[str, int] = {
+    "input_ids": -10,  # the model's input: before every activation
     "embeddings": 0,
-    "block_input": 10,
-    "attention_probs": 20,
-    "attention_value": 30,
-    "attention_output": 40,
-    "mlp_input": 50,
-    "mlp_activation": 60,
-    "mlp_output": 70,
-    "router_logits": 71,  # the router fires before the experts it routes to
-    "expert_output": 72,
-    "block_output": 80,
-    "ln_final": 90,
-    "lm_head": 100,
+    "block_input": 100,
+    "attention_input_norm": 150,  # input_layernorm, between resid_pre and mixer
+    # The DeltaNet mixer's interior (round 4) interleaves numerically with the
+    # full-attention band below: a layer carries one stream or the other, so
+    # only relative order *within* a stream is ever compared, and the numbers
+    # avoid every attention slot so that neither round renumbers the other.
+    "delta_qkv": 152,  # in_proj_qkv's fused [q|k|v] output, pre-conv
+    "delta_gate": 154,  # in_proj_z's output — the output gate, produced early
+    "delta_conv": 156,  # causal_conv1d_fn's return, channels-first
+    "delta_query": 158,  # kernel arg 0: post-conv, post-tiling, PRE-l2norm
+    # The mixer's interior, in the order the forward computes it. All four are
+    # module boundaries: q_norm/k_norm run BEFORE RoPE and are nn.Modules, so
+    # the pre-RoPE projections are ordinary forward hooks rather than taps
+    # inside the attention function.
+    "attention_query_pre_rope": 160,
+    "delta_key": 162,  # kernel arg 1
+    "delta_value": 164,  # kernel arg 2
+    "delta_beta": 166,  # kernel kwarg beta — sigmoid(in_proj_b), per head
+    "delta_decay": 168,  # kernel kwarg g — the log-decay, negative reals
+    "attention_key_pre_rope": 170,
+    # the per-step interior (round 4.3), in loop order: readout, update, state
+    "delta_kv_mem": 172,  # (S_{t-1}·exp(g_t) · k̂_t).sum — what the state recalls
+    "delta_state_update": 174,  # (v_t − kv_mem_t)·β_t — the diagram's `delta`
+    "delta_state": 176,  # S_t, one d_k × d_v matrix per head per step
+    "delta_kernel_output": 178,  # kernel return[0]: pre-norm, pre-gate
+    "attention_value_states": 180,
+    # the DeltaNet post-norm, post-gate mixer input — the exact analogue of
+    # attention_premix, which is why the name
+    "delta_premix": 182,
+    # produced with q (one fused projection) and consumed at the very end, at
+    # `attn_output * sigmoid(gate)` — ranked where it is produced
+    "attention_gate": 190,
+    # ...then RoPE rotates q and k, and the attention function runs: scores,
+    # softmax, and the weighted sum of values. These four are taps *inside* that
+    # function rather than module boundaries — see pytorch_hooks/attention_interface.py.
+    "attention_query": 200,
+    "attention_key": 210,
+    "attention_scores": 220,
+    "attention_probs": 230,
+    "attention_z": 240,
+    # The Gated DeltaNet interior (N7), in ITS mixer's fire order — which is
+    # what these ranks must encode, because the `.source` interiors refuse
+    # out-of-order requests: the fused qkv projection, then the gate's early
+    # reshape (z is projected right after qkv, long before it is consumed),
+    # the causal conv, the q/k/v splits, β, the kernel's decay argument
+    # (requested at call entry, before anything drills into the kernel), the
+    # per-chunk state, the kernel's return, and the post-norm gated output.
+    # A linear-attention layer never carries the full-attention interior, so
+    # sharing the 150–400 mixer band with it collides with nothing.
+    "deltanet_qkv": 250,
+    "deltanet_gate": 252,
+    "deltanet_qkv_conv": 254,
+    "deltanet_query": 256,
+    "deltanet_key": 258,
+    "deltanet_value": 260,
+    "deltanet_beta": 262,
+    "deltanet_decay": 264,
+    "deltanet_state": 266,
+    "deltanet_core_out": 268,
+    "deltanet_gated_out": 270,
+    # 🔤 `attention_premix` was `attention_value` until round 2. It is the
+    # o-projection's INPUT — on a gated family `z · σ(gate)`, on an ungated one
+    # `z` — which is the mixer's output just before it is mixed back into the
+    # residual stream, and is not the value vectors that name suggested. Round 2
+    # introduces those separately, and two components a letter apart in meaning
+    # and identical in name is nnterp#51's cautionary tale happening to us.
+    "attention_premix": 300,
+    # derived, not computed: the model never forms it, so it sorts where it
+    # would be if it did — between the tensor it is a function of and the sum
+    # of its own heads
+    "attention_result": 350,
+    "attention_output": 400,
+    # resid_mid is post_attention_layernorm's INPUT and mlp_input_norm its
+    # OUTPUT, so the two straddle that one module in this order
+    "block_mid": 450,
+    "mlp_input_norm": 470,
+    "mlp_input": 500,
+    # The MoE interior, between the block's input and its output: the router
+    # fires first, then the experts, then the combine.
+    "router_logits": 510,
+    "router_scores": 520,
+    "expert_idx": 530,
+    # The per-expert interior (round 3 / N6), ranked where its ops fire inside
+    # the fused experts forward: the fused [gate | up] projection's two halves
+    # land at 532/534, the activation between them and the down-projection at
+    # 536, then — just before the weighted combine — the kernel's inverse
+    # permutation (538), which is what `expert_permutation` reads, and the
+    # down-projection's (pre-routing-weight) output keeps its reserved 540.
+    # The late permutation rank is deliberate: ranks are execution order, and
+    # the `.source` interiors refuse out-of-order taps.
+    "expert_gate_proj": 532,
+    "expert_up_proj": 534,
+    "expert_activation": 536,
+    "expert_permutation": 538,
+    "expert_output": 540,
+    "routed_output": 550,
+    "mlp_activation": 600,
+    # the shared expert runs beside the routed ones; its gate is *consumed*
+    # last, at the multiply that produces the (derived) gated output
+    "shared_expert_gate_proj": 610,
+    "shared_expert_up_proj": 620,
+    "shared_expert_activation": 630,
+    "shared_expert_output": 640,
+    "shared_expert_gate": 650,
+    "mlp_output": 700,
+    "block_output": 800,
+    "ln_final": 900,
+    "lm_head": 1000,
 }
+
+#: The rank of a component the table does not know. Deliberately past
+#: ``lm_head``: an unranked tap sorts last, so it is treated as the deepest and
+#: nothing is elided behind it. Being wrong in the other direction would elide a
+#: forward that a later tap still needed.
+UNRANKED = 10_000
 
 
 @dataclasses.dataclass(frozen=True)
@@ -70,13 +186,13 @@ class Tap:
 
 @dataclasses.dataclass(frozen=True)
 class Materialization:
-    """What one continuation read obliges a backend to build.
+    """What one continuation read obliges an engine to build.
 
     ``needs_distribution`` is the expensive bit: a vocabulary-wide tensor
     per addressed position. It is false when the read is neither saved nor
     reduced by a metric that consumes distributions, in which case the
-    backend must not build one (§8). *How* it avoids building one — a
-    narrowed projection, per-step captures, a replay — is the backend's
+    engine must not build one (§8). *How* it avoids building one — a
+    narrowed projection, per-step captures, a replay — is the engine's
     choice; this is the requirement, not the mechanism."""
 
     read: str
@@ -103,7 +219,7 @@ class ForwardGroup:
 
     @property
     def stop_after(self) -> tuple[int, int] | None:
-        """The deepest tap's depth — a backend may end the forward there
+        """The deepest tap's depth — an engine may end the forward there
         (§4 elision). ``None`` when the group has no taps, and also when it
         decodes: every decode step needs the head, so there is nothing to
         elide.
@@ -302,7 +418,7 @@ def _depth(doc: Document, site_name: str) -> tuple[int, int]:
     site = doc.sites[site_name]
     layer = site.layer if isinstance(site.layer, int) else 0
     component = site.component if isinstance(site.component, str) else "lm_head"
-    rank = COMPONENT_RANK.get(component, 100)
+    rank = COMPONENT_RANK.get(component, UNRANKED)
     if component in ("ln_final", "lm_head"):
         return (1_000_000, rank)  # after every block
     return (layer, rank)

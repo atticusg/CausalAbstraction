@@ -1,7 +1,7 @@
 """The decode's derived shape: depth, materialization, capability (§4, §6, §8).
 
 The point of these tests is that the *cost* of a generate document is a
-value the planner emits, not a backend heuristic: a document that wants one
+value the planner emits, not an engine heuristic: a document that wants one
 token's distribution must not oblige the same work as one that wants every
 token's. So they assert the plan, never memory.
 """
@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from causalab.protocol.backend import requires
+from causalab.protocol.engine import requires
 from causalab.protocol.plan import plan_point
 from causalab.protocol.schema import parse_document
 
@@ -79,7 +79,7 @@ def test_a_metric_input_needs_a_distribution():
 
 
 def test_saving_a_read_obliges_building_it():
-    """A continuation harvest at a non-head site: saved, so the backend owes
+    """A continuation harvest at a non-head site: saved, so the engine owes
     the tensor whatever the site is. The *false* branch of
     ``needs_distribution`` is unreachable in v1 — every metric kind reduces
     logits — and becomes reachable when metric kinds declare a domain and an
@@ -141,7 +141,7 @@ def _decode_metric(raw: dict[str, Any]) -> dict[str, Any]:
             "value": "said",
             "model": "patched",
             "input": "base",
-            "file_path": "said.parquet",
+            "file_path": "said.json",
         }
     ]
     return in_order(raw)

@@ -36,11 +36,18 @@ import json
 from typing import Any, Mapping
 
 from causalab.protocol.errors import ValidationError
-from causalab.protocol.registry import ModelInfo, component_width
+from causalab.protocol.registry import (
+    ModelInfo,
+    component_shape,
+    component_width,
+    head_space_refusal,
+)
 from causalab.protocol.resolve import ResolutionEnv
 from causalab.protocol.schema import (
     ALL_POSITIONS,
+    DEPRECATED_COMPONENTS,
     FEATURIZER_SLOTS,
+    MODEL_DTYPE_DEFAULT,
     LAYERLESS_COMPONENTS,
     METRIC_FIELD_DEFAULTS,
     OPTIMIZER_DEFAULTS,
@@ -49,7 +56,7 @@ from causalab.protocol.schema import (
     parse_document,
 )
 
-__all__ = ["canonical_bytes", "canonicalize", "digest"]
+__all__ = ["canonical_bytes", "canonical_model", "canonicalize", "digest"]
 
 
 def canonical_bytes(canonical: Mapping[str, Any]) -> bytes:
@@ -118,11 +125,10 @@ def canonicalize(raw: Mapping[str, Any], env: ResolutionEnv) -> dict[str, Any]:
         if section not in normalized:
             continue
         value = normalized[section]
+        if section == "type":
+            continue  # authoring metadata, never content (§1.1)
         if section == "model":
-            out["model"] = {
-                "key": value["key"],
-                "revision": value.get("revision", "main"),
-            }
+            out["model"] = canonical_model(value)
         elif section == "data":
             out["data"] = _canon_data(value, env)
         elif section == "positions":
@@ -181,6 +187,40 @@ def _canon_metric(entry: Any) -> Any:
     out = dict(entry)
     for field in OPTIONAL_METRIC_FIELDS.get(kind, ()):
         out.setdefault(field, METRIC_FIELD_DEFAULTS[(kind, field)])
+    return out
+
+
+def canonical_model(value: Mapping[str, Any]) -> dict[str, Any]:
+    """§2.1 — the network *and* how it is realized numerically. ``revision``
+    and ``dtype`` are materialized here, so no canonical form is silent about
+    the precision its numbers came out of; a ``quantization`` block
+    materializes the scheme's own defaults for the same reason."""
+    out: dict[str, Any] = {
+        "key": value["key"],
+        "revision": value.get("revision", "main"),
+        "dtype": value.get("dtype", MODEL_DTYPE_DEFAULT),
+    }
+    quantization = value.get("quantization")
+    if quantization is not None:
+        quant = dict(quantization)
+        quant.setdefault("method", "bitsandbytes")
+        if quant.get("scheme") in ("nf4", "fp4"):
+            # 📐 `compute_dtype` is a 4-bit knob: BitsAndBytesConfig takes it
+            # as bnb_4bit_compute_dtype, and the int8 path
+            # (`load_in_8bit=True`) has nowhere to put it — LLM.int8()
+            # accumulates in fp16 by construction. Materializing it for every
+            # scheme gave two int8 documents that differ only there two
+            # different digests for numerically identical runs, which inverts
+            # the rule this whole function exists to keep: every field in the
+            # canonical form is one that moves a number. Rule 17 refuses an
+            # authored one, so this only has to stop inventing it.
+            quant.setdefault("compute_dtype", out["dtype"])
+            quant.setdefault("double_quant", False)
+        if quant.get("scheme") == "int8":
+            # bitsandbytes' LLM.int8() outlier threshold: a number that moves
+            # numbers, so it is materialized like any other (arXiv:2208.07339)
+            quant.setdefault("int8_threshold", 6.0)
+        out["quantization"] = quant
     return out
 
 
@@ -248,7 +288,16 @@ def _canon_position_entry(entry: Any) -> Any:
 def _canon_site(
     name: str, entry: Mapping[str, Any], info: ModelInfo | None
 ) -> dict[str, Any]:
+    entry = dict(entry)
     component = entry.get("component")
+    if isinstance(component, str) and component in DEPRECATED_COMPONENTS:
+        # A retired spelling canonicalizes to its replacement, so both digest
+        # identically and the canonical form is in one vocabulary. Folding only
+        # at parse would leave the *canonical* document carrying a name no table
+        # downstream knows — `component_shape` would refuse it, which is the
+        # opposite of what an alias is for.
+        component = DEPRECATED_COMPONENTS[component]
+        entry["component"] = component
     layer = entry.get("layer")
     if (
         info is not None
@@ -263,14 +312,31 @@ def _canon_site(
                 path=f"sites.{name}.layer",
             )
     head = entry.get("head")
-    if info is not None and isinstance(head, int):
-        # attention_value is the per-head o-projection input — query-head space
-        space = info.num_heads
+    if info is not None and isinstance(head, int) and isinstance(component, str):
+        # 🐞 This used to read ``info.num_heads`` regardless of component, which
+        # was wrong in two directions at once. On a component with no head axis
+        # the bound *accepted* and the backend then silently dropped the field —
+        # the same class as the ``expert`` sub-axis that ``_moe_site`` refuses by
+        # name. And on a KV-space component under GQA the query-head bound is too
+        # wide, so an over-wide head yields an **empty** slice rather than an
+        # out-of-range one: python does not raise, the read saves a
+        # ``(b, n_pos, 0)`` tensor and the write changes nothing.
+        #
+        # The bound now comes from the component's own shape, which is the only
+        # thing that knows how many heads it has, or whether it has any.
+        shape = component_shape(info, component)
+        space = shape.head_space
+        if space is None:
+            raise ValidationError(
+                4,
+                f"site {name!r}: " + head_space_refusal(component, head, shape),
+                path=f"sites.{name}.head",
+            )
         if not 0 <= head < space:
             raise ValidationError(
                 4,
-                f"site {name!r}: head {head} out of range ({space} heads in this "
-                "component's head space)",
+                f"site {name!r}: head {head} out of range ({space} heads in "
+                f"{component!r}'s head space, {shape.describe()})",
                 path=f"sites.{name}.head",
             )
     return dict(entry)
@@ -304,6 +370,12 @@ def _featurizer_chains_raw(
                 if pair not in used:
                     used.append(pair)
     return used
+
+
+#: Featurizer kinds whose parameters are a **basis** over the feature axis, and
+#: which therefore need that axis to be one. The rest (identity, standardize,
+#: gate) act per column and are meaningful on any axis with a width.
+_BASIS_FITTING_KINDS: frozenset[str] = frozenset({"subspace", "pca", "sae"})
 
 
 def _raw_stage_output_width(spec: Mapping[str, Any], input_width: int) -> int | None:
@@ -387,6 +459,30 @@ def _derived_width(
             return None
         if not isinstance(component, str):
             return None
+        shape = component_shape(info, component)
+        if shape.ranking:
+            # D3: dimensionally the axis has a width, so every featurizer used
+            # to be accepted here — but column *k* is the *k*-th ranked expert,
+            # a different expert for different tokens. A basis fitted across
+            # positions is fitted across a basis that is itself shuffled per
+            # position, so the fit means nothing even though it converges. Only
+            # the kinds that *fit a basis* are refused; identity, standardize
+            # and gate act per column and stay meaningful.
+            declared = normalized.get("featurizers", {})
+            fitting = [
+                (member, declared.get(member, {}).get("kind"))
+                for member in chain
+                if declared.get(member, {}).get("kind") in _BASIS_FITTING_KINDS
+            ]
+            if fitting:
+                member, kind = fitting[0]
+                raise ValidationError(
+                    4,
+                    f"featurizer {member!r} ({kind!r}) fits a basis on site "
+                    f"{site_name!r}, whose component {component!r} is not one: "
+                    + shape.refusal(f"component {component!r}"),
+                    path=f"featurizers.{member}",
+                )
         running: int | None = component_width(
             info, component, head=head if isinstance(head, int) else None
         )
@@ -425,7 +521,6 @@ def _canon_train(
     precision = dict(out.get("precision", {}))
     precision.setdefault("feature", "fp32")
     precision.setdefault("loss", "fp32")
-    precision.setdefault("model", info.native_dtype if info is not None else "fp32")
     out["precision"] = precision
     out.setdefault("seed", 0)
     if "eval" in out and isinstance(out["eval"], Mapping):

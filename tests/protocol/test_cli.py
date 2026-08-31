@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from causalab.cli import main
+from causalab.protocol.engine import Engine
+from causalab.protocol.schema import COMPONENTS
 from causalab.protocol.loader import check_data_columns, load
 
 from tests.protocol._env import CORPUS_DIR, FIXTURES
@@ -105,51 +108,57 @@ def test_refusal_exits_nonzero(capsys, artifacts_root):
 # --------------------------------------------------------------------------- #
 
 
-class _CapturingBackend:
-    """Stands in for the reference backend: records construction kwargs and
+class _CapturingEngine(Engine):
+    """Stands in for the reference engine: records construction kwargs and
     the ExecutionRequest, executes nothing."""
 
-    last: "_CapturingBackend | None" = None
+    last: "_CapturingEngine | None" = None
 
     name = "capture"
     capabilities = frozenset(
         {"grad", "paired_forward", "full_logits", "pytorch_fn_local"}
     )
+    components = frozenset(COMPONENTS)
+    writable_components = frozenset(COMPONENTS)
     is_local = True
 
-    def __init__(self, *, device: str = "cpu", dtype: str = "fp32") -> None:
+    def __init__(self, *, device: str = "cpu") -> None:
         self.device = device
-        self.dtype = dtype
         self.request = None
         type(self).last = self
 
     def execute(self, request):
-        from causalab.protocol.backend import RunResult
+        from causalab.protocol.engine import RunResult
 
         self.request = request
         return RunResult(files={})
 
 
 @pytest.fixture
-def capturing_backend(monkeypatch):
-    """Swap the lazily-imported reference backend module for the stub."""
+def capturing_engine(monkeypatch):
+    """Swap the lazily-imported reference engine module for the stub."""
     import sys as _sys
     import types
 
-    stub = types.ModuleType("causalab.neural.pytorch_hooks")
-    stub.PytorchHooksBackend = _CapturingBackend
-    monkeypatch.setitem(_sys.modules, "causalab.neural.pytorch_hooks", stub)
-    _CapturingBackend.last = None
-    return _CapturingBackend
+    stub = types.ModuleType("causalab.neural.engines.pytorch_hooks")
+    stub.PytorchHooksEngine = _CapturingEngine
+    monkeypatch.setitem(_sys.modules, "causalab.neural.engines.pytorch_hooks", stub)
+    _CapturingEngine.last = None
+    return _CapturingEngine
 
 
 def _run_argv(name: str, artifacts_root, out, *extra: str) -> list[str]:
     return _argv("run", name, artifacts_root, "--out", str(out), *extra)
 
 
-def test_run_threads_device_and_dtype_into_the_backend(
-    capturing_backend, artifacts_root, tmp_path
+def test_device_goes_to_the_engine_and_dtype_goes_to_the_document(
+    capturing_engine, artifacts_root, tmp_path
 ):
+    """§8: placement is the engine's, precision is the document's. ``--dtype``
+    is shorthand for ``--set model.dtype``, so an overridden run's digest is
+    the overridden document's — the record cannot disagree with the numbers."""
+    unoverridden = main(_argv("digest", "02_interchange_im.json", artifacts_root))
+    assert unoverridden == 0
     code = main(
         _run_argv(
             "02_interchange_im.json",
@@ -162,18 +171,103 @@ def test_run_threads_device_and_dtype_into_the_backend(
         )
     )
     assert code == 0
-    assert capturing_backend.last.device == "cuda:1"
-    assert capturing_backend.last.dtype == "bf16"
+    assert capturing_engine.last.device == "cuda:1"
+    assert not hasattr(capturing_engine.last, "dtype")
+    request = capturing_engine.last.request
+    assert request.canonical[0]["model"]["dtype"] == "bf16"
 
 
-def test_run_defaults_stay_cpu_fp32(capturing_backend, artifacts_root, tmp_path):
+def test_engine_auto_tolerates_a_missing_optional_engine(
+    capturing_engine, artifacts_root, tmp_path
+):
+    """--engine auto is every *installed* engine: the nnsight extra being
+    absent must not break runs that never needed it."""
+    code = main(
+        _run_argv("01_harvest_im.json", artifacts_root, tmp_path, "--engine", "auto")
+    )
+    assert code == 0
+    assert capturing_engine.last is not None
+
+
+class _AbsentModule:
+    """A meta-path finder that makes one module unimportable, so the
+    not-installed path stays testable in an env that has the extra."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == self.name or fullname.startswith(self.name + "."):
+            raise ModuleNotFoundError(f"No module named {fullname!r} (simulated)")
+        return None
+
+
+def test_engine_nnsight_refuses_by_name_when_not_installed(
+    capturing_engine, artifacts_root, tmp_path, capsys, monkeypatch
+):
+    """Naming an engine that is not installed is an error that says which
+    extra provides it — unlike auto, which quietly narrows to what exists."""
+    import sys as _sys
+
+    target = "causalab.neural.engines.nnsight_tracing"
+    for mod in [m for m in list(_sys.modules) if m.startswith(target)]:
+        monkeypatch.delitem(_sys.modules, mod)
+    monkeypatch.setattr(_sys, "meta_path", [_AbsentModule(target), *_sys.meta_path])
+    code = main(
+        _run_argv("01_harvest_im.json", artifacts_root, tmp_path, "--engine", "nnsight")
+    )
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "nnsight" in err and "extra" in err
+
+
+def test_engine_nnsight_selects_the_nnsight_engine(
+    capturing_engine, artifacts_root, tmp_path, monkeypatch
+):
+    """--engine nnsight builds the nnsight engine (stubbed here — the real
+    one's answers are pinned by its parity suite)."""
+    import sys as _sys
+    import types
+
+    class _CapturingNnsight(_CapturingEngine):
+        name = "nnsight"
+
+    stub = types.ModuleType("causalab.neural.engines.nnsight_tracing")
+    stub.NnsightEngine = _CapturingNnsight
+    monkeypatch.setitem(_sys.modules, "causalab.neural.engines.nnsight_tracing", stub)
+    _CapturingNnsight.last = None
+    code = main(
+        _run_argv("01_harvest_im.json", artifacts_root, tmp_path, "--engine", "nnsight")
+    )
+    assert code == 0
+    assert _CapturingNnsight.last is not None
+    assert _CapturingNnsight.last.name == "nnsight"
+
+
+def test_run_defaults_stay_cpu_fp32(capturing_engine, artifacts_root, tmp_path):
     assert main(_run_argv("02_interchange_im.json", artifacts_root, tmp_path)) == 0
-    assert capturing_backend.last.device == "cpu"
-    assert capturing_backend.last.dtype == "fp32"
+    assert capturing_engine.last.device == "cpu"
+    assert capturing_engine.last.request.canonical[0]["model"]["dtype"] == "fp32"
+
+
+def test_dtype_and_set_may_not_contradict(artifacts_root, tmp_path):
+    with pytest.raises(SystemExit) as err:
+        main(
+            _run_argv(
+                "02_interchange_im.json",
+                artifacts_root,
+                tmp_path,
+                "--dtype",
+                "bf16",
+                "--set",
+                "model.dtype=fp16",
+            )
+        )
+    assert "contradicts" in str(err.value)
 
 
 def test_points_selects_a_shard_without_moving_the_campaign_digest(
-    capturing_backend, env, artifacts_root, tmp_path
+    capturing_engine, env, artifacts_root, tmp_path
 ):
     loaded = load(CORPUS_DIR / "07_weekdays_locate_scan_im.json", env)
     code = main(
@@ -186,7 +280,7 @@ def test_points_selects_a_shard_without_moving_the_campaign_digest(
         )
     )
     assert code == 0
-    request = capturing_backend.last.request
+    request = capturing_engine.last.request
     assert len(request.points) == 4
     assert request.digests == tuple(loaded.point_digests[3:7])
     assert request.coords == tuple(p.coords for p in loaded.expansion.points[3:7])
@@ -195,7 +289,7 @@ def test_points_selects_a_shard_without_moving_the_campaign_digest(
 
 @pytest.mark.parametrize("spec", ["7", "3:3", "60:70", "-1:4", "a:b"])
 def test_points_refuses_malformed_and_out_of_range(
-    capturing_backend, artifacts_root, tmp_path, capsys, spec
+    capturing_engine, artifacts_root, tmp_path, capsys, spec
 ):
     # the = form keeps argparse from reading a leading "-" as a flag
     code = main(
@@ -211,7 +305,7 @@ def test_points_refuses_malformed_and_out_of_range(
 
 
 def test_points_refused_on_workflow_documents(
-    capturing_backend, artifacts_root, tmp_path, capsys
+    capturing_engine, artifacts_root, tmp_path, capsys
 ):
     doc = tmp_path / "wf.json"
     doc.write_text(json.dumps({"version": "1", "steps": {}}))
@@ -241,7 +335,7 @@ def test_points_refused_on_workflow_documents(
 
 def test_validate_data_flags_a_missing_position_column(env):
     """A ``{"column": …}`` position is an explicit reference, so
-    ``validate --data`` catches a typo at load instead of the backend hitting
+    ``validate --data`` catches a typo at load instead of the engine hitting
     it mid-run (§2.3)."""
     loaded = load(CORPUS_DIR / "10_task_table_iia_im.json", env)
     raw = json.loads(json.dumps(dict(loaded.raw)))
@@ -280,3 +374,75 @@ def test_explain_reports_the_decode_and_what_it_obliges(capsys, artifacts_root):
     assert "generate" in out
     assert "decode 8 tokens (greedy)" in out
     assert "tail at lm_head: distribution per addressed position" in out
+
+
+# --------------------------------------------------------------------------- #
+# methods, applications, and the run record (§1.1, §9)
+# --------------------------------------------------------------------------- #
+
+
+REPO = Path(__file__).resolve().parents[2]
+SHIPPED_METHOD = REPO / "causalab/configs/methods/interchange.json"
+SHIPPED_RUN = REPO / "causalab/configs/runs/weekdays_8b_interchange.json"
+
+
+def _file_argv(verb: str, path, artifacts_root, *extra: str) -> list[str]:
+    return [
+        verb,
+        str(path),
+        "--data-root",
+        str(FIXTURES / "data"),
+        "--artifacts-root",
+        str(artifacts_root),
+        *extra,
+    ]
+
+
+def test_validate_and_digest_work_on_a_method(capsys, artifacts_root):
+    assert main(_file_argv("validate", SHIPPED_METHOD, artifacts_root)) == 0
+    assert "method" in capsys.readouterr().out
+    assert main(_file_argv("digest", SHIPPED_METHOD, artifacts_root)) == 0
+    assert len(capsys.readouterr().out.strip()) == 64
+
+
+def test_explain_on_a_method_prints_what_must_be_bound(capsys, artifacts_root):
+    assert main(_file_argv("explain", SHIPPED_METHOD, artifacts_root)) == 0
+    out = capsys.readouterr().out
+    assert "binds" in out
+    assert "sites.target: layer" in out
+    assert "model: key, revision, dtype" in out
+
+
+def test_a_method_cannot_be_run(capsys, artifacts_root, tmp_path):
+    code = main(
+        _file_argv("run", SHIPPED_METHOD, artifacts_root, "--out", str(tmp_path))
+    )
+    assert code == 1
+    assert "method file" in capsys.readouterr().err
+
+
+def test_explain_on_a_split_document_names_its_method(capsys, artifacts_root):
+    assert main(_file_argv("explain", SHIPPED_RUN, artifacts_root)) == 0
+    out = capsys.readouterr().out
+    assert "method    " in out
+    assert "(inline)" in out  # one file is one run
+    assert "bf16" in out
+
+
+def test_run_writes_the_protocol_record(capturing_engine, artifacts_root, tmp_path):
+    """The record a reproducer reads first: what ran, at what precision, from
+    which method, with the provenance digest of every point."""
+    assert (
+        main(_file_argv("run", SHIPPED_RUN, artifacts_root, "--out", str(tmp_path)))
+        == 0
+    )
+    record = json.loads((tmp_path / "protocol.json").read_text())
+    assert record["canonical"]["model"] == {
+        "key": "meta-llama/Llama-3.1-8B",
+        "revision": "main",
+        "dtype": "bf16",
+    }
+    assert record["method"]["ref"] is None  # inlined in the run document
+    assert len(record["method"]["digest"]) == 64
+    assert [point["index"] for point in record["points"]] == [0]
+    assert record["points"][0]["digest"] == record["document_digest"]
