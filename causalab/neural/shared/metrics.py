@@ -523,10 +523,26 @@ def compute_metric(
                 "literal tokens, not a dataset column name",
             )
         probs = torch.softmax(logits, dim=-1)
-        group_ids = {
-            name: token_ids([str(v) for v in members], f"groups.{name}")
-            for name, members in groups.items()
-        }
+        group_ids: dict[str, list[int]] = {}
+        for name, members in groups.items():
+            values = [str(v) for v in members]
+            by_id: dict[int, str] = {}
+            for value, token in zip(values, token_ids(values, f"groups.{name}")):
+                if token in by_id:
+                    raise ProtocolError(
+                        "P2",
+                        f"class_probs group {name!r}: {value!r} and "
+                        f"{by_id[token]!r} both resolve to token id {token} "
+                        f"under token_form={token_form!r}, and this metric sums "
+                        "a group's ids — so the class would count that token "
+                        "twice and report a 'probability' above 1. The "
+                        "['X', ' X'] idiom is the usual cause and is inert "
+                        "anyway: a leading space is normalized away before "
+                        "token_form decides the form (§2.10). List each answer "
+                        "once",
+                    )
+                by_id[token] = value
+            group_ids[name] = list(by_id)
         return [
             {name: float(probs[i, ids].sum()) for name, ids in group_ids.items()}
             for i in range(logits.shape[0])

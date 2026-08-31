@@ -805,17 +805,24 @@ its table says which:
   nothing else. Cross-read arithmetic (differences of saved metrics) is
   post-hoc analysis. The vocabulary stays closed so engines can lower kinds
   to fused/vocab-parallel implementations.
-- **`token_form`** (optional, `auto` | `bare` | `space_prefixed`; default
-  `auto`) — how this metric's string answers become token ids. Legal on every
-  kind that names token strings (`logit_diff`, `token_logit`, `cross_entropy`,
+- **`token_form`** (**required**, `auto` | `bare` | `space_prefixed`) — how
+  this metric's string answers become token ids. Required on every kind that
+  names token strings (`logit_diff`, `token_logit`, `cross_entropy`,
   `class_probs`, `match`); `kl` and `top_k` never resolve a string and refuse
   the key. That stays true under `top_k`'s any-read semantics: it *reports*
   indices it found and decodes them only when the read taps `lm_head` — it
   never turns an authored string into a token id, so the knob would have
   nothing to apply to.
+  - **Why required rather than defaulted.** How a string becomes a token id is
+    a fact about the model's tokenizer, and a document that does not say which
+    rule it means gets whichever one the library happened to prefer. That guess
+    has been measurably wrong four ways in production: a leading space
+    (`" ?"`=907 against `"?"`=30), punctuation that merges with the token
+    before it, two authored forms resolving to one id and being summed twice,
+    and the non-case of digits where `" 7"` really is two tokens and `auto` is
+    right. `auto` remains available — as something a document *chooses*.
   - `auto` tries `" " + s` first and falls back to `s`. That is right when the
-    answer follows a space in the prompt — weekdays, names, MCQA letters — and
-    it is the default so pre-`token_form` documents are unchanged.
+    answer follows a space in the prompt — weekdays, names, MCQA letters.
   - It is **wrong** when the answer does not follow a space and both forms
     happen to be single tokens. Under gpt2, `"?"` is token 30 and `" ?"` is
     token 5633: a `match` on a punctuation answer scored 5633, the model emits
@@ -826,6 +833,16 @@ its table says which:
     warning that produces a wrong number anyway is not a check.
   - The form applies to every token string in the metric, so a `class_probs`
     whose groups mix spaced and bare answers must stay on `auto`.
+  - ⚠️ **A leading space in an authored value is normalized away, not
+    honored.** The resolver strips it and then `token_form` alone decides the
+    form, so `" X"` and `"X"` name the same answer. The consequence is worth
+    stating because it is the opposite of what the spelling suggests: the
+    common `["X", " X"]` idiom — written to "cover both forms" — is **inert**.
+    Both entries resolve identically, and in a `class_probs` group, where the
+    kind sums its members' ids, that used to be summed twice and report a
+    probability above 1 (a measured **1.9927**). A group whose members collide
+    on one id is now refused; list each answer once and say which form with
+    `token_form`.
 - A column value resolves to **one token**, space-prefixed form first; a
   multi-token value refuses rather than silently scoring its first piece.
 - `match` is the exception, and only when told: its `expected` column may hold

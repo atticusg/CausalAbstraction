@@ -270,6 +270,7 @@ def _ablate_doc() -> dict:
                 "of": "logits",
                 "a": "base_answer",
                 "b": "cf_answer",
+                "token_form": "space_prefixed",
             }
         },
         "save": [

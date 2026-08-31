@@ -560,3 +560,78 @@ def test_first_token_agrees_with_exact_on_single_token_answers(tokenizer):
         assert column_first_token_id(tokenizer, value) == column_token_id(
             tokenizer, value
         )
+
+
+# --------------------------------------------------------------------------- #
+# §2.10 class_probs — a group is a set of token ids, not a list of strings
+#
+# `_candidates` strips a leading space before `token_form` picks a form, so
+# ["Sorry", " Sorry"] resolves to one id twice and `class_probs` — which SUMS a
+# group's ids — counted it twice. Measured in a refusal study: a reported
+# "probability" of 1.9927.
+#
+# The gpt2 tokenizer is the witness that makes this visible. On the
+# sentencepiece fixture above, half the surface-form distinctions collapse
+# anyway, so the CPU suite could not have seen the bug.
+# --------------------------------------------------------------------------- #
+
+
+def _one_hot(vocab: int, token: int, value: float = 4.0) -> torch.Tensor:
+    logits = torch.zeros(1, 1, vocab)
+    logits[0, 0, token] = value
+    return logits
+
+
+def test_class_probs_refuses_a_group_whose_members_are_one_token(gpt2_tokenizer):
+    """The `["X", " X"]` idiom is inert, and in this kind it was worse than
+    inert. Refusing beats returning 1.99."""
+    metric = MetricSpec(
+        kind="class_probs",
+        of="logits",
+        fields={"groups": {"refusal": ["Sorry", " Sorry"]}},
+        token_form="space_prefixed",
+    )
+    with pytest.raises(ProtocolError) as err:
+        compute_metric(
+            metric,
+            _one_hot(gpt2_tokenizer.vocab_size, 0),
+            [{}],
+            gpt2_tokenizer,
+        )
+    assert "resolve to token id" in str(err.value)
+    assert "twice" in str(err.value)
+
+
+def test_class_probs_over_a_deduplicated_group_stays_a_probability(gpt2_tokenizer):
+    """The number the double-count was hiding: one member, one id, ≤ 1.0."""
+    token = column_token_id(gpt2_tokenizer, "Sorry", token_form="space_prefixed")
+    metric = MetricSpec(
+        kind="class_probs",
+        of="logits",
+        fields={"groups": {"refusal": ["Sorry"]}},
+        token_form="space_prefixed",
+    )
+    logits = _one_hot(gpt2_tokenizer.vocab_size, token, value=12.0)
+    (entry,) = compute_metric(metric, logits, [{}], gpt2_tokenizer)
+    probs = torch.softmax(logits[0, 0].float(), dim=-1)
+    assert entry["refusal"] == pytest.approx(float(probs[token]))
+    assert 0.0 <= entry["refusal"] <= 1.0
+
+
+def test_class_probs_distinct_forms_under_bare_still_sum(gpt2_tokenizer):
+    """The dedup must not eat a real two-member class: under `bare`, "Sorry"
+    and "sorry" are different gpt2 ids and both belong in the group."""
+    upper = column_token_id(gpt2_tokenizer, "Sorry", token_form="bare")
+    lower = column_token_id(gpt2_tokenizer, "sorry", token_form="bare")
+    assert upper != lower  # the premise
+    metric = MetricSpec(
+        kind="class_probs",
+        of="logits",
+        fields={"groups": {"refusal": ["Sorry", "sorry"]}},
+        token_form="bare",
+    )
+    logits = _one_hot(gpt2_tokenizer.vocab_size, upper, value=6.0)
+    logits[0, 0, lower] = 6.0
+    (entry,) = compute_metric(metric, logits, [{}], gpt2_tokenizer)
+    probs = torch.softmax(logits[0, 0].float(), dim=-1)
+    assert entry["refusal"] == pytest.approx(float(probs[upper] + probs[lower]))

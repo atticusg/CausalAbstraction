@@ -64,6 +64,7 @@ def _baseline_document(refs: list[str]) -> dict:
                 "of": "logits",
                 "expected": "base_answer_forms",
                 "mode": "first_token",
+                "token_form": "space_prefixed",
             }
         },
         "save": [

@@ -21,7 +21,8 @@
     }
   },
   "metrics": {
-    "metric": {"kind": "token_logit", "of": "logits", "token": "base_answer"}
+    "metric": {"kind": "token_logit", "of": "logits", "token": "base_answer",
+               "token_form": "space_prefixed"}
   },
   "save": [
     {

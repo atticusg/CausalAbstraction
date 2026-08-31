@@ -710,8 +710,11 @@ class MetricSpec:
     """§2.10 — a closed-vocabulary reduction over one read (``of``) plus
     dataset columns. ``fields`` holds the kind's extra value fields.
     ``token_form`` says how this metric's string answers become token ids
-    (``TOKEN_FORMS``); the ``auto`` default is the historical resolver, so an
-    unauthored metric behaves exactly as before. ``top_k`` additionally
+    (``TOKEN_FORMS``). It is **required** on every kind in
+    ``TOKEN_COLUMN_METRIC_KINDS``: the field defaults to ``"auto"`` here only
+    so a spec constructed in code stays valid, while a *document* must name a
+    form. ``"auto"`` is still the historical space-prefixed-first resolver —
+    now something a document chooses rather than inherits. ``top_k`` additionally
     carries a mandatory ``by`` (``TOP_K_RANKINGS``) in ``fields``, because a
     top-k over a signed feature code and one over a vocabulary projection are
     different questions."""
@@ -1720,6 +1723,21 @@ def _parse_metric(raw: Any, path: str) -> MetricSpec:
     if "of" not in obj:
         raise ParseError("P2", "a metric needs 'of' (a read name)", path=path)
     token_form: Any = "auto"
+    if takes_token_form and "token_form" not in obj:
+        raise ParseError(
+            "P2",
+            f"metric kind {kind!r} needs 'token_form' — how its string answers "
+            f"become token ids is a property of the model's tokenizer, not "
+            f"something a document may leave to a default. One of "
+            f"{list(TOKEN_FORMS)}: 'space_prefixed' for an answer the model "
+            f"emits after a space (the common case), 'bare' for one it does "
+            f"not, 'auto' to keep the historical space-prefixed-first guess. "
+            f"The guess has been wrong in four measured ways — a leading space "
+            f"(' ?' vs '?'), punctuation that merges with the token before it, "
+            f"two authored forms resolving to one id, and multi-token digits — "
+            f"so 'auto' is now something a document says on purpose",
+            path=path,
+        )
     if "token_form" in obj:
         token_form = _wrapped(
             obj["token_form"],
