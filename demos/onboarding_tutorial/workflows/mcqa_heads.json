@@ -1,11 +1,35 @@
 {
   "version": "1",
-  "description": "The 08_attention demo end to end: interchange every head's pattern, draw the (layer x head) grid, summarize each head with a mean and a spread, and name the one head the grid picks. head_stats reads the same per-example table the heatmap does, so the ranking and the picture cannot disagree; it is told which columns hold the layer and the head, because its defaults name a site called 'target' and this document's site is called 'pattern'.",
+  "description": "The 08_attention demo end to end: interchange a whole layer's attention pattern, then interchange each head's contribution to the residual stream, and draw both. The two scans are the demo's contrast -- where a head looks against what it delivers -- and they share a band, a position, a dataset and a metric so that the difference between them is the site and nothing else. head_stats is told which columns hold the layer and the head, because its defaults name a site called 'target' and this document's sites are called 'pattern' and 'contribution'.",
   "output_dir": "mcqa_heads",
   "steps": {
-    "scan": {
+    "pattern_scan": {
       "type": "intervention_protocol",
       "document": "../protocols/mcqa_head_scan.json"
+    },
+    "pattern_curve": {
+      "type": "script",
+      "script": {
+        "module": "causalab.io.plots.workflow_figures"
+      },
+      "inputs": {
+        "table": {
+          "step": "pattern_scan",
+          "file": "iia.json"
+        },
+        "plot": "lines",
+        "x": "sites.pattern.layer"
+      },
+      "outputs": {
+        "figure": "pattern_iia.png",
+        "plotted": {
+          "file": "pattern_iia.json"
+        }
+      }
+    },
+    "result_scan": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_head_result_scan.json"
     },
     "grid": {
       "type": "script",
@@ -14,12 +38,12 @@
       },
       "inputs": {
         "table": {
-          "step": "scan",
+          "step": "result_scan",
           "file": "iia.json"
         },
         "plot": "heatmap",
-        "x": "sites.pattern.layer",
-        "y": "sites.pattern.head"
+        "x": "sites.contribution.layer",
+        "y": "sites.contribution.head"
       },
       "outputs": {
         "figure": "head_iia.png",
@@ -35,11 +59,11 @@
       },
       "inputs": {
         "table": {
-          "step": "scan",
+          "step": "result_scan",
           "file": "iia.json"
         },
-        "layer_column": "sites.pattern.layer",
-        "head_column": "sites.pattern.head"
+        "layer_column": "sites.contribution.layer",
+        "head_column": "sites.contribution.head"
       },
       "outputs": {
         "stats": {
@@ -61,13 +85,13 @@
       },
       "inputs": {
         "table": {
-          "step": "scan",
+          "step": "result_scan",
           "file": "iia.json"
         },
         "choose": "max",
         "emit": {
-          "best_layer": "sites.pattern.layer",
-          "best_head": "sites.pattern.head"
+          "best_layer": "sites.contribution.layer",
+          "best_head": "sites.contribution.head"
         }
       },
       "outputs": {
