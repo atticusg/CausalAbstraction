@@ -87,7 +87,11 @@ class NnsightEngine(Engine):
         return execute_request(
             request,
             engine_name=self.name,
-            executor_factory=lambda doc, req, coords: self._executor(
+            # the trace executor does not consult the shared ForwardCache, so
+            # it takes the campaign's interning handle and drops it; §3's
+            # cross-point sharing is unclaimed here and RunResult.forwards
+            # stays 0 rather than reporting a count nothing measured
+            executor_factory=lambda doc, req, coords, _interning: self._executor(
                 doc, req, coords=coords
             ),
             train_runner=None,
