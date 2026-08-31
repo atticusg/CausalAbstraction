@@ -93,7 +93,7 @@ A document names a dataset ref; a resolver reads bytes (`protocol/resolve.py`). 
 
 ## 6. Configs are documents
 
-`causalab/configs/protocols/*.json` are the nine shipped protocol documents (byte-comparable to the corpus documents under `tests/protocols/`); `causalab/configs/runs/weekdays_8b_interchange.json` carries the same experiment as one document split into its transferable and its input-bound halves, and `causalab/configs/methods/interchange.json` is that method on its own (spec §1.1, implemented in `protocol/method.py`); `causalab/configs/workflows/weekdays_8b.json` is the worked workflow. There is no Python config system: a "config" is a protocol or workflow document, overridden ad hoc with `--set` and promoted into a file when it matters.
+`causalab/configs/protocols/*.json` are the shipped protocol documents (most are byte-identical to a corpus document under `tests/protocols/`; the exceptions are the presets with no corpus twin — `mean_harvest`, `mean_ablation`, `dbm_apply`); `causalab/configs/runs/weekdays_8b_interchange.json` carries the same experiment as one document split into its transferable and its input-bound halves, and `causalab/configs/methods/interchange.json` is that method on its own (spec §1.1, implemented in `protocol/method.py`); `causalab/configs/workflows/weekdays_8b.json` is the worked workflow. There is no Python config system: a "config" is a protocol or workflow document, overridden ad hoc with `--set` and promoted into a file when it matters.
 
 ## 7. Tests
 
