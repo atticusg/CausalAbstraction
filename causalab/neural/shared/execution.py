@@ -75,6 +75,11 @@ class TrainEvalScore:
     #: The trained featurizers this score describes — the join back to the
     #: saved bundle, which stamps the same point digest.
     featurizers: tuple[str, ...] = ()
+    #: How the returned weights were chosen: ``"early_stop.best"`` when the
+    #: loop restored the best-scoring snapshot, ``"last"`` when nothing
+    #: selected. Without it a reader cannot tell whether this score describes
+    #: the saved weights or merely the final pass over them.
+    selected: str = "last"
 
     def as_record(self, *, point: str, coords: Mapping[str, Any]) -> dict[str, Any]:
         return {
@@ -84,6 +89,7 @@ class TrainEvalScore:
             "metrics": dict(self.metrics),
             "passes": self.passes,
             "featurizers": list(self.featurizers),
+            "selected": self.selected,
         }
 
 
