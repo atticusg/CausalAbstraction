@@ -83,9 +83,20 @@ the one number that carries it. Written last, read first. No forward references
 
 ### The protocol
 
-The **complete, unelided** document, once, in a fenced `json` block. Not a
-fragment, not a diff against another demo. If it is too long to read, the demo
-is too big.
+The **complete, unelided** document, once, in a fenced `json` block, and
+immediately beside it a **link to the file it copies**. Not a fragment, not a
+diff against another demo, and not a reflow: the block is the file's bytes, so
+that pasting it back over the file is a no-op. If it is too long to read, the
+demo is too big.
+
+Both halves are load-bearing, and neither is redundant. The copy is what a
+reader on GitHub sees without a second click — a demo whose thesis lives in
+another file is a demo nobody reads. The file is what `causalab run` reads, so
+it is the *copy* that can be wrong, and a wrong copy is worse than no copy: the
+prose reads as authoritative while the run uses the other bytes. Two places for
+one fact is precisely the arrangement that needs a check rather than a habit,
+which is why `tests/demos/test_demos.py` fails the moment a block stops matching
+the file it names.
 
 Then two things, in this order:
 
@@ -183,9 +194,12 @@ The demos that follow, one line each, naming what they take from this one.
 A demo whose question decomposes into questions that feed each other is a
 **workflow demo**. It keeps the same seven sections, with three differences:
 
-- **The protocol** section holds the *workflow* document, and each protocol
-  step's document is linked rather than inlined — the workflow is the thesis,
-  the steps are its sentences.
+- **The protocol** section leads with the *workflow* document, unfolded: the
+  workflow is the thesis, the steps are its sentences. The step documents are
+  inlined too — §2's rule holds for every document a demo runs — but after
+  the step table and each inside a `<details>` block, so the chain stays the
+  thing the section reads as. The `<summary>` names the step and its path;
+  the markdown link in the step table is the cross-reference.
 - The flow chart draws the **derived schedule**, not the model graph. `explain`
   prints the levels; the chart is that, drawn.
 - **Experimental design** numbers its questions `RQ1 … RQn` and each maps to
@@ -271,6 +285,7 @@ Before opening the PR:
 
 - [ ] every JSON in the demo passes `causalab validate … --data --data-root <root>`
 - [ ] every `explain` block is pasted output, not typed by hand
+- [ ] every document is inlined verbatim, beside a link to the file it copies
 - [ ] `Results` has one subsection per `Experimental design` question, same order
 - [ ] every number in prose has a floor, a chance level, or a unit
 - [ ] every figure caption says what produced it
@@ -278,4 +293,5 @@ Before opening the PR:
 - [ ] `Limits` is not empty
 
 `tests/demos/test_demos.py` checks the mechanical half of this list — the
-documents, the links, and the section skeleton. The rest is review.
+documents, the links, the inlined copies, the quoted digests and the section
+skeleton. The rest is review.

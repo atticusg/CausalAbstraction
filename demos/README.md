@@ -48,5 +48,5 @@ records how the table was built.
 
 Read [`docs/demos.md`](../docs/demos.md), then copy the closest existing demo's
 skeleton. `tests/demos/test_demos.py` checks the mechanical half of the format:
-that every document validates, every link resolves, and every demo has the seven
-sections in order.
+that every document validates, every link resolves, every document is inlined in
+its demo byte for byte, and every demo has the seven sections in order.

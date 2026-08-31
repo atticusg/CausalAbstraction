@@ -22,6 +22,10 @@ one cell it names is what the next stage would train a subspace in.
 
 ## The protocol
 
+[`protocols/mcqa_locate_scan.json`](protocols/mcqa_locate_scan.json), inlined
+verbatim — the file is what `causalab run` reads, and
+`tests/demos/test_demos.py` checks these bytes against it.
+
 ```json
 {
   "version": "1",
@@ -89,23 +93,48 @@ model 128 times.
 
 Scanning is only half of it — the grid has to be rendered and reduced to the
 cell a next stage would use. [`workflows/mcqa_locate.json`](workflows/mcqa_locate.json)
-adds both:
+adds both, and the file is inlined here the same way — verbatim, so
+`tests/demos/test_demos.py` can hold this copy to it:
 
 ```json
 {
   "version": "1",
+  "description": "The 03_localize demo end to end: scan the (layer x position) grid, render it, and reduce it to the one cell the next stage would target. Nothing orders these steps -- `heatmap` and `best` both reference `scan`, so the runner derives that they may run together the moment the scan finishes.",
   "output_dir": "mcqa_locate",
   "steps": {
-    "scan":    {"type": "intervention_protocol", "document": "../protocols/mcqa_locate_scan.json"},
-    "heatmap": {"type": "script", "script": {"module": "causalab.io.plots.workflow_figures"},
-                "inputs": {"table": {"step": "scan", "file": "iia.json"},
-                           "plot": "heatmap", "x": "sites.target.layer", "y": "positions.tap"},
-                "outputs": {"figure": "iia_heatmap.png", "plotted": {"file": "iia_heatmap.json"}}},
-    "best":    {"type": "script", "script": {"module": "causalab.workflow.scripts.select"},
-                "inputs": {"table": {"step": "scan", "file": "iia.json"}, "choose": "max",
-                           "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}},
-                "outputs": {"values": {"file": "values.json",
-                                       "keys": {"best_layer": 0, "best_pos": {"index": -6}}}}}
+    "scan": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_locate_scan.json"
+    },
+    "heatmap": {
+      "type": "script",
+      "script": {"module": "causalab.io.plots.workflow_figures"},
+      "inputs": {
+        "table": {"step": "scan", "file": "iia.json"},
+        "plot": "heatmap",
+        "x": "sites.target.layer",
+        "y": "positions.tap"
+      },
+      "outputs": {
+        "figure": "iia_heatmap.png",
+        "plotted": {"file": "iia_heatmap.json"}
+      }
+    },
+    "best": {
+      "type": "script",
+      "script": {"module": "causalab.workflow.scripts.select"},
+      "inputs": {
+        "table": {"step": "scan", "file": "iia.json"},
+        "choose": "max",
+        "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}
+      },
+      "outputs": {
+        "values": {
+          "file": "values.json",
+          "keys": {"best_layer": 0, "best_pos": {"index": -6}}
+        }
+      }
+    }
   }
 }
 ```

@@ -10,6 +10,9 @@ of the format's checklist runs here —
 * every workflow's steps resolve, which reaches into each inner document;
 * every relative link in a demo's markdown points at a file that exists, and
   every committed figure is actually shown;
+* every document is inlined in its demo's markdown *byte for byte*, beside a
+  link to the file, so the copy a reader sees and the bytes a run reads cannot
+  drift apart;
 * every demo has the seven sections of ``docs/demos.md`` §2, in order, with a
   header table whose ``Reproduced`` field is one of the two legal forms;
 * every digest a demo quotes is one its own documents and tables really have,
@@ -58,6 +61,11 @@ REPRODUCED = re.compile(r"^\s*(✓|⚠)\s+\S")
 #: A markdown link whose target is a path rather than a URL or an anchor.
 LINK = re.compile(r"\[[^\]]*\]\((?!https?://|#)([^)\s]+)\)")
 
+#: A fenced ``json`` block. Anchored at line starts so the lazy body stops at
+#: the first closing fence rather than the last one in the file, which is what
+#: lets a demo carry six of them.
+JSON_FENCE = re.compile(r"^```json\n(.*?)^```$", re.DOTALL | re.MULTILINE)
+
 
 def _demo_dirs() -> list[Path]:
     return sorted(p for p in DEMOS.iterdir() if p.is_dir())
@@ -86,6 +94,16 @@ def _env(document: Path) -> ResolutionEnv:
         datasets=FileDatasets(root=demo / "data"),
         artifacts=FileArtifacts(root=REPO),
     )
+
+
+def _carriers(document: Path) -> list[Path]:
+    """The demo markdown files that carry ``document`` verbatim in a fence."""
+    want = document.read_text()
+    return [
+        demo
+        for demo in sorted(document.parents[1].glob("*.md"))
+        if want in JSON_FENCE.findall(demo.read_text())
+    ]
 
 
 def _ids(paths: list[Path]) -> list[str]:
@@ -221,6 +239,39 @@ class TestPastedOutput:
             f"{demo_dir.name}: digests {stale} match no document in this demo — "
             "re-paste the explain output"
         )
+
+
+class TestInlinedDocuments:
+    """§2 and §3 — every document is inlined verbatim, beside a link to it.
+
+    The copy and the file are both load-bearing. The copy is what a reader on
+    GitHub sees without a second click, so a demo whose thesis lives in another
+    file is a demo nobody reads; the file is what ``causalab run`` reads, so it
+    is the copy that can be wrong. That is two places for one fact, which is
+    exactly the arrangement that needs a test rather than a habit — the same
+    argument as the digests above, one level up.
+
+    Drift here is worse than never inlining: the prose reads as authoritative
+    while the run uses the other bytes, and nothing in the markdown says so.
+    """
+
+    @pytest.mark.parametrize("document", _documents(), ids=_ids(_documents()))
+    def test_is_inlined_verbatim(self, document: Path) -> None:
+        assert _carriers(document), (
+            f"no markdown in {document.parents[1].name}/ carries "
+            f"{document.name} verbatim — inline the file's bytes in a ```json "
+            "block (docs/demos.md §2), or re-paste it if the file has changed"
+        )
+
+    @pytest.mark.parametrize("document", _documents(), ids=_ids(_documents()))
+    def test_the_inlined_copy_links_the_file(self, document: Path) -> None:
+        """A verbatim block with no path beside it is a copy the reader cannot
+        get back to, and cannot run."""
+        rel = document.relative_to(document.parents[1]).as_posix()
+        for demo in _carriers(document):
+            assert rel in LINK.findall(demo.read_text()), (
+                f"{demo.name} inlines {rel} but never links it"
+            )
 
 
 class TestFigures:
