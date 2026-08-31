@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "description": "Which head's CONTRIBUTION carries the answer symbol? attention_result is each head's own addition to the residual stream -- the o-projection applied to that head's slice alone -- so naming a head here selects one head's output rather than one head's routing. This is the companion to mcqa_head_scan.json: the pattern says where a head looks, this says what it delivers, and only one of the two turns out to carry the variable. 4 layers x 32 heads over 64 pairs, at the answer slot.",
+  "description": "Which head's CONTRIBUTION carries the answer symbol? attention_premix is the o-projection's input, which is head-shaped: naming a head selects that head's slice, and because the projection is linear a swap there moves the head's addition to the residual stream by exactly the projection of what was written. attention_result -- the addition itself -- is the quantity one wants and is not writable: the model never forms it, it forms the sum by projecting the whole premix at once, so a write there is refused at the plan with premix named as the alternative. This is the companion to mcqa_head_scan.json: the pattern says where a head looks, this says what it delivers, and only one of the two turns out to carry the variable. 4 layers x 32 heads over 64 pairs, at the answer slot.",
   "model": {
     "key": "meta-llama/Llama-3.2-1B-Instruct",
     "revision": "main",
@@ -23,7 +23,7 @@
   },
   "sites": {
     "contribution": {
-      "component": "attention_result",
+      "component": "attention_premix",
       "layer": {
         "sweep": {
           "range": [

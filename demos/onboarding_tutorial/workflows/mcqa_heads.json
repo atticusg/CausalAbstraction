@@ -29,7 +29,7 @@
     },
     "result_scan": {
       "type": "intervention_protocol",
-      "document": "../protocols/mcqa_head_result_scan.json"
+      "document": "../protocols/mcqa_head_premix_scan.json"
     },
     "grid": {
       "type": "script",
