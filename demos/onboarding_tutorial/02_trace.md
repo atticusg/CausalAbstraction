@@ -8,7 +8,7 @@
 | **Data** | `mcqa/pair_n1_s0` — **one** pair, `different_symbol` design ([01](01_define.md)) |
 | **Documents** | [`protocols/mcqa_trace_scan.json`](protocols/mcqa_trace_scan.json) |
 | **Cost** | 352 points × 2 forwards = 704 single-row forwards |
-| **Reproduced** | ⚠ figure carried from the pre-refactor reference run on a different pair |
+| **Reproduced** | ✓ 2026-08-31, `pytorch_hooks` on one H100 80GB, digest `0685b0fafc6037ae…` |
 
 ## TL;DR
 
@@ -118,10 +118,10 @@ uv run causalab run demos/onboarding_tutorial/protocols/mcqa_trace_scan.json \
 ```
 
 **Hardware.** 704 forwards over a single 22-token row on a 1.2 B model —
-roughly 2.5 GB of bf16 weights, so any GPU with 8 GB is enough, and the run is
-minutes rather than hours. Both `validate` and `explain` are pure: no weights,
-no network, no accelerator, so the two blocks above run on a laptop. This is an
-estimate from the point count, not a measured wall clock.
+roughly 2.5 GB of bf16 weights, so any GPU with 8 GB is enough. **Measured: 49 s
+of wall clock** on one H100 80GB, model load included, for the whole 352-point
+sweep. Both `validate` and `explain` are pure: no weights, no network, no
+accelerator, so the two blocks above run on a laptop.
 
 ## Experimental design
 
@@ -179,58 +179,99 @@ difference being patched there.
 
 ## Results
 
-> **Not yet regenerated.** The document above has not been run since the
-> protocol refactor. The figure below is the same experiment from the
-> pre-refactor pipeline, on a *different* pair and a counterfactual that
-> resampled only one symbol — so it answers Q1–Q3 and cannot answer Q4.
+Run on 2026-08-31, one H100 80GB, reference engine (`pytorch_hooks`), bf16,
+document digest `0685b0fafc6037ae…` as stamped into `mcqa_trace/protocol.json`.
+All 352 points completed. The table below is the whole `flipped.json`, one cell
+per (layer, token index): **1** means the patched model said the
+counterfactual's answer symbol, `" Q"`, instead of the base's `" Z"`.
+
+```
+  L |  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21
+  0 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
+  1 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
+  2 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
+  3 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
+  4 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
+  5 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
+  6 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
+  7 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
+  8 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
+  9 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
+ 10 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
+ 11 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
+ 12 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
+ 13 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0  0  0  0  0
+ 14 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1
+ 15 |  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1
+```
+
+Two columns are non-zero and the other twenty are zero at every depth. That is
+the whole finding, and it is sharper than the reference figure it replaces:
+**column 16 carries the answer from L0 to L13, column 21 from L14 to L15, and no
+cell is ever ambiguous.**
 
 ### Q1 — yes, from the embedding up
 
-![Single-pair trace](figures/02_trace_single_pair.png)
-
-*Reference run: Llama-3.2-1B-Instruct, pre-refactor `locate` single-pair trace.
-Rows are layers (embedding at the bottom), columns are token positions; each
-cell is the greedy output token after patching there. Base answer `N`, red cells
-`B` — the counterfactual's answer. Look at which column is red in which rows.*
-
-✓ Column 12 — the answer symbol — is red from the embedding row through L12. The
-two prompts differ exactly there, so this is a sanity check, not a finding.
+✓ `flipped` at (L0, index 16) is **1.0**. The patched model says `" Q"` at
+probability **0.897**. The two prompts differ exactly at that token, so this is
+the sanity check passing, not a finding: the embedding difference does reach the
+block output.
 
 **Verdict.** Yes.
 
-### Q2 — yes, at the last four layers
+### Q2 — yes, at the last two layers
 
-✓ Column 21, the answer slot, is red at L12–L15. The unembedding reads position
-21, so anything else would mean the model's own answer is not where it writes
-it.
+✓ `flipped` at (L15, index 21) is **1.0**, `" Q"` at probability **0.848**. The
+unembedding reads position 21, so anything else would have meant the model's own
+answer is not where it writes it. Column 21 is 1 at L14 and L15 and 0 below.
 
 **Verdict.** Yes.
 
-### Q3 — the hop is at L12
+### Q3 — the hop is between L13 and L14, and no layer carries both
 
-**Finding.** L12 is the only row where *both* columns are red. Below it the
-answer is legible only at the symbol; above it only at the slot. So one band of
-layers moves the variable from where it entered to where it is read — the
-attention step that a population-scale scan will quantify in [03](03_localize.md).
+**Finding, and it corrects the reference.** The pre-refactor figure this demo
+used to show had one row — L12 — where *both* columns were legible, and the
+prose here read the hop off that overlap. On the document's own pair there is
+**no such row**: the symbol column is 1 for L0–L13 and 0 for L14–L15, the slot
+column is 0 for L0–L13 and 1 for L14–L15, and the two never overlap. The
+transition is a clean partition between **L13 and L14**, two layers later than
+the reference's L12 and with no band where the variable is readable in both
+places at once.
 
-The columns between the two are red nowhere. Whatever carries the symbol
-across, it is not laid down in the intervening token positions.
+The columns between the two are 0 everywhere, as before: whatever carries the
+symbol across, it is not laid down in the intervening token positions.
 
-**Verdict.** Between L11 and L13, with L12 the crossing point.
+That the greedy read-out flips all-or-nothing is what makes the partition clean
+— it is also what a single pair can and cannot tell you, which is why the
+population scan in [03](03_localize.md) sees the same hop as a *gradient* rather
+than a step.
 
-### Q4 — no result
+**Verdict.** Between L13 and L14. No layer carries both.
 
-The reference figure's counterfactual changed one symbol, so it has no
-distractor column to look at. Running the document above produces the answer:
-`flipped` at `positions.tap.index = 12`, expected 0 at every layer.
+### Q4 — yes, the distractor column is silent
+
+✓ This is the question the reference figure could not answer, because its
+counterfactual changed only one symbol. Running the document answers it:
+`flipped` at `positions.tap.index = 12` — symbol0, the distractor — is **0.0 at
+every one of the 16 layers**, exactly the null the design predicts. Patching the
+wrong symbol never moves the answer; at (L15, 12) the model still says `" Z"` at
+probability 0.853, its base answer.
+
+**Verdict.** 0 at every layer, as predicted. The `different_symbol` design
+buys a distractor column that stays silent.
 
 ## Limits
 
 - One pair. The routing pattern is often stable across inputs, but a single
   trace cannot say so — that is [03](03_localize.md)'s job, and it is why 03 exists.
-- The figure predates the document. The quantity matches (`top_k k=1` is the
-  same greedy token the reference plotted) but the pair and the counterfactual
-  design do not.
+- **This demo ships no figure, and cannot render one from its own run.** The
+  repo's figure script (`causalab.io.plots.workflow_figures`) reads a table's
+  sweep axes from the `_step.json` a *workflow step* writes; a bare
+  `causalab run` of a protocol document writes `protocol.json` instead, so
+  `axes_for` returns `()` and the renderer collapses all 352 cells into one.
+  The grid above is the table itself, which is the more checkable artifact —
+  but a bare-protocol demo wanting a picture currently has to become a
+  one-step workflow.
 - The grid is `block_output` only. A signal that is present in
   `attention_output` and cancelled by the MLP is invisible here.
 - There is no embedding row: `embeddings` is a separate, layer-less component,
@@ -240,4 +281,4 @@ distractor column to look at. Running the document above produces the answer:
 
 - **[03 — Locate across the population](03_localize.md)** runs this
   intervention over all 64 pairs and turns "what did it say" into "how often was
-  it right", which is what makes L12 a claim rather than an anecdote.
+  it right", which is what makes the L13/L14 hop a claim rather than an anecdote.

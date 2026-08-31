@@ -8,18 +8,22 @@
 | **Data** | `weekdays/train` (64 pairs), `weekdays/test` (32) — `natural_domains_arithmetic`, `domain_type=weekdays` |
 | **Documents** | [`workflows/weekdays_geometry.json`](workflows/weekdays_geometry.json) → five [`protocols/`](protocols/) |
 | **Cost** | 10 steps, 118 points; the DAS step trains 9 rotations |
-| **Reproduced** | ⚠ figures carried from the pre-refactor reference run, some at a different layer than the documents pin |
+| **Reproduced** | ⚠ all ten steps re-run 2026-08-31 on one H100 80GB (digest `8143a3361bb0326e…`) and every number below is this run's; RQ3's 2D/3D views and RQ4's two walks are still the pre-refactor reference — they need script steps that do not ship |
 
 ## TL;DR
 
 The task is weekday arithmetic — *"What day is four days after Sunday?"* — and
-the variable is the answer day. Llama-3.1-8B solves it (**0.918**, against a
+the variable is the answer day. Llama-3.1-8B solves it (**0.828**, against a
 1-in-7 floor of 0.143), and an interchange scan puts it at the answer slot from
-**L18** on. The representation there is not one direction: 32 principal components are needed
-for 98% of the variance, and 6 for 63%. Walking the residual stream from one
-answer to another along a straight line takes the model *through* no other
-weekday; walking it along the curve the seven answers lie on does — which is the
-whole reason to ask about geometry rather than about a direction.
+**L18** on, sharply: 0.281 at L17, 0.891 at L18, a 0.953 plateau from L26. The
+representation there is not one direction — six principal components carry 70% of
+the kept variance, and a DAS rotation needs **eight** dimensions to match what
+the whole residual stream achieves, where two reach only 0.641. Walking the
+residual stream in a straight line from one answer to another passes *through* a
+third weekday on 9 of 64 rows without ever leaving the region where the model's
+answers live, which is a question about geometry rather than about a direction —
+though the comparison against the curve the seven answers lie on still needs a
+script step that does not ship.
 
 ## The protocol
 
@@ -589,15 +593,22 @@ uv run causalab explain demos/weekdays_geometry/workflows/weekdays_geometry.json
 ```bash
 uv run causalab run demos/weekdays_geometry/workflows/weekdays_geometry.json \
     --data-root demos/weekdays_geometry/data \
-    --out runs --device cuda --dtype bf16
+    --out runs --device cuda
 ```
 
 **Hardware.** One GPU with ≥40 GB: 8 B parameters in bf16 is ~16 GB of weights,
 and the `fit` step holds gradients for a 4096 × k rotation on top. That step's
 `requires` includes `grad`, which only the reference engine declares — so the
 document routes there whatever `--engine` says, while the read-only steps could
-run on either. Sizing comes from `explain`'s point counts (118 across the five
-protocol steps); it is not a measured wall clock.
+run on either. **Measured: 132 s of wall clock** for all ten steps on one H100
+80GB, model load included — the nine DAS rotations of the `fit` step included.
+
+> **No `--dtype` on a workflow.** The flag sets `model.dtype` on *one* protocol
+> document, so the CLI refuses it here: *"a workflow's steps each declare their
+> own realization — set it in the step's document, or with that step's own `set`
+> block"*. All five protocols under `protocols/` already pin `"dtype": "bf16"`.
+> The single-protocol shard command below is a protocol document, so it takes
+> `--dtype` normally.
 
 Shard a long scan rather than growing the job:
 
@@ -685,137 +696,224 @@ they differ qualitatively:
 
 ## Results
 
-> **Not yet regenerated.** These documents have not been run since the protocol
-> refactor. Every figure below is from the pre-refactor pipeline; RQ1 and RQ2 are
-> the same quantities the documents compute, RQ3 and RQ4 are not — each caption
-> says how it differs.
+Run on 2026-08-31, one H100 80GB, reference engine (`pytorch_hooks`), bf16,
+workflow digest `8143a3361bb0326e…`. All ten steps completed in 132 s.
 
-### RQ1 — yes, 0.918
+**Read this first: the run selected layer 26, not the 18 the workflow
+declares.** `best` is a `select` step, so the layer the downstream steps use is
+whatever `locate`'s argmax turns out to be — and it is **L26**. The workflow's
+`best.outputs.values.keys` declares `{"best_layer": 18, …}`, which is what the
+plan-time *authored* digests for `harvest`, `fit` and `walk` are computed
+against; the run itself harvested, fitted and walked at **L26**. Every RQ3 and
+RQ4 number below is therefore a layer-26 measurement.
+
+### RQ1 — yes, 0.828
 
 ![Confusion](figures/rq1_confusion.png)
 
-*Reference run: Llama-3.1-8B, pre-refactor `baseline` over all 49
-entity × number combinations. Rows are the true weekday, columns the predicted
-one, cells the probability mass. Look at the diagonal, then at the Monday row.*
+*Reference run (pre-refactor), retained for the shape of the errors only: rows
+are the true weekday, columns the predicted one. Its 0.918 is over all 49
+entity × number combinations; the `baseline` document above scores the 64 rows
+of `weekdays/train`, so the two numbers are not the same quantity. Look at the
+diagonal, then at the Monday row.*
 
-45 of 49 correct — 0.918 against a 0.143 floor. The mean probability on the
-correct token is 0.569, so the model is right without being certain.
+**This run: accuracy 0.828 over 64 rows** — 53 of 64 — against a 1-in-7 floor of
+0.143. Not the reference's 0.918, and not a contradiction of it either: a
+different population, scored by the document that ships.
 
-**Finding.** The one substantial off-diagonal is Monday predicted as Sunday,
-carrying roughly a quarter of the Monday row. Errors are adjacent-day errors,
-not arbitrary ones — a hint about the representation that RQ3 comes back to.
+**Finding.** The task is solved well above floor by a margin of 0.685, which is
+what RQ2 needs in order to mean anything. It is also comfortably below the
+reference's number, so the 11 rows the model gets wrong are part of the
+population every interchange below is averaged over.
 
-**Verdict.** Yes. The task is solved well enough for an intervention on it to
-mean something.
+**Verdict.** Yes. 0.828 against 0.143.
 
-### RQ2 — the entity token early, the answer slot from L18
+### RQ2 — the answer slot, jumping at L18 exactly, peaking at L26
 
 ![Locate IIA](figures/rq2_locate_iia.png)
 
-*Reference run: Llama-3.1-8B, pre-refactor `locate` in pairwise mode — the same
-quantity as this document's `match` IIA — over six sampled layers and three
-positions. **Its counterfactual resampled the entity only**, where this
-document's table resamples entity and number both. The `last_token` column is
-therefore comparable and the `entity` column is not. Look at the right-hand
-column across rows.*
+*This run: Llama-3.1-8B, `locate`'s 32 layers × 3 positions, `match` IIA over 64
+pairs, rendered by the workflow's own `locate_heatmap` step from `iia.json`. The
+one bright row is `{"index": -1}`, the answer slot; the `entity` and `number`
+rows never leave the floor.*
 
-`last_token` reads 0.00 up to L8, 0.12 at L16, then 0.92, 0.92, 0.98 at L18, L20,
-L24. The handoff is sharp: one layer either side of L18 and the answer has
-arrived at the slot the unembedding reads.
+The answer-slot column, every layer:
 
-✓ `number` reads 0.00 at all six sampled depths. Under the reference design the
-number never varied, so there was nothing at that token to interchange — the
-check that the scan reads what the dataset varies.
+```
+  L0-L11  0.219   L15  0.141   L18  0.891   L21-L24  0.922
+  L12     0.203   L16  0.266   L19  0.875   L25      0.938
+  L13     0.219   L17  0.281   L20  0.844   L26-L31  0.953
+  L14     0.234
+```
 
-**Finding.** Under an entity-only counterfactual the entity token carries the
-answer from L0 (0.98) and hands it over between L16 and L18. That is the
-model routing a variable it can compute early. Whether the *same* handoff is
-visible under this document's independent resampling is what running it decides:
-the expectation above says the entity column should sit near 0.219 throughout,
-because knowing the entity is not knowing the answer when the number moved too.
+✓ **The L18 handoff is confirmed to the layer.** 0.281 at L17, **0.891 at L18** —
+one layer, and the answer has arrived at the slot the unembedding reads. That was
+the reference's claim under a different counterfactual design, and it survives
+the change.
 
-**Verdict.** L18 at the answer slot, at IIA 0.92 against a 0.219 floor. The
-entity column's reading is the reference design's, not this document's.
+✓ **The entity column sits at the floor throughout, exactly as this document
+predicted.** Under the reference's entity-only counterfactual the entity token
+carried the answer from L0 at 0.98. Under this document's *independent*
+resampling it reads 0.141–0.219 across all 32 layers, mean 0.181 — because
+knowing the entity is not knowing the answer when the number moved too. The
+prediction written into this section before the run was "the entity column
+should sit near 0.219 throughout"; it does.
 
-### RQ3 — not one direction, and the seven answers lie on a ring
+✓ `number` likewise never leaves the floor: 0.125–0.219, max 0.219.
+
+**Finding, and it is about the floor rather than the model.** 0.219 is not
+approximately the floor — it is *exactly* the value at essentially every
+unresponsive cell, and it is the number the dataset's own duplication implies
+(3 pairs in 64 are literally the same prompt, 14 more share an answer). An
+interchange that does nothing still scores 0.219 here, so the readable range of
+this grid is 0.219 to 1.0, not 0 to 1.0.
+
+**Verdict.** The answer slot. Handoff at L18 (0.891), plateau at L26–L31
+(0.953), and `best` emits `{"best_layer": 26, "best_pos": {"index": -1}}`.
+
+### RQ3a — not one direction: six components for 70%, and it takes eight to intervene
 
 ![PCA spectrum](figures/rq3_pca_spectrum.png)
 
-*Reference run: cumulative variance of the harvested activations, as a fraction
-of the **full** embedding space — the denominator is every singular value, not
-just the 32 kept. Note the caption in [Limits](#limits): this fit is at layer 28,
-where the document pins layer 18.*
+*This run: cumulative variance of the activations `harvest` collected at **L26**,
+rendered by the workflow's own `spectrum_curve` step. Note the denominator —
+`fit_pca` writes `explained_variance_ratio` over the **32 components it keeps**
+(they sum to 0.9959), not over the full 4096-dimensional space. The reference
+figure's 16.5% / 63% / 82% / 98% were full-space fractions at layer 28, so these
+numbers are not comparable to those and neither is a correction of the other.*
 
-The first component carries 16.5%, six reach 63%, twelve reach 82%, and the
-32-component subspace retains 98%.
+Cumulative, over the kept 32:
 
-**Finding.** The representation is low-dimensional relative to 4096 and *not*
-low-dimensional in the sense a single steering direction assumes. Anything that
-treats "the weekday direction" as one vector is discarding 83% of the variance.
+| first *k* PCs | 1 | 2 | 3 | 6 | 12 | 16 | 32 |
+|---|---|---|---|---|---|---|---|
+| variance retained | 22.5% | 36.7% | 48.9% | 69.7% | 87.6% | 93.1% | 99.6% |
+
+**Finding.** The leading component carries 22.5% and it takes six to pass 70%.
+Whatever "the weekday direction" would mean, one vector is not it: a single
+direction discards 77% of the variance that the kept subspace contains.
 
 ![PCA 2D](figures/rq3_pca_2d.png)
-
-*Same fit, first two components. Small dots are individual examples coloured by
-their answer day, diamonds are the seven class centroids.*
-
-**Finding.** The seven centroids sit on a closed curve, in weekday order:
-Monday and Sunday are neighbours on it, which is what RQ1's Monday-for-Sunday
-confusion looks like from the inside. The examples of one class scatter widely
-around their centroid — the ring is a statement about class means, not about
-individual activations.
-
 ![Fitted manifold](figures/rq3_manifold_3d.png)
 
-*Same fit, first three components, with a closed spline fitted through the seven
-centroids (legend indices 0–6 are Monday–Sunday). This curve is what RQ4's first
-walk follows; producing it needs a script step that does not ship — see
-[Limits](#limits).*
+*Both are the pre-refactor reference at layer 28 — the ring, and a closed spline
+through the seven class centroids. The shipped workflow produces neither: a 2D
+scatter and a fitted manifold are script steps that do not exist in
+`causalab/analysis/`, which is why these two remain the ⚠ in this demo's
+header. They are shown because the ring is what makes RQ4 a question about
+geometry, and RQ3b below is the first evidence for it that this document itself
+produces.*
 
-**Verdict, RQ3a.** Six to twelve directions, arranged as a ring rather than a
-line — a curve a walk can follow, which is what makes RQ4 a question about
-geometry rather than about a direction.
+**Verdict, RQ3a.** Six components for 70%, twelve for 88% — a subspace, not a
+line.
 
-**RQ3b — no result.** The `fit` step's IIA-vs-k curve has not been run. The
-document sweeps k ∈ {2, 8, 32} × seed ∈ {0, 1, 2}; the question it answers is
-whether k = 2 — enough for a ring — already reaches RQ2's 0.92.
+### RQ3b — no longer a gap: k = 2 is *not* enough, k = 8 is
 
-### RQ4 — a straight line crosses over, the ring passes through
+![IIA by k](figures/rq3b_iia_by_k.png)
+
+*This run: the `fit` step's nine DAS rotations, rendered by the workflow's own
+`iia_by_k` step. Three seeds at each of k ∈ {2, 8, 32}, trained at L26.*
+
+This section said "no result" because the sweep had not been run. It has now:
+
+| k | seed 0 | seed 1 | seed 2 | mean | reaches RQ2's 0.953? |
+|---|---|---|---|---|---|
+| 2 | 0.656 | 0.672 | 0.594 | **0.641** | no, short by 0.31 |
+| 8 | 0.984 | 0.984 | 0.984 | **0.984** | yes, and above it |
+| 32 | 1.000 | 1.000 | 1.000 | **1.000** | yes, perfectly |
+
+**Finding, and it is the answer RQ3a was reaching for.** Two dimensions are
+enough to *draw* a ring and not enough to *be* the variable: k = 2 reaches 0.641,
+well short of the 0.953 the whole residual stream achieves at the same cell. Eight
+dimensions reach 0.984 — **higher than the full residual** — and 32 reach 1.000 on
+all three seeds. So the representation is genuinely low-dimensional, the number
+is nearer 8 than 2, and a rotation into it is *cleaner* than intervening on the
+raw residual: the 4096-dimensional patch drags along whatever else lives at that
+cell, and an 8-dimensional one does not.
+
+The three seeds agree to the digit at k = 8 and k = 32 and spread 0.594–0.672 at
+k = 2, which is itself the signal: the fit is only seed-sensitive where the
+subspace is too small to hold the variable.
+
+**Verdict, RQ3b.** k = 2 does not reach RQ2's number; k = 8 exceeds it. Six to
+eight directions, matching RQ3a's spectrum.
+
+### RQ4 — under this document's construction the line does *not* cross over
 
 ![Geodesic walk](figures/rq4_geodesic.png)
 ![Linear walk](figures/rq4_linear.png)
 
-*Reference run: pre-refactor `path_steering`, Monday → Thursday, probability of
-each weekday token along the walk. **Top**: along a spline fitted to the ring.
-**Bottom**: along the straight line between the Monday and Thursday centroids in
-PCA space. The dashed line is the mass on everything that is not a weekday.
-Both are walks between class **centroids** in a 32-dimensional PCA subspace; the
-document above walks between two **rows'** activations in the full space, so
-these answer RQ4's question under a different construction.*
+*Reference run (pre-refactor `path_steering`), Monday → Thursday: **top** along a
+spline fitted to the ring, **bottom** along the straight line between two class
+centroids in a 32-dimensional PCA subspace. Both are centroid-to-centroid walks
+in PCA space. The document above walks between two **rows'** activations in the
+**full** space at L26 — a different construction, and the numbers below show it
+answers differently.*
 
-Along the ring, Tuesday peaks at ≈0.71 near α = 0.3 and Wednesday at ≈0.72 near
-α = 0.6, and the non-weekday mass stays flat at 0.17–0.25 throughout. Along the
-straight line, no intermediate day exceeds ≈0.11 and the non-weekday mass rises
-from 0.23 to a peak of ≈0.37 at α ≈ 0.5 before falling back.
+`walk` produced 704 records: 11 values of α over 64 rows. Aggregating them is
+the wrong move and worth saying why — each row interpolates between *its own*
+two answers, so the mean over rows smears eleven different endpoint pairs into a
+curve whose argmax is "Sunday" at every α. Per row it is sharp. One row, verbatim:
 
-**Finding.** The straight line between two answers leaves the region where the
-model's answers live: at the midpoint, more mass sits on non-weekday tokens than
-on any weekday. The curve the answers lie on does not — it walks the model
-through Tuesday and Wednesday at nearly the confidence it has for the endpoints.
-The seven-day structure of RQ3's ring is therefore *causal*, not decorative: the
-path between two points matters, and the ring is the path the model behaves
-along.
+```
+alpha |    Mon    Tue    Wed    Thu    Fri    Sat    Sun  non-weekday
+ 0.00 |  0.012  0.010  0.028  0.445  0.127  0.014  0.024        0.339
+ 0.20 |  0.013  0.019  0.108  0.485  0.074  0.008  0.024        0.269
+ 0.40 |  0.013  0.033  0.350  0.309  0.035  0.005  0.020        0.236
+ 0.50 |  0.011  0.037  0.514  0.189  0.021  0.003  0.017        0.207
+ 0.60 |  0.010  0.040  0.633  0.110  0.012  0.002  0.014        0.178
+ 1.00 |  0.010  0.068  0.731  0.012  0.002  0.001  0.011        0.164
+```
 
-**Verdict.** Passes through along the ring; crosses over along the line.
+Thursday → Wednesday, handed over cleanly at α ≈ 0.45, and the non-weekday mass
+*falls* from 0.339 to 0.164 along the way.
+
+Over all 64 rows, 9 interior α each:
+
+| | |
+|---|---|
+| rows whose two endpoints are different days | 49 / 64 |
+| rows where some interior α's argmax is a day that is **neither** endpoint | **9 / 64** |
+| interior points where non-weekday mass beats every weekday | **55 / 576** (9.5%) |
+
+**Finding, and it contradicts the reference under this construction.** The
+reference's straight line left the answer region — at its midpoint more mass sat
+on non-weekday tokens than on any weekday. Interpolating between two **rows'
+activations in the full residual stream** does not do that: only 9.5% of interior
+points put non-weekday mass on top, and on the row above the non-weekday mass
+declines monotonically. The line stays inside the region where the model's
+answers live.
+
+So "a straight line crosses over" is a property of the **centroid-in-PCA-space**
+construction, not of linear interpolation as such. What survives is the weaker
+and better-supported claim: on 9 of 64 rows the straight path passes *through* a
+third weekday, which is evidence that the days are not arranged so that any two
+are adjacent — but this document cannot compare a line against the ring, because
+the geodesic arm does not ship.
+
+15 of the 64 rows interpolate between two activations with the **same** answer
+day, which is the generator's failure to deconfound showing up a third time.
+
+**Verdict.** Under this document's row-to-row, full-space construction: the line
+does **not** cross over; it passes through a third day on 9 of 64 rows. The
+ring-versus-line comparison remains unanswered — see Limits.
 
 ## Limits
 
-- **The RQ3 and RQ4 figures are fitted at layer 28; the documents pin layer 18.**
-  The source notebook's prose says layer 18 while its config says 28, and the
-  figures are the config's. At deeper layers the `last_token` residual is
-  dominated by the *number* variable, and because each result class spans all
-  seven numbers uniformly, the result centroids can collapse toward the global
-  mean — a mathematical identity, not a bug. That the layer-28 fit still shows a
-  clean ring is worth re-checking when these are regenerated at 18.
+- **The layer is selected, not pinned, and it is 26.** The source notebook's
+  prose said layer 18 and its config said 28; the run resolves the question by
+  not answering it — `best` is a `select` step, so the layer is `locate`'s
+  argmax, and that is **L26** (0.953, on a plateau that runs L26–L31). The
+  workflow's `best.outputs.values.keys` still *declares* `{"best_layer": 18}`,
+  which is only used to compute the plan-time authored digests for `harvest`,
+  `fit` and `walk` — so `explain`'s authored digests for those three steps
+  describe a plan at L18 while the run happened at L26. Updating that declared
+  value to 26 would make the two agree; it moves the workflow digest, so it is a
+  deliberate follow-up rather than a typo fix.
+- **`fit_pca`'s spectrum is normalized over the components it keeps**, so
+  RQ3a cannot state what fraction of the *full* 4096-dimensional variance the
+  32-component subspace retains — the reference figure's 98% was that quantity
+  and this run's 99.6% is not. A full-space denominator needs `fit_pca` to write
+  the total variance alongside the kept ratios.
 - **The weekday generator does not deconfound.** It samples the counterfactual
   independently, so 3 pairs in 64 are literally the same prompt, 14 share an
   answer, and both input variables move at once. That sets a 0.219 floor under
@@ -823,10 +921,13 @@ along.
   localization. The fix is a crafted generator of the kind
   [01](../onboarding_tutorial/01_define.md) demonstrates — a `resample_entity`
   beside `generate_dataset` in the task package — not a scoring change.
-- **The geodesic arm is not expressible today.** Fitting a spline to the ring and
-  walking it needs a script step that does not ship; `causalab/analysis/` has
-  `fit_pca`, `harvest_difference`, `head_stats` and `paired_ttest`. The linear
-  arm is a document (`weekdays_linear_walk.json`); the comparison is not yet.
+- **The geodesic arm is not expressible today**, which is why RQ4's verdict is
+  one-armed. Fitting a spline to the ring and walking it needs a script step that
+  does not ship; `causalab/analysis/` has `fit_pca`, `harvest_difference`,
+  `head_stats` and `paired_ttest`. The linear arm is a document
+  (`weekdays_linear_walk.json`) and it ran; the comparison is not yet. Until it
+  exists, RQ4's reference figures and RQ4's numbers describe two different
+  constructions and the demo says so rather than blending them.
 - **RQ4's figure is one series per weekday, which the shipped renderer does not
   draw.** `causalab.io.plots.workflow_figures` plots one value column, and
   `class_probs` writes seven. The numbers land in `day_probs.json` regardless —
@@ -837,8 +938,14 @@ along.
 
 ## Next
 
-- Regenerate at the pinned layer: `causalab run` on the workflow above turns
-  every ⚠ in this file into a ✓ and a digest.
+- **Three script steps stand between this demo and a ✓ header**: a 2D PCA
+  scatter, a spline fit through the class centroids (which is also RQ4's missing
+  arm), and a multi-series probability-vs-α plot. Each is a `script` step over
+  artifacts the run already produces — `pca/basis.safetensors`,
+  `harvest/acts.safetensors`, `walk/day_probs.json` — so none of them needs a
+  new document or a new GPU hour.
+- Reconcile the declared `best_layer` with the selected one (18 → 26) so the
+  authored digests `explain` prints describe the plan that actually runs.
 - The missing spline-fit script is the one piece between the linear arm and the
   comparison — it is a `script` step over `harvest`'s activations, which is what
   the step type exists for ([`docs/workflow_protocol.md`](../../docs/workflow_protocol.md) §2.3).
