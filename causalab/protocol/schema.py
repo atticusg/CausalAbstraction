@@ -228,7 +228,7 @@ FEATURIZER_SLOTS: dict[str, tuple[str, ...]] = {
 #: legal on every kind; ``description`` is legal everywhere.
 FEATURIZER_FIELDS: dict[str, frozenset[str]] = {
     "identity": frozenset(),
-    "subspace": frozenset({"k", "parametrization", "init"}),
+    "subspace": frozenset({"k", "parametrization", "init", "seed"}),
     "pca": frozenset({"k"}),
     "sae": frozenset(),
     "standardize": frozenset(),
@@ -632,6 +632,13 @@ class FeaturizerSpec:
     k: Leaf | None = None
     parametrization: Leaf | None = None
     init: Leaf | None = None
+    #: ``subspace`` only: the draw its initial rotation comes from. Absent, it
+    #: is the document's seed (``train.seed``, or 0 with no fit) — so nothing
+    #: about an existing document changes. Authoring it is what makes an
+    #: *untrained* subspace a **random rank-k basis a document can sweep**,
+    #: which is the matched-k control the localization report requires and no
+    #: preset could express.
+    seed: Leaf | None = None
     dtype: Leaf | None = None
     file_path: Leaf | None = None
     entry: Any = None
@@ -703,8 +710,11 @@ class MetricSpec:
     """§2.10 — a closed-vocabulary reduction over one read (``of``) plus
     dataset columns. ``fields`` holds the kind's extra value fields.
     ``token_form`` says how this metric's string answers become token ids
-    (``TOKEN_FORMS``); the ``auto`` default is the historical resolver, so an
-    unauthored metric behaves exactly as before. ``top_k`` additionally
+    (``TOKEN_FORMS``). It is **required** on every kind in
+    ``TOKEN_COLUMN_METRIC_KINDS``: the field defaults to ``"auto"`` here only
+    so a spec constructed in code stays valid, while a *document* must name a
+    form. ``"auto"`` is still the historical space-prefixed-first resolver —
+    now something a document chooses rather than inherits. ``top_k`` additionally
     carries a mandatory ``by`` (``TOP_K_RANKINGS``) in ``fields``, because a
     top-k over a signed feature code and one over a vocabulary projection are
     different questions."""
@@ -1413,6 +1423,13 @@ def _parse_featurizer(raw: Any, path: str) -> FeaturizerSpec:
             "'entry' selects inside a loaded bundle — it needs a file_path",
             path=path,
         )
+    if "seed" in obj and "file_path" in obj:
+        raise ParseError(
+            "P2",
+            "'seed' picks an *initial* rotation; a featurizer loaded from a "
+            "file_path has its weights in the file and draws nothing",
+            path=f"{path}.seed",
+        )
     parametrization = None
     if "parametrization" in obj:
         parametrization = _wrapped(
@@ -1426,6 +1443,9 @@ def _parse_featurizer(raw: Any, path: str) -> FeaturizerSpec:
         parametrization=parametrization,
         init=_wrapped(obj["init"], _scalar_str, f"{path}.init")
         if "init" in obj
+        else None,
+        seed=_wrapped(obj["seed"], _scalar_int, f"{path}.seed")
+        if "seed" in obj
         else None,
         dtype=_wrapped(
             obj["dtype"], lambda v, p: _enum(v, PRECISION_DTYPES, p), f"{path}.dtype"
@@ -1703,6 +1723,21 @@ def _parse_metric(raw: Any, path: str) -> MetricSpec:
     if "of" not in obj:
         raise ParseError("P2", "a metric needs 'of' (a read name)", path=path)
     token_form: Any = "auto"
+    if takes_token_form and "token_form" not in obj:
+        raise ParseError(
+            "P2",
+            f"metric kind {kind!r} needs 'token_form' — how its string answers "
+            f"become token ids is a property of the model's tokenizer, not "
+            f"something a document may leave to a default. One of "
+            f"{list(TOKEN_FORMS)}: 'space_prefixed' for an answer the model "
+            f"emits after a space (the common case), 'bare' for one it does "
+            f"not, 'auto' to keep the historical space-prefixed-first guess. "
+            f"The guess has been wrong in four measured ways — a leading space "
+            f"(' ?' vs '?'), punctuation that merges with the token before it, "
+            f"two authored forms resolving to one id, and multi-token digits — "
+            f"so 'auto' is now something a document says on purpose",
+            path=path,
+        )
     if "token_form" in obj:
         token_form = _wrapped(
             obj["token_form"],

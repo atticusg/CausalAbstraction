@@ -107,12 +107,14 @@
     "ce_corr": {
       "kind": "cross_entropy",
       "of": "logits_corr",
-      "target": "answer"
+      "target": "answer",
+      "token_form": "space_prefixed"
     },
     "ce_rest": {
       "kind": "cross_entropy",
       "of": "logits_rest",
-      "target": "answer"
+      "target": "answer",
+      "token_form": "space_prefixed"
     }
   },
   "save": [

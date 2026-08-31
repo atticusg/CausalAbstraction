@@ -40,6 +40,9 @@ from causalab.protocol.schema import (
 
 __all__ = [
     "ExecutorSurface",
+    "MASK_DECISIVE_MARGIN",
+    "TrainEvalScore",
+    "TrainOutcome",
     "campaign_plans",
     "execute_request",
     "featurizer_identity",
@@ -59,6 +62,72 @@ class ExecutorSurface(Protocol):
     def addressed_steps(self, name: str) -> list[list[int]]: ...
     def generated_ids(self, name: str) -> list[list[int]]: ...
     def rows_for_metrics(self) -> list[dict[str, Any]]: ...
+
+
+@dataclasses.dataclass(frozen=True)
+class TrainEvalScore:
+    """One point's ``train.eval`` result: the split it was measured on, the
+    mean per eval metric, and how many eval passes ran.
+
+    ``passes`` is there so a reader can tell "evaluated once at the end" from
+    "evaluated every epoch and early-stopped", which decides whether the score
+    describes the returned weights or merely the last pass over them.
+    """
+
+    split: str
+    metrics: Mapping[str, float]
+    passes: int
+    #: The trained featurizers this score describes — the join back to the
+    #: saved bundle, which stamps the same point digest.
+    featurizers: tuple[str, ...] = ()
+    #: How the returned weights were chosen: ``"early_stop.best"`` when the
+    #: loop restored the best-scoring snapshot, ``"last"`` when nothing
+    #: selected. Without it a reader cannot tell whether this score describes
+    #: the saved weights or merely the final pass over them.
+    selected: str = "last"
+
+    def as_record(self, *, point: str, coords: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "point": point,
+            "coords": dict(coords),
+            "split": self.split,
+            "metrics": dict(self.metrics),
+            "passes": self.passes,
+            "featurizers": list(self.featurizers),
+            "selected": self.selected,
+        }
+
+
+#: A soft mask is "decisive" at a dimension when σ(θ) is outside
+#: ``[0.5 - MASK_DECISIVE_MARGIN, 0.5 + MASK_DECISIVE_MARGIN]`` — i.e. outside
+#: [0.1, 0.9] at the default. Chosen to match the measure the A3B DBM run
+#: reported: 0 of 2048 dimensions cleared it, in either configuration.
+MASK_DECISIVE_MARGIN = 0.4
+
+
+@dataclasses.dataclass(frozen=True)
+class TrainOutcome:
+    """What an engine's train loop produced.
+
+    ``stages`` is the fitted stage per trained featurizer name — what the save
+    manifest writes. ``eval_score`` is the held-out score from ``train.eval``,
+    and it is deliberately *not* a metric-table column: it is measured on a
+    different split, i.e. a different population from the point's metric rows,
+    and folding it in under the same metric name is exactly the confusion that
+    made a fit document's ``iia.json`` read as an eval score when it was the
+    train score (spec §2.12).
+    """
+
+    stages: Mapping[str, Any]
+    eval_score: TrainEvalScore | None = None
+    #: Per trained featurizer, whatever the fit can say about *itself* — see
+    #: :func:`~causalab.neural.engines.pytorch_hooks.train.fit_diagnostics`.
+    #: Written beside the bundle, because a fit that produced a meaningless
+    #: parameter and a perfect score is otherwise indistinguishable from a
+    #: good one.
+    diagnostics: Mapping[str, Mapping[str, float]] = dataclasses.field(
+        default_factory=dict
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -142,7 +211,7 @@ def execute_request(
         [Document, ExecutionRequest, Mapping[str, Any], "Interning | None"],
         ExecutorSurface,
     ],
-    train_runner: Callable[[Document, Any, ExecutionRequest], dict[str, Any]]
+    train_runner: Callable[[Document, Any, ExecutionRequest], TrainOutcome]
     | None = None,
     intern_forwards: bool = False,
 ) -> RunResult:
@@ -168,6 +237,8 @@ def execute_request(
 
     tensor_files: dict[str, TensorFile] = {}
     metric_files: dict[str, MetricTable] = {}
+    train_evals: list[Mapping[str, Any]] = []
+    fit_diagnostics: list[Mapping[str, Any]] = []
     summaries: list[Mapping[str, Any]] = []
     for i, (doc, coords, digest) in enumerate(
         zip(docs, request.coords, request.digests)
@@ -179,6 +250,8 @@ def execute_request(
             point_digest=digest,
             tensor_files=tensor_files,
             metric_files=metric_files,
+            train_evals=train_evals,
+            fit_diagnostics=fit_diagnostics,
             executor_factory=executor_factory,
             train_runner=train_runner,
             engine_name=engine_name,
@@ -222,6 +295,8 @@ def execute_request(
         tensor_files,
         metric_files,
         identity_base=identity_base,
+        train_evals=train_evals,
+        fit_diagnostics=fit_diagnostics,
     )
     return RunResult(
         files=files, summaries=tuple(summaries), forwards=len(cache.executed)
@@ -236,11 +311,13 @@ def _execute_point(
     point_digest: str,
     tensor_files: dict[str, TensorFile],
     metric_files: dict[str, MetricTable],
+    train_evals: list[Mapping[str, Any]],
+    fit_diagnostics: list[Mapping[str, Any]],
     executor_factory: Callable[
         [Document, ExecutionRequest, Mapping[str, Any], "Interning | None"],
         ExecutorSurface,
     ],
-    train_runner: Callable[[Document, Any, ExecutionRequest], dict[str, Any]] | None,
+    train_runner: Callable[[Document, Any, ExecutionRequest], TrainOutcome] | None,
     engine_name: str,
     interning: "Interning | None" = None,
 ) -> Mapping[str, Any]:
@@ -255,7 +332,23 @@ def _execute_point(
                 "capability is absent, so routing should not have sent it "
                 "here",
             )
-        trained_stages = train_runner(doc, executor, request)
+        outcome = train_runner(doc, executor, request)
+        trained_stages = dict(outcome.stages)
+        if outcome.eval_score is not None:
+            train_evals.append(
+                outcome.eval_score.as_record(point=point_digest, coords=coords)
+            )
+        if outcome.diagnostics:
+            fit_diagnostics.append(
+                {
+                    "point": point_digest,
+                    "coords": dict(coords),
+                    "featurizers": {
+                        name: dict(values)
+                        for name, values in outcome.diagnostics.items()
+                    },
+                }
+            )
     executor.run_all()
     metric_values: dict[str, list[Any]] = {}
     windowed: dict[str, _Windowed] = {}

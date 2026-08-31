@@ -8,7 +8,7 @@
 | **Data** | `mcqa/pairs_n64_s0` — 64 pairs, `different_symbol` design ([01](01_define.md)) |
 | **Documents** | [`protocols/mcqa_locate_scan.json`](protocols/mcqa_locate_scan.json) · [`workflows/mcqa_locate.json`](workflows/mcqa_locate.json) |
 | **Cost** | 128 points × 2 forwards, 64 rows each = 16 384 row-forwards |
-| **Reproduced** | ✓ 2026-08-31, `pytorch_hooks` on one H100 80GB, digest `7dd122b239ad4e36…` |
+| **Reproduced** | ✓ 2026-08-31, `pytorch_hooks` on one H100 80GB, at workflow digest `7dd122b239ad4e36…`; the run predates the `token_form: "space_prefixed"` pin these documents now carry, which is the form `auto` already resolved to, so the token ids and every number are unchanged and only the digest moved — the workflow now digests `6cf9f8e66267738f…` |
 
 ## TL;DR
 
@@ -62,8 +62,8 @@ verbatim — the file is what `causalab run` reads, and
     "patched": {"input": "base", "writes": ["patch"]}
   },
   "metrics": {
-    "iia":        {"kind": "match",      "of": "logits", "expected": "cf_answer"},
-    "logit_diff": {"kind": "logit_diff", "of": "logits", "a": "cf_answer", "b": "base_answer"}
+    "iia":        {"kind": "match",      "of": "logits", "expected": "cf_answer", "token_form": "space_prefixed"},
+    "logit_diff": {"kind": "logit_diff", "of": "logits", "a": "cf_answer", "b": "base_answer", "token_form": "space_prefixed"}
   },
   "save": [
     {"value": "iia",        "model": "patched", "input": "base", "file_path": "iia.json"},
@@ -99,17 +99,17 @@ it to one cell. That document is inlined beside the picture it produces, in
 ```bash
 uv run causalab validate demos/onboarding_tutorial/workflows/mcqa_locate.json \
     --data-root demos/onboarding_tutorial/data
-# OK: demos/onboarding_tutorial/workflows/mcqa_locate.json — 3 steps, digest 7dd122b239ad4e36…
+# OK: demos/onboarding_tutorial/workflows/mcqa_locate.json — 3 steps, digest 6cf9f8e66267738f…
 ```
 
 ```bash
 uv run causalab explain demos/onboarding_tutorial/workflows/mcqa_locate.json \
     --data-root demos/onboarding_tutorial/data
-# digest    7dd122b239ad4e3653822cf1226263aea256cb6c7d5f8c3f41b3575b12cace64
+# digest    6cf9f8e66267738f62daf28206a5eb07eeeec9a4932291c800fd01eb94a1058c
 # schedule  2 levels
 #   level 0: scan
 #   level 1: heatmap, best
-#   scan: intervention_protocol ../protocols/mcqa_locate_scan.json — 128 point(s), campaign digest 8228e1e94bb6c247…
+#   scan: intervention_protocol ../protocols/mcqa_locate_scan.json — 128 point(s), campaign digest 7822796d10109eb7…
 #   heatmap: script causalab.io.plots.workflow_figures -> iia_heatmap.json, iia_heatmap.png
 #   best: script causalab.workflow.scripts.select -> values.json
 ```
@@ -188,7 +188,7 @@ than near 1.0, the deficit is the position spec's, not the model's.
 ## Results
 
 Run on 2026-08-31, one H100 80GB, reference engine (`pytorch_hooks`), bf16,
-workflow digest `7dd122b239ad4e36…`. All three steps ran; `scan` produced 8 192
+workflow digest `6cf9f8e66267738f…`. All three steps ran; `scan` produced 8 192
 per-example records over 128 cells (64 pairs each), which `heatmap` and `best`
 aggregate identically — both call `causalab.io.step_record.aggregate`, and the
 aggregate was checked to be the mean of the 64 per-example values in every cell.

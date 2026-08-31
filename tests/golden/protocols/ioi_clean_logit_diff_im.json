@@ -30,7 +30,8 @@
       "kind": "logit_diff",
       "of": "logits",
       "a": "io",
-      "b": "s"
+      "b": "s",
+      "token_form": "space_prefixed"
     }
   },
   "save": [

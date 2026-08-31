@@ -45,13 +45,15 @@
     "iia": {
       "kind": "match",
       "of": "logits",
-      "expected": "cf_answer"
+      "expected": "cf_answer",
+      "token_form": "space_prefixed"
     },
     "logit_diff": {
       "kind": "logit_diff",
       "of": "logits",
       "a": "cf_answer",
-      "b": "base_answer"
+      "b": "base_answer",
+      "token_form": "space_prefixed"
     }
   },
   "save": [

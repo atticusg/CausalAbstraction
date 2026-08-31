@@ -288,6 +288,47 @@ def test_a_sweep_in_the_application_expands(env):
     assert method_digest(raw["method"]) == before
 
 
+def test_a_swept_component_in_the_application_digests_as_the_flat_form(env):
+    """§1.1's promise, at the one shape that used to break it.
+
+    Sweeping ``sites.<name>.component`` in the application half raised an
+    unhandled ``TypeError: unhashable type: 'dict'`` from ``signature_of`` —
+    while *the same experiment written flat* loaded fine. So this is both the
+    regression test for that traceback and the property test for "a split
+    document digests exactly as the same experiment written flat": one
+    assertion, because they are the same claim.
+    """
+    sweep = {"sweep": ["attention_output", "mlp_output"]}
+    flat = in_order(base_doc())
+    flat["sites"]["tgt"] = {"component": sweep, "layer": 3}
+
+    split = split_doc()
+    split["method"]["sites"]["tgt"] = {}
+    split["application"]["sites"]["tgt"] = {"component": sweep, "layer": 3}
+
+    loaded_split = load(split, env)
+    assert loaded_split.document_digest == load(flat, env).document_digest
+    assert len(loaded_split.expansion.points) == 2
+
+
+def test_a_swept_component_still_obliges_a_layer_when_any_value_needs_one():
+    """The sweep is not a hole in the layer obligation. Every value layerless
+    means no layer is owed; one layered spelling in the sweep owes one, because
+    otherwise the composition names a site that cannot resolve."""
+    raw = split_doc()["method"]
+    raw["sites"]["tgt"] = {"component": {"sweep": ["ln_final", "lm_head"]}}
+    assert signature_of(raw).sites["tgt"] == ()
+
+    raw["sites"]["tgt"] = {"component": {"sweep": ["lm_head", "mlp_output"]}}
+    assert signature_of(raw).sites["tgt"] == ("layer",)
+
+    raw["sites"]["tgt"] = {
+        "component": {"sweep": ["lm_head", "mlp_output"]},
+        "layer": 3,
+    }
+    assert signature_of(raw).sites["tgt"] == ()
+
+
 def test_overrides_address_the_composition(env):
     """``--set`` paths are the flat document's, whichever form was authored —
     one override vocabulary for both."""

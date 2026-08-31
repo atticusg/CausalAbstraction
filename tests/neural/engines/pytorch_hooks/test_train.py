@@ -72,7 +72,14 @@ def das_doc(*, seed: int = 0, epochs: int = 2) -> dict:
             }
         },
         "intervened_models": {"patched": {"input": "base", "writes": ["patch"]}},
-        "metrics": {"ce": {"kind": "cross_entropy", "of": "logits", "target": "label"}},
+        "metrics": {
+            "ce": {
+                "kind": "cross_entropy",
+                "of": "logits",
+                "target": "label",
+                "token_form": "space_prefixed",
+            }
+        },
         "train": {
             "objective": [[1.0, "ce"]],
             "params": ["rot"],
@@ -124,10 +131,10 @@ def _fit(doc_raw: dict) -> dict[str, torch.Tensor]:
         env=ResolutionEnv(datasets=_NoDatasets(), artifacts=None),  # type: ignore[arg-type]
         output_dir=None,  # type: ignore[arg-type]
     )
-    stages = run_training(executor.doc, executor, request)
+    outcome = run_training(executor.doc, executor, request)
     return {
         f"{name}.{slot}": param.detach().clone()
-        for name, stage in stages.items()
+        for name, stage in outcome.stages.items()
         for slot, param in stage.slot_params().items()
     }
 
@@ -229,11 +236,171 @@ def test_dbm_fit_trains_theta_and_anneals_temperature():
         env=ResolutionEnv(datasets=_NoDatasets(), artifacts=None),  # type: ignore[arg-type]
         output_dir=None,  # type: ignore[arg-type]
     )
-    stages = run_training(executor.doc, executor, request)
-    gate = stages["gate"]
+    gate = run_training(executor.doc, executor, request).stages["gate"]
     assert not torch.allclose(gate.theta, torch.zeros_like(gate.theta))
     assert gate.temperature < 1.0  # the anneal ran
     assert not gate.training  # left in (hard) eval mode
+
+
+def test_early_stop_returns_the_best_fit_not_the_last(monkeypatch):
+    """``early_stop`` selects a fit by its eval score, so the fit it selected
+    is the one that must come back.
+
+    Nothing snapshotted the parameters: ``best`` was tracked, the loop broke
+    after ``patience`` non-improving evals, and the stages returned were the
+    **last** ones — the worst of the tail. The question-mark run saw held-out
+    1.000 at every seed, so last and best coincided *at ceiling*; that is luck,
+    not a property, and off ceiling nothing in the saved bundle says which
+    weights you have.
+
+    The eval score is scripted here rather than engineered out of a random
+    model: what is under test is the selection, and a deterministic peak is
+    the only way to assert "the peak, not the end" without a flaky fit.
+    """
+    from causalab.neural.engines.pytorch_hooks import train as train_module
+    from causalab.neural.engines.pytorch_hooks.loading import load_model
+    from causalab.protocol.resolve import ResolutionEnv
+
+    doc_raw = das_doc(seed=0, epochs=5)
+    doc_raw["train"]["eval"] = {
+        "every": {"epochs": 1},
+        "split": "weekdays/test",
+        "metrics": ["ce"],
+    }
+    doc_raw["train"]["early_stop"] = {"metric": "ce", "patience": 10, "mode": "max"}
+
+    scores = [0.1, 0.9, 0.5, 0.4, 0.3]  # peak at the second eval
+    seen: list[dict[str, torch.Tensor]] = []
+
+    def fake_eval(doc, executor, request, split):
+        stage = executor.stage_cache["rot"]
+        seen.append({k: v.detach().clone() for k, v in stage.state_dict().items()})
+        return {"ce": scores[len(seen) - 1]}
+
+    monkeypatch.setattr(train_module, "_run_eval", fake_eval)
+
+    bundle = load_model(TINY_LLAMA)
+    executor = executor_for(
+        doc_raw,
+        bundle,
+        base_texts=BASES,
+        counterfactual_texts=COUNTERFACTUALS,
+        extra_columns={"label": ANSWERS},
+        grad_enabled=False,
+    )
+    request = ExecutionRequest(
+        points=(),
+        canonical=(),
+        digests=(),
+        coords=(),
+        document_digest="0" * 64,
+        env=ResolutionEnv(datasets=_NoDatasets(), artifacts=None),  # type: ignore[arg-type]
+        output_dir=None,  # type: ignore[arg-type]
+    )
+    outcome = train_module.run_training(executor.doc, executor, request)
+
+    assert len(seen) == len(scores)  # patience never fires: five evals ran
+    peak, final = seen[1], seen[-1]
+    key = "parametrizations.weight.original"  # what the optimizer actually steps
+    assert not torch.allclose(peak[key], final[key])  # the fit really moved on
+
+    returned = outcome.stages["rot"].state_dict()
+    torch.testing.assert_close(returned[key], peak[key], atol=0.0, rtol=0.0)
+
+    assert outcome.eval_score is not None
+    assert outcome.eval_score.selected == "early_stop.best"
+    # the reported score describes the weights that came back, not the last pass
+    assert outcome.eval_score.metrics["ce"] == 0.9
+
+
+def test_without_early_stop_the_last_fit_is_the_one_returned(monkeypatch):
+    """Nothing is selecting, so nothing is restored — and the record says so
+    rather than leaving a reader to guess."""
+    from causalab.neural.engines.pytorch_hooks import train as train_module
+    from causalab.neural.engines.pytorch_hooks.loading import load_model
+    from causalab.protocol.resolve import ResolutionEnv
+
+    doc_raw = das_doc(seed=0, epochs=3)
+    doc_raw["train"]["eval"] = {
+        "every": {"epochs": 1},
+        "split": "weekdays/test",
+        "metrics": ["ce"],
+    }
+
+    scores = [0.1, 0.9, 0.2]
+    seen: list[dict[str, torch.Tensor]] = []
+
+    def fake_eval(doc, executor, request, split):
+        stage = executor.stage_cache["rot"]
+        seen.append({k: v.detach().clone() for k, v in stage.state_dict().items()})
+        return {"ce": scores[len(seen) - 1]}
+
+    monkeypatch.setattr(train_module, "_run_eval", fake_eval)
+
+    bundle = load_model(TINY_LLAMA)
+    executor = executor_for(
+        doc_raw,
+        bundle,
+        base_texts=BASES,
+        counterfactual_texts=COUNTERFACTUALS,
+        extra_columns={"label": ANSWERS},
+        grad_enabled=False,
+    )
+    request = ExecutionRequest(
+        points=(),
+        canonical=(),
+        digests=(),
+        coords=(),
+        document_digest="0" * 64,
+        env=ResolutionEnv(datasets=_NoDatasets(), artifacts=None),  # type: ignore[arg-type]
+        output_dir=None,  # type: ignore[arg-type]
+    )
+    outcome = train_module.run_training(executor.doc, executor, request)
+
+    key = "parametrizations.weight.original"
+    torch.testing.assert_close(
+        outcome.stages["rot"].state_dict()[key], seen[-1][key], atol=0.0, rtol=0.0
+    )
+    assert outcome.eval_score is not None
+    assert outcome.eval_score.selected == "last"
+    assert outcome.eval_score.metrics["ce"] == 0.2
+    assert outcome.eval_score.passes == 3
+
+
+def test_an_update_counted_eval_is_refused_rather_than_never_run():
+    """This loop only reaches an eval on an epoch boundary, so an ``updates``
+    counter would run no eval at all and still save the fit."""
+    from causalab.neural.engines.pytorch_hooks.loading import load_model
+    from causalab.protocol.errors import ProtocolError
+    from causalab.neural.engines.pytorch_hooks.train import run_training
+    from causalab.protocol.resolve import ResolutionEnv
+
+    doc_raw = das_doc(seed=0, epochs=1)
+    doc_raw["train"]["eval"] = {
+        "every": {"updates": 1},
+        "split": "weekdays/test",
+        "metrics": ["ce"],
+    }
+    bundle = load_model(TINY_LLAMA)
+    executor = executor_for(
+        doc_raw,
+        bundle,
+        base_texts=BASES,
+        counterfactual_texts=COUNTERFACTUALS,
+        extra_columns={"label": ANSWERS},
+        grad_enabled=False,
+    )
+    request = ExecutionRequest(
+        points=(),
+        canonical=(),
+        digests=(),
+        coords=(),
+        document_digest="0" * 64,
+        env=ResolutionEnv(datasets=_NoDatasets(), artifacts=None),  # type: ignore[arg-type]
+        output_dir=None,  # type: ignore[arg-type]
+    )
+    with pytest.raises(ProtocolError, match="must count epochs"):
+        run_training(executor.doc, executor, request)
 
 
 def test_validation_accepts_the_train_docs():
@@ -241,3 +408,77 @@ def test_validation_accepts_the_train_docs():
         from tests.protocol._docs import in_order
 
         validate_document(parse_document(in_order(raw)), engine_is_local=True)
+
+
+def test_a_gate_fit_reports_whether_its_mask_is_a_mask():
+    """The DBM finding's non-GPU half.
+
+    As shipped, `configs/protocols/dbm.json` produced **0 of 2048** dimensions
+    outside [0.1, 0.9] and still scored **1.000** at layer 38 — because
+    `Gate._mask` returns a *hard* `θ > 0` mask in eval mode, so an unseparated
+    θ makes the mask a coin flip on gradient noise. Roughly half the dimensions
+    swap, which at the readout layer scores 1.000. A meaningless mask and a
+    perfect number, with nothing in the saved outputs to tell them apart.
+
+    Asserted on the fit's own report rather than on a value: what is under test
+    is that the fact is *recorded*, not that a random model separates θ. The
+    retune that makes θ separate needs a GPU run and is not asserted here.
+    """
+    from causalab.neural.engines.pytorch_hooks.loading import load_model
+    from causalab.neural.engines.pytorch_hooks.train import run_training
+    from causalab.protocol.resolve import ResolutionEnv
+
+    bundle = load_model(TINY_LLAMA)
+    executor = executor_for(
+        dbm_doc(),
+        bundle,
+        base_texts=BASES,
+        counterfactual_texts=COUNTERFACTUALS,
+        extra_columns={"label": ANSWERS},
+    )
+    request = ExecutionRequest(
+        points=(),
+        canonical=(),
+        digests=(),
+        coords=(),
+        document_digest="0" * 64,
+        env=ResolutionEnv(datasets=_NoDatasets(), artifacts=None),  # type: ignore[arg-type]
+        output_dir=None,  # type: ignore[arg-type]
+    )
+    outcome = run_training(executor.doc, executor, request)
+
+    report = outcome.diagnostics["gate"]
+    width = int(report["width"])
+    assert width == outcome.stages["gate"].theta.numel()
+    assert 0.0 <= report["decisive_fraction"] <= 1.0
+    assert 0 <= report["hard_mask_size"] <= width
+    # the hard mask is what the eval-mode score was computed through, so it has
+    # to be reported as a count of *this* gate, not a fraction of some other
+    assert report["hard_mask_size"] == float((outcome.stages["gate"].theta > 0).sum())
+
+
+def test_a_subspace_fit_reports_no_mask_diagnostic():
+    """Only a gate has a mask to be indecisive about — the report is per kind,
+    not a fixed schema every fit has to fill with zeros."""
+    from causalab.neural.engines.pytorch_hooks.loading import load_model
+    from causalab.neural.engines.pytorch_hooks.train import run_training
+    from causalab.protocol.resolve import ResolutionEnv
+
+    bundle = load_model(TINY_LLAMA)
+    executor = executor_for(
+        das_doc(seed=0, epochs=1),
+        bundle,
+        base_texts=BASES,
+        counterfactual_texts=COUNTERFACTUALS,
+        extra_columns={"label": ANSWERS},
+    )
+    request = ExecutionRequest(
+        points=(),
+        canonical=(),
+        digests=(),
+        coords=(),
+        document_digest="0" * 64,
+        env=ResolutionEnv(datasets=_NoDatasets(), artifacts=None),  # type: ignore[arg-type]
+        output_dir=None,  # type: ignore[arg-type]
+    )
+    assert run_training(executor.doc, executor, request).diagnostics == {}

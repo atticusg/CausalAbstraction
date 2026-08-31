@@ -104,7 +104,8 @@
         "Sunday": [
           "Sunday"
         ]
-      }
+      },
+      "token_form": "space_prefixed"
     }
   },
   "save": [

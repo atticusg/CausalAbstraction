@@ -63,6 +63,7 @@ __all__ = [
     "build_manifest",
     "config_class",
     "serialize_counterfactual_dataset",
+    "serialize_examples",
     "table_bytes",
     "write_dataset_table",
 ]
@@ -95,7 +96,10 @@ class SerializedDataset:
     task: str
     generator: str
     n: int
-    seed: int
+    #: ``None`` when the examples did not come from a seeded generator — an
+    #: honest gap in the manifest is better than a number nothing reproduces
+    #: (:func:`serialize_examples`).
+    seed: int | None
     target_variables: tuple[str, ...]
     answer_variable: str | None
     #: The task's declared string-match mode for the answer variable
@@ -152,14 +156,69 @@ def serialize_counterfactual_dataset(
         )
     model: CausalModel = task.causal_model
     examples = getattr(generators, generator)(model, n, seed)
-    labeled = model.label_counterfactual_data(examples, targets)
+    return serialize_examples(
+        model,
+        examples,
+        target_variables=targets,
+        answer_variable=answer_variable,
+        task_label=task_name,
+        generator=generator,
+        n=n,
+        seed=seed,
+    )
+
+
+def serialize_examples(
+    model: CausalModel,
+    examples: Sequence[Mapping[str, Any]],
+    *,
+    target_variables: Sequence[str],
+    answer_variable: str | None = None,
+    task_label: str = "inline",
+    generator: str = "inline",
+    n: int | None = None,
+    seed: int | None = None,
+) -> SerializedDataset:
+    """The same rows, from a causal model and an example list you already have.
+
+    :func:`serialize_counterfactual_dataset` goes through
+    :func:`~causalab.tasks.loader.load_task`, which needs a task **package**
+    inside the library checkout. The causal protocol's step 3 tells an author
+    to write ``models.py`` and ``counterfactuals.py`` in their own working
+    directory — and then had nowhere to go: there was no public path from a
+    hand-authored causal model to a serialized table, so the step dead-ended
+    at "now build the task package".
+
+    This is that path, and it is the *same* code: the package entry point
+    resolves its task and then calls this, so the two cannot drift.
+
+    Args:
+        model: The causal model the examples were generated from.
+        examples: Counterfactual examples — what a generator returns.
+        target_variables: The variables the interchange replaces. Required
+            here (there is no package to read a ``TARGET_VARIABLE`` from), and
+            what the ``label`` column is computed against.
+        answer_variable: As in :func:`serialize_counterfactual_dataset`.
+        task_label: What the rows record as their task. Provenance only — no
+            package of this name has to exist.
+        generator, n, seed: Recorded on the result for the manifest. Leave
+            them alone when the examples did not come from a seeded generator;
+            ``None`` is more honest than a number nothing can reproduce.
+    """
+    targets = list(target_variables)
+    if not targets or targets == [None]:
+        raise ValueError(
+            "target_variables is required: it is what the `label` column — the "
+            "answer after the interchange — is computed against"
+        )
+    labeled = model.label_counterfactual_data(list(examples), targets)
     resolved_answer = _answer_variable(model, answer_variable)
     forms_of = _forms_lookup(model, answer_variable)
     return SerializedDataset(
-        rows=[_row(example, forms_of, task_name) for example in labeled],
-        task=task_name,
+        rows=[_row(example, forms_of, task_label) for example in labeled],
+        task=task_label,
         generator=generator,
-        n=n,
+        n=len(labeled) if n is None else n,
         seed=seed,
         target_variables=tuple(targets),
         answer_variable=resolved_answer,

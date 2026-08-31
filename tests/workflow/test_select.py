@@ -180,3 +180,95 @@ def test_empty_table_is_refused(tmp_path):
             {"values": tmp_path / "values.json"},
         )
     assert "no rows" in str(err.value)
+
+
+# --------------------------------------------------------------------------- #
+#  choose: "knee" — the rank sweep's own question                              #
+# --------------------------------------------------------------------------- #
+
+#: A saturating IIA-versus-k curve at one seed: k=8 already has everything, and
+#: k=16/32 buy 0.005 and 0.008 more. `max` picks 32; the curve's answer is 8.
+SATURATED = [
+    {"featurizers.rot.k": 2, "value": 0.41, "example": 0},
+    {"featurizers.rot.k": 8, "value": 0.90, "example": 0},
+    {"featurizers.rot.k": 16, "value": 0.905, "example": 0},
+    {"featurizers.rot.k": 32, "value": 0.908, "example": 0},
+]
+
+
+@pytest.fixture()
+def saturated(tmp_path: Path) -> Path:
+    fit = tmp_path / "fit"
+    put_table(fit / "iia.json", SATURATED)
+    put_sidecar(fit, ["featurizers.rot.k"])
+    return fit / "iia.json"
+
+
+def _select_k(table: Path, out: Path, **extra) -> dict:
+    run_step(
+        select,
+        {"table": table, "emit": {"best_k": "featurizers.rot.k"}, **extra},
+        {"values": out},
+    )
+    return json.loads(out.read_text())
+
+
+def test_knee_picks_the_smallest_rank_that_is_as_good_as_the_best(saturated, tmp_path):
+    """The protocol says *choose rank from the IIA-versus-k curve, not the
+    highest score*, and `max` cannot express that: here it returns k=32 for
+    0.008 more IIA than k=8, which is inside the noise of a fit."""
+    assert _select_k(saturated, tmp_path / "max.json", choose="max")["best_k"] == 32
+    assert _select_k(saturated, tmp_path / "knee.json", choose="knee")["best_k"] == 8
+
+
+def test_knee_reproduces_max_on_a_monotone_curve(tmp_path):
+    """Nothing near the best but the best, so the cheapest near-best *is* the
+    best — a knee is only a different answer where the curve flattens."""
+    fit = tmp_path / "fit"
+    put_table(
+        fit / "iia.json",
+        [
+            {"featurizers.rot.k": 2, "value": 0.1, "example": 0},
+            {"featurizers.rot.k": 8, "value": 0.5, "example": 0},
+            {"featurizers.rot.k": 32, "value": 0.9, "example": 0},
+        ],
+    )
+    put_sidecar(fit, ["featurizers.rot.k"])
+    table = fit / "iia.json"
+    assert _select_k(table, tmp_path / "a.json", choose="knee")["best_k"] == 32
+    assert _select_k(table, tmp_path / "b.json", choose="max")["best_k"] == 32
+
+
+def test_knee_tolerance_is_the_knob(saturated, tmp_path):
+    """A wider band accepts a cheaper rank; a zero band is `max` with a
+    tie-break toward the cheap end."""
+    wide = _select_k(saturated, tmp_path / "w.json", choose="knee", tolerance=0.6)
+    assert wide["best_k"] == 2
+    tight = _select_k(saturated, tmp_path / "t.json", choose="knee", tolerance=0.0)
+    assert tight["best_k"] == 32
+
+
+def test_knee_refuses_an_ambiguous_cost_axis(swept, tmp_path):
+    """Two numeric axes and no `order`: "the knee" is meaningless until
+    someone says which axis is the cost."""
+    with pytest.raises(StepError, match="which axis is the cost"):
+        _select_k(swept, tmp_path / "values.json", choose="knee")
+
+
+def test_knee_takes_the_named_order_axis(swept, tmp_path):
+    """With two axes, `order` says which one is the cost — and the answer
+    changes with it."""
+    chosen = _select_k(
+        swept, tmp_path / "values.json", choose="knee", order="featurizers.rot.k"
+    )
+    assert chosen["best_k"] == 16  # k=2 means 0.2, far outside the band
+
+
+def test_knee_refuses_an_order_column_that_is_not_there(saturated, tmp_path):
+    with pytest.raises(StepError, match="carried no such axis"):
+        _select_k(saturated, tmp_path / "values.json", choose="knee", order="nope")
+
+
+def test_knee_refuses_a_negative_tolerance(saturated, tmp_path):
+    with pytest.raises(StepError, match="not negative"):
+        _select_k(saturated, tmp_path / "values.json", choose="knee", tolerance=-1)

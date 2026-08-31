@@ -172,11 +172,21 @@ def select_entry(
             15,
             f"{what}: no {slot!r} entry matches {{{shown}}} (has {available})",
         )
+    missing = sorted(
+        {name for key, coords in candidates if key in matched for name in coords}
+        - set(requested)
+    )
+    naming = f" ({', '.join(missing)})" if missing else ""
     raise ValidationError(
         15,
         f"{what}: {len(matched)} {slot!r} entries match {{{shown}}} "
         f"({sorted(matched)}) — the selection must be unique, so name the "
-        "remaining coordinates",
+        f"remaining coordinates{naming} in 'entry'. An authored 'entry' is "
+        "used exactly as written and is NOT completed from the consuming "
+        "point's coordinates, so pinning a coordinate elsewhere in the "
+        "document does not narrow this; the other way out is to drop 'entry' "
+        "entirely and let the point's own coordinates imply the selection "
+        "(§2.5)",
     )
 
 
@@ -187,12 +197,21 @@ def entry_selection(
 ) -> tuple[Mapping[str, Any] | None, bool]:
     """What one loaded spec selects, and whether it was implied.
 
-    An authored ``entry`` wins as written. Otherwise the consuming point's
-    own coordinates stand in — that is what lets an ``apply`` document swept
-    on ``featurizers.rot.k`` pick up the fit at *its* ``k`` without naming a
-    single entry, and what keeps the two sweeps zipped instead of crossed
-    (§3: axis identity is name identity). An un-swept consumer implies
-    nothing, so a single-entry bundle still resolves by slot alone.
+    An authored ``entry`` wins as written — **all of it, and only it**. It is
+    deliberately *not* completed from the point's coordinates for the keys it
+    omits: the two are alternative ways to say the same thing, and mixing them
+    would make a selector's meaning depend on which axes the consuming document
+    happens to sweep. A partial ``entry`` against a multi-axis bundle therefore
+    resolves only if it is already unique, and otherwise refuses naming the
+    coordinates that would disambiguate (:func:`select_entry`). Pinning ``k``
+    elsewhere in the document does not narrow an ``entry`` that omits ``k``.
+
+    With no authored ``entry`` the consuming point's own coordinates stand in —
+    that is what lets an ``apply`` document swept on ``featurizers.rot.k`` pick
+    up the fit at *its* ``k`` without naming a single entry, and what keeps the
+    two sweeps zipped instead of crossed (§3: axis identity is name identity).
+    An un-swept consumer implies nothing, so a single-entry bundle still
+    resolves by slot alone.
     """
     if authored:
         return {

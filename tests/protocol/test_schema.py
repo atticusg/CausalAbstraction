@@ -153,10 +153,37 @@ def test_entry_level_sweep_on_positions():
 # --------------------------------------------------------------------------- #
 
 
-def test_metric_token_form_defaults_to_auto():
-    """Every pre-``token_form`` document keeps the historical resolver."""
-    doc = parse_document(base_doc())
-    assert doc.metrics["ld"].token_form == "auto"
+def test_metric_token_form_is_required_on_the_token_column_kinds():
+    """A document may not inherit a tokenization rule.
+
+    ``token_form`` used to default to ``auto`` — the space-prefixed-first
+    guess — and the guess has been measurably wrong four ways (a leading space,
+    punctuation that merges leftward, two authored forms resolving to one id,
+    and multi-token digits). Every shipped document is pinned; what this makes
+    true is that every *new* one has to say which form it means. ``auto`` is
+    still available, as a choice."""
+    raw = base_doc()
+    del raw["metrics"]["ld"]["token_form"]
+    with pytest.raises(ParseError) as err:
+        parse_document(raw)
+    assert "token_form" in str(err.value)
+    assert "space_prefixed" in str(err.value)  # the message names the options
+
+
+def test_metric_token_form_is_not_required_where_it_does_not_apply():
+    """``kl`` compares two reads and ``top_k`` ranks a vector: neither resolves
+    an authored string to a token id, so neither takes the field at all."""
+    raw = base_doc()
+    raw["reads"]["cf_logits"] = {
+        "site": "lm_head",
+        "pos": -1,
+        "model": "original",
+        "input": "counterfactual",
+    }
+    raw["metrics"]["kl"] = {"kind": "kl", "of": "logits", "target": "cf_logits"}
+    raw["metrics"]["tk"] = {"kind": "top_k", "of": "logits", "k": 3, "by": "prob"}
+    parsed = parse_document(in_order(raw))
+    assert parsed.metrics["kl"].token_form == "auto"
 
 
 @pytest.mark.parametrize("form", ["auto", "bare", "space_prefixed"])

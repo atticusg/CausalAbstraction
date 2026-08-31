@@ -269,3 +269,100 @@ def test_only_subspace_is_seed_sensitive(kind: str) -> None:
     }
     responded = any(not torch.equal(a, b) for a, b in zip(tensors[0], tensors[1]))
     assert responded == (kind == "subspace")
+
+
+# --------------------------------------------------------------------- #
+# an authored `seed`: the random rank-k control (§2.5)
+# --------------------------------------------------------------------- #
+
+
+def test_an_authored_seed_wins_over_the_documents_seed() -> None:
+    """`seed` on a `subspace` spec is what makes an UNTRAINED subspace a
+    sweepable random basis. Without it the only seed is `train.seed`, so a
+    document with nothing to train had no way to vary the draw — which is
+    why every study that wanted a matched-k random control built the draws by
+    hand instead of sweeping one document.
+    """
+    specs = {
+        "rot": FeaturizerSpec(kind="subspace", k=K, parametrization="cayley", seed=5)
+    }
+
+    def rotation(document_seed: int) -> torch.Tensor:
+        stack = build_stack(
+            "rot",
+            specs,
+            width=WIDTH,
+            load_tensors=_no_tensors,
+            stage_cache={},
+            seed=document_seed,
+        )
+        return stack.stages[0].slot_params()["weight"].detach().clone()
+
+    # the document seed is ignored entirely: the spec named the draw
+    assert torch.equal(rotation(0), rotation(3))
+    assert torch.equal(rotation(0), _rotation(5))
+
+
+def test_authored_seeds_are_genuinely_different_bases() -> None:
+    """A control distribution of one draw is an anecdote. Three authored
+    seeds must be three different subspaces, or the spread the control
+    reports is not a spread."""
+    rotations = []
+    for seed in (0, 1, 2):
+        specs = {
+            "rot": FeaturizerSpec(
+                kind="subspace", k=K, parametrization="cayley", seed=seed
+            )
+        }
+        stack = build_stack(
+            "rot", specs, width=WIDTH, load_tensors=_no_tensors, stage_cache={}
+        )
+        rotations.append(stack.stages[0].slot_params()["weight"].detach().clone())
+    for i, a in enumerate(rotations):
+        for b in rotations[i + 1 :]:
+            assert _subspace_distance(a, b) > 1.0
+
+
+def test_an_authored_seed_still_refuses_a_shared_stage_cache() -> None:
+    """The cache is keyed by name alone, so the seed check has to compare
+    against the *effective* seed — otherwise a swept control would hand
+    seed 0's basis to every draw and score three copies of one number."""
+    cache: dict = {}
+    for seed in (0, 1):
+        specs = {
+            "rot": FeaturizerSpec(
+                kind="subspace", k=K, parametrization="cayley", seed=seed
+            )
+        }
+        if seed == 0:
+            build_stack(
+                "rot", specs, width=WIDTH, load_tensors=_no_tensors, stage_cache=cache
+            )
+            continue
+        with pytest.raises(ProtocolError, match="one featurizer, one seed"):
+            build_stack(
+                "rot", specs, width=WIDTH, load_tensors=_no_tensors, stage_cache=cache
+            )
+
+
+def test_a_seed_on_a_loaded_featurizer_is_refused() -> None:
+    """A loaded featurizer's weights are its bytes; it draws nothing, so a
+    seed there would describe something that never happens."""
+    from causalab.protocol.errors import ParseError
+    from causalab.protocol.schema import parse_document
+
+    doc = in_order(
+        {
+            **das_doc(),
+            "featurizers": {
+                "rot": {
+                    "kind": "subspace",
+                    "k": 2,
+                    "file_path": "rot.safetensors",
+                    "seed": 3,
+                }
+            },
+        }
+    )
+    with pytest.raises(ParseError, match="draws nothing"):
+        parse_document(doc)

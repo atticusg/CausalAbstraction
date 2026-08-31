@@ -69,19 +69,22 @@
       "kind": "logit_diff",
       "of": "logits",
       "a": "pos_answer",
-      "b": "orig_answer"
+      "b": "orig_answer",
+      "token_form": "space_prefixed"
     },
     "ld_lex": {
       "kind": "logit_diff",
       "of": "logits",
       "a": "lex_answer",
-      "b": "orig_answer"
+      "b": "orig_answer",
+      "token_form": "space_prefixed"
     },
     "ld_ref": {
       "kind": "logit_diff",
       "of": "logits",
       "a": "ref_answer",
-      "b": "orig_answer"
+      "b": "orig_answer",
+      "token_form": "space_prefixed"
     }
   },
   "save": [

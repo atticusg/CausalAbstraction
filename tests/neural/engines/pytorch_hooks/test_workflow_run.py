@@ -7,9 +7,14 @@ v2 rewrite: the *pipeline* is the same one v1 ran, so if the numbers and the
 provenance still arrive, the vocabulary change did not cost anything.
 
 The workflow references the shipped method presets with per-step ``set``
-overrides that retarget model/layers/positions at tiny scale. The tap axis
-overrides to two index positions (the subject-variable window is ragged across
-weekday rows, and ragged *writes* are a stated engine boundary).
+overrides that retarget model/layers at tiny scale. The **tap axis is not
+overridden**: the shipped document's own two positions are what runs here, so
+CI exercises the axis a user gets. It used to override to two plain indices,
+which is why nothing noticed that the shipped axis named a variable
+(``subject``) no task-generated table has, and that a bare variable *window* is
+ragged across weekday rows — a stated engine boundary for writes ([V19]). Both
+are fixed in the document: the second position is now the last token of the
+``entity`` span.
 """
 
 from __future__ import annotations
@@ -49,7 +54,6 @@ def _tiny_workflow() -> dict:
                 "set": {
                     **tiny,
                     "sites.target.layer": {"sweep": {"range": [0, 2]}},
-                    "positions.tap": {"sweep": [{"index": -1}, {"index": -2}]},
                 },
             },
             "best": {
@@ -193,7 +197,12 @@ def test_select_chose_the_argmax_cell(pipeline_run):
     out, _, _ = pipeline_run
     chosen = json.loads((out / "best/values.json").read_text())
     assert chosen["best_layer"] in (0, 1)
-    assert chosen["best_pos"] in ({"index": -1}, {"index": -2})
+    # the shipped tap axis, unoverridden: the last prompt token, or the last
+    # token of the entity span
+    assert chosen["best_pos"] in (
+        {"index": -1},
+        {"index": -1, "scope": {"variable": "entity"}},
+    )
     frame = table_frame(out / "locate/iia.json")
     grouped = frame.groupby(["sites.target.layer", "positions.tap"])["value"].mean()
     best_key = grouped.idxmax()

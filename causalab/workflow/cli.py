@@ -21,7 +21,7 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
     from causalab.protocol.loader import apply_overrides as _apply
     from causalab.protocol.loader import flatten as _flatten
     from causalab.protocol.loader import load_text as _load_text
-    from causalab.cli import register_model_key
+    from causalab.cli import register_model_key, wants_hf_registration
     from causalab.workflow.document import ProtocolStep, load_workflow
 
     if args.verb == "run":
@@ -41,8 +41,14 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
                 file=sys.stderr,
             )
             return 1
-        # the run verb touches models anyway: pre-register every inner model
-        # key BEFORE loading (canonicalization derives widths from the registry)
+
+    if wants_hf_registration(args):
+        # `run` touches models anyway, and `--register-from-hf` is the author
+        # asking for it: pre-register **every inner** model key BEFORE loading,
+        # because canonicalization derives widths from the registry. A workflow
+        # names several documents, so registering only the outer one would
+        # pre-flight nothing — which is why the three A3B runs' hand-rolled
+        # wrappers had to be workflow-aware too.
         raw_wf = _apply(dict(_load_text(args.document)), dict(args.parsed_set))
         workflow_dir = args.document.resolve().parent
         for step_raw in raw_wf.get("steps", {}).values():

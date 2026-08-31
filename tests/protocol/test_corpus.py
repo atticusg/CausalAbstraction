@@ -116,6 +116,18 @@ CORPUS_SHAPE = [
         1,
         {"generate", "full_logits"} | _touch("block_output", "lm_head"),
     ),
+    (
+        "13_random_subspace_control_im.json",
+        3,  # one point per random draw: the sweep IS the control distribution
+        2,
+        {"paired_forward"} | _touch("block_output+w", "lm_head"),
+    ),
+    (
+        "14_multi_position_patch_im.json",
+        1,
+        2,
+        {"paired_forward"} | _touch("block_output+w", "lm_head"),
+    ),
 ]
 
 

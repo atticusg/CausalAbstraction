@@ -1,6 +1,26 @@
 """
 Token Position Utilities
 
+⚠️ **Chat templates are not part of the protocol engine's contract.**
+``apply_chat_template`` is called **nowhere** in this package. A protocol
+document's prompts are tokenized as the *raw text* of the ``input`` column
+(``neural/shared/encoding.py``, whose ``prefix_lengths`` is 0 for every row),
+so a model that needs a chat frame gets it by baking the **rendered** template
+into the table — which works, and is what the A3B studies did. What it must not
+do is leave the template's leading BOS in place: the encoder adds special
+tokens as the tokenizer defines them, and a second BOS shifts every position by
+one. That case is refused at encode.
+
+The ``use_chat_template`` field on :class:`EncodingPipeline` below, its
+``_chat_prefix_token_count`` hook, and the "Chat template altered …" error are
+therefore **inert under every shipped engine**: they belong to the Plan-era
+``LMPipeline`` surface the task packages' own ``token_positions`` modules are
+annotated against, and are kept so those keep type-checking. Nothing in
+``protocol/`` or ``neural/engines/`` implements them. Read them as the shape a
+future first-class ``chat`` field would fill, not as a code path you can reach
+from a document today; a first-class ``chat`` field is a spec change and its
+own PR.
+
 This module provides tools for working with token positions in language models:
 
 1. **Core utilities** (TokenPosition, get_substring_token_ids, etc.)

@@ -31,16 +31,22 @@ ROT_FIXTURE_RELPATH = "artifacts/weekdays/llama31_8b/subspace/rot_k8.safetensors
 
 def write_rot_fixture(artifacts_root: Path) -> Path:
     """A deterministic fitted-DAS bundle matching 09_das_apply_im.json:
-    stamped identity for (Llama-3.1-8B @ main in fp32, block_output L18, k=8,
+    stamped identity for (Llama-3.1-8B @ main in bf16, block_output L18, k=8,
     cayley, fp32 params), weight zeros. Load-time checks read only the
-    header."""
+    header.
+
+    ``model_dtype`` is the *model's* precision and ``dtype`` the featurizer
+    params', and they differ on purpose: a fit runs a bf16 backbone with fp32
+    featurizers (``train.precision``), and both are stamped."""
     target = artifacts_root / ROT_FIXTURE_RELPATH
     target.parent.mkdir(parents=True, exist_ok=True)
     identity = build_artifact_identity(
         produced_by="0" * 64,
         model_key="meta-llama/Llama-3.1-8B",
         model_revision="main",
-        model_dtype="fp32",
+        # 09 declares bf16, matching the fit it applies (weekdays_das_sweep);
+        # model_dtype is part of ArtifactIdentity, so the fixture stamps it too
+        model_dtype="bf16",
         tokenizer="meta-llama/Llama-3.1-8B",
         site={"component": "block_output", "layer": 18},
         k=8,

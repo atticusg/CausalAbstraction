@@ -282,6 +282,34 @@ def _check_namespace(raw: Mapping[str, Any]) -> None:
             seen[name] = section
 
 
+def _needs_layer(component: Any) -> bool:
+    """Whether a component spelling obliges a ``layer`` in the signature.
+
+    ``component`` is not always a string: an application half may sweep it
+    (``{"sweep": ["attention_output", "mlp_output"]}``), and the signature is
+    computed on the composition *before* axes expand. A bare membership test
+    against ``LAYERLESS_COMPONENTS`` — a frozenset of strings — then raises
+    ``TypeError: unhashable type: 'dict'``, which is why the sibling check in
+    :mod:`causalab.protocol.canonical` guards with ``isinstance(component,
+    str)``. The same experiment written flat loads fine, so without this the
+    split form breaks §1.1's promise that a split document digests exactly as
+    the flat one.
+
+    A swept component obliges a layer unless *every* value is a known layerless
+    spelling: requiring a layer the application already supplies costs nothing,
+    while omitting the obligation would compose a document whose sites cannot
+    resolve.
+    """
+    if isinstance(component, str):
+        return component not in LAYERLESS_COMPONENTS
+    if isinstance(component, Mapping) and "sweep" in component:
+        spec = component["sweep"]
+        if isinstance(spec, (list, tuple)):
+            return any(_needs_layer(value) for value in spec)
+        return True  # range sugar or another shape: the strict parse rules on it
+    return True
+
+
 def signature_of(raw: Mapping[str, Any]) -> MethodSignature:
     """What is still open in ``raw`` — computed the same way for a method and
     for a composition, so "what must be bound" and "did the application bind
@@ -299,7 +327,7 @@ def signature_of(raw: Mapping[str, Any]) -> MethodSignature:
         component = entry.get("component")
         if component is None:
             missing.append("component")
-        elif component not in LAYERLESS_COMPONENTS and "layer" not in entry:
+        elif _needs_layer(component) and "layer" not in entry:
             missing.append("layer")
         sites[name] = tuple(missing)
     data_raw = raw.get("data")

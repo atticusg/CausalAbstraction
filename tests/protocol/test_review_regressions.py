@@ -130,7 +130,12 @@ def _train_doc():
     }
     doc["reads"]["v_cf"]["featurizer"] = "rot"
     doc["writes"]["patch"]["featurizer"] = "rot"
-    doc["metrics"]["ce"] = {"kind": "cross_entropy", "of": "logits", "target": "label"}
+    doc["metrics"]["ce"] = {
+        "kind": "cross_entropy",
+        "of": "logits",
+        "target": "label",
+        "token_form": "space_prefixed",
+    }
     doc["train"] = {
         "objective": [[1.0, "ce"]],
         "params": ["rot"],

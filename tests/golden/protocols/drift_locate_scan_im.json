@@ -68,7 +68,8 @@
     "iia": {
       "kind": "match",
       "of": "logits",
-      "expected": "cf_answer"
+      "expected": "cf_answer",
+      "token_form": "space_prefixed"
     }
   },
   "save": [

@@ -8,7 +8,7 @@
 | **Data** | `weekdays/train` (64 pairs), `weekdays/test` (32) — `natural_domains_arithmetic`, `domain_type=weekdays` |
 | **Documents** | [`workflows/weekdays_geometry.json`](workflows/weekdays_geometry.json) → five [`protocols/`](protocols/) |
 | **Cost** | 10 steps, 118 points; the DAS step trains 9 rotations |
-| **Reproduced** | ⚠ all ten steps re-run 2026-08-31 on one H100 80GB (digest `b4c84874445539d3…`) and every number below is this run's; RQ3's 2D/3D views and RQ4's two walks are still the pre-refactor reference — they need script steps that do not ship |
+| **Reproduced** | ⚠ all ten steps re-run 2026-08-31 on one H100 80GB (at digest `b4c84874445539d3…`) and every number below is this run's; the run predates the `token_form: "space_prefixed"` pin these documents now carry, which is the form `auto` already resolved to, so the token ids and every number are unchanged and only the digest moved — the workflow now digests `cf6041e74c91a7a2…`; RQ3's 2D/3D views and RQ4's two walks are still the pre-refactor reference — they need script steps that do not ship |
 
 ## TL;DR
 
@@ -199,7 +199,7 @@ file byte for byte — the file is what `causalab run` reads, and
     "logits": {"site": "lm_head", "pos": -1, "model": "original", "input": "base"}
   },
   "metrics": {
-    "accuracy": {"kind": "match",  "of": "logits", "expected": "base_answer_forms", "mode": "first_token"},
+    "accuracy": {"kind": "match",  "of": "logits", "expected": "base_answer_forms", "mode": "first_token", "token_form": "space_prefixed"},
     "said":     {"kind": "top_k",  "of": "logits", "k": 3, "by": "prob"}
   },
   "save": [
@@ -300,13 +300,15 @@ file byte for byte — the file is what `causalab run` reads, and
       "kind": "match",
       "of": "logits",
       "expected": "label_forms",
-      "mode": "first_token"
+      "mode": "first_token",
+      "token_form": "space_prefixed"
     },
     "logit_diff": {
       "kind": "logit_diff",
       "of": "logits",
       "a": "cf_answer",
-      "b": "base_answer"
+      "b": "base_answer",
+      "token_form": "space_prefixed"
     }
   },
   "save": [
@@ -411,8 +413,8 @@ file byte for byte — the file is what `causalab run` reads, and
     "patched": {"input": "base", "writes": ["patch"]}
   },
   "metrics": {
-    "iia": {"kind": "match",         "of": "logits", "expected": "label_forms", "mode": "first_token"},
-    "ce":  {"kind": "cross_entropy", "of": "logits", "target": "label"}
+    "iia": {"kind": "match",         "of": "logits", "expected": "label_forms", "mode": "first_token", "token_form": "space_prefixed"},
+    "ce":  {"kind": "cross_entropy", "of": "logits", "target": "label", "token_form": "space_prefixed"}
   },
   "train": {
     "objective":  [[1.0, "ce"]],
@@ -545,7 +547,8 @@ file byte for byte — the file is what `causalab run` reads, and
         "Sunday": [
           "Sunday"
         ]
-      }
+      },
+      "token_form": "space_prefixed"
     }
   },
   "save": [
@@ -565,29 +568,29 @@ file byte for byte — the file is what `causalab run` reads, and
 ```bash
 uv run causalab validate demos/weekdays_geometry/workflows/weekdays_geometry.json \
     --data-root demos/weekdays_geometry/data
-# OK: demos/weekdays_geometry/workflows/weekdays_geometry.json — 10 steps, digest b4c84874445539d3…
+# OK: demos/weekdays_geometry/workflows/weekdays_geometry.json — 10 steps, digest cf6041e74c91a7a2…
 ```
 
 ```bash
 uv run causalab explain demos/weekdays_geometry/workflows/weekdays_geometry.json \
     --data-root demos/weekdays_geometry/data
-# digest    b4c84874445539d33811d62995234a8aa14b07533795942b8f641d94d5595d60
+# digest    cf6041e74c91a7a2f35de1f0618b3415302a764d1c3a9f2ab7ac05955030f614
 # schedule  5 levels
 #   level 0: baseline, locate
 #   level 1: locate_heatmap, best
 #   level 2: harvest, fit, walk
 #   level 3: pca, iia_by_k
 #   level 4: spectrum_curve
-#   baseline: intervention_protocol ../protocols/weekdays_baseline.json — 1 point(s), campaign digest 527242f281bea3cf…
-#   locate: intervention_protocol ../protocols/weekdays_locate_scan.json — 96 point(s), campaign digest cb532909ac4829fb…
+#   baseline: intervention_protocol ../protocols/weekdays_baseline.json — 1 point(s), campaign digest 36a05bad111cd1b7…
+#   locate: intervention_protocol ../protocols/weekdays_locate_scan.json — 96 point(s), campaign digest 5467d39d0f247e4d…
 #   locate_heatmap: script causalab.io.plots.workflow_figures -> locate_iia.json, locate_iia.png
 #   best: script causalab.workflow.scripts.select -> values.json
 #   harvest: intervention_protocol ../protocols/weekdays_harvest.json — 1 point(s), authored digest 4548aa315625b3f1…
 #   pca: script causalab.analysis.fit_pca -> basis.safetensors, spectrum.json
 #   spectrum_curve: script causalab.io.plots.workflow_figures -> pca_spectrum.png
-#   fit: intervention_protocol ../protocols/weekdays_das_sweep.json — 9 point(s), authored digest 386b7941ee33fc33…
+#   fit: intervention_protocol ../protocols/weekdays_das_sweep.json — 9 point(s), authored digest 5069c4d0f7cfc6f6…
 #   iia_by_k: script causalab.io.plots.workflow_figures -> iia_by_k.json, iia_by_k.png
-#   walk: intervention_protocol ../protocols/weekdays_linear_walk.json — 11 point(s), authored digest 95cadecd15fe1b94…
+#   walk: intervention_protocol ../protocols/weekdays_linear_walk.json — 11 point(s), authored digest 96965272bd8b65bb…
 ```
 
 ```bash
@@ -697,7 +700,7 @@ they differ qualitatively:
 ## Results
 
 Run on 2026-08-31, one H100 80GB, reference engine (`pytorch_hooks`), bf16,
-workflow digest `b4c84874445539d3…`. All ten steps completed in 132 s.
+workflow digest `cf6041e74c91a7a2…`. All ten steps completed in 132 s.
 
 Run twice: once with the declared `best_layer` at its inherited 18 and once at
 the reconciled 26, into separate output directories with nothing resumed. Every
@@ -907,12 +910,14 @@ ring-versus-line comparison remains unanswered — see Limits.
   downstream documents at *load* time, so it is bounds-checked: declaring 999
   is refused with `[V4] at sites.target.layer … layer 999 out of range for the
   32-layer model`. It does **not** enter those steps' authored digests —
-  `harvest`, `fit` and `walk` keep `4548aa31…`, `386b7941…` and `95cadecd…`
+  `harvest`, `fit` and `walk` keep `4548aa31…`, `5069c4d0…` and `96965272…`
   across the 18 → 26 change, which is the point of calling them *authored*
   rather than campaign digests: they are the step's document with its `set`
   block applied symbolically, and the artifact's value is a runtime fact. The
   change does move the **workflow** digest, `8143a336…` → `b4c84874…`, because
-  the workflow document's own bytes changed.
+  the workflow document's own bytes changed. (The `token_form` pin has since
+  moved it again, to `cf6041e7…` — a document's digest is the identity of its
+  bytes, so every edit moves it, including one that changes no number.)
 - **`fit_pca`'s spectrum is normalized over the components it keeps**, so
   RQ3a cannot state what fraction of the *full* 4096-dimensional variance the
   32-component subspace retains — the reference figure's 98% was that quantity
@@ -937,15 +942,18 @@ ring-versus-line comparison remains unanswered — see Limits.
   `class_probs` writes seven. The numbers land in `day_probs.json` regardless —
   a figure is a rendering, not the record — and a seven-series plot is one more
   script step.
-- **Every answer is tokenizer-ambiguous, and `token_form` is left on `auto`.**
-  The run warns on it for all seven days: `" Thursday"` is token 7950
-  space-prefixed and 38888 bare, and both forms are single tokens naming
-  different rows, so `auto` picks the space-prefixed one for `logit_diff`,
-  `cross_entropy` and the class probabilities alike. That is the right choice for
-  this template — the answer follows `"is "` — but it is a choice the documents
-  do not state, and on a template whose answer starts a line it would be the
-  wrong one. Setting each metric's `token_form` to `space_prefixed` explicitly
-  would make the demo say what it relies on.
+- **Every answer is tokenizer-ambiguous, and the documents now say which form
+  they mean.** `" Thursday"` is token 7950 space-prefixed and 38888 bare, and
+  both forms are single tokens naming different rows, so the resolver had a
+  choice to make for `logit_diff`, `cross_entropy` and the class probabilities
+  alike. The run above made it implicitly: `token_form` was left on `auto`,
+  which tries the space-prefixed form first. That is the right choice for this
+  template — the answer follows `"is "` — and on a template whose answer starts
+  a line it would have been the wrong one, silently. Every metric here now pins
+  `token_form: "space_prefixed"` explicitly, which is what `auto` resolved to,
+  so **the numbers above are unchanged and only the digests moved**. The field
+  is required as of the same change, so no later document can inherit the guess
+  instead of stating it.
 - **One model, one task, one prompt template.** Whether the ring is a fact about
   weekdays, about cyclic categories, or about this checkpoint is not asked here.
 

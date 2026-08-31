@@ -41,12 +41,12 @@
     "with_inj20_abl":   {"input": "base", "writes": ["inj20_abl"]}
   },
   "metrics": {
-    "te_clean": {"kind": "token_logit", "of": "logits_clean", "token": "ml_token"},
-    "te_abl":   {"kind": "token_logit", "of": "logits_abl",   "token": "ml_token"},
-    "de14_c":   {"kind": "token_logit", "of": "de14_clean",   "token": "ml_token"},
-    "de20_c":   {"kind": "token_logit", "of": "de20_clean",   "token": "ml_token"},
-    "de14_a":   {"kind": "token_logit", "of": "de14_abl",     "token": "ml_token"},
-    "de20_a":   {"kind": "token_logit", "of": "de20_abl",     "token": "ml_token"}
+    "te_clean": {"kind": "token_logit", "of": "logits_clean", "token": "ml_token", "token_form": "space_prefixed"},
+    "te_abl":   {"kind": "token_logit", "of": "logits_abl",   "token": "ml_token", "token_form": "space_prefixed"},
+    "de14_c":   {"kind": "token_logit", "of": "de14_clean",   "token": "ml_token", "token_form": "space_prefixed"},
+    "de20_c":   {"kind": "token_logit", "of": "de20_clean",   "token": "ml_token", "token_form": "space_prefixed"},
+    "de14_a":   {"kind": "token_logit", "of": "de14_abl",     "token": "ml_token", "token_form": "space_prefixed"},
+    "de20_a":   {"kind": "token_logit", "of": "de20_abl",     "token": "ml_token", "token_form": "space_prefixed"}
   },
   "save": [
     {"value": "te_clean", "model": "original", "input": "base", "file_path": "te_clean.json"},

@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import torch
 
@@ -233,15 +233,36 @@ def code_commit(repo_root: Path) -> str:
         return "unknown"
 
 
+#: Where a run records its ``train.eval`` scores. A sibling of the save
+#: manifest's own files, never a column inside one: the eval score is measured
+#: on a different split, so it is a different population from the metric rows
+#: and does not belong in the same table (spec §2.12).
+TRAIN_EVAL_FILE = "train_eval.json"
+
+#: Where a run records what each fit can say about *itself*. A separate file
+#: from the trained bundle because the bundle's metadata is a closed identity
+#: schema, and separate from the metric table because these are properties of
+#: a parameter, not of an example.
+FIT_DIAGNOSTICS_FILE = "fit_diagnostics.json"
+
+
 def write_outputs(
     output_dir: Path,
     tensor_files: Mapping[str, TensorFile],
     metric_files: Mapping[str, MetricTable],
     *,
     identity_base: Mapping[str, Any],
+    train_evals: Sequence[Mapping[str, Any]] = (),
+    fit_diagnostics: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Path]:
     """Write every accumulated save file under ``output_dir``; returns
-    manifest path → absolute path."""
+    manifest path → absolute path.
+
+    ``train_evals`` is one record per point that declared ``train.eval`` — the
+    held-out score the fit was selected by. It is written to
+    :data:`TRAIN_EVAL_FILE` only when there is something to write, so a run
+    with no fit produces no empty file.
+    """
     from safetensors.torch import save_file
 
     written: dict[str, Path] = {}
@@ -257,5 +278,15 @@ def write_outputs(
         target = output_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         write_table(target, table.rows)
+        written[rel] = target
+    for rel, records in (
+        (TRAIN_EVAL_FILE, train_evals),
+        (FIT_DIAGNOSTICS_FILE, fit_diagnostics),
+    ):
+        if not records:
+            continue
+        target = output_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(list(records), indent=2) + "\n")
         written[rel] = target
     return written

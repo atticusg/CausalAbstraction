@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from causalab.protocol.engine import requires_campaign
-from causalab.protocol.errors import ProtocolError
+from causalab.protocol.errors import ProtocolError, ValidationError
 from causalab.protocol.loader import (
     LoadedProtocol,
     check_data_columns,
@@ -83,9 +83,9 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
         raw = dict(load_text(args.document))
         if document_type(raw) == "method":
             return _method_main(args, raw)
-        if args.verb == "run":
-            from causalab.cli import ensure_model_registered
+        from causalab.cli import ensure_model_registered, wants_hf_registration
 
+        if wants_hf_registration(args):
             ensure_model_registered(args)
         loaded = _load(args, env)
         if args.verb == "validate":
@@ -102,6 +102,7 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
             return 0
         if args.verb == "explain":
             _explain(loaded)
+            _explain_engine(loaded, getattr(args, "engine", None))
             return 0
         # run — engines are optional, lazily-imported extras so the pure
         # verbs stay torch-free; --engine picks the list, choose_engine routes
@@ -110,7 +111,7 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
         result = _run(
             loaded,
             env,
-            load_engines(getattr(args, "engine", "pytorch_hooks"), args.device),
+            load_engines(getattr(args, "engine", "auto"), args.device),
             args.out,
             points=args.points,
         )
@@ -225,6 +226,32 @@ def _write_run_record(loaded: LoadedProtocol, out: Path, selected: range) -> Pat
     target = out / "protocol.json"
     target.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     return target
+
+
+def _explain_engine(loaded: LoadedProtocol, choice: str | None) -> None:
+    """Print which engine ``choose_engine`` would pick, or the §8 refusal.
+
+    ``explain`` printed ``requires`` and stopped there, so routing could not be
+    pre-flighted at all — and routing is exactly what is not obvious on a model
+    where one family of components is hooks-only and another is nnsight-only.
+    The refusal is the *more* useful answer of the two, so it is printed rather
+    than raised.
+
+    Opt-in because engines are heavy: without ``--engine`` nothing here loads,
+    and the pure verbs stay torch-free (``test_load_is_torch_free``). The
+    import is inside ``main`` for the same reason ``run``'s is — ``protocol/``
+    never links against an engine at module scope.
+    """
+    if choice is None:
+        return
+    from causalab.cli import load_engines
+    from causalab.protocol.engine import choose_engine
+
+    engines = load_engines(choice, "cpu")
+    try:
+        print(f"engine    {choose_engine(list(loaded.point_documents), engines).name}")
+    except ValidationError as err:
+        print(f"engine    refused: {err}")
 
 
 def _explain(loaded: LoadedProtocol) -> None:
