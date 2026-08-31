@@ -244,6 +244,15 @@ the model said the row's value for `x`.
   are deliberately not a v1 spelling: they would bind a table to one
   tokenizer, and a task that can compute an index can serialize the substring
   instead.
+- ⚠️ **There is no chat prefix in v1.** Both the `n ≥ 0` rebase above and the
+  "past any chat prefix" clause below are written against a `prefix_lengths`
+  the encoder sets to **0 for every row** — there is no chat-template code
+  path, so the rule is an identity today. A dataset that wants an instruct
+  model's chat frame bakes the *rendered* template into its `input` column,
+  which works; what it must not do is leave the template's leading BOS in
+  place, because the encoder adds special tokens as the tokenizer defines them
+  and a second BOS shifts every position by one. That case is refused at
+  encode. A first-class `chat` field is a spec change and its own PR.
 - **`{"all": true}`** selects the row's real tokens only: padding is excluded,
   and so is any chat prefix — the same frame `{"index": n}` uses for `n ≥ 0`.
   It takes no `scope` or `relative_to` (there is nothing left to narrow), and

@@ -337,3 +337,43 @@ def test_variable_without_its_row_refuses():
     cont = _said(" Thursday", [" Thursday"])
     with pytest.raises(ProtocolError, match="needs its dataset row"):
         resolve_steps(_variable_spec(), cont, 0)
+
+
+# --------------------------------------------------------------------------- #
+#  the chat-template guard (§2.3): v1 has no chat field, so the rendered        #
+#  template is the data — and the encoder must not silently prefix it twice     #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_text_that_already_carries_bos_is_refused(tokenizer):
+    """The double-BOS trap, which is a wrong number rather than a crash.
+
+    `encode` adds special tokens as the tokenizer defines them, and the
+    workaround for having no chat-template path is to bake the *rendered*
+    template into the dataset's `input` column. A rendered template opens with
+    BOS, so on a BOS-adding tokenizer every position in the row shifts by one
+    and nothing raises. Refused rather than stripped: the text is the
+    document's data, and its content digest is part of the canonical form.
+    """
+    assert tokenizer.bos_token_id is not None  # the premise
+    with pytest.raises(ProtocolError) as err:
+        encode(tokenizer, [tokenizer.bos_token + "already prefixed"])
+    assert "twice" in str(err.value)
+    assert "no chat field" in str(err.value)
+
+
+def test_a_plain_text_still_encodes(tokenizer):
+    """The guard is exactly two BOS at the content start — one is the
+    tokenizer doing its job."""
+    batch = encode(tokenizer, ["a plain sentence", "another one"])
+    start = batch.content_start(0) - batch.prefix_lengths[0]
+    assert int(batch.input_ids[0, start]) == tokenizer.bos_token_id
+    assert int(batch.input_ids[0, start + 1]) != tokenizer.bos_token_id
+
+
+def test_prefix_lengths_are_zero_in_v1(tokenizer):
+    """The spec's `n >= 0 is rebased past any chat prefix` rule is an identity
+    today, and §2.3 now says so. Pinned here so the claim and the code cannot
+    drift apart silently — a real `chat` field must change both."""
+    batch = encode(tokenizer, ["one two three", "four five"])
+    assert batch.prefix_lengths == (0, 0)
