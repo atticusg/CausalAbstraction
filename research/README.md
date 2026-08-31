@@ -14,7 +14,7 @@ contains the six-step protocol:
 3. [Hypothesis generation](answer-research-question/hypothesis-generation/hypothesis-generation.md) — one counterfactual dataset experiment per proposed intermediate variable
 4. [Hypothesis testing](answer-research-question/hypothesis-testing/hypothesis-testing.md) — six intervention experiments for each intermediate variable
 5. [Generalize results](answer-research-question/generalize-results/generalize-results.md) — new prompt templates, related tasks, and naturally occurring text
-6. [Save results](answer-research-question/save-results/save-results.md) — synthesize the evidence into LaTeX, a compiled PDF, and a complete appendix
+6. [Save results](answer-research-question/save-results/save-results.md) — synthesize the evidence into `report.md`, a self-contained `report.html`, and a complete appendix
 
 Read it first. It contains the flow chart, roadmap, and rules for responding to a
 negative test.
@@ -81,8 +81,12 @@ The remaining stubs are:
 
 | Document | Waiting on |
 |---|---|
-| `behavioral-analysis/behavioral-analysis.md` | A protocol document that can decode a batch of prompts greedily and display the results. |
 | `exploratory-experimentation/attention-head-dbm.md` | A grouped DBM gate with one tied mask value per complete attention head across a selected layer band. The current gate masks individual feature coordinates. |
+
+`behavioral-analysis/behavioral-analysis.md` is no longer a stub: the step runs
+on a no-intervention protocol document (`match` + `top_k` at `lm_head`, and a
+`decode` over the continuation frame for multi-token behavior). Its "Execution"
+section carries the recipe.
 
 Most of `hypothesis-testing/` runs on the shipped protocol presets in the
 library's `causalab/configs/protocols/` and the worked workflow in

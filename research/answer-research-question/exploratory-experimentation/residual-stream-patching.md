@@ -34,6 +34,16 @@ Use `causalab/configs/protocols/weekdays_locate_scan.json` as the starting patte
 for the layer and position sweep. Keep all layer and position points in one
 campaign and shard it with `--points` when needed.
 
+Its second position is `{"index": -1, "scope": {"variable": "entity"}}` — the
+**last token of** the entity span, not the span. Write it that way for any
+variable whose value tokenizes to different lengths across rows: a bare
+`{"variable": …}` window is ragged, and a ragged *write* is refused at run time
+([V19]). `validate --data` cannot catch that for you — it has no tokenizer, so
+it checks that the variable exists and nothing about the width of what it
+resolves to. When you do want the whole span, patch it and expect the refusal on
+any table whose values are not uniform; when you want one token per row, scope
+an index.
+
 ## Signal and DAS gate
 
 Before launching, define the minimum effect that counts as signal and how many

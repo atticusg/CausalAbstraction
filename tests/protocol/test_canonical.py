@@ -131,7 +131,12 @@ def test_match_mode_default_materialized(env):
     defaults (§2.10): the two spellings of "exact" are one canonical form, so
     adding the field cannot split the digest of documents that omit it."""
     omitted = base_doc()
-    omitted["metrics"]["m"] = {"kind": "match", "of": "logits", "expected": "label"}
+    omitted["metrics"]["m"] = {
+        "kind": "match",
+        "of": "logits",
+        "expected": "label",
+        "token_form": "space_prefixed",
+    }
     omitted["save"].append(
         {"value": "m", "model": "patched", "input": "base", "file_path": "m.json"}
     )
@@ -149,7 +154,12 @@ def test_match_mode_default_materialized(env):
 def test_first_token_mode_is_a_different_document(env):
     """...and a real semantic choice still moves the digest."""
     exact = base_doc()
-    exact["metrics"]["m"] = {"kind": "match", "of": "logits", "expected": "label"}
+    exact["metrics"]["m"] = {
+        "kind": "match",
+        "of": "logits",
+        "expected": "label",
+        "token_form": "space_prefixed",
+    }
     exact["save"].append(
         {"value": "m", "model": "patched", "input": "base", "file_path": "m.json"}
     )

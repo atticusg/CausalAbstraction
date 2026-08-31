@@ -244,6 +244,90 @@ def test_engine_nnsight_selects_the_nnsight_engine(
     assert _CapturingNnsight.last.name == "nnsight"
 
 
+def test_explain_engine_prints_the_engine_that_would_run(
+    capturing_engine, artifacts_root, capsys
+):
+    """`explain` printed `requires` and stopped, so routing could not be
+    pre-flighted — which is exactly what is not obvious on a model where one
+    family of components is hooks-only and another is nnsight-only."""
+    code = main(
+        _argv("explain", "02_interchange_im.json", artifacts_root, "--engine", "auto")
+    )
+    assert code == 0
+    assert "engine    capture" in capsys.readouterr().out
+
+
+def test_explain_engine_prints_the_refusal_rather_than_raising(
+    capturing_engine, artifacts_root, capsys, monkeypatch
+):
+    """A document nothing serves is the *more* useful answer of the two, so it
+    is printed beside the plan instead of aborting the explanation."""
+    monkeypatch.setattr(
+        capturing_engine,
+        "capabilities",
+        frozenset(),  # serves nothing
+    )
+    # `pytorch_hooks`, not `auto`: auto also builds the real nnsight engine,
+    # which would serve this document and route right past the stub
+    code = main(
+        _argv(
+            "explain",
+            "02_interchange_im.json",
+            artifacts_root,
+            "--engine",
+            "pytorch_hooks",
+        )
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "engine    refused" in out
+    assert "paired_forward" in out  # names what is missing
+
+
+def test_explain_without_the_flag_loads_no_engine(artifacts_root, capsys):
+    """Opt-in: engines are heavy, and the pure verbs stay torch-free. No
+    `capturing_engine` fixture here — a load would import the real one."""
+    assert main(_argv("explain", "02_interchange_im.json", artifacts_root)) == 0
+    assert "engine" not in capsys.readouterr().out
+
+
+def test_the_engine_default_is_auto(capturing_engine, artifacts_root, tmp_path):
+    """Routing is §8's own answer, so not passing `--engine` must not silently
+    pin one.
+
+    `auto` is every installed engine with the reference **first**, and list
+    order is preference — so anything the reference serves behaves exactly as
+    the old `pytorch_hooks` default did. What changes is the other case: a
+    document only the nnsight engine can serve now runs instead of refusing by
+    name a document nothing in the list served.
+    """
+    assert main(_run_argv("01_harvest_im.json", artifacts_root, tmp_path)) == 0
+    assert capturing_engine.last is not None  # the reference still wins
+
+
+def test_the_default_falls_through_to_the_engine_that_can_serve(
+    capturing_engine, artifacts_root, tmp_path, monkeypatch
+):
+    """The behaviour the default buys: the reference cannot serve it, and the
+    run routes on instead of refusing."""
+    import sys as _sys
+    import types
+
+    class _Nnsight(_CapturingEngine):
+        name = "nnsight"
+        # its own set, so emptying the base class's below does not follow it
+        capabilities = frozenset(_CapturingEngine.capabilities)
+
+    monkeypatch.setattr(capturing_engine, "capabilities", frozenset())
+    stub = types.ModuleType("causalab.neural.engines.nnsight_tracing")
+    stub.NnsightEngine = _Nnsight
+    monkeypatch.setitem(_sys.modules, "causalab.neural.engines.nnsight_tracing", stub)
+    _Nnsight.last = None
+
+    assert main(_run_argv("02_interchange_im.json", artifacts_root, tmp_path)) == 0
+    assert _Nnsight.last is not None and _Nnsight.last.name == "nnsight"
+
+
 def test_run_defaults_stay_cpu_fp32(capturing_engine, artifacts_root, tmp_path):
     assert main(_run_argv("02_interchange_im.json", artifacts_root, tmp_path)) == 0
     assert capturing_engine.last.device == "cpu"
@@ -354,6 +438,61 @@ def test_validate_data_accepts_the_generated_tables_columns(env):
     assert "entity" in refs  # the column position
 
 
+def test_validate_data_flags_a_missing_position_variable(env):
+    """The false green this closes. ``weekdays_locate_scan`` swept its tap over
+    ``{"variable": "subject"}``, no task-generated table has a ``subject``, and
+    ``validate --data`` still printed ``OK … 64 points`` — the whole point of
+    the pure verbs being a load-error checklist. 32 of those points then died
+    mid-campaign with ``[P2] no value for prompt variable 'subject'``.
+
+    Existence is answerable without a tokenizer, so it is answered here; the
+    *width* of the resulting window is not, and stays a run-time refusal."""
+    loaded = load(CORPUS_DIR / "07_weekdays_locate_scan_im.json", env)
+    raw = json.loads(json.dumps(dict(loaded.raw)))
+    # the axis exactly as it shipped, bad coordinate second
+    raw["positions"]["tap"] = {"sweep": [{"index": -1}, {"variable": "subject"}]}
+    with pytest.raises(Exception) as err:
+        check_data_columns(load(raw, env), env)
+    assert "subject" in str(err.value)
+    assert "prompt variable" in str(err.value)
+
+
+def test_validate_data_checks_every_point_not_just_the_first(env):
+    """The structural half of the same false green: this pass read
+    ``point_documents[0]``, so a swept axis was only ever checked at coordinate
+    0. Any reference that varies with the sweep — a position, a metric column,
+    a dataset field — was unchecked at every other coordinate."""
+    loaded = load(CORPUS_DIR / "07_weekdays_locate_scan_im.json", env)
+    raw = json.loads(json.dumps(dict(loaded.raw)))
+    raw["metrics"]["iia"]["expected"] = {"sweep": ["cf_answer", "not_a_column"]}
+    with pytest.raises(Exception) as err:
+        check_data_columns(load(raw, env), env)
+    assert "not_a_column" in str(err.value)
+
+
+def test_validate_data_accepts_a_variable_only_the_sibling_names(env):
+    """A prompt variable is per-role (§2.3): the counterfactual role's value
+    for ``entity`` lives in ``counterfactual_inputs_variables``, not in a
+    top-level column of that name. Resolving one spelling but not the other
+    would refuse every real task table."""
+    refs = check_data_columns(
+        load(CORPUS_DIR / "07_weekdays_locate_scan_im.json", env), env
+    )
+    assert "entity" in refs
+
+
+def test_validate_data_flags_a_missing_scope_variable(env):
+    """``scope``/``relative_to`` spelled as a variable is the same reference,
+    and the ROME-shaped ``{"index": -1, "scope": {"variable": …}}`` idiom is
+    where it is actually written."""
+    loaded = load(CORPUS_DIR / "07_weekdays_locate_scan_im.json", env)
+    raw = json.loads(json.dumps(dict(loaded.raw)))
+    raw["positions"]["tap"] = {"index": -1, "scope": {"variable": "not_a_variable"}}
+    with pytest.raises(Exception) as err:
+        check_data_columns(load(raw, env), env)
+    assert "not_a_variable" in str(err.value)
+
+
 def test_validate_data_flags_a_missing_relative_to_column(env):
     loaded = load(CORPUS_DIR / "10_task_table_iia_im.json", env)
     raw = json.loads(json.dumps(dict(loaded.raw)))
@@ -396,6 +535,131 @@ def _file_argv(verb: str, path, artifacts_root, *extra: str) -> list[str]:
         str(artifacts_root),
         *extra,
     ]
+
+
+# --------------------------------------------------------------------------- #
+#  --register-from-hf: pre-flighting a document on an unregistered model        #
+# --------------------------------------------------------------------------- #
+
+
+class _StubConfig:
+    """Just the attributes :func:`model_info_from_hf_config` reads."""
+
+    num_attention_heads = 8
+    hidden_size = 64
+    num_hidden_layers = 40
+    num_key_value_heads = 8
+    head_dim = 8
+    intermediate_size = 128
+    vocab_size = 512
+    dtype = "bfloat16"
+
+
+def _unregistered_key(request) -> str:
+    """A key unique to the calling test.
+
+    ``register_model`` writes to a process-global registry, so a shared key
+    would leak: whichever test registered it first would make the others'
+    "still refuses" assertion vacuous.
+    """
+    return f"some-org/never-registered-40L-{abs(hash(request.node.name)):x}"
+
+
+@pytest.fixture
+def unregistered_document(tmp_path, request):
+    """Corpus 02 retargeted at a key the registry has never heard of."""
+    raw = json.loads((CORPUS_DIR / "02_interchange_im.json").read_text())
+    raw["model"]["key"] = _unregistered_key(request)
+    path = tmp_path / "unregistered_im.json"
+    path.write_text(json.dumps(raw, indent=2))
+    return path
+
+
+def _verb(verb: str, path: Path, artifacts_root, *extra: str) -> list[str]:
+    return [
+        verb,
+        str(path),
+        "--data-root",
+        str(FIXTURES / "data"),
+        "--artifacts-root",
+        str(artifacts_root),
+        *extra,
+    ]
+
+
+@pytest.mark.parametrize("verb", ["validate", "explain", "digest"])
+def test_a_pure_verb_refuses_an_unregistered_model_without_the_flag(
+    verb, unregistered_document, artifacts_root, capsys
+):
+    """The invariant: no flag, no network — so the refusal stands."""
+    code = main(_verb(verb, unregistered_document, artifacts_root))
+    assert code == 1
+    assert "[V4]" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("verb", ["validate", "explain", "digest"])
+def test_register_from_hf_lets_a_pure_verb_pre_flight_an_unregistered_model(
+    verb, unregistered_document, artifacts_root, capsys, monkeypatch
+):
+    """The gap all three A3B protocol runs hand-rolled a wrapper around.
+
+    The documented workaround — validate against a *similar* registered model —
+    produces a **false** refusal: `[V4] layer 36 out of range for the 36-layer
+    model 'Qwen/Qwen3-4B-Instruct-2507'` on a perfectly valid 40-layer
+    document. Pre-flighting has to be possible on the model the document names.
+    """
+    import transformers
+
+    monkeypatch.setattr(
+        transformers.AutoConfig,
+        "from_pretrained",
+        classmethod(lambda cls, key, **kw: _StubConfig()),
+    )
+    code = main(
+        _verb(verb, unregistered_document, artifacts_root, "--register-from-hf")
+    )
+    assert code == 0, capsys.readouterr().err
+
+
+def test_register_from_hf_pre_registers_every_inner_model_of_a_workflow(
+    tmp_path, artifacts_root, monkeypatch, capsys, request
+):
+    """A workflow names several documents, so registering only the outer one
+    would pre-flight nothing — which is why the runs' wrappers were
+    workflow-aware."""
+    import transformers
+
+    seen: list[str] = []
+
+    def fake(cls, key, **kw):
+        seen.append(key)
+        return _StubConfig()
+
+    monkeypatch.setattr(transformers.AutoConfig, "from_pretrained", classmethod(fake))
+    raw = json.loads((CORPUS_DIR / "02_interchange_im.json").read_text())
+    key = _unregistered_key(request)
+    raw["model"]["key"] = key
+    inner = tmp_path / "inner_im.json"
+    inner.write_text(json.dumps(raw, indent=2))
+    workflow = tmp_path / "wf.json"
+    workflow.write_text(
+        json.dumps(
+            {
+                "version": "1",
+                "output_dir": "out",
+                "steps": {
+                    "only": {
+                        "type": "intervention_protocol",
+                        "document": str(inner),
+                    }
+                },
+            },
+            indent=2,
+        )
+    )
+    code = main(_verb("validate", workflow, artifacts_root, "--register-from-hf"))
+    assert code == 0, capsys.readouterr().err
+    assert key in seen
 
 
 def test_validate_and_digest_work_on_a_method(capsys, artifacts_root):

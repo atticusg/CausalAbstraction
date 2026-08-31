@@ -167,3 +167,74 @@ def test_a_generated_table_carries_no_model_dependency():
     for row in dataset.rows:
         for value in row.values():
             assert isinstance(value, (str, list)), value
+
+
+# --------------------------------------------------------------------------- #
+#  serialize_examples: the seam step 3 walks into                              #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_hand_authored_model_serializes_to_the_same_rows():
+    """The gap this closes.
+
+    `serialize_counterfactual_dataset` resolves its task through `load_task`,
+    which needs a task **package** inside the library checkout. The causal
+    protocol's step 3 tells an author to write `models.py` and
+    `counterfactuals.py` in their own working directory, and then had nowhere
+    to go: no public path from a causal model in hand to a serialized table.
+
+    The assertion that makes the extraction meaningful is that the two entry
+    points agree — the package path is now literally this function with a
+    `load_task` in front of it, so the rows must be identical.
+    """
+    from causalab.tasks.loader import load_task, load_task_counterfactuals
+    from causalab.tasks.serialize import serialize_examples
+
+    cfg = NaturalDomainConfig(domain_type="weekdays")
+    task = load_task("natural_domains_arithmetic", task_cfg=cfg)
+    generators = load_task_counterfactuals("natural_domains_arithmetic")
+    examples = generators.generate_dataset(task.causal_model, 4, 0)
+
+    inline = serialize_examples(
+        task.causal_model,
+        examples,
+        target_variables=["result"],
+        task_label="natural_domains_arithmetic",
+        generator="generate_dataset",
+        n=4,
+        seed=0,
+    )
+    assert inline.rows == _weekdays().rows
+    assert table_bytes(inline.rows) == table_bytes(_weekdays().rows)
+
+
+def test_serialize_examples_records_no_seed_it_cannot_vouch_for():
+    """Examples that did not come from a seeded generator get `seed: None` in
+    the manifest rather than a number nothing can reproduce."""
+    from causalab.tasks.loader import load_task, load_task_counterfactuals
+    from causalab.tasks.serialize import serialize_examples
+
+    cfg = NaturalDomainConfig(domain_type="weekdays")
+    task = load_task("natural_domains_arithmetic", task_cfg=cfg)
+    generators = load_task_counterfactuals("natural_domains_arithmetic")
+    examples = generators.generate_dataset(task.causal_model, 3, 0)
+
+    dataset = serialize_examples(
+        task.causal_model, examples, target_variables=["result"]
+    )
+    assert dataset.seed is None
+    assert dataset.n == 3  # counted from the rows, not asserted by the caller
+    assert build_manifest(dataset)["seed"] is None
+
+
+def test_serialize_examples_requires_the_target_variables():
+    """There is no package to read a `TARGET_VARIABLE` from, and the `label`
+    column — the answer *after* the interchange — is undefined without it."""
+    from causalab.tasks.serialize import serialize_examples
+
+    cfg = NaturalDomainConfig(domain_type="weekdays")
+    from causalab.tasks.loader import load_task
+
+    task = load_task("natural_domains_arithmetic", task_cfg=cfg)
+    with pytest.raises(ValueError, match="target_variables is required"):
+        serialize_examples(task.causal_model, [], target_variables=[])

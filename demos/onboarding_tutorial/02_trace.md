@@ -8,7 +8,7 @@
 | **Data** | `mcqa/pair_n1_s0` — **one** pair, `different_symbol` design ([01](01_define.md)) |
 | **Documents** | [`protocols/mcqa_trace_scan.json`](protocols/mcqa_trace_scan.json) · [`workflows/mcqa_trace.json`](workflows/mcqa_trace.json) |
 | **Cost** | 352 points × 2 forwards = 704 single-row forwards |
-| **Reproduced** | ✓ 2026-08-31, `pytorch_hooks` on one H100 80GB, digest `0685b0fafc6037ae…` |
+| **Reproduced** | ✓ 2026-08-31, `pytorch_hooks` on one H100 80GB, at digest `0685b0fafc6037ae…`; the run predates the `token_form: "space_prefixed"` pin these documents now carry, which is the form `auto` already resolved to, so the token ids and every number are unchanged and only the digest moved — the document now digests `b9c21dcd7e557be0…` |
 
 ## TL;DR
 
@@ -54,7 +54,7 @@ verbatim — the file is what `causalab run` reads, and
   },
   "metrics": {
     "said":    {"kind": "top_k", "of": "logits", "k": 1, "by": "prob"},
-    "flipped": {"kind": "match", "of": "logits", "expected": "cf_answer"}
+    "flipped": {"kind": "match", "of": "logits", "expected": "cf_answer", "token_form": "space_prefixed"}
   },
   "save": [
     {"value": "said",    "model": "patched", "input": "base", "file_path": "said.json"},
@@ -91,13 +91,13 @@ exactly one read, and reducing one read two ways costs one forward, not two.
 ```bash
 uv run causalab validate demos/onboarding_tutorial/protocols/mcqa_trace_scan.json \
     --data-root demos/onboarding_tutorial/data --data
-# OK: demos/onboarding_tutorial/protocols/mcqa_trace_scan.json — 352 points, digest 0685b0fafc6037ae…
+# OK: demos/onboarding_tutorial/protocols/mcqa_trace_scan.json — 352 points, digest b9c21dcd7e557be0…
 ```
 
 ```bash
 uv run causalab explain demos/onboarding_tutorial/protocols/mcqa_trace_scan.json \
     --data-root demos/onboarding_tutorial/data
-# digest    0685b0fafc6037ae0dd32543862eed426922147ff613e9ea36abcb5c1d182c22
+# digest    b9c21dcd7e557be042306fa74962c2116d7f1bc8fd8bd604e541b83a89d1e464
 # model     meta-llama/Llama-3.2-1B-Instruct@main bf16
 # axes      positions.tap.index (22 values), sites.target.layer (16 values)
 # points    352
@@ -108,7 +108,7 @@ uv run causalab explain demos/onboarding_tutorial/protocols/mcqa_trace_scan.json
 # save
 #   said (model=patched, input=base) -> said.json
 #   flipped (model=patched, input=base) -> flipped.json
-# first point [tap.index=0,target.layer=0] digest 1c044b2aacb9e5f8…
+# first point [tap.index=0,target.layer=0] digest 5bc2ae38e4ab689d…
 ```
 
 ```bash
@@ -180,7 +180,7 @@ difference being patched there.
 ## Results
 
 Run on 2026-08-31, one H100 80GB, reference engine (`pytorch_hooks`), bf16,
-document digest `0685b0fafc6037ae…` as stamped into `mcqa_trace/protocol.json`.
+document digest `b9c21dcd7e557be0…` as stamped into `mcqa_trace/protocol.json`.
 All 352 points completed.
 
 The picture below is the whole run. It needs one thing the protocol above cannot
@@ -228,7 +228,7 @@ verbatim so `tests/demos/test_demos.py` can hold this copy to the file:
 **The scan step names the protocol, it does not restate it.** `document` points
 at the same `../protocols/mcqa_trace_scan.json` documented above, so the
 experiment is bit-for-bit the one this demo describes — its campaign digest is
-still `0685b0fafc6037ae…`. Adding a figure did not change what runs.
+still `b9c21dcd7e557be0…`. Adding a figure did not change what runs.
 
 **`plotted` is not optional in spirit.** A `.png` carries no record, so the
 `heatmap` step declares `flipped_grid.json` beside it: the exact rows that were
@@ -237,11 +237,11 @@ drawn, in the same directory, under the same step digest.
 ```bash
 uv run causalab explain demos/onboarding_tutorial/workflows/mcqa_trace.json \
     --data-root demos/onboarding_tutorial/data
-# digest    475bad60fedde6311c23657c69d48a6226626dc86572b044fc925bd48a648342
+# digest    0fd35a654a442a867181fe5488056537f191b3e5a4c5d60b509898c59d881be1
 # schedule  2 levels
 #   level 0: scan
 #   level 1: heatmap
-#   scan: intervention_protocol ../protocols/mcqa_trace_scan.json — 352 point(s), campaign digest 0685b0fafc6037ae…
+#   scan: intervention_protocol ../protocols/mcqa_trace_scan.json — 352 point(s), campaign digest b9c21dcd7e557be0…
 #   heatmap: script causalab.io.plots.workflow_figures -> flipped_grid.json, flipped_grid.png
 ```
 

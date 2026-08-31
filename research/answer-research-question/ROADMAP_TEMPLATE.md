@@ -68,7 +68,7 @@ hypothesis loop                 many variables proceed concurrently
 generalize main claims          prompt templates, related tasks, natural text
         │
         ▼
-final LaTeX synthesis
+final synthesis (report.md + self-contained report.html)
 ```
 
 ### 1. Behavioral analysis
@@ -114,8 +114,8 @@ final LaTeX synthesis
 
 ### 6. Save results
 
-- **Expect:** {`report.tex`, compiled `report.pdf`, figures, and a machine-readable
-  index of every experiment}
+- **Expect:** {`report.md`, a self-contained `report.html`, figures, and a
+  machine-readable index of every experiment}
 
 ## Candidate intermediate variables
 

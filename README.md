@@ -55,12 +55,23 @@ The golden-corpus documents ship as user-facing presets in [`causalab/configs/pr
 | `harvest` | activation harvesting at named sites/positions |
 | `interchange` | interchange intervention + IIA scoring |
 | `path_patching` | sender→receiver path patching with off-path freezing |
+| `attention_band_patch` | contiguous layer bands in one forward, several bands per document |
+| `multi_position_patch` | several writes on one site at disjoint positions |
+| `mean_harvest` / `mean_ablation` | harvest a corpus mean at save time, then swap it in |
 | `das` | trained orthogonal-subspace interchange (DAS) |
 | `dbm` | differential binary masking through a trained gate |
+| `random_subspace_control` | the matched-k random subspace every DAS cell is read against |
 | `hydra_effect` | resample-ablation + downstream direct-effect probes |
+| `probe_generate` / `probe_variable` | greedy-decode under a steer, read the continuation back |
 | `weekdays_locate_scan` | layer × position interchange scan (one shared harvest) |
 | `weekdays_das_sweep` | k × seed DAS fits at a located cell |
 | `weekdays_das_apply` | apply a fitted rotation (ArtifactIdentity-checked) |
+| `dbm_apply` | apply a fitted gate — DBM's held-out half of the pair above |
+
+A **fit** document's saved score is its *training* score: `dbm.json`'s and
+`weekdays_das_sweep.json`'s `iia.json` are computed over the split they trained
+on. The held-out number comes from the matching `*_apply` document, or from the
+fit's own `train_eval.json` when `train.eval` declares a split.
 
 [`causalab/configs/runs/`](causalab/configs/runs/) holds the same experiment as a **split run document** (`application` + `method` in one file, spec §1.1), and [`causalab/configs/methods/`](causalab/configs/methods/) the reusable method on its own — the network- and data-independent half. [`causalab/configs/workflows/weekdays_8b.json`](causalab/configs/workflows/weekdays_8b.json) chains locate → select → fit → apply → plots as one workflow document (two step types: `intervention_protocol` and `script`).
 

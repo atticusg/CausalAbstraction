@@ -45,6 +45,7 @@ def base_doc() -> dict[str, Any]:
                 "of": "logits",
                 "a": "cf_answer",
                 "b": "base_answer",
+                "token_form": "space_prefixed",
             }
         },
         "save": [

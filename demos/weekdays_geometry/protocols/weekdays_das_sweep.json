@@ -27,8 +27,8 @@
     "patched": {"input": "base", "writes": ["patch"]}
   },
   "metrics": {
-    "iia": {"kind": "match",         "of": "logits", "expected": "label_forms", "mode": "first_token"},
-    "ce":  {"kind": "cross_entropy", "of": "logits", "target": "label"}
+    "iia": {"kind": "match",         "of": "logits", "expected": "label_forms", "mode": "first_token", "token_form": "space_prefixed"},
+    "ce":  {"kind": "cross_entropy", "of": "logits", "target": "label", "token_form": "space_prefixed"}
   },
   "train": {
     "objective":  [[1.0, "ce"]],

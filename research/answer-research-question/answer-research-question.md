@@ -68,13 +68,30 @@ hypothesis loop                  many variables proceed concurrently
 generalize main claims           prompt templates, related tasks, natural text
         │
         ▼
-final synthesis                  LaTeX, PDF, figures, complete experiment index
+final synthesis                  report.md + self-contained report.html, figures, index
 ```
 
 Exploratory jobs on separate branches may run concurrently. Residual stream DAS,
 attention head DBM, and MLP neuron DBM each start as soon as their own parent
 patching experiment identifies signal. Hypothesis generation cannot begin until
 the exploratory phase and its table of candidate variables are complete.
+
+> ⚠️ **One of the six branches cannot be completed on any model right now.**
+> Attention head DBM needs a grouped gate whose mask unit is a whole head;
+> CausaLab has only a per-coordinate `gate`, which is explicitly not a
+> substitute. Plan the study on five completable methods plus the attention
+> *output* patch, and mark the sixth as missing evidence rather than designing
+> a claim that depends on it. The leaf document
+> ([`exploratory-experimentation/attention-head-dbm.md`](exploratory-experimentation/attention-head-dbm.md))
+> carries the detail; it is stated here because the cost of finding it late is
+> a study design.
+>
+> **On a MoE or hybrid tower, two more of the six change shape.** `mlp_activation`
+> may have no tensor at all (an MoE block has no `act_fn`), and
+> `attention_premix` may exist on only the full-attention layers of a hybrid
+> stack — on Qwen3.6-35B-A3B that is 10 of 40, so a "five-layer band" contains
+> one or two attention layers. The per-method guides name the substitutes.
+> Check the model's hookpoint table before designing the bands, not after.
 
 The return paths after a failed or ambiguous hypothesis test are described under
 "Routing after hypothesis testing" below.

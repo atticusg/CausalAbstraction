@@ -12,7 +12,9 @@ lossy-split behavior and DAS semantics.
 
 ``gate`` is soft during training (``σ(θ/T) ⊙ x``, temperature annealed by
 the train loop) and **hard** in eval (``θ > 0``) — the parity oracle's
-mask mode pins the hard-eval split.
+mask mode pins the hard-eval split. A gate loaded from a fitted ``theta``
+(:meth:`Gate.from_theta`) is that eval-mode object and nothing else, so a
+DBM fit has a held-out *apply* pass in the same shape DAS does.
 
 Everything here is per-position math on ``(..., d)`` tensors; widths come
 from the resolved site, never from the document.
@@ -27,7 +29,8 @@ stay fp32 against a bf16 backbone.
 *local* generator rather than the global RNG, so its starting rotation cannot
 depend on build order or on whether a train loop ran. :func:`build_stack` takes
 the ``seed``; the executor resolves it from ``train.seed`` (0 when the document
-declares no fit). ``gate`` inits to zeros and the rest load from files.
+declares no fit). ``gate`` inits to zeros, or loads a fitted ``theta``; the rest load from
+files.
 """
 
 from __future__ import annotations
@@ -215,6 +218,24 @@ class Gate(Stage):
     def slot_params(self) -> dict[str, torch.Tensor]:
         return {"theta": self.theta}
 
+    @classmethod
+    def from_theta(cls, theta: torch.Tensor) -> "Gate":
+        """A gate reconstituted from a fitted ``theta`` (§2.5 ``file_path``).
+
+        The number a DBM fit *reports* is scored through its eval-mode hard
+        split, so an apply document only reproduces the fit if the reloaded
+        stage is the same object a trained gate is after ``stage.eval()``:
+        same ``theta``, same ``θ > 0`` mask. ``theta`` is therefore copied
+        verbatim — no re-init, no thresholding here — and left untrainable,
+        because applying a mask is not resuming a fit (a ``file_path``
+        featurizer may not appear in ``train.params``).
+        """
+        gate = cls(int(theta.numel()))
+        gate.theta = torch.nn.Parameter(
+            theta.detach().clone().reshape(-1), requires_grad=False
+        )
+        return gate
+
 
 @dataclasses.dataclass
 class FeaturizerStack:
@@ -299,6 +320,11 @@ def build_stack(
     would make a rotation depend on construction order. The cache is keyed by
     name, so a cached stage built from a different seed refuses, as with width.
 
+    A ``subspace`` spec may name its **own** ``seed`` (§2.5), which wins. That is
+    what makes an *untrained* subspace a random rank-k basis a document can
+    sweep — the matched-k random-subspace control, which otherwise needs a
+    ``train`` block it has nothing to train.
+
     ``coords`` are the executing point's sweep coordinates: they select the
     matching entry of a swept bundle when the spec authored no ``entry``
     (§2.5)."""
@@ -309,6 +335,9 @@ def build_stack(
     running: int | None = width
     for name in chain:
         spec = specs[name]
+        # a `subspace` may author its own seed (§2.5); absent, the document's
+        # seed stands, so nothing about an existing document changes
+        stage_seed = spec.seed if isinstance(spec.seed, int) else seed
         if name in stage_cache:
             stage = stage_cache[name]
             built_for = _stage_width(stage)
@@ -319,10 +348,11 @@ def build_stack(
                     f"built for width {built_for} — one featurizer, one width",
                 )
             built_seed = getattr(stage, "seed", None)
-            if built_seed is not None and built_seed != seed:
+            if built_seed is not None and built_seed != stage_seed:
                 raise ProtocolError(
                     "P2",
-                    f"featurizer {name!r} is used at init seed {seed} here but the "
+                    f"featurizer {name!r} is used at init seed {stage_seed} here "
+                    f"but the "
                     f"cached stage was initialised from seed {built_seed} — one "
                     "featurizer, one seed; a stage cache belongs to one point, so "
                     "two points differing in train.seed must not share one",
@@ -339,7 +369,7 @@ def build_stack(
                 spec,
                 width=running,
                 load_tensors=load_tensors,
-                seed=seed,
+                seed=stage_seed,
                 coords=coords,
             )
             stage.to(device)  # parameters and registered buffers alike
@@ -412,6 +442,17 @@ def _build_stage(
             return Standardize(slot("mu"), slot("sigma"))
         if kind == "sae":
             return Sae(slot("enc"), slot("dec"), slot("b_enc"), slot("b_dec"))
+        if kind == "gate":
+            theta = slot("theta")
+            if theta.numel() != width:
+                raise ProtocolError(
+                    "P2",
+                    f"{what}: the fitted gate is {theta.numel()} wide but the "
+                    f"site here is {width} — a mask is a set of coordinates of "
+                    "one activation, so it only applies at the width it was "
+                    "fitted at",
+                )
+            return Gate.from_theta(theta)
         raise ProtocolError(
             "P2", f"featurizer kind {kind!r} cannot be loaded from a file"
         )

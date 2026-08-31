@@ -112,9 +112,63 @@ quality objectives now rather than after the task is written —
 Update `ROADMAP.md`, then go to
 [`../exploratory-experimentation/exploratory-experimentation.md`](../exploratory-experimentation/exploratory-experimentation.md).
 
-> **Execution: stub.** Batch greedy decoding over a prompt list ran through the
-> Hydra `exploration` analysis in `probe` mode, which the protocol refactor
-> retired. A protocol document can read `lm_head` at the final position and use a
-> `match` metric to compare it with the answer column. However, causalab does not
-> yet define a command that simply generates and displays the answers. Fill in this
-> section once causalab stabilizes.
+## Execution
+
+There is no "generate and display" command, and none is needed: a
+**no-intervention protocol document** does both halves of this step. One
+document per prompt format, `--set` for nothing that matters, one table per
+format.
+
+**The score.** Read `lm_head` at the last prompt position and grade it with
+`match` against the answer column:
+
+```json
+"sites":   {"lm_head": {"component": "lm_head"}},
+"reads":   {"logits": {"site": "lm_head", "pos": -1, "model": "original", "input": "base"}},
+"metrics": {
+  "acc":  {"kind": "match",  "of": "logits", "expected": "base_answer_forms",
+           "mode": "first_token", "token_form": "space_prefixed"},
+  "top5": {"kind": "top_k",  "of": "logits", "k": 5, "by": "prob"}
+}
+```
+
+- `token_form` is **required** and is a real choice. `space_prefixed` is right
+  when the answer follows a space in the prompt; pin `bare` when the prompt
+  already ends in a space, or the answer is punctuation. Getting it wrong reads
+  a flat 0.000 at every layer with no error — it is the single most common way
+  this step reports a false negative.
+- `mode: "first_token"` is what grades a multi-token answer; `expected` may name
+  an answer-**forms** column, so a task's equivalent surface forms are task
+  data, not a document-side string transform.
+- `top_k` with `by: "prob"` is the "inspect the outputs" half. It is what tells
+  you the model's top token is `"\n"` rather than an answer at all — which is
+  not hypothetical: on Qwen3.6-35B-A3B the shipped `MCQA` prompt and the shipped
+  `natural_domains_arithmetic` integer prompt each scored `base_acc` **0.000**,
+  for two independent reasons, and only the top-k view says which.
+
+**The generations.** When the behavior is more than one token, decode and read
+the text back with a continuation-frame read
+(`causalab/configs/protocols/probe_variable.json` is the worked shape, minus its
+steer):
+
+```json
+"positions": {"continuation": {"generated": {"max_new_tokens": 8}, "all": true}},
+"reads":     {"steps": {"site": "lm_head", "pos": "continuation",
+                        "model": "original", "input": "base"}},
+"metrics":   {"said": {"kind": "decode", "of": "steps"},
+              "per_step": {"kind": "top_k", "of": "steps", "k": 1, "by": "prob"}}
+```
+
+`decode` reduces ids the greedy decode already produced, so the text costs no
+extra vocabulary projection, and a row that generated nothing yields a null
+value with `matched: false` rather than failing the run.
+
+**The error browser** is then a script step over the saved tables: join `acc`
+with the row's `input`, `base_answer` and the `top5` entry, and keep every row
+where `acc` is 0.
+
+> **Step 1 is load-bearing, not ceremonial.** Both measured failures above are
+> failures of the *prompt*, found in an hour of CPU-scale work, and each would
+> otherwise have been discovered as an unexplainable null result several GPU
+> days into exploration. Do not let a later phase start before a prompt clears
+> the gate.

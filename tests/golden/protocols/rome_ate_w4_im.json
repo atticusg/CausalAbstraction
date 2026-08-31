@@ -67,12 +67,14 @@
     "ce_clean": {
       "kind": "cross_entropy",
       "of": "logits_clean",
-      "target": "answer"
+      "target": "answer",
+      "token_form": "space_prefixed"
     },
     "ce_corr": {
       "kind": "cross_entropy",
       "of": "logits_corr",
-      "target": "answer"
+      "target": "answer",
+      "token_form": "space_prefixed"
     }
   },
   "save": [

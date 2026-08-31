@@ -195,14 +195,21 @@ def test_a_swept_dtype_expands_like_any_other_axis(env):
 
 
 def test_a_fit_bundle_is_refused_at_a_different_realization(env, artifacts_root):
-    """The other half of stamping: corpus 09 loads a rotation fitted in fp32,
-    so asking to apply it at bf16 refuses rather than quietly mixing the two."""
+    """The other half of stamping: corpus 09 loads a rotation fitted in bf16,
+    so asking to apply it at fp32 refuses rather than quietly mixing the two.
+
+    fp32 is the *implied* realization of a `model` block with no `dtype`, which
+    is what makes this the shape people hit: an apply document that simply omits
+    the field is refused against a bf16 fit. The refusal says where to write it.
+    """
     from tests.protocol._env import CORPUS_DIR
 
-    assert load(CORPUS_DIR / "09_das_apply_im.json", env)  # fp32, as fitted
+    assert load(CORPUS_DIR / "09_das_apply_im.json", env)  # bf16, as fitted
     with pytest.raises(ValidationError) as err:
         load(
-            CORPUS_DIR / "09_das_apply_im.json", env, overrides={"model.dtype": "bf16"}
+            CORPUS_DIR / "09_das_apply_im.json", env, overrides={"model.dtype": "fp32"}
         )
     assert err.value.rule == 15
     assert "model_dtype" in str(err.value)
+    assert '"dtype": "bf16"' in str(err.value)  # the message says what to write
+    assert "--dtype" in str(err.value)  # and that the flag is not the fix

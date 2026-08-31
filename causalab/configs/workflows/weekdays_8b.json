@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "description": "weekdays-8b: locate a layer x position cell -> DAS k x seed fits at it -> apply the best fit on test; scan heatmap + IIA-vs-k curves.",
+  "description": "weekdays-8b: locate a layer x position cell -> DAS k x seed fits at it -> apply the best fit on test; scan heatmap + IIA-vs-k curves. The rank comes off the IIA-versus-k CURVE (`choose: knee`), not from the highest score: on a saturated curve the argmax is whichever near-tied k the table lists first.",
   "output_dir": "weekdays_8b",
   "steps": {
     "locate": {
@@ -35,7 +35,8 @@
       "script": {"module": "causalab.workflow.scripts.select"},
       "inputs": {
         "table": {"step": "fit", "file": "iia.json"},
-        "choose": "max",
+        "choose": "knee",
+        "order": "featurizers.rot.k",
         "emit": {"best_k": "featurizers.rot.k", "best_seed": "train.seed"}
       },
       "outputs": {

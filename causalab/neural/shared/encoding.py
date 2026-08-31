@@ -149,22 +149,71 @@ def encode(
 ) -> EncodedBatch:
     """Tokenize one batch with the engine's single convention: left
     padding, special tokens as the tokenizer defines them, offset mapping
-    kept for char→token position resolution."""
+    kept for char→token position resolution.
+
+    ⚠️ ``prefix_lengths`` is ``0`` for every row in v1: there is no
+    chat-template code path, so a dataset that wants an instruct model's chat
+    frame bakes the *rendered* template into its ``input`` column. That is a
+    working idiom — but this call adds special tokens as the tokenizer defines
+    them, so a rendered template that already opens with BOS gets a second one.
+    A double BOS is a wrong number, not a crash: every position shifts by one
+    and nothing says so. :func:`refuse_double_bos` catches it here, which is
+    the only place that can see both halves.
+    """
     enc = tokenizer(
         list(texts),
         return_tensors="pt",
         padding=True,
         return_offsets_mapping=True,
     )
+    input_ids = enc["input_ids"].to(device)
+    attention_mask = enc["attention_mask"].to(device)
+    refuse_double_bos(tokenizer, input_ids, attention_mask)
     return EncodedBatch(
         texts=tuple(texts),
-        input_ids=enc["input_ids"].to(device),
-        attention_mask=enc["attention_mask"].to(device),
+        input_ids=input_ids,
+        attention_mask=attention_mask,
         offset_mapping=tuple(
             tuple((int(a), int(b)) for a, b in row) for row in enc["offset_mapping"]
         ),
         prefix_lengths=tuple(0 for _ in texts),
     )
+
+
+def refuse_double_bos(
+    tokenizer: Any,
+    input_ids: "torch.Tensor",
+    attention_mask: "torch.Tensor",
+) -> None:
+    """Refuse a batch whose rows start with the BOS token twice.
+
+    Read off the encoded batch rather than by re-encoding: the ids are already
+    computed, and "two BOS at the start of the content" is the exact condition
+    — it needs no assumption about whether *this* tokenizer prepends one, or
+    about which string spells it.
+
+    Stripping instead of refusing was considered and rejected: the text is the
+    document's data, its content digest is part of the canonical form (§7), and
+    silently editing it would make the digest describe bytes that never ran.
+    """
+    bos_id = getattr(tokenizer, "bos_token_id", None)
+    if bos_id is None or input_ids.shape[1] < 2:
+        return
+    for row in range(input_ids.shape[0]):
+        start = int(attention_mask[row].int().argmax().item())
+        if start + 1 >= input_ids.shape[1]:
+            continue
+        if int(input_ids[row, start]) == bos_id == int(input_ids[row, start + 1]):
+            bos = getattr(tokenizer, "bos_token", None) or f"id {bos_id}"
+            raise ProtocolError(
+                "P2",
+                f"row {row} begins with {bos!r} twice: the text already carries "
+                "a BOS — a rendered chat template, most likely — and the "
+                "tokenizer added another. Every position in the row is then "
+                "off by one and no error would be raised. Remove the leading "
+                f"{bos!r} from the dataset's text; v1 has no chat field, so "
+                "the rendered template is the data",
+            )
 
 
 _LIST_FIELD = re.compile(r"^([A-Za-z0-9_]+)\[(\d+)\]$")

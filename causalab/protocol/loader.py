@@ -421,58 +421,172 @@ def apply_overrides(
     return out
 
 
+#: A ``<column>[j]`` field selector (§2.2). Same shape as the engine's
+#: ``encoding._LIST_FIELD``; kept here so ``protocol/`` needs no import from
+#: ``neural/`` to answer a question about a table.
+_LIST_FIELD = re.compile(r"^([A-Za-z0-9_]+)\[(\d+)\]$")
+
+
 def check_data_columns(loaded: LoadedProtocol, env: ResolutionEnv) -> list[str]:
     """The ``validate --data`` pass (§2.2): every dataset field selector, every
-    metric column reference and every ``column`` position must exist in the
-    resolved tables. Returns the checked column names (for reporting); raises
-    on a miss.
+    metric column reference and every ``column``/``variable`` position must
+    exist in the resolved tables. Returns the checked names (for reporting);
+    raises on a miss.
 
-    Column references are checked against the *union* of the resolved tables'
-    columns: rows are paired across roles (§2.2), and a metric or a column
-    position addresses the row, not one role's text."""
-    doc = loaded.point_documents[0]
-    columns: set[str] = set()
+    References are checked against the *union* of the resolved tables: rows are
+    paired across roles (§2.2), and a metric or a column position addresses the
+    row, not one role's text.
+
+    **Every expanded point, not just the first.** A swept axis is a set of
+    documents (§3), and the coordinate that names a bad column need not be
+    coordinate 0 — ``weekdays_locate_scan`` swept its tap over
+    ``[{"index": -1}, {"variable": "subject"}]`` and this pass, reading
+    ``point_documents[0]``, only ever saw the index. Table reads are cached per
+    dataset ref, so the cost is the number of distinct refs, not the number of
+    points.
+
+    A ``variable`` position is checked for **existence only**. What a prompt
+    variable resolves to — a char span, hence a token count — needs a
+    tokenizer, and the pure verbs hold none (``ResolutionEnv`` carries datasets
+    and artifacts, and stays torch- and network-free). So a variable that no
+    role can name is refused here, while a variable whose window turns out to
+    be ragged across rows is still a run-time refusal ([V19]). That split is
+    the whole of what is answerable without a model.
+    """
+    columns_by_ref: dict[str, set[str]] = {}
+    variables_by_role: dict[tuple[str, str], set[str]] = {}
+
+    def columns_of(ref: str) -> set[str]:
+        if ref not in columns_by_ref:
+            columns_by_ref[ref] = set(env.datasets.columns(ref))
+        return columns_by_ref[ref]
+
+    def variables_of(ref: str, field: str) -> set[str]:
+        key = (ref, field)
+        if key not in variables_by_role:
+            variables_by_role[key] = _role_variables(env.datasets.rows(ref), field)
+        return variables_by_role[key]
+
     refs: list[str] = []
-    for role_value in doc.data.values():
-        roles = role_value if isinstance(role_value, tuple) else (role_value,)
-        for role in roles:
-            if isinstance(role.dataset, str):
-                columns.update(env.datasets.columns(role.dataset))
+    seen: set[tuple[str, str]] = set()
+
+    def record(where: str, name: str) -> bool:
+        """Report the reference, and say whether it still needs checking."""
+        refs.append(name)
+        if (where, name) in seen:
+            return False
+        seen.add((where, name))
+        return True
+
+    for doc in loaded.point_documents:
+        columns: set[str] = set()
+        variables: set[str] = set()
+        for role_value in doc.data.values():
+            roles = role_value if isinstance(role_value, tuple) else (role_value,)
+            for role in roles:
+                if not isinstance(role.dataset, str):
+                    continue
+                columns.update(columns_of(role.dataset))
                 field = str(role.field)
                 base_field = field.split("[", 1)[0]
-                if base_field not in env.datasets.columns(role.dataset):
+                if base_field not in columns_of(role.dataset):
                     raise ValidationError(
                         4,
                         f"data field {field!r} is not a column of {role.dataset!r}",
                         path="data",
                     )
-    for qname, metric in doc.metrics.items():
-        for field, value in metric.fields.items():
-            if (
-                metric.kind == "kl"
-                or field in NON_COLUMN_METRIC_FIELDS
-                or field in OPTIONAL_METRIC_FIELDS.get(str(metric.kind), ())
-                or not isinstance(value, str)
-            ):
+                variables.update(variables_of(role.dataset, field))
+        for qname, metric in doc.metrics.items():
+            for field, value in metric.fields.items():
+                if (
+                    metric.kind == "kl"
+                    or field in NON_COLUMN_METRIC_FIELDS
+                    or field in OPTIONAL_METRIC_FIELDS.get(str(metric.kind), ())
+                    or not isinstance(value, str)
+                ):
+                    continue
+                if not record(f"metrics.{qname}.{field}", value):
+                    continue
+                if value not in columns:
+                    raise ValidationError(
+                        4,
+                        f"metric {qname!r} references column {value!r}, which none "
+                        f"of the resolved datasets provide",
+                        path=f"metrics.{qname}.{field}",
+                    )
+        for where, name in _column_position_refs(doc):
+            if not record(where, name):
                 continue
-            refs.append(value)
-            if value not in columns:
+            if name not in columns:
                 raise ValidationError(
                     4,
-                    f"metric {qname!r} references column {value!r}, which none of "
+                    f"position {where} references column {name!r}, which none of "
                     f"the resolved datasets provide",
-                    path=f"metrics.{qname}.{field}",
+                    path=where,
                 )
-    for where, name in _column_position_refs(doc):
-        refs.append(name)
-        if name not in columns:
-            raise ValidationError(
-                4,
-                f"position {where} references column {name!r}, which none of the "
-                f"resolved datasets provide",
-                path=where,
-            )
+        # a prompt variable resolves per role: the role's <col>_variables
+        # sibling first, then a same-named column (§2.3). Either spelling counts.
+        resolvable = variables | columns
+        for where, name in _variable_position_refs(doc):
+            if not record(where, name):
+                continue
+            if name not in resolvable:
+                raise ValidationError(
+                    4,
+                    f"position {where} references prompt variable {name!r}, which "
+                    f"none of the resolved datasets provide — no role's "
+                    f"'<field>_variables' names it and there is no {name!r} "
+                    f"column (have {sorted(resolvable)})",
+                    path=where,
+                )
     return refs
+
+
+def _role_variables(rows: list[dict[str, Any]], field: str) -> set[str]:
+    """The prompt variables one data role can name, from its rows.
+
+    Mirrors ``neural.shared.encoding.variable_value``, which is the authority
+    at run time; duplicated rather than imported because ``protocol/`` stays
+    torch-free (``test_load_is_torch_free``). Only the *sibling* half is here —
+    the plain-column fallback is the caller's ``columns`` set.
+
+    Union across rows, matching ``FileDatasets.columns``: a table whose rows
+    disagree about their variables is a table defect, and refusing the
+    *document* for it would point at the wrong thing."""
+    match = _LIST_FIELD.match(field)
+    column = match.group(1) if match else field
+    index = int(match.group(2)) if match else None
+    found: set[str] = set()
+    for row in rows:
+        sibling = row.get(f"{column}_variables")
+        if index is not None and isinstance(sibling, list):
+            sibling = sibling[index] if index < len(sibling) else None
+        if isinstance(sibling, Mapping):
+            found.update(str(key) for key in sibling)
+    return found
+
+
+def _variable_position_refs(doc: Document) -> list[tuple[str, str]]:
+    """``(where, variable)`` for every prompt-variable position in a document —
+    the named entries plus the inline specs on reads and writes, and the
+    ``scope``/``relative_to`` anchors spelled as a variable (§2.3)."""
+    found: list[tuple[str, str]] = []
+
+    def visit(where: str, spec: Any) -> None:
+        if not isinstance(spec, PositionSpec):
+            return
+        if isinstance(spec.variable, str):
+            found.append((where, spec.variable))
+        anchor = spec.scope if spec.scope is not None else spec.relative_to
+        if spec.anchor_source == "variable" and isinstance(anchor, str):
+            found.append((where, anchor))
+
+    for name, entry in doc.positions.items():
+        visit(f"positions.{name}", entry)
+    for section, table in (("reads", doc.reads), ("writes", doc.writes)):
+        for name, spec in table.items():
+            visit(f"{section}.{name}.pos", spec.pos)
+    return found
 
 
 def _column_position_refs(doc: Document) -> list[tuple[str, str]]:

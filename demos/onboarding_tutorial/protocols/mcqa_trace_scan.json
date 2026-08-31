@@ -25,7 +25,7 @@
   },
   "metrics": {
     "said":    {"kind": "top_k", "of": "logits", "k": 1, "by": "prob"},
-    "flipped": {"kind": "match", "of": "logits", "expected": "cf_answer"}
+    "flipped": {"kind": "match", "of": "logits", "expected": "cf_answer", "token_form": "space_prefixed"}
   },
   "save": [
     {"value": "said",    "model": "patched", "input": "base", "file_path": "said.json"},

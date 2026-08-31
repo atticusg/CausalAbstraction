@@ -1,0 +1,15 @@
+{
+  "version": "1",
+  "description": "Mean replacement, end to end: harvest a corpus mean at one cell, then ablate that cell to it and score the drop. The chain the causal protocol's step 2 asks for ('always use zero and mean replacement') and which no shipped example showed - the mean is a two-document `reduce: mean` -> `params` handoff, not a document-side transform.",
+  "output_dir": "mean_ablation",
+  "steps": {
+    "harvest": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mean_harvest.json"
+    },
+    "ablate": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mean_ablation.json"
+    }
+  }
+}

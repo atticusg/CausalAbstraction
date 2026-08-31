@@ -27,7 +27,7 @@
     "patched": {"input": "base", "writes": ["patch"]}
   },
   "metrics": {
-    "iia": {"kind": "match", "of": "logits", "expected": "label_forms", "mode": "first_token"}
+    "iia": {"kind": "match", "of": "logits", "expected": "label_forms", "mode": "first_token", "token_form": "space_prefixed"}
   },
   "save": [
     {"value": "iia", "model": "patched", "input": "base", "file_path": "iia.json"},

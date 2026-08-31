@@ -31,7 +31,8 @@
     "patched": {"input": "base", "writes": ["patch"]}
   },
   "metrics": {
-    "iia": {"kind": "match", "of": "patched_logits", "expected": "label"}
+    "iia": {"kind": "match", "of": "patched_logits", "expected": "label",
+            "token_form": "space_prefixed"}
   },
   "save": [
     {

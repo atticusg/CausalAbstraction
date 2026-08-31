@@ -24,8 +24,8 @@
     "patched": {"input": "base", "writes": ["patch"]}
   },
   "metrics": {
-    "iia": {"kind": "logit_diff",    "of": "logits", "a": "cf_answer", "b": "base_answer"},
-    "ce":  {"kind": "cross_entropy", "of": "logits", "target": "label"}
+    "iia": {"kind": "logit_diff",    "of": "logits", "a": "cf_answer", "b": "base_answer", "token_form": "space_prefixed"},
+    "ce":  {"kind": "cross_entropy", "of": "logits", "target": "label", "token_form": "space_prefixed"}
   },
   "train": {
     "objective":  [[1.0, "ce"]],

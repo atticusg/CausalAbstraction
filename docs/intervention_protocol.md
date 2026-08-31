@@ -165,8 +165,12 @@ record, and stamped into artifacts; it is not part of the canonical bytes.
 - **Anything per-row or task-semantic is a column**, computed when the table is
   built — answer forms for `match` (sec. 2.10), values that place a position per
   row (sec. 2.3). Documents reference columns; they never compute.
-- Dataset **columns** referenced by metrics and by `column` positions are checked
-  against the resolved tables by `validate --data`, not at load.
+- Dataset **columns** referenced by metrics and by `column` positions, and the
+  prompt **variables** named by `variable` positions and by `scope` /
+  `relative_to` anchors, are checked against the resolved tables by
+  `validate --data`, not at load. The check covers **every expanded point**, so
+  a reference that appears only at one coordinate of a sweep is checked there
+  too.
 
 ### 2.3 `positions`
 
@@ -236,14 +240,38 @@ the model said the row's value for `x`.
   the row, so it is a property of the *row*, not of a role's text — the same
   `{"column": "c"}` resolves to the same string whichever role reads it. Use
   `column` when the value is computed by the task (per-row answer symbols,
-  chosen entities): being an explicit reference, it is checked by
-  `validate --data`, where a variable that only happens to exist as a column
-  is not.
+  chosen entities) and every role must read the same string; use `variable`
+  when each role's own text carries its own value, which is what a
+  counterfactual pair usually needs.
+- **What `validate --data` can and cannot say about a position.** Both
+  spellings are checked for **existence** — a `column` against the resolved
+  tables' columns, a `variable` against each role's `<field>_variables` sibling
+  and the same-named-column fallback. Neither is checked for **width**: what a
+  variable or a column resolves to is a char span, hence a token count, and the
+  pure verbs hold no tokenizer (`ResolutionEnv` carries datasets and artifacts
+  and stays torch- and network-free). So a per-row window that turns out ragged
+  across rows is a *run-time* refusal — rule 19 for a write — and no amount of
+  pre-flighting moves it earlier. When a document needs one token per row at a
+  variable, say so: `{"index": -1, "scope": {"variable": "x"}}` is the last
+  token of `x`'s span and is never ragged.
 - The value in a column position is a **string**, resolved like a variable's
   value (it must occur exactly once in the row's text). Integer token indices
   are deliberately not a v1 spelling: they would bind a table to one
   tokenizer, and a task that can compute an index can serialize the substring
   instead.
+- ⚠️ **There is no chat prefix in v1.** Both the `n ≥ 0` rebase above and the
+  "past any chat prefix" clause below are written against a `prefix_lengths`
+  the encoder sets to **0 for every row** — `apply_chat_template` is called
+  **nowhere** in the package, so the rule is an identity today. (The
+  `use_chat_template` field and chat-prefix hook in
+  `neural/token_positions.py` belong to the pre-protocol pipeline surface the
+  task packages annotate against; no engine implements them. That module says
+  so at the top.) A dataset that wants an instruct
+  model's chat frame bakes the *rendered* template into its `input` column,
+  which works; what it must not do is leave the template's leading BOS in
+  place, because the encoder adds special tokens as the tokenizer defines them
+  and a second BOS shifts every position by one. That case is refused at
+  encode. A first-class `chat` field is a spec change and its own PR.
 - **`{"all": true}`** selects the row's real tokens only: padding is excluded,
   and so is any chat prefix — the same frame `{"index": n}` uses for `n ≥ 0`.
   It takes no `scope` or `relative_to` (there is nothing left to narrow), and
@@ -536,23 +564,46 @@ execution order:
 | kind | featurize | param slots | authored fields |
 |---|---|---|---|
 | `identity` (default) | `(x, 0)` | — | — |
-| `subspace` | `(Qᵀx, 0)` | `weight` | `k`, `parametrization` ∈ `cayley` \| `matrix_exp` \| `stiefel` |
+| `subspace` | `(Qᵀx, 0)` | `weight` | `k`, `parametrization` ∈ `cayley` \| `matrix_exp` \| `stiefel`, `seed` |
 | `pca` | `(Pᵀx, 0)` | `weight` | `k`, `file_path` |
 | `sae` | `(enc(x), x − dec(enc(x)))` | `enc, dec, b_enc, b_dec` | `file_path` |
 | `standardize` | `((x−μ)/σ, 0)` | `mu, sigma` | `file_path` |
 | `gate` | `(σ(θ)⊙x, (1−σ(θ))⊙x)` | `theta` | — |
 
 - **Widths are derived** from (model, site) — never authored. Only choices
-  (`k`, `parametrization`, `dtype`, `init`) are authored.
+  (`k`, `parametrization`, `dtype`, `init`, `seed`) are authored.
 - **Params are auto-declared** per kind, named `<featurizer>.<slot>`.
 - **Composition**: a `featurizer` reference may be a list `["rot", "gate"]`,
   applied left-to-right with a per-stage `err` list.
 - **Error-term contract**: `err` and unselected dims always come from the
   pre-write value at the address — so a zero write ablates only the feature
   contribution, and a `dims` write is a subspace swap.
+- **`seed`** (optional, `subspace` only): the draw its **initial** rotation
+  comes from. Absent, it is the document's seed (`train.seed`, or 0 with no
+  fit), so an existing document is unchanged and its canonical form does not
+  grow a field. Illegal together with `file_path`: a loaded featurizer's
+  weights are its bytes and it draws nothing.
+  - This is what makes an *untrained* `subspace` a first-class **random rank-k
+    basis**: `Q = qr(randn(d, k))` at that seed, orthonormal by construction.
+    With `seed: {"sweep": [0, 1, 2]}` and no `train` block, one document is the
+    matched-k random-subspace control — three draws at one cell, scored exactly
+    as the fit was, in one model load. Without an authorable seed the control
+    needed a `train` section it had nothing to train, which is why every study
+    that wanted it built the draws by hand.
+    See `configs/protocols/random_subspace_control.json`.
 - **`file_path`** (optional): load a fitted artifact instead of computing.
   Its `ArtifactIdentity` (sec. 8) is checked; mismatch refuses. A loaded
   featurizer may not appear in `train.params`.
+  - ⚠️ **`model_dtype` is part of that identity, and `--dtype` is not a way to
+    satisfy it.** The compared value is the document's `model.dtype`, and a
+    `model` block with no `dtype` **implies `fp32`** — so an apply document that
+    omits it is refused against a fit that declared `bf16`, with
+    `[V15] … implies 'fp32' but the bundle was stamped 'bf16'`. `--dtype` is a
+    `--set model.dtype=…` shorthand on a **document** run, and a *workflow* run
+    does not accept it at all — so a chained fit → apply can only be repaired in
+    the file. Write `"dtype": "bf16"` into the apply document's `model` block,
+    next to the fit's. The refusal message says so, and names the stamped
+    value.
 - **`entry`** (optional, only with `file_path`): which entry of that bundle.
   A swept document writes one file across all its points, keyed by
   coordinate (`weight[k=8,seed=0]`, sec. 2.12), so "the fit at k=8, seed=0"
@@ -563,6 +614,14 @@ execution order:
     swept on `featurizers.rot.k` selects the fit at *its* `k` and the two
     sweeps zip instead of crossing. Coordinates the producer never had are
     ignored; a bundle with a single entry needs nothing.
+  - **Authored, it is used exactly as written and is not completed from those
+    coordinates.** The two spellings are alternatives, not layers: completing
+    one from the other would make a selector's meaning depend on which axes the
+    consuming document happens to sweep. So a *partial* `entry` against a
+    multi-axis bundle resolves only when it is already unique, and otherwise
+    refuses naming the coordinates that would disambiguate — pinning `k`
+    elsewhere in the document does **not** narrow an `entry` that omits `k`.
+    Name every varying coordinate, or drop `entry` entirely.
   - A selection that matches no entry, or more than one, is a **load
     error** — never first-hit-wins. Inside a workflow it is caught before
     any step runs, since a producing document's entry names follow from its
@@ -662,18 +721,26 @@ Closed mechanism set (`do` has exactly one key):
 
 ### 2.10 `metrics`
 
-Closed vocabulary; `of` names a read; other value fields name dataset columns.
+Closed vocabulary; `of` names a read. The other value fields do **not** all
+mean the same thing, and the difference has cost real debugging time:
 
-| kind | fields | result per example |
-|---|---|---|
-| `logit_diff` | `of, a, b` | `logits[a] − logits[b]` |
-| `token_logit` | `of, token` | `logits[token]` |
-| `cross_entropy` | `of, target` | CE against target |
-| `kl` | `of, target` (a read) | KL between two reads' distributions |
-| `class_probs` | `of, groups` | summed probability per group |
-| `top_k` | `of, k, by` | the k top-ranked entries of the read (see below) |
-| `match` | `of, expected` (+ optional `mode`) | match indicator |
-| `decode` | `of` | the addressed tokens as text |
+- `a` / `b` / `token` / `target` / `expected` name **dataset columns** — the
+  answer is per row, so the document names the column and the table carries the
+  string.
+- `class_probs`'s `groups` holds **literal token strings**, `{name: [tokens]}`.
+  A class is a property of the answer *space*, one for the whole run, so there
+  is no column to read it from.
+
+| kind | fields | what the value fields name | result per example |
+|---|---|---|---|
+| `logit_diff` | `of, a, b` | columns | `logits[a] − logits[b]` |
+| `token_logit` | `of, token` | column | `logits[token]` |
+| `cross_entropy` | `of, target` | column | CE against target |
+| `kl` | `of, target` | a **read** | KL between two reads' distributions |
+| `class_probs` | `of, groups` | **literal token strings** | summed probability per group |
+| `top_k` | `of, k, by` | — | the k top-ranked entries of the read (see below) |
+| `match` | `of, expected` (+ optional `mode`) | column (of a string, or a **list** of equivalent forms) | match indicator |
+| `decode` | `of` | — | the addressed tokens as text |
 
 **Reads a kind may bind to.** Every kind but `kl` and `top_k` names *vocabulary
 entries* — an authored string resolved to a token id — so it binds to a *plain*
@@ -760,24 +827,44 @@ its table says which:
   nothing else. Cross-read arithmetic (differences of saved metrics) is
   post-hoc analysis. The vocabulary stays closed so engines can lower kinds
   to fused/vocab-parallel implementations.
-- **`token_form`** (optional, `auto` | `bare` | `space_prefixed`; default
-  `auto`) — how this metric's string answers become token ids. Legal on every
-  kind that names token strings (`logit_diff`, `token_logit`, `cross_entropy`,
+- **`token_form`** (**required**, `auto` | `bare` | `space_prefixed`) — how
+  this metric's string answers become token ids. Required on every kind that
+  names token strings (`logit_diff`, `token_logit`, `cross_entropy`,
   `class_probs`, `match`); `kl` and `top_k` never resolve a string and refuse
   the key. That stays true under `top_k`'s any-read semantics: it *reports*
   indices it found and decodes them only when the read taps `lm_head` — it
   never turns an authored string into a token id, so the knob would have
   nothing to apply to.
+  - **Why required rather than defaulted.** How a string becomes a token id is
+    a fact about the model's tokenizer, and a document that does not say which
+    rule it means gets whichever one the library happened to prefer. That guess
+    has been measurably wrong four ways in production: a leading space
+    (`" ?"`=907 against `"?"`=30), punctuation that merges with the token
+    before it, two authored forms resolving to one id and being summed twice,
+    and the non-case of digits where `" 7"` really is two tokens and `auto` is
+    right. `auto` remains available — as something a document *chooses*.
   - `auto` tries `" " + s` first and falls back to `s`. That is right when the
-    answer follows a space in the prompt — weekdays, names, MCQA letters — and
-    it is the default so pre-`token_form` documents are unchanged.
+    answer follows a space in the prompt — weekdays, names, MCQA letters.
   - It is **wrong** when the answer does not follow a space and both forms
     happen to be single tokens. Under gpt2, `"?"` is token 30 and `" ?"` is
-    token 5633: a `match` on a punctuation answer scores 5633, the model emits
-    30, and the metric reads a flat 0.000 with no error raised anywhere. Pin
-    `token_form: "bare"` for those. `auto` warns when the two forms disagree.
+    token 5633: a `match` on a punctuation answer scored 5633, the model emits
+    30, and the metric read a flat 0.000. Pin `token_form: "bare"` for those.
+    **`auto` now refuses** rather than guessing whenever the two forms
+    disagree — as a single token each (the case above), or, under
+    `mode: "first_token"`, on which piece they credit. It warned before, and a
+    warning that produces a wrong number anyway is not a check.
   - The form applies to every token string in the metric, so a `class_probs`
     whose groups mix spaced and bare answers must stay on `auto`.
+  - ⚠️ **A leading space in an authored value is normalized away, not
+    honored.** The resolver strips it and then `token_form` alone decides the
+    form, so `" X"` and `"X"` name the same answer. The consequence is worth
+    stating because it is the opposite of what the spelling suggests: the
+    common `["X", " X"]` idiom — written to "cover both forms" — is **inert**.
+    Both entries resolve identically, and in a `class_probs` group, where the
+    kind sums its members' ids, that used to be summed twice and report a
+    probability above 1 (a measured **1.9927**). A group whose members collide
+    on one id is now refused; list each answer once and say which form with
+    `token_form`.
 - A column value resolves to **one token**, space-prefixed form first; a
   multi-token value refuses rather than silently scoring its first piece.
 - `match` is the exception, and only when told: its `expected` column may hold
@@ -794,7 +881,11 @@ its table says which:
   - `first_token` is what "prefix" means with logits at one position. It
     over-credits an answer space that is not first-token-distinct; whether a
     table's answer space *is* first-token-distinct is a property of the
-    dataset, so the mode is opt-in per document and never a default.
+    dataset, so the mode is opt-in per document and never a default — **and
+    the metric refuses** a row set in which two different answers share a
+    first token, which is the last place the claim can be checked before a
+    number exists. `" 85"` is `[220, "8", "5"]` on Qwen, so an emitted `87`
+    would otherwise score 1.000 against an expected `85`.
 
 ### 2.11 `train`
 
@@ -863,6 +954,19 @@ everything that leaves the run. Three saveable kinds, two entry shapes:
   singletons shared by all points.
 - Multiple axes form the **cross product**; nothing else (no zip, no
   conditionals; dependent axes are a generator's job — emit the JSON).
+  - ⚠️ **`data.base.dataset` and `data.counterfactual.dataset` are two names,
+    hence two axes.** Sweeping both over the same *n* refs is an *n*×*n* cross
+    that pairs every base table with every counterfactual table, and rows are
+    paired **across roles by index** (sec. 2.2) — so *n*²−*n* of those points
+    silently score mispaired rows rather than failing. One campaign hit the
+    4096-point cap this way and read the cap as the symptom. There is no zip to
+    reach for: the intended shape is **one table carrying both sides**, base
+    reading `input` and the counterfactual role reading
+    `counterfactual_inputs[j]` of the *same* ref — which is what every shipped
+    preset does, and what leaves one axis to sweep. When the two sides really
+    are separate files, that is one document per pair (or one `--set` per
+    shard), not one document with two axes. Letting two fields share one axis
+    is a spec change and its own PR.
 - Coordinates suffix derived names (`rot[k=8]`) and key results.
 - Expansion is **deterministic at load**: one document ⇒ a set of point
   protocols. The document digest names the campaign; each point's digest is
@@ -954,6 +1058,12 @@ A conforming loader rejects the document unless all of these hold:
     exactly one half, or by both with the same value; and the composition is
     closed — every input and every site address bound. An unfilled hole is
     refused with the list of what is missing.
+19. Write widths are uniform: every row a write addresses carries the same
+    number of positions. Only an `all` or `variable` write can be ragged, and
+    only the tokenizer can say how wide a row is — so, unlike the rest of this
+    checklist, rule 19 is checked when the run encodes its inputs, **before any
+    forward pass**, not at load. `validate` cannot decide it: the pure verbs
+    hold no tokenizer, by design.
 
 ## 6. Derived — never authored
 
@@ -1124,13 +1234,16 @@ runs the full pipeline, a split one composing its halves first.
 | verb | effect |
 |---|---|
 | `run <doc>` | validate, expand, plan, execute, stamp; writes `<out>/protocol.json` — the canonical document, its digest, the per-point provenance digests, and the method it was composed from |
-| `validate <doc> [--data]` | sec. 5 checks; `--data` also checks column references |
+| `validate <doc> [--data]` | sec. 5 checks; `--data` also checks column and prompt-variable references, at every point |
 | `explain <doc>` | models + forward plan, expanded point count, derived `requires`, resolved bindings, digest, what `save` produces |
+| `--engine` (explain) | also route the document and print which engine would serve it, or the sec. 8 refusal. Opt-in: engines are heavy, and without it `explain` stays torch-free |
 | `digest <doc>` | the campaign digest |
 | `--set path=value` | ad-hoc override — exploration only; promote anything that matters into the file |
 | `--device` (run) | reference-engine placement: any torch device string (`cpu` default, `cuda`, `cuda:1`, `mps`). Placement is execution; precision is not (§8) |
+| `--engine` (run) | `auto` (default) is every installed engine with the reference **first**, routed by `choose_engine` (sec. 8); name one to pin it. A document never names an engine — it declares what it needs — so the default is routing rather than a choice the document did not make |
 | `--dtype` (run) | shorthand for `--set model.dtype=…` — it edits the document, so the run's digest is the overridden document's and the record never lies about what produced the numbers. Refused on a workflow, whose steps each declare their own |
 | `--points START:STOP` (run) | execute one half-open point-index shard of the expanded campaign (sec. 8, execution scale); document runs only — digests and stamps are unaffected |
+| `--register-from-hf` | resolve an unregistered `model.key` from its HF config before loading, instead of refusing `[V4]`. Opt-in, so without it a digest never depends on the network; `run` always does it. On a workflow it pre-registers **every** inner document's key |
 
 ## 10. Worked examples
 
