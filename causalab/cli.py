@@ -89,6 +89,15 @@ def _build_parser() -> argparse.ArgumentParser:
             default=None,
             help="override the sweep point cap (§5.14)",
         )
+        p.add_argument(
+            "--register-from-hf",
+            action="store_true",
+            help="resolve an unregistered model key from its HF config before "
+            "loading, instead of refusing [V4]. Opt-in: without it the pure "
+            "verbs stay registry-only, so a digest never depends on the "
+            "network. 'run' always does this — the flag is for the verbs that "
+            "otherwise never touch a model",
+        )
         if verb == "validate":
             p.add_argument(
                 "--data", action="store_true", help="also check column references"
@@ -191,11 +200,27 @@ def load_engines(choice: str, device: str) -> list[Any]:
     return engines
 
 
+def wants_hf_registration(args: argparse.Namespace) -> bool:
+    """Whether this invocation may resolve an unregistered key over the network.
+
+    ``run`` touches the model anyway. For the pure verbs it is the author
+    saying so with ``--register-from-hf``: pre-flighting a document on an
+    unregistered model was impossible without it, and the documented
+    workaround — validate against a *similar* registered model — produces a
+    **false** refusal (`[V4] layer 36 out of range for the 36-layer model
+    'Qwen/Qwen3-4B-Instruct-2507'` on a valid 40-layer document). All three A3B
+    protocol runs wrote the same nine-line wrapper instead.
+    """
+    return args.verb == "run" or bool(getattr(args, "register_from_hf", False))
+
+
 def ensure_model_registered(args: argparse.Namespace) -> None:
-    """The run verb touches the model anyway, so an unregistered key is
-    resolved from its HF config and registered before canonicalization —
-    the pure verbs stay registry-only so digests never depend on the
-    network."""
+    """Resolve an unregistered model key from its HF config and register it
+    before canonicalization.
+
+    Called for ``run`` unconditionally and for the pure verbs only under
+    ``--register-from-hf``, so the invariant survives: without the flag a
+    digest never depends on the network."""
     from causalab.protocol.loader import apply_overrides, flatten, load_text
 
     # flatten first: in a split document the model lives in the `application`
