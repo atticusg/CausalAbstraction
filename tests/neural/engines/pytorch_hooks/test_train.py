@@ -72,7 +72,14 @@ def das_doc(*, seed: int = 0, epochs: int = 2) -> dict:
             }
         },
         "intervened_models": {"patched": {"input": "base", "writes": ["patch"]}},
-        "metrics": {"ce": {"kind": "cross_entropy", "of": "logits", "target": "label"}},
+        "metrics": {
+            "ce": {
+                "kind": "cross_entropy",
+                "of": "logits",
+                "target": "label",
+                "token_form": "space_prefixed",
+            }
+        },
         "train": {
             "objective": [[1.0, "ce"]],
             "params": ["rot"],

@@ -144,10 +144,22 @@ def test_rule_4_metric_on_non_lm_head_read():
 @pytest.mark.parametrize(
     "spec",
     [
-        {"kind": "class_probs", "groups": {"days": ["Monday"]}},
-        {"kind": "token_logit", "token": "cf_answer"},
-        {"kind": "cross_entropy", "target": "cf_answer"},
-        {"kind": "match", "expected": "cf_answer"},
+        {
+            "kind": "class_probs",
+            "groups": {"days": ["Monday"]},
+            "token_form": "space_prefixed",
+        },
+        {
+            "kind": "token_logit",
+            "token": "cf_answer",
+            "token_form": "space_prefixed",
+        },
+        {
+            "kind": "cross_entropy",
+            "target": "cf_answer",
+            "token_form": "space_prefixed",
+        },
+        {"kind": "match", "expected": "cf_answer", "token_form": "space_prefixed"},
     ],
 )
 def test_rule_4_still_binds_the_token_space_kinds_to_lm_head(spec):
@@ -275,7 +287,12 @@ def test_rule_4_a_token_space_kind_over_a_featurized_lm_head_read_is_refused():
     doc["featurizers"] = {
         "f": {"kind": "subspace", "k": 4, "parametrization": "cayley"}
     }
-    doc["metrics"]["m"] = {"kind": "match", "of": "flogits", "expected": "cf_answer"}
+    doc["metrics"]["m"] = {
+        "kind": "match",
+        "of": "flogits",
+        "expected": "cf_answer",
+        "token_form": "space_prefixed",
+    }
     doc["save"].append(
         {"value": "m", "model": "patched", "input": "base", "file_path": "m.json"}
     )
@@ -588,7 +605,12 @@ def test_rule_12_loaded_featurizer_trained():
     }
     doc["reads"]["v_cf"]["featurizer"] = "rot"
     doc["writes"]["patch"]["featurizer"] = "rot"
-    doc["metrics"]["ce"] = {"kind": "cross_entropy", "of": "logits", "target": "label"}
+    doc["metrics"]["ce"] = {
+        "kind": "cross_entropy",
+        "of": "logits",
+        "target": "label",
+        "token_form": "space_prefixed",
+    }
     doc["train"] = {
         "objective": [[1.0, "ce"]],
         "params": ["rot"],
@@ -712,6 +734,7 @@ def test_unknown_match_mode_is_a_closed_enum_error():
         "kind": "match",
         "of": "logits",
         "expected": "label",
+        "token_form": "space_prefixed",
         "mode": "prefix",  # the task-side spelling; the metric's is first_token
     }
     doc["save"].append(
