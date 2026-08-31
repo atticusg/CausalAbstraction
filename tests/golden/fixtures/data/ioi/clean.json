@@ -1,0 +1,2562 @@
+[
+ {
+  "input": "Friends Peter and Laura found a book at the store. Laura gave it to",
+  "io": " Peter",
+  "s": " Laura"
+ },
+ {
+  "input": "Then, Kevin and Peter had a lot of fun at the station. Kevin gave a ball to",
+  "io": " Peter",
+  "s": " Kevin"
+ },
+ {
+  "input": "Then, Jason and Dan went to the restaurant. Dan gave a bone to",
+  "io": " Jason",
+  "s": " Dan"
+ },
+ {
+  "input": "Then, Sarah and Lisa went to the school. Sarah gave a book to",
+  "io": " Lisa",
+  "s": " Sarah"
+ },
+ {
+  "input": "Then, Rachel and Tom went to the garden. Tom gave a basketball to",
+  "io": " Rachel",
+  "s": " Tom"
+ },
+ {
+  "input": "Friends Laura and Anna found a snack at the garden. Laura gave it to",
+  "io": " Anna",
+  "s": " Laura"
+ },
+ {
+  "input": "Then, Mark and Jason went to the restaurant. Jason gave a drink to",
+  "io": " Mark",
+  "s": " Jason"
+ },
+ {
+  "input": "Friends Rachel and Tom found a drink at the hospital. Rachel gave it to",
+  "io": " Tom",
+  "s": " Rachel"
+ },
+ {
+  "input": "Then, Paul and Scott had a lot of fun at the garden. Scott gave a ring to",
+  "io": " Paul",
+  "s": " Scott"
+ },
+ {
+  "input": "Friends Scott and Ryan found a bone at the office. Scott gave it to",
+  "io": " Ryan",
+  "s": " Scott"
+ },
+ {
+  "input": "When Tom and Paul got a ring at the station, Paul decided to give it to",
+  "io": " Tom",
+  "s": " Paul"
+ },
+ {
+  "input": "Then, Kevin and Karen had a lot of fun at the park. Kevin gave a ball to",
+  "io": " Karen",
+  "s": " Kevin"
+ },
+ {
+  "input": "Then, Lisa and Karen went to the restaurant. Karen gave a basketball to",
+  "io": " Lisa",
+  "s": " Karen"
+ },
+ {
+  "input": "When Peter and Lisa got a snack at the garden, Peter decided to give it to",
+  "io": " Lisa",
+  "s": " Peter"
+ },
+ {
+  "input": "When Martin and Amy got a drink at the school, Amy decided to give it to",
+  "io": " Martin",
+  "s": " Amy"
+ },
+ {
+  "input": "Then, Tom and Emily had a lot of fun at the park. Tom gave a bone to",
+  "io": " Emily",
+  "s": " Tom"
+ },
+ {
+  "input": "Then, John and Tom had a lot of fun at the hospital. Tom gave a book to",
+  "io": " John",
+  "s": " Tom"
+ },
+ {
+  "input": "Friends Susan and Amy found a book at the hospital. Susan gave it to",
+  "io": " Amy",
+  "s": " Susan"
+ },
+ {
+  "input": "When Emily and Susan got a ring at the garden, Susan decided to give it to",
+  "io": " Emily",
+  "s": " Susan"
+ },
+ {
+  "input": "Then, James and Lisa had a lot of fun at the station. James gave a ball to",
+  "io": " Lisa",
+  "s": " James"
+ },
+ {
+  "input": "Then, Scott and Mary had a lot of fun at the restaurant. Mary gave a ring to",
+  "io": " Scott",
+  "s": " Mary"
+ },
+ {
+  "input": "Then, Martin and Anna went to the garden. Martin gave a necklace to",
+  "io": " Anna",
+  "s": " Martin"
+ },
+ {
+  "input": "Then, James and Dan went to the office. Dan gave a drink to",
+  "io": " James",
+  "s": " Dan"
+ },
+ {
+  "input": "Friends James and Mary found a ring at the office. James gave it to",
+  "io": " Mary",
+  "s": " James"
+ },
+ {
+  "input": "Then, Tom and Anna went to the park. Anna gave a drink to",
+  "io": " Tom",
+  "s": " Anna"
+ },
+ {
+  "input": "Then, Martin and Amy had a lot of fun at the park. Martin gave a basketball to",
+  "io": " Amy",
+  "s": " Martin"
+ },
+ {
+  "input": "Then, Rachel and John went to the store. John gave a necklace to",
+  "io": " Rachel",
+  "s": " John"
+ },
+ {
+  "input": "When Tom and Sarah got a ring at the office, Tom decided to give it to",
+  "io": " Sarah",
+  "s": " Tom"
+ },
+ {
+  "input": "Friends Anna and Laura found a drink at the school. Laura gave it to",
+  "io": " Anna",
+  "s": " Laura"
+ },
+ {
+  "input": "Then, Lisa and John had a lot of fun at the park. Lisa gave a necklace to",
+  "io": " John",
+  "s": " Lisa"
+ },
+ {
+  "input": "Then, Sarah and Anna had a lot of fun at the station. Anna gave a bone to",
+  "io": " Sarah",
+  "s": " Anna"
+ },
+ {
+  "input": "When Susan and John got a bone at the school, Susan decided to give it to",
+  "io": " John",
+  "s": " Susan"
+ },
+ {
+  "input": "Then, Jason and Sarah had a lot of fun at the park. Sarah gave a basketball to",
+  "io": " Jason",
+  "s": " Sarah"
+ },
+ {
+  "input": "When Emily and Mary got a book at the hospital, Emily decided to give it to",
+  "io": " Mary",
+  "s": " Emily"
+ },
+ {
+  "input": "Then, Peter and Susan went to the restaurant. Susan gave a bone to",
+  "io": " Peter",
+  "s": " Susan"
+ },
+ {
+  "input": "Then, Rachel and Mark went to the park. Rachel gave a ball to",
+  "io": " Mark",
+  "s": " Rachel"
+ },
+ {
+  "input": "Friends Karen and Sarah found a snack at the school. Sarah gave it to",
+  "io": " Karen",
+  "s": " Sarah"
+ },
+ {
+  "input": "Then, Lisa and Anna had a lot of fun at the restaurant. Lisa gave a ball to",
+  "io": " Anna",
+  "s": " Lisa"
+ },
+ {
+  "input": "Then, Adam and Kevin went to the hospital. Kevin gave a necklace to",
+  "io": " Adam",
+  "s": " Kevin"
+ },
+ {
+  "input": "Then, Lisa and Mary had a lot of fun at the office. Lisa gave a ball to",
+  "io": " Mary",
+  "s": " Lisa"
+ },
+ {
+  "input": "Friends Scott and Eric found a necklace at the station. Eric gave it to",
+  "io": " Scott",
+  "s": " Eric"
+ },
+ {
+  "input": "Then, Peter and John had a lot of fun at the hospital. Peter gave a drink to",
+  "io": " John",
+  "s": " Peter"
+ },
+ {
+  "input": "Friends Mark and Tom found a bone at the restaurant. Tom gave it to",
+  "io": " Mark",
+  "s": " Tom"
+ },
+ {
+  "input": "Friends Emily and Jason found a drink at the store. Emily gave it to",
+  "io": " Jason",
+  "s": " Emily"
+ },
+ {
+  "input": "Friends Paul and Kevin found a drink at the station. Kevin gave it to",
+  "io": " Paul",
+  "s": " Kevin"
+ },
+ {
+  "input": "Then, Karen and Amy went to the park. Karen gave a bone to",
+  "io": " Amy",
+  "s": " Karen"
+ },
+ {
+  "input": "Then, Peter and Susan went to the hospital. Susan gave a ball to",
+  "io": " Peter",
+  "s": " Susan"
+ },
+ {
+  "input": "Then, Mary and Amy had a lot of fun at the store. Mary gave a ring to",
+  "io": " Amy",
+  "s": " Mary"
+ },
+ {
+  "input": "When James and Lisa got a book at the office, Lisa decided to give it to",
+  "io": " James",
+  "s": " Lisa"
+ },
+ {
+  "input": "Friends Martin and Adam found a basketball at the park. Martin gave it to",
+  "io": " Adam",
+  "s": " Martin"
+ },
+ {
+  "input": "Friends Eric and Tom found a book at the store. Tom gave it to",
+  "io": " Eric",
+  "s": " Tom"
+ },
+ {
+  "input": "Then, Sarah and James went to the school. Sarah gave a ball to",
+  "io": " James",
+  "s": " Sarah"
+ },
+ {
+  "input": "Then, Dan and Sarah went to the store. Sarah gave a drink to",
+  "io": " Dan",
+  "s": " Sarah"
+ },
+ {
+  "input": "When Susan and Amy got a ball at the restaurant, Susan decided to give it to",
+  "io": " Amy",
+  "s": " Susan"
+ },
+ {
+  "input": "Friends Ryan and John found a basketball at the station. John gave it to",
+  "io": " Ryan",
+  "s": " John"
+ },
+ {
+  "input": "Friends Karen and Anna found a snack at the school. Karen gave it to",
+  "io": " Anna",
+  "s": " Karen"
+ },
+ {
+  "input": "Then, Ryan and Kevin had a lot of fun at the store. Kevin gave a bone to",
+  "io": " Ryan",
+  "s": " Kevin"
+ },
+ {
+  "input": "Then, Paul and Sarah went to the garden. Paul gave a ball to",
+  "io": " Sarah",
+  "s": " Paul"
+ },
+ {
+  "input": "When Paul and Lisa got a drink at the store, Lisa decided to give it to",
+  "io": " Paul",
+  "s": " Lisa"
+ },
+ {
+  "input": "Friends Dan and Martin found a ball at the restaurant. Dan gave it to",
+  "io": " Martin",
+  "s": " Dan"
+ },
+ {
+  "input": "Friends Karen and Dan found a ring at the restaurant. Dan gave it to",
+  "io": " Karen",
+  "s": " Dan"
+ },
+ {
+  "input": "Then, Scott and Rachel had a lot of fun at the store. Scott gave a book to",
+  "io": " Rachel",
+  "s": " Scott"
+ },
+ {
+  "input": "Friends Jason and Rachel found a book at the park. Rachel gave it to",
+  "io": " Jason",
+  "s": " Rachel"
+ },
+ {
+  "input": "Then, Kevin and Paul went to the hospital. Kevin gave a ring to",
+  "io": " Paul",
+  "s": " Kevin"
+ },
+ {
+  "input": "When Karen and Emily got a ball at the station, Emily decided to give it to",
+  "io": " Karen",
+  "s": " Emily"
+ },
+ {
+  "input": "Friends Emily and James found a basketball at the park. Emily gave it to",
+  "io": " James",
+  "s": " Emily"
+ },
+ {
+  "input": "Then, John and Kevin had a lot of fun at the garden. Kevin gave a bone to",
+  "io": " John",
+  "s": " Kevin"
+ },
+ {
+  "input": "Then, Ryan and Eric went to the hospital. Ryan gave a ring to",
+  "io": " Eric",
+  "s": " Ryan"
+ },
+ {
+  "input": "Friends Tom and Amy found a drink at the office. Amy gave it to",
+  "io": " Tom",
+  "s": " Amy"
+ },
+ {
+  "input": "Friends James and Mary found a book at the hospital. James gave it to",
+  "io": " Mary",
+  "s": " James"
+ },
+ {
+  "input": "Then, Emily and Ryan went to the office. Ryan gave a necklace to",
+  "io": " Emily",
+  "s": " Ryan"
+ },
+ {
+  "input": "Friends Scott and Anna found a bone at the restaurant. Scott gave it to",
+  "io": " Anna",
+  "s": " Scott"
+ },
+ {
+  "input": "Then, Amy and Anna went to the park. Anna gave a ring to",
+  "io": " Amy",
+  "s": " Anna"
+ },
+ {
+  "input": "Friends Mark and Jason found a ring at the office. Mark gave it to",
+  "io": " Jason",
+  "s": " Mark"
+ },
+ {
+  "input": "Then, Peter and Sarah had a lot of fun at the office. Sarah gave a drink to",
+  "io": " Peter",
+  "s": " Sarah"
+ },
+ {
+  "input": "Friends Dan and Lisa found a snack at the park. Dan gave it to",
+  "io": " Lisa",
+  "s": " Dan"
+ },
+ {
+  "input": "Friends Peter and Anna found a ring at the school. Anna gave it to",
+  "io": " Peter",
+  "s": " Anna"
+ },
+ {
+  "input": "Friends Ryan and Dan found a necklace at the hospital. Ryan gave it to",
+  "io": " Dan",
+  "s": " Ryan"
+ },
+ {
+  "input": "Then, Susan and Paul had a lot of fun at the station. Paul gave a basketball to",
+  "io": " Susan",
+  "s": " Paul"
+ },
+ {
+  "input": "When Lisa and Karen got a drink at the office, Lisa decided to give it to",
+  "io": " Karen",
+  "s": " Lisa"
+ },
+ {
+  "input": "Then, Adam and Rachel went to the garden. Rachel gave a ball to",
+  "io": " Adam",
+  "s": " Rachel"
+ },
+ {
+  "input": "Friends Dan and Jason found a bone at the restaurant. Dan gave it to",
+  "io": " Jason",
+  "s": " Dan"
+ },
+ {
+  "input": "Then, Ryan and Kevin went to the station. Kevin gave a ring to",
+  "io": " Ryan",
+  "s": " Kevin"
+ },
+ {
+  "input": "Then, John and Jason had a lot of fun at the park. John gave a snack to",
+  "io": " Jason",
+  "s": " John"
+ },
+ {
+  "input": "When John and Kevin got a basketball at the store, Kevin decided to give it to",
+  "io": " John",
+  "s": " Kevin"
+ },
+ {
+  "input": "Friends Dan and Martin found a ball at the station. Dan gave it to",
+  "io": " Martin",
+  "s": " Dan"
+ },
+ {
+  "input": "Friends Jason and John found a ring at the park. John gave it to",
+  "io": " Jason",
+  "s": " John"
+ },
+ {
+  "input": "Friends Kevin and Amy found a basketball at the hospital. Kevin gave it to",
+  "io": " Amy",
+  "s": " Kevin"
+ },
+ {
+  "input": "Then, Lisa and Ryan went to the office. Ryan gave a drink to",
+  "io": " Lisa",
+  "s": " Ryan"
+ },
+ {
+  "input": "When Martin and Rachel got a book at the restaurant, Martin decided to give it to",
+  "io": " Rachel",
+  "s": " Martin"
+ },
+ {
+  "input": "Friends Tom and Emily found a book at the restaurant. Emily gave it to",
+  "io": " Tom",
+  "s": " Emily"
+ },
+ {
+  "input": "Then, John and Peter had a lot of fun at the school. John gave a bone to",
+  "io": " Peter",
+  "s": " John"
+ },
+ {
+  "input": "Then, Kevin and Rachel went to the garden. Rachel gave a drink to",
+  "io": " Kevin",
+  "s": " Rachel"
+ },
+ {
+  "input": "Then, Laura and Emily went to the school. Laura gave a basketball to",
+  "io": " Emily",
+  "s": " Laura"
+ },
+ {
+  "input": "Friends Susan and Adam found a ball at the school. Adam gave it to",
+  "io": " Susan",
+  "s": " Adam"
+ },
+ {
+  "input": "Friends Lisa and John found a necklace at the station. Lisa gave it to",
+  "io": " John",
+  "s": " Lisa"
+ },
+ {
+  "input": "Then, John and James went to the station. James gave a bone to",
+  "io": " John",
+  "s": " James"
+ },
+ {
+  "input": "Then, Lisa and John went to the school. Lisa gave a ball to",
+  "io": " John",
+  "s": " Lisa"
+ },
+ {
+  "input": "Friends Adam and Karen found a snack at the garden. Karen gave it to",
+  "io": " Adam",
+  "s": " Karen"
+ },
+ {
+  "input": "When James and Emily got a basketball at the store, James decided to give it to",
+  "io": " Emily",
+  "s": " James"
+ },
+ {
+  "input": "Friends Eric and James found a bone at the restaurant. James gave it to",
+  "io": " Eric",
+  "s": " James"
+ },
+ {
+  "input": "Then, Rachel and Kevin went to the park. Rachel gave a snack to",
+  "io": " Kevin",
+  "s": " Rachel"
+ },
+ {
+  "input": "Friends Peter and Mark found a snack at the garden. Mark gave it to",
+  "io": " Peter",
+  "s": " Mark"
+ },
+ {
+  "input": "Then, Eric and Anna went to the park. Eric gave a drink to",
+  "io": " Anna",
+  "s": " Eric"
+ },
+ {
+  "input": "Then, Emily and Sarah had a lot of fun at the store. Sarah gave a snack to",
+  "io": " Emily",
+  "s": " Sarah"
+ },
+ {
+  "input": "Then, Eric and Tom went to the hospital. Eric gave a book to",
+  "io": " Tom",
+  "s": " Eric"
+ },
+ {
+  "input": "Then, Dan and Laura went to the hospital. Laura gave a ring to",
+  "io": " Dan",
+  "s": " Laura"
+ },
+ {
+  "input": "Then, Tom and Laura had a lot of fun at the park. Tom gave a necklace to",
+  "io": " Laura",
+  "s": " Tom"
+ },
+ {
+  "input": "Friends Rachel and Mary found a necklace at the station. Mary gave it to",
+  "io": " Rachel",
+  "s": " Mary"
+ },
+ {
+  "input": "Then, Emily and Mary went to the garden. Emily gave a book to",
+  "io": " Mary",
+  "s": " Emily"
+ },
+ {
+  "input": "Then, Anna and Tom went to the park. Tom gave a ball to",
+  "io": " Anna",
+  "s": " Tom"
+ },
+ {
+  "input": "When Martin and Anna got a snack at the store, Martin decided to give it to",
+  "io": " Anna",
+  "s": " Martin"
+ },
+ {
+  "input": "Then, Tom and Lisa went to the school. Lisa gave a snack to",
+  "io": " Tom",
+  "s": " Lisa"
+ },
+ {
+  "input": "When Susan and Amy got a drink at the park, Susan decided to give it to",
+  "io": " Amy",
+  "s": " Susan"
+ },
+ {
+  "input": "Then, Anna and Adam had a lot of fun at the store. Adam gave a snack to",
+  "io": " Anna",
+  "s": " Adam"
+ },
+ {
+  "input": "When Mark and Martin got a basketball at the park, Mark decided to give it to",
+  "io": " Martin",
+  "s": " Mark"
+ },
+ {
+  "input": "Then, Adam and Sarah had a lot of fun at the school. Sarah gave a drink to",
+  "io": " Adam",
+  "s": " Sarah"
+ },
+ {
+  "input": "When Paul and Anna got a book at the station, Paul decided to give it to",
+  "io": " Anna",
+  "s": " Paul"
+ },
+ {
+  "input": "Then, Karen and Eric went to the garden. Eric gave a bone to",
+  "io": " Karen",
+  "s": " Eric"
+ },
+ {
+  "input": "Friends Karen and James found a bone at the restaurant. Karen gave it to",
+  "io": " James",
+  "s": " Karen"
+ },
+ {
+  "input": "Then, Dan and Scott had a lot of fun at the garden. Scott gave a snack to",
+  "io": " Dan",
+  "s": " Scott"
+ },
+ {
+  "input": "Then, Kevin and Martin went to the garden. Kevin gave a necklace to",
+  "io": " Martin",
+  "s": " Kevin"
+ },
+ {
+  "input": "Then, Dan and Lisa went to the store. Lisa gave a necklace to",
+  "io": " Dan",
+  "s": " Lisa"
+ },
+ {
+  "input": "When Tom and Adam got a necklace at the school, Tom decided to give it to",
+  "io": " Adam",
+  "s": " Tom"
+ },
+ {
+  "input": "When Karen and Laura got a necklace at the school, Laura decided to give it to",
+  "io": " Karen",
+  "s": " Laura"
+ },
+ {
+  "input": "Friends Anna and Eric found a snack at the park. Anna gave it to",
+  "io": " Eric",
+  "s": " Anna"
+ },
+ {
+  "input": "Friends Eric and Anna found a necklace at the store. Anna gave it to",
+  "io": " Eric",
+  "s": " Anna"
+ },
+ {
+  "input": "Then, Laura and Mary had a lot of fun at the garden. Laura gave a basketball to",
+  "io": " Mary",
+  "s": " Laura"
+ },
+ {
+  "input": "Then, Anna and Kevin had a lot of fun at the station. Kevin gave a ring to",
+  "io": " Anna",
+  "s": " Kevin"
+ },
+ {
+  "input": "Friends Sarah and James found a bone at the park. Sarah gave it to",
+  "io": " James",
+  "s": " Sarah"
+ },
+ {
+  "input": "Then, Peter and Martin had a lot of fun at the hospital. Martin gave a necklace to",
+  "io": " Peter",
+  "s": " Martin"
+ },
+ {
+  "input": "When Mark and Scott got a bone at the garden, Mark decided to give it to",
+  "io": " Scott",
+  "s": " Mark"
+ },
+ {
+  "input": "Then, Mark and Eric had a lot of fun at the park. Eric gave a basketball to",
+  "io": " Mark",
+  "s": " Eric"
+ },
+ {
+  "input": "Then, Mary and Kevin went to the station. Mary gave a basketball to",
+  "io": " Kevin",
+  "s": " Mary"
+ },
+ {
+  "input": "Then, Amy and Kevin had a lot of fun at the park. Kevin gave a book to",
+  "io": " Amy",
+  "s": " Kevin"
+ },
+ {
+  "input": "Friends Adam and Laura found a ring at the station. Adam gave it to",
+  "io": " Laura",
+  "s": " Adam"
+ },
+ {
+  "input": "Then, Scott and Karen went to the hospital. Karen gave a book to",
+  "io": " Scott",
+  "s": " Karen"
+ },
+ {
+  "input": "When Sarah and James got a drink at the store, Sarah decided to give it to",
+  "io": " James",
+  "s": " Sarah"
+ },
+ {
+  "input": "Then, Peter and Jason went to the hospital. Jason gave a basketball to",
+  "io": " Peter",
+  "s": " Jason"
+ },
+ {
+  "input": "Then, Sarah and Rachel had a lot of fun at the garden. Sarah gave a book to",
+  "io": " Rachel",
+  "s": " Sarah"
+ },
+ {
+  "input": "When Lisa and Tom got a ring at the store, Tom decided to give it to",
+  "io": " Lisa",
+  "s": " Tom"
+ },
+ {
+  "input": "Then, Karen and Kevin had a lot of fun at the garden. Karen gave a ring to",
+  "io": " Kevin",
+  "s": " Karen"
+ },
+ {
+  "input": "When Martin and Tom got a book at the hospital, Tom decided to give it to",
+  "io": " Martin",
+  "s": " Tom"
+ },
+ {
+  "input": "Friends Dan and Jason found a ring at the office. Dan gave it to",
+  "io": " Jason",
+  "s": " Dan"
+ },
+ {
+  "input": "When Eric and Karen got a book at the hospital, Karen decided to give it to",
+  "io": " Eric",
+  "s": " Karen"
+ },
+ {
+  "input": "Then, Anna and Mark went to the school. Anna gave a bone to",
+  "io": " Mark",
+  "s": " Anna"
+ },
+ {
+  "input": "Friends Adam and James found a necklace at the hospital. James gave it to",
+  "io": " Adam",
+  "s": " James"
+ },
+ {
+  "input": "Friends Karen and Dan found a ball at the restaurant. Karen gave it to",
+  "io": " Dan",
+  "s": " Karen"
+ },
+ {
+  "input": "Friends Rachel and Laura found a basketball at the office. Laura gave it to",
+  "io": " Rachel",
+  "s": " Laura"
+ },
+ {
+  "input": "Then, Jason and Adam went to the garden. Jason gave a basketball to",
+  "io": " Adam",
+  "s": " Jason"
+ },
+ {
+  "input": "Then, Mark and Kevin went to the school. Kevin gave a basketball to",
+  "io": " Mark",
+  "s": " Kevin"
+ },
+ {
+  "input": "Friends Amy and Lisa found a ball at the store. Amy gave it to",
+  "io": " Lisa",
+  "s": " Amy"
+ },
+ {
+  "input": "Friends Peter and Mary found a ring at the park. Mary gave it to",
+  "io": " Peter",
+  "s": " Mary"
+ },
+ {
+  "input": "Then, Anna and Mary went to the store. Anna gave a ring to",
+  "io": " Mary",
+  "s": " Anna"
+ },
+ {
+  "input": "Then, Sarah and Eric had a lot of fun at the restaurant. Eric gave a snack to",
+  "io": " Sarah",
+  "s": " Eric"
+ },
+ {
+  "input": "Friends Kevin and Ryan found a ring at the office. Kevin gave it to",
+  "io": " Ryan",
+  "s": " Kevin"
+ },
+ {
+  "input": "Then, Mark and Adam had a lot of fun at the garden. Adam gave a necklace to",
+  "io": " Mark",
+  "s": " Adam"
+ },
+ {
+  "input": "Friends Laura and Paul found a bone at the hospital. Laura gave it to",
+  "io": " Paul",
+  "s": " Laura"
+ },
+ {
+  "input": "Then, Adam and Dan had a lot of fun at the garden. Dan gave a bone to",
+  "io": " Adam",
+  "s": " Dan"
+ },
+ {
+  "input": "Friends Mark and Martin found a necklace at the garden. Mark gave it to",
+  "io": " Martin",
+  "s": " Mark"
+ },
+ {
+  "input": "Friends Emily and Peter found a snack at the office. Peter gave it to",
+  "io": " Emily",
+  "s": " Peter"
+ },
+ {
+  "input": "Then, Ryan and Amy went to the store. Ryan gave a necklace to",
+  "io": " Amy",
+  "s": " Ryan"
+ },
+ {
+  "input": "When Scott and Eric got a bone at the park, Eric decided to give it to",
+  "io": " Scott",
+  "s": " Eric"
+ },
+ {
+  "input": "When Rachel and John got a snack at the school, Rachel decided to give it to",
+  "io": " John",
+  "s": " Rachel"
+ },
+ {
+  "input": "Friends Lisa and Tom found a ball at the restaurant. Tom gave it to",
+  "io": " Lisa",
+  "s": " Tom"
+ },
+ {
+  "input": "Friends John and Mark found a basketball at the hospital. John gave it to",
+  "io": " Mark",
+  "s": " John"
+ },
+ {
+  "input": "When Sarah and Adam got a snack at the station, Adam decided to give it to",
+  "io": " Sarah",
+  "s": " Adam"
+ },
+ {
+  "input": "Then, John and Sarah had a lot of fun at the store. John gave a drink to",
+  "io": " Sarah",
+  "s": " John"
+ },
+ {
+  "input": "Then, Anna and Mary had a lot of fun at the restaurant. Mary gave a drink to",
+  "io": " Anna",
+  "s": " Mary"
+ },
+ {
+  "input": "Then, Laura and Tom had a lot of fun at the office. Laura gave a necklace to",
+  "io": " Tom",
+  "s": " Laura"
+ },
+ {
+  "input": "Then, Mark and Amy went to the garden. Amy gave a ring to",
+  "io": " Mark",
+  "s": " Amy"
+ },
+ {
+  "input": "When Karen and Paul got a ball at the station, Karen decided to give it to",
+  "io": " Paul",
+  "s": " Karen"
+ },
+ {
+  "input": "When Mary and Jason got a snack at the store, Jason decided to give it to",
+  "io": " Mary",
+  "s": " Jason"
+ },
+ {
+  "input": "Then, Amy and Tom had a lot of fun at the garden. Amy gave a snack to",
+  "io": " Tom",
+  "s": " Amy"
+ },
+ {
+  "input": "Friends Sarah and Susan found a book at the restaurant. Susan gave it to",
+  "io": " Sarah",
+  "s": " Susan"
+ },
+ {
+  "input": "Then, Emily and Sarah went to the garden. Emily gave a snack to",
+  "io": " Sarah",
+  "s": " Emily"
+ },
+ {
+  "input": "Friends Kevin and Karen found a drink at the park. Karen gave it to",
+  "io": " Kevin",
+  "s": " Karen"
+ },
+ {
+  "input": "Friends Rachel and Emily found a drink at the station. Rachel gave it to",
+  "io": " Emily",
+  "s": " Rachel"
+ },
+ {
+  "input": "Then, Emily and Mark went to the station. Mark gave a ring to",
+  "io": " Emily",
+  "s": " Mark"
+ },
+ {
+  "input": "Friends Scott and Tom found a bone at the park. Scott gave it to",
+  "io": " Tom",
+  "s": " Scott"
+ },
+ {
+  "input": "Friends Amy and Mark found a necklace at the park. Mark gave it to",
+  "io": " Amy",
+  "s": " Mark"
+ },
+ {
+  "input": "Then, Martin and John had a lot of fun at the office. Martin gave a basketball to",
+  "io": " John",
+  "s": " Martin"
+ },
+ {
+  "input": "Friends Dan and Sarah found a ball at the garden. Sarah gave it to",
+  "io": " Dan",
+  "s": " Sarah"
+ },
+ {
+  "input": "When Karen and James got a snack at the restaurant, Karen decided to give it to",
+  "io": " James",
+  "s": " Karen"
+ },
+ {
+  "input": "When Mark and Jason got a book at the station, Jason decided to give it to",
+  "io": " Mark",
+  "s": " Jason"
+ },
+ {
+  "input": "Then, Mary and Scott had a lot of fun at the park. Mary gave a ring to",
+  "io": " Scott",
+  "s": " Mary"
+ },
+ {
+  "input": "When Rachel and Laura got a snack at the office, Laura decided to give it to",
+  "io": " Rachel",
+  "s": " Laura"
+ },
+ {
+  "input": "Then, Susan and Rachel went to the store. Susan gave a necklace to",
+  "io": " Rachel",
+  "s": " Susan"
+ },
+ {
+  "input": "When James and Peter got a ring at the restaurant, Peter decided to give it to",
+  "io": " James",
+  "s": " Peter"
+ },
+ {
+  "input": "Then, Susan and Scott had a lot of fun at the restaurant. Susan gave a snack to",
+  "io": " Scott",
+  "s": " Susan"
+ },
+ {
+  "input": "Then, Tom and Jason had a lot of fun at the restaurant. Jason gave a ball to",
+  "io": " Tom",
+  "s": " Jason"
+ },
+ {
+  "input": "Then, Eric and Anna had a lot of fun at the station. Eric gave a book to",
+  "io": " Anna",
+  "s": " Eric"
+ },
+ {
+  "input": "Then, Dan and Mary went to the garden. Mary gave a ball to",
+  "io": " Dan",
+  "s": " Mary"
+ },
+ {
+  "input": "Then, Peter and Dan went to the school. Peter gave a bone to",
+  "io": " Dan",
+  "s": " Peter"
+ },
+ {
+  "input": "Then, Dan and Amy had a lot of fun at the station. Amy gave a snack to",
+  "io": " Dan",
+  "s": " Amy"
+ },
+ {
+  "input": "When Dan and Rachel got a necklace at the office, Dan decided to give it to",
+  "io": " Rachel",
+  "s": " Dan"
+ },
+ {
+  "input": "Then, Lisa and Ryan went to the school. Ryan gave a basketball to",
+  "io": " Lisa",
+  "s": " Ryan"
+ },
+ {
+  "input": "Friends Mary and Lisa found a basketball at the garden. Mary gave it to",
+  "io": " Lisa",
+  "s": " Mary"
+ },
+ {
+  "input": "Friends Kevin and Mary found a bone at the office. Mary gave it to",
+  "io": " Kevin",
+  "s": " Mary"
+ },
+ {
+  "input": "When Emily and Rachel got a ring at the garden, Emily decided to give it to",
+  "io": " Rachel",
+  "s": " Emily"
+ },
+ {
+  "input": "When Dan and Lisa got a snack at the hospital, Lisa decided to give it to",
+  "io": " Dan",
+  "s": " Lisa"
+ },
+ {
+  "input": "Then, Peter and Kevin went to the store. Peter gave a snack to",
+  "io": " Kevin",
+  "s": " Peter"
+ },
+ {
+  "input": "Friends Paul and Rachel found a ball at the office. Rachel gave it to",
+  "io": " Paul",
+  "s": " Rachel"
+ },
+ {
+  "input": "When Rachel and Susan got a book at the office, Rachel decided to give it to",
+  "io": " Susan",
+  "s": " Rachel"
+ },
+ {
+  "input": "When Susan and Martin got a drink at the restaurant, Martin decided to give it to",
+  "io": " Susan",
+  "s": " Martin"
+ },
+ {
+  "input": "When Karen and Ryan got a bone at the store, Karen decided to give it to",
+  "io": " Ryan",
+  "s": " Karen"
+ },
+ {
+  "input": "Then, Mary and Emily had a lot of fun at the store. Emily gave a drink to",
+  "io": " Mary",
+  "s": " Emily"
+ },
+ {
+  "input": "Then, Mary and John went to the office. Mary gave a ball to",
+  "io": " John",
+  "s": " Mary"
+ },
+ {
+  "input": "Then, John and Anna had a lot of fun at the hospital. Anna gave a bone to",
+  "io": " John",
+  "s": " Anna"
+ },
+ {
+  "input": "When Laura and Mark got a ball at the school, Laura decided to give it to",
+  "io": " Mark",
+  "s": " Laura"
+ },
+ {
+  "input": "Friends Martin and Eric found a necklace at the garden. Eric gave it to",
+  "io": " Martin",
+  "s": " Eric"
+ },
+ {
+  "input": "Then, Laura and Mary went to the restaurant. Laura gave a basketball to",
+  "io": " Mary",
+  "s": " Laura"
+ },
+ {
+  "input": "Then, Ryan and James had a lot of fun at the hospital. James gave a necklace to",
+  "io": " Ryan",
+  "s": " James"
+ },
+ {
+  "input": "Then, Jason and Mary went to the school. Jason gave a bone to",
+  "io": " Mary",
+  "s": " Jason"
+ },
+ {
+  "input": "Then, Paul and Scott went to the school. Scott gave a snack to",
+  "io": " Paul",
+  "s": " Scott"
+ },
+ {
+  "input": "Friends Rachel and Martin found a ring at the school. Rachel gave it to",
+  "io": " Martin",
+  "s": " Rachel"
+ },
+ {
+  "input": "Then, Lisa and James went to the station. James gave a bone to",
+  "io": " Lisa",
+  "s": " James"
+ },
+ {
+  "input": "Then, Paul and Sarah went to the hospital. Paul gave a drink to",
+  "io": " Sarah",
+  "s": " Paul"
+ },
+ {
+  "input": "Then, Emily and Tom had a lot of fun at the garden. Tom gave a book to",
+  "io": " Emily",
+  "s": " Tom"
+ },
+ {
+  "input": "Friends Scott and Mark found a bone at the garden. Scott gave it to",
+  "io": " Mark",
+  "s": " Scott"
+ },
+ {
+  "input": "Then, Paul and Sarah went to the station. Sarah gave a necklace to",
+  "io": " Paul",
+  "s": " Sarah"
+ },
+ {
+  "input": "Then, Jason and Kevin went to the restaurant. Jason gave a basketball to",
+  "io": " Kevin",
+  "s": " Jason"
+ },
+ {
+  "input": "Friends Karen and Ryan found a drink at the restaurant. Ryan gave it to",
+  "io": " Karen",
+  "s": " Ryan"
+ },
+ {
+  "input": "When Rachel and Peter got a necklace at the park, Rachel decided to give it to",
+  "io": " Peter",
+  "s": " Rachel"
+ },
+ {
+  "input": "Then, Emily and John went to the store. John gave a book to",
+  "io": " Emily",
+  "s": " John"
+ },
+ {
+  "input": "When Susan and Sarah got a snack at the restaurant, Susan decided to give it to",
+  "io": " Sarah",
+  "s": " Susan"
+ },
+ {
+  "input": "When Peter and Sarah got a ring at the office, Sarah decided to give it to",
+  "io": " Peter",
+  "s": " Sarah"
+ },
+ {
+  "input": "Then, Ryan and Scott had a lot of fun at the garden. Ryan gave a bone to",
+  "io": " Scott",
+  "s": " Ryan"
+ },
+ {
+  "input": "Then, Paul and Rachel had a lot of fun at the store. Rachel gave a drink to",
+  "io": " Paul",
+  "s": " Rachel"
+ },
+ {
+  "input": "Friends Kevin and Anna found a ball at the restaurant. Kevin gave it to",
+  "io": " Anna",
+  "s": " Kevin"
+ },
+ {
+  "input": "Then, Peter and Lisa went to the hospital. Lisa gave a bone to",
+  "io": " Peter",
+  "s": " Lisa"
+ },
+ {
+  "input": "Then, Ryan and Dan had a lot of fun at the store. Ryan gave a basketball to",
+  "io": " Dan",
+  "s": " Ryan"
+ },
+ {
+  "input": "Then, Paul and Mary had a lot of fun at the station. Mary gave a book to",
+  "io": " Paul",
+  "s": " Mary"
+ },
+ {
+  "input": "Then, Karen and Tom had a lot of fun at the hospital. Karen gave a book to",
+  "io": " Tom",
+  "s": " Karen"
+ },
+ {
+  "input": "Then, Jason and Martin went to the park. Martin gave a bone to",
+  "io": " Jason",
+  "s": " Martin"
+ },
+ {
+  "input": "When Eric and Jason got a necklace at the hospital, Eric decided to give it to",
+  "io": " Jason",
+  "s": " Eric"
+ },
+ {
+  "input": "When Kevin and Mary got a book at the hospital, Mary decided to give it to",
+  "io": " Kevin",
+  "s": " Mary"
+ },
+ {
+  "input": "Then, Jason and Karen had a lot of fun at the garden. Jason gave a ball to",
+  "io": " Karen",
+  "s": " Jason"
+ },
+ {
+  "input": "Then, Adam and Laura had a lot of fun at the school. Laura gave a drink to",
+  "io": " Adam",
+  "s": " Laura"
+ },
+ {
+  "input": "Friends Adam and Susan found a ball at the hospital. Adam gave it to",
+  "io": " Susan",
+  "s": " Adam"
+ },
+ {
+  "input": "Then, John and Karen went to the hospital. Karen gave a snack to",
+  "io": " John",
+  "s": " Karen"
+ },
+ {
+  "input": "When Jason and Anna got a snack at the school, Jason decided to give it to",
+  "io": " Anna",
+  "s": " Jason"
+ },
+ {
+  "input": "Then, Eric and Adam had a lot of fun at the station. Adam gave a drink to",
+  "io": " Eric",
+  "s": " Adam"
+ },
+ {
+  "input": "Friends Scott and Ryan found a bone at the restaurant. Scott gave it to",
+  "io": " Ryan",
+  "s": " Scott"
+ },
+ {
+  "input": "Friends Tom and Ryan found a snack at the station. Ryan gave it to",
+  "io": " Tom",
+  "s": " Ryan"
+ },
+ {
+  "input": "Then, Adam and Jason had a lot of fun at the park. Adam gave a snack to",
+  "io": " Jason",
+  "s": " Adam"
+ },
+ {
+  "input": "When Mark and Tom got a necklace at the hospital, Tom decided to give it to",
+  "io": " Mark",
+  "s": " Tom"
+ },
+ {
+  "input": "Then, Laura and Sarah went to the garden. Laura gave a ball to",
+  "io": " Sarah",
+  "s": " Laura"
+ },
+ {
+  "input": "When Kevin and Mary got a drink at the station, Mary decided to give it to",
+  "io": " Kevin",
+  "s": " Mary"
+ },
+ {
+  "input": "Friends Peter and Amy found a necklace at the hospital. Peter gave it to",
+  "io": " Amy",
+  "s": " Peter"
+ },
+ {
+  "input": "Then, Adam and John had a lot of fun at the station. John gave a ball to",
+  "io": " Adam",
+  "s": " John"
+ },
+ {
+  "input": "Then, Adam and Ryan went to the restaurant. Adam gave a ball to",
+  "io": " Ryan",
+  "s": " Adam"
+ },
+ {
+  "input": "Then, Peter and Emily went to the school. Emily gave a drink to",
+  "io": " Peter",
+  "s": " Emily"
+ },
+ {
+  "input": "Then, Anna and Ryan went to the garden. Anna gave a drink to",
+  "io": " Ryan",
+  "s": " Anna"
+ },
+ {
+  "input": "Then, Amy and Adam went to the park. Adam gave a basketball to",
+  "io": " Amy",
+  "s": " Adam"
+ },
+ {
+  "input": "Then, Mary and Paul had a lot of fun at the garden. Mary gave a necklace to",
+  "io": " Paul",
+  "s": " Mary"
+ },
+ {
+  "input": "Then, Eric and Sarah had a lot of fun at the hospital. Sarah gave a bone to",
+  "io": " Eric",
+  "s": " Sarah"
+ },
+ {
+  "input": "Then, Kevin and Peter had a lot of fun at the store. Kevin gave a bone to",
+  "io": " Peter",
+  "s": " Kevin"
+ },
+ {
+  "input": "Friends Dan and Emily found a drink at the store. Emily gave it to",
+  "io": " Dan",
+  "s": " Emily"
+ },
+ {
+  "input": "Then, Anna and Martin had a lot of fun at the park. Anna gave a ring to",
+  "io": " Martin",
+  "s": " Anna"
+ },
+ {
+  "input": "When Sarah and Amy got a ball at the restaurant, Amy decided to give it to",
+  "io": " Sarah",
+  "s": " Amy"
+ },
+ {
+  "input": "Friends Jason and Sarah found a bone at the station. Jason gave it to",
+  "io": " Sarah",
+  "s": " Jason"
+ },
+ {
+  "input": "Then, Karen and Dan went to the store. Dan gave a bone to",
+  "io": " Karen",
+  "s": " Dan"
+ },
+ {
+  "input": "Then, Tom and Paul had a lot of fun at the office. Tom gave a basketball to",
+  "io": " Paul",
+  "s": " Tom"
+ },
+ {
+  "input": "Then, Mark and Jason had a lot of fun at the school. Jason gave a ball to",
+  "io": " Mark",
+  "s": " Jason"
+ },
+ {
+  "input": "When Karen and Emily got a ring at the store, Karen decided to give it to",
+  "io": " Emily",
+  "s": " Karen"
+ },
+ {
+  "input": "When Mary and Tom got a necklace at the park, Tom decided to give it to",
+  "io": " Mary",
+  "s": " Tom"
+ },
+ {
+  "input": "When Mark and Ryan got a necklace at the garden, Mark decided to give it to",
+  "io": " Ryan",
+  "s": " Mark"
+ },
+ {
+  "input": "Then, Eric and James went to the school. James gave a ball to",
+  "io": " Eric",
+  "s": " James"
+ },
+ {
+  "input": "When Rachel and Martin got a drink at the school, Rachel decided to give it to",
+  "io": " Martin",
+  "s": " Rachel"
+ },
+ {
+  "input": "Then, Lisa and Amy went to the store. Amy gave a necklace to",
+  "io": " Lisa",
+  "s": " Amy"
+ },
+ {
+  "input": "Then, Kevin and Adam had a lot of fun at the hospital. Kevin gave a drink to",
+  "io": " Adam",
+  "s": " Kevin"
+ },
+ {
+  "input": "Friends Anna and Tom found a drink at the hospital. Tom gave it to",
+  "io": " Anna",
+  "s": " Tom"
+ },
+ {
+  "input": "Friends Lisa and Anna found a book at the restaurant. Lisa gave it to",
+  "io": " Anna",
+  "s": " Lisa"
+ },
+ {
+  "input": "When Laura and Martin got a basketball at the store, Martin decided to give it to",
+  "io": " Laura",
+  "s": " Martin"
+ },
+ {
+  "input": "Then, Peter and Amy went to the park. Peter gave a ball to",
+  "io": " Amy",
+  "s": " Peter"
+ },
+ {
+  "input": "Then, James and Mary had a lot of fun at the garden. Mary gave a drink to",
+  "io": " James",
+  "s": " Mary"
+ },
+ {
+  "input": "Friends Lisa and Peter found a ball at the store. Lisa gave it to",
+  "io": " Peter",
+  "s": " Lisa"
+ },
+ {
+  "input": "Then, Karen and Rachel went to the station. Rachel gave a basketball to",
+  "io": " Karen",
+  "s": " Rachel"
+ },
+ {
+  "input": "Then, Karen and John went to the hospital. Karen gave a book to",
+  "io": " John",
+  "s": " Karen"
+ },
+ {
+  "input": "When Eric and Jason got a ring at the park, Jason decided to give it to",
+  "io": " Eric",
+  "s": " Jason"
+ },
+ {
+  "input": "Then, James and Anna had a lot of fun at the station. James gave a drink to",
+  "io": " Anna",
+  "s": " James"
+ },
+ {
+  "input": "Then, Jason and Eric went to the restaurant. Eric gave a drink to",
+  "io": " Jason",
+  "s": " Eric"
+ },
+ {
+  "input": "Then, Paul and Peter had a lot of fun at the school. Paul gave a bone to",
+  "io": " Peter",
+  "s": " Paul"
+ },
+ {
+  "input": "Then, Martin and Eric went to the office. Eric gave a ball to",
+  "io": " Martin",
+  "s": " Eric"
+ },
+ {
+  "input": "Then, Eric and Emily had a lot of fun at the hospital. Eric gave a drink to",
+  "io": " Emily",
+  "s": " Eric"
+ },
+ {
+  "input": "Then, Scott and Eric had a lot of fun at the restaurant. Eric gave a ball to",
+  "io": " Scott",
+  "s": " Eric"
+ },
+ {
+  "input": "Friends Anna and Scott found a bone at the office. Anna gave it to",
+  "io": " Scott",
+  "s": " Anna"
+ },
+ {
+  "input": "Then, Mark and Anna went to the school. Anna gave a necklace to",
+  "io": " Mark",
+  "s": " Anna"
+ },
+ {
+  "input": "Then, Ryan and Martin had a lot of fun at the store. Ryan gave a necklace to",
+  "io": " Martin",
+  "s": " Ryan"
+ },
+ {
+  "input": "Then, Dan and Mary went to the store. Mary gave a ball to",
+  "io": " Dan",
+  "s": " Mary"
+ },
+ {
+  "input": "Friends James and John found a bone at the school. James gave it to",
+  "io": " John",
+  "s": " James"
+ },
+ {
+  "input": "Then, Mary and Laura had a lot of fun at the hospital. Laura gave a ball to",
+  "io": " Mary",
+  "s": " Laura"
+ },
+ {
+  "input": "Then, Anna and Dan went to the office. Anna gave a necklace to",
+  "io": " Dan",
+  "s": " Anna"
+ },
+ {
+  "input": "Friends Dan and Laura found a ring at the garden. Laura gave it to",
+  "io": " Dan",
+  "s": " Laura"
+ },
+ {
+  "input": "Then, Scott and Laura had a lot of fun at the station. Scott gave a necklace to",
+  "io": " Laura",
+  "s": " Scott"
+ },
+ {
+  "input": "Then, Peter and Scott went to the station. Scott gave a necklace to",
+  "io": " Peter",
+  "s": " Scott"
+ },
+ {
+  "input": "Friends Jason and Sarah found a drink at the garden. Jason gave it to",
+  "io": " Sarah",
+  "s": " Jason"
+ },
+ {
+  "input": "Friends Scott and Sarah found a ball at the store. Sarah gave it to",
+  "io": " Scott",
+  "s": " Sarah"
+ },
+ {
+  "input": "Friends James and Eric found a bone at the store. James gave it to",
+  "io": " Eric",
+  "s": " James"
+ },
+ {
+  "input": "Then, Mary and Laura went to the hospital. Laura gave a necklace to",
+  "io": " Mary",
+  "s": " Laura"
+ },
+ {
+  "input": "Then, Mark and Adam had a lot of fun at the station. Mark gave a bone to",
+  "io": " Adam",
+  "s": " Mark"
+ },
+ {
+  "input": "When Paul and Emily got a bone at the hospital, Emily decided to give it to",
+  "io": " Paul",
+  "s": " Emily"
+ },
+ {
+  "input": "Then, James and Jason had a lot of fun at the garden. James gave a ball to",
+  "io": " Jason",
+  "s": " James"
+ },
+ {
+  "input": "Then, Eric and Anna had a lot of fun at the station. Anna gave a drink to",
+  "io": " Eric",
+  "s": " Anna"
+ },
+ {
+  "input": "Friends Martin and Sarah found a book at the garden. Martin gave it to",
+  "io": " Sarah",
+  "s": " Martin"
+ },
+ {
+  "input": "Then, Eric and John went to the restaurant. John gave a necklace to",
+  "io": " Eric",
+  "s": " John"
+ },
+ {
+  "input": "Then, Laura and Susan had a lot of fun at the restaurant. Laura gave a necklace to",
+  "io": " Susan",
+  "s": " Laura"
+ },
+ {
+  "input": "When Anna and Dan got a ring at the school, Dan decided to give it to",
+  "io": " Anna",
+  "s": " Dan"
+ },
+ {
+  "input": "Friends Mary and Martin found a necklace at the hospital. Mary gave it to",
+  "io": " Martin",
+  "s": " Mary"
+ },
+ {
+  "input": "Then, Tom and Eric had a lot of fun at the park. Eric gave a necklace to",
+  "io": " Tom",
+  "s": " Eric"
+ },
+ {
+  "input": "Then, Dan and Martin had a lot of fun at the office. Dan gave a bone to",
+  "io": " Martin",
+  "s": " Dan"
+ },
+ {
+  "input": "When Mary and Jason got a basketball at the school, Jason decided to give it to",
+  "io": " Mary",
+  "s": " Jason"
+ },
+ {
+  "input": "Then, Rachel and Lisa went to the restaurant. Rachel gave a ball to",
+  "io": " Lisa",
+  "s": " Rachel"
+ },
+ {
+  "input": "When Laura and Sarah got a ball at the school, Sarah decided to give it to",
+  "io": " Laura",
+  "s": " Sarah"
+ },
+ {
+  "input": "When Adam and Karen got a necklace at the school, Adam decided to give it to",
+  "io": " Karen",
+  "s": " Adam"
+ },
+ {
+  "input": "Friends Scott and Peter found a necklace at the garden. Peter gave it to",
+  "io": " Scott",
+  "s": " Peter"
+ },
+ {
+  "input": "Then, Kevin and Jason went to the hospital. Kevin gave a necklace to",
+  "io": " Jason",
+  "s": " Kevin"
+ },
+ {
+  "input": "Then, Susan and Dan went to the school. Dan gave a drink to",
+  "io": " Susan",
+  "s": " Dan"
+ },
+ {
+  "input": "When Eric and Adam got a ring at the office, Eric decided to give it to",
+  "io": " Adam",
+  "s": " Eric"
+ },
+ {
+  "input": "Then, Adam and Rachel went to the school. Rachel gave a necklace to",
+  "io": " Adam",
+  "s": " Rachel"
+ },
+ {
+  "input": "Friends Mary and John found a ball at the park. Mary gave it to",
+  "io": " John",
+  "s": " Mary"
+ },
+ {
+  "input": "When Paul and James got a ball at the station, James decided to give it to",
+  "io": " Paul",
+  "s": " James"
+ },
+ {
+  "input": "Then, Emily and Susan went to the office. Emily gave a bone to",
+  "io": " Susan",
+  "s": " Emily"
+ },
+ {
+  "input": "Friends Jason and Martin found a bone at the store. Martin gave it to",
+  "io": " Jason",
+  "s": " Martin"
+ },
+ {
+  "input": "Friends Susan and Lisa found a basketball at the office. Susan gave it to",
+  "io": " Lisa",
+  "s": " Susan"
+ },
+ {
+  "input": "Then, Sarah and Mary had a lot of fun at the school. Mary gave a necklace to",
+  "io": " Sarah",
+  "s": " Mary"
+ },
+ {
+  "input": "Then, Ryan and Mark went to the store. Ryan gave a necklace to",
+  "io": " Mark",
+  "s": " Ryan"
+ },
+ {
+  "input": "Then, Eric and Ryan had a lot of fun at the hospital. Ryan gave a ball to",
+  "io": " Eric",
+  "s": " Ryan"
+ },
+ {
+  "input": "Then, Mark and Jason went to the store. Mark gave a basketball to",
+  "io": " Jason",
+  "s": " Mark"
+ },
+ {
+  "input": "Friends Sarah and Jason found a necklace at the station. Jason gave it to",
+  "io": " Sarah",
+  "s": " Jason"
+ },
+ {
+  "input": "Then, Martin and Sarah had a lot of fun at the office. Martin gave a ball to",
+  "io": " Sarah",
+  "s": " Martin"
+ },
+ {
+  "input": "Then, Kevin and Lisa went to the school. Lisa gave a basketball to",
+  "io": " Kevin",
+  "s": " Lisa"
+ },
+ {
+  "input": "Then, Emily and Tom went to the hospital. Emily gave a necklace to",
+  "io": " Tom",
+  "s": " Emily"
+ },
+ {
+  "input": "When Sarah and Emily got a ring at the office, Emily decided to give it to",
+  "io": " Sarah",
+  "s": " Emily"
+ },
+ {
+  "input": "Then, Anna and Dan went to the park. Anna gave a bone to",
+  "io": " Dan",
+  "s": " Anna"
+ },
+ {
+  "input": "Then, Susan and Dan went to the office. Dan gave a drink to",
+  "io": " Susan",
+  "s": " Dan"
+ },
+ {
+  "input": "Friends Karen and Peter found a ring at the station. Karen gave it to",
+  "io": " Peter",
+  "s": " Karen"
+ },
+ {
+  "input": "Then, Karen and Anna went to the garden. Anna gave a ring to",
+  "io": " Karen",
+  "s": " Anna"
+ },
+ {
+  "input": "Then, Emily and Scott had a lot of fun at the restaurant. Emily gave a book to",
+  "io": " Scott",
+  "s": " Emily"
+ },
+ {
+  "input": "Then, Mary and Emily went to the garden. Emily gave a ball to",
+  "io": " Mary",
+  "s": " Emily"
+ },
+ {
+  "input": "When Kevin and Tom got a snack at the hospital, Kevin decided to give it to",
+  "io": " Tom",
+  "s": " Kevin"
+ },
+ {
+  "input": "Then, Peter and Dan had a lot of fun at the office. Dan gave a book to",
+  "io": " Peter",
+  "s": " Dan"
+ },
+ {
+  "input": "Friends Emily and Rachel found a book at the garden. Emily gave it to",
+  "io": " Rachel",
+  "s": " Emily"
+ },
+ {
+  "input": "When Lisa and Dan got a necklace at the park, Dan decided to give it to",
+  "io": " Lisa",
+  "s": " Dan"
+ },
+ {
+  "input": "When Emily and Jason got a ball at the office, Emily decided to give it to",
+  "io": " Jason",
+  "s": " Emily"
+ },
+ {
+  "input": "When Laura and Sarah got a necklace at the garden, Sarah decided to give it to",
+  "io": " Laura",
+  "s": " Sarah"
+ },
+ {
+  "input": "Friends Emily and James found a ring at the restaurant. Emily gave it to",
+  "io": " James",
+  "s": " Emily"
+ },
+ {
+  "input": "When Dan and Anna got a bone at the office, Anna decided to give it to",
+  "io": " Dan",
+  "s": " Anna"
+ },
+ {
+  "input": "Friends Scott and Emily found a necklace at the park. Scott gave it to",
+  "io": " Emily",
+  "s": " Scott"
+ },
+ {
+  "input": "Friends Mark and Jason found a snack at the station. Jason gave it to",
+  "io": " Mark",
+  "s": " Jason"
+ },
+ {
+  "input": "When Kevin and Jason got a snack at the station, Kevin decided to give it to",
+  "io": " Jason",
+  "s": " Kevin"
+ },
+ {
+  "input": "Friends Jason and Susan found a ring at the store. Susan gave it to",
+  "io": " Jason",
+  "s": " Susan"
+ },
+ {
+  "input": "Then, Peter and Paul went to the office. Peter gave a necklace to",
+  "io": " Paul",
+  "s": " Peter"
+ },
+ {
+  "input": "When Ryan and John got a ring at the hospital, John decided to give it to",
+  "io": " Ryan",
+  "s": " John"
+ },
+ {
+  "input": "Then, Rachel and Amy went to the garden. Rachel gave a bone to",
+  "io": " Amy",
+  "s": " Rachel"
+ },
+ {
+  "input": "Then, Martin and Adam had a lot of fun at the garden. Adam gave a drink to",
+  "io": " Martin",
+  "s": " Adam"
+ },
+ {
+  "input": "Then, Mary and John had a lot of fun at the hospital. Mary gave a drink to",
+  "io": " John",
+  "s": " Mary"
+ },
+ {
+  "input": "Friends James and Lisa found a ring at the office. Lisa gave it to",
+  "io": " James",
+  "s": " Lisa"
+ },
+ {
+  "input": "Then, Mary and Amy had a lot of fun at the hospital. Mary gave a ring to",
+  "io": " Amy",
+  "s": " Mary"
+ },
+ {
+  "input": "Then, Scott and Laura went to the hospital. Laura gave a basketball to",
+  "io": " Scott",
+  "s": " Laura"
+ },
+ {
+  "input": "When Amy and Laura got a drink at the hospital, Amy decided to give it to",
+  "io": " Laura",
+  "s": " Amy"
+ },
+ {
+  "input": "When Mary and Ryan got a ball at the garden, Ryan decided to give it to",
+  "io": " Mary",
+  "s": " Ryan"
+ },
+ {
+  "input": "When Mark and Susan got a ring at the school, Mark decided to give it to",
+  "io": " Susan",
+  "s": " Mark"
+ },
+ {
+  "input": "Then, James and Adam went to the park. Adam gave a book to",
+  "io": " James",
+  "s": " Adam"
+ },
+ {
+  "input": "Then, Dan and Adam had a lot of fun at the school. Dan gave a necklace to",
+  "io": " Adam",
+  "s": " Dan"
+ },
+ {
+  "input": "Friends Ryan and Susan found a snack at the garden. Susan gave it to",
+  "io": " Ryan",
+  "s": " Susan"
+ },
+ {
+  "input": "Then, James and Jason went to the park. James gave a basketball to",
+  "io": " Jason",
+  "s": " James"
+ },
+ {
+  "input": "Friends Jason and Mark found a bone at the station. Mark gave it to",
+  "io": " Jason",
+  "s": " Mark"
+ },
+ {
+  "input": "When Paul and Karen got a necklace at the school, Paul decided to give it to",
+  "io": " Karen",
+  "s": " Paul"
+ },
+ {
+  "input": "Friends Peter and Tom found a snack at the garden. Tom gave it to",
+  "io": " Peter",
+  "s": " Tom"
+ },
+ {
+  "input": "Then, Anna and Scott went to the station. Anna gave a necklace to",
+  "io": " Scott",
+  "s": " Anna"
+ },
+ {
+  "input": "Friends Mark and Rachel found a necklace at the store. Rachel gave it to",
+  "io": " Mark",
+  "s": " Rachel"
+ },
+ {
+  "input": "Friends Laura and Scott found a book at the office. Laura gave it to",
+  "io": " Scott",
+  "s": " Laura"
+ },
+ {
+  "input": "When Emily and Dan got a basketball at the office, Dan decided to give it to",
+  "io": " Emily",
+  "s": " Dan"
+ },
+ {
+  "input": "Then, Eric and Anna went to the station. Eric gave a bone to",
+  "io": " Anna",
+  "s": " Eric"
+ },
+ {
+  "input": "Then, Amy and Kevin had a lot of fun at the park. Kevin gave a drink to",
+  "io": " Amy",
+  "s": " Kevin"
+ },
+ {
+  "input": "Friends John and Paul found a bone at the garden. John gave it to",
+  "io": " Paul",
+  "s": " John"
+ },
+ {
+  "input": "Friends Peter and Susan found a necklace at the office. Susan gave it to",
+  "io": " Peter",
+  "s": " Susan"
+ },
+ {
+  "input": "When Martin and Amy got a drink at the hospital, Martin decided to give it to",
+  "io": " Amy",
+  "s": " Martin"
+ },
+ {
+  "input": "Then, Susan and Jason had a lot of fun at the office. Jason gave a ball to",
+  "io": " Susan",
+  "s": " Jason"
+ },
+ {
+  "input": "Friends Karen and Jason found a bone at the hospital. Karen gave it to",
+  "io": " Jason",
+  "s": " Karen"
+ },
+ {
+  "input": "Then, Susan and Ryan went to the office. Ryan gave a basketball to",
+  "io": " Susan",
+  "s": " Ryan"
+ },
+ {
+  "input": "Then, Emily and Scott went to the garden. Emily gave a snack to",
+  "io": " Scott",
+  "s": " Emily"
+ },
+ {
+  "input": "Then, John and Dan had a lot of fun at the office. Dan gave a basketball to",
+  "io": " John",
+  "s": " Dan"
+ },
+ {
+  "input": "When James and Susan got a book at the hospital, James decided to give it to",
+  "io": " Susan",
+  "s": " James"
+ },
+ {
+  "input": "When Emily and Susan got a bone at the office, Susan decided to give it to",
+  "io": " Emily",
+  "s": " Susan"
+ },
+ {
+  "input": "Friends Anna and Karen found a necklace at the station. Anna gave it to",
+  "io": " Karen",
+  "s": " Anna"
+ },
+ {
+  "input": "Then, Susan and Paul had a lot of fun at the station. Paul gave a ring to",
+  "io": " Susan",
+  "s": " Paul"
+ },
+ {
+  "input": "Friends James and Scott found a necklace at the school. James gave it to",
+  "io": " Scott",
+  "s": " James"
+ },
+ {
+  "input": "Then, Adam and Karen went to the office. Karen gave a ball to",
+  "io": " Adam",
+  "s": " Karen"
+ },
+ {
+  "input": "Friends Peter and Mary found a ring at the office. Peter gave it to",
+  "io": " Mary",
+  "s": " Peter"
+ },
+ {
+  "input": "Then, Ryan and Laura had a lot of fun at the office. Laura gave a drink to",
+  "io": " Ryan",
+  "s": " Laura"
+ },
+ {
+  "input": "Friends Eric and Jason found a book at the station. Eric gave it to",
+  "io": " Jason",
+  "s": " Eric"
+ },
+ {
+  "input": "Then, Karen and Tom went to the park. Tom gave a basketball to",
+  "io": " Karen",
+  "s": " Tom"
+ },
+ {
+  "input": "Then, Laura and Amy went to the garden. Laura gave a book to",
+  "io": " Amy",
+  "s": " Laura"
+ },
+ {
+  "input": "When Rachel and Mary got a drink at the office, Mary decided to give it to",
+  "io": " Rachel",
+  "s": " Mary"
+ },
+ {
+  "input": "Friends Mark and Dan found a ring at the restaurant. Mark gave it to",
+  "io": " Dan",
+  "s": " Mark"
+ },
+ {
+  "input": "When Sarah and Scott got a necklace at the hospital, Scott decided to give it to",
+  "io": " Sarah",
+  "s": " Scott"
+ },
+ {
+  "input": "Then, Ryan and Scott went to the restaurant. Ryan gave a ring to",
+  "io": " Scott",
+  "s": " Ryan"
+ },
+ {
+  "input": "Friends Dan and Paul found a ring at the station. Paul gave it to",
+  "io": " Dan",
+  "s": " Paul"
+ },
+ {
+  "input": "Then, Paul and Laura went to the hospital. Paul gave a drink to",
+  "io": " Laura",
+  "s": " Paul"
+ },
+ {
+  "input": "Then, Laura and Lisa went to the school. Lisa gave a bone to",
+  "io": " Laura",
+  "s": " Lisa"
+ },
+ {
+  "input": "Then, Adam and James went to the hospital. Adam gave a snack to",
+  "io": " James",
+  "s": " Adam"
+ },
+ {
+  "input": "Then, Eric and Sarah went to the restaurant. Sarah gave a necklace to",
+  "io": " Eric",
+  "s": " Sarah"
+ },
+ {
+  "input": "Then, Kevin and Anna went to the garden. Kevin gave a snack to",
+  "io": " Anna",
+  "s": " Kevin"
+ },
+ {
+  "input": "Friends Paul and Jason found a bone at the store. Jason gave it to",
+  "io": " Paul",
+  "s": " Jason"
+ },
+ {
+  "input": "Then, Eric and Mary had a lot of fun at the restaurant. Eric gave a ball to",
+  "io": " Mary",
+  "s": " Eric"
+ },
+ {
+  "input": "When Anna and James got a ring at the hospital, James decided to give it to",
+  "io": " Anna",
+  "s": " James"
+ },
+ {
+  "input": "Friends James and Ryan found a bone at the park. James gave it to",
+  "io": " Ryan",
+  "s": " James"
+ },
+ {
+  "input": "Then, John and Jason went to the office. Jason gave a ball to",
+  "io": " John",
+  "s": " Jason"
+ },
+ {
+  "input": "Then, Adam and Karen had a lot of fun at the office. Adam gave a bone to",
+  "io": " Karen",
+  "s": " Adam"
+ },
+ {
+  "input": "Then, Peter and Amy had a lot of fun at the station. Amy gave a ball to",
+  "io": " Peter",
+  "s": " Amy"
+ },
+ {
+  "input": "Then, Rachel and Sarah had a lot of fun at the garden. Rachel gave a snack to",
+  "io": " Sarah",
+  "s": " Rachel"
+ },
+ {
+  "input": "Then, Mark and Paul went to the school. Paul gave a book to",
+  "io": " Mark",
+  "s": " Paul"
+ },
+ {
+  "input": "When Susan and Tom got a book at the garden, Susan decided to give it to",
+  "io": " Tom",
+  "s": " Susan"
+ },
+ {
+  "input": "Then, John and Tom went to the store. Tom gave a book to",
+  "io": " John",
+  "s": " Tom"
+ },
+ {
+  "input": "When Adam and Martin got a snack at the restaurant, Adam decided to give it to",
+  "io": " Martin",
+  "s": " Adam"
+ },
+ {
+  "input": "Then, Mark and Tom went to the hospital. Tom gave a necklace to",
+  "io": " Mark",
+  "s": " Tom"
+ },
+ {
+  "input": "Then, Ryan and Tom had a lot of fun at the station. Ryan gave a ball to",
+  "io": " Tom",
+  "s": " Ryan"
+ },
+ {
+  "input": "Then, Kevin and Scott went to the hospital. Scott gave a book to",
+  "io": " Kevin",
+  "s": " Scott"
+ },
+ {
+  "input": "When Eric and Mary got a ring at the restaurant, Eric decided to give it to",
+  "io": " Mary",
+  "s": " Eric"
+ },
+ {
+  "input": "Then, Paul and Karen had a lot of fun at the restaurant. Karen gave a drink to",
+  "io": " Paul",
+  "s": " Karen"
+ },
+ {
+  "input": "Then, Jason and Adam went to the school. Jason gave a book to",
+  "io": " Adam",
+  "s": " Jason"
+ },
+ {
+  "input": "When Peter and Laura got a snack at the restaurant, Laura decided to give it to",
+  "io": " Peter",
+  "s": " Laura"
+ },
+ {
+  "input": "Then, Karen and Paul went to the station. Karen gave a basketball to",
+  "io": " Paul",
+  "s": " Karen"
+ },
+ {
+  "input": "Then, Laura and Anna had a lot of fun at the school. Anna gave a drink to",
+  "io": " Laura",
+  "s": " Anna"
+ },
+ {
+  "input": "Then, Emily and Adam had a lot of fun at the hospital. Emily gave a drink to",
+  "io": " Adam",
+  "s": " Emily"
+ },
+ {
+  "input": "Then, Tom and Kevin had a lot of fun at the park. Kevin gave a bone to",
+  "io": " Tom",
+  "s": " Kevin"
+ },
+ {
+  "input": "Then, Mary and Mark went to the garden. Mary gave a necklace to",
+  "io": " Mark",
+  "s": " Mary"
+ },
+ {
+  "input": "When Jason and Scott got a book at the station, Scott decided to give it to",
+  "io": " Jason",
+  "s": " Scott"
+ },
+ {
+  "input": "Then, Laura and Peter had a lot of fun at the station. Laura gave a drink to",
+  "io": " Peter",
+  "s": " Laura"
+ },
+ {
+  "input": "Then, Adam and Jason had a lot of fun at the garden. Jason gave a snack to",
+  "io": " Adam",
+  "s": " Jason"
+ },
+ {
+  "input": "Then, Scott and Dan had a lot of fun at the restaurant. Scott gave a bone to",
+  "io": " Dan",
+  "s": " Scott"
+ },
+ {
+  "input": "Then, Karen and Sarah had a lot of fun at the store. Sarah gave a bone to",
+  "io": " Karen",
+  "s": " Sarah"
+ },
+ {
+  "input": "Then, Laura and Rachel had a lot of fun at the school. Laura gave a snack to",
+  "io": " Rachel",
+  "s": " Laura"
+ },
+ {
+  "input": "When Ryan and Susan got a snack at the school, Susan decided to give it to",
+  "io": " Ryan",
+  "s": " Susan"
+ },
+ {
+  "input": "Then, Rachel and Adam had a lot of fun at the store. Rachel gave a basketball to",
+  "io": " Adam",
+  "s": " Rachel"
+ },
+ {
+  "input": "Friends John and Laura found a necklace at the school. Laura gave it to",
+  "io": " John",
+  "s": " Laura"
+ },
+ {
+  "input": "Then, Peter and Amy had a lot of fun at the station. Peter gave a ring to",
+  "io": " Amy",
+  "s": " Peter"
+ },
+ {
+  "input": "Then, Tom and Karen went to the store. Karen gave a ring to",
+  "io": " Tom",
+  "s": " Karen"
+ },
+ {
+  "input": "When Scott and Rachel got a basketball at the hospital, Scott decided to give it to",
+  "io": " Rachel",
+  "s": " Scott"
+ },
+ {
+  "input": "Then, Laura and Anna went to the hospital. Anna gave a book to",
+  "io": " Laura",
+  "s": " Anna"
+ },
+ {
+  "input": "Then, Ryan and Martin went to the office. Ryan gave a snack to",
+  "io": " Martin",
+  "s": " Ryan"
+ },
+ {
+  "input": "Then, John and Jason had a lot of fun at the park. Jason gave a basketball to",
+  "io": " John",
+  "s": " Jason"
+ },
+ {
+  "input": "Then, Adam and Mark went to the school. Adam gave a book to",
+  "io": " Mark",
+  "s": " Adam"
+ },
+ {
+  "input": "When Lisa and Dan got a ball at the garden, Dan decided to give it to",
+  "io": " Lisa",
+  "s": " Dan"
+ },
+ {
+  "input": "Then, Jason and Kevin went to the restaurant. Jason gave a bone to",
+  "io": " Kevin",
+  "s": " Jason"
+ },
+ {
+  "input": "When Emily and Rachel got a necklace at the office, Rachel decided to give it to",
+  "io": " Emily",
+  "s": " Rachel"
+ },
+ {
+  "input": "Friends Kevin and Emily found a bone at the station. Kevin gave it to",
+  "io": " Emily",
+  "s": " Kevin"
+ },
+ {
+  "input": "Friends Kevin and Adam found a ball at the garden. Adam gave it to",
+  "io": " Kevin",
+  "s": " Adam"
+ },
+ {
+  "input": "Then, Ryan and Peter had a lot of fun at the hospital. Ryan gave a book to",
+  "io": " Peter",
+  "s": " Ryan"
+ },
+ {
+  "input": "Then, Amy and Laura had a lot of fun at the office. Laura gave a book to",
+  "io": " Amy",
+  "s": " Laura"
+ },
+ {
+  "input": "When Dan and Jason got a ball at the station, Dan decided to give it to",
+  "io": " Jason",
+  "s": " Dan"
+ },
+ {
+  "input": "Then, Laura and Kevin had a lot of fun at the station. Kevin gave a drink to",
+  "io": " Laura",
+  "s": " Kevin"
+ },
+ {
+  "input": "Then, Mark and Sarah had a lot of fun at the park. Mark gave a drink to",
+  "io": " Sarah",
+  "s": " Mark"
+ },
+ {
+  "input": "Then, Lisa and James had a lot of fun at the restaurant. James gave a drink to",
+  "io": " Lisa",
+  "s": " James"
+ },
+ {
+  "input": "When Lisa and Martin got a ball at the school, Lisa decided to give it to",
+  "io": " Martin",
+  "s": " Lisa"
+ },
+ {
+  "input": "Then, Mary and Susan had a lot of fun at the store. Susan gave a drink to",
+  "io": " Mary",
+  "s": " Susan"
+ },
+ {
+  "input": "When Scott and Kevin got a basketball at the hospital, Scott decided to give it to",
+  "io": " Kevin",
+  "s": " Scott"
+ },
+ {
+  "input": "Then, Anna and Tom went to the hospital. Tom gave a ring to",
+  "io": " Anna",
+  "s": " Tom"
+ },
+ {
+  "input": "Then, Mary and Martin had a lot of fun at the restaurant. Mary gave a ball to",
+  "io": " Martin",
+  "s": " Mary"
+ },
+ {
+  "input": "Then, Peter and Amy had a lot of fun at the garden. Amy gave a bone to",
+  "io": " Peter",
+  "s": " Amy"
+ },
+ {
+  "input": "Then, Susan and Emily had a lot of fun at the school. Susan gave a necklace to",
+  "io": " Emily",
+  "s": " Susan"
+ },
+ {
+  "input": "Then, Mary and John had a lot of fun at the hospital. John gave a drink to",
+  "io": " Mary",
+  "s": " John"
+ },
+ {
+  "input": "When Tom and Jason got a book at the hospital, Tom decided to give it to",
+  "io": " Jason",
+  "s": " Tom"
+ },
+ {
+  "input": "When Eric and Lisa got a drink at the office, Lisa decided to give it to",
+  "io": " Eric",
+  "s": " Lisa"
+ },
+ {
+  "input": "Friends Paul and Dan found a basketball at the restaurant. Paul gave it to",
+  "io": " Dan",
+  "s": " Paul"
+ },
+ {
+  "input": "Friends Lisa and Paul found a ring at the restaurant. Paul gave it to",
+  "io": " Lisa",
+  "s": " Paul"
+ },
+ {
+  "input": "Friends James and Martin found a necklace at the restaurant. James gave it to",
+  "io": " Martin",
+  "s": " James"
+ },
+ {
+  "input": "Then, Laura and Susan had a lot of fun at the school. Susan gave a necklace to",
+  "io": " Laura",
+  "s": " Susan"
+ },
+ {
+  "input": "Friends James and Susan found a bone at the park. James gave it to",
+  "io": " Susan",
+  "s": " James"
+ },
+ {
+  "input": "When Kevin and Susan got a necklace at the park, Susan decided to give it to",
+  "io": " Kevin",
+  "s": " Susan"
+ },
+ {
+  "input": "Then, James and Sarah went to the garden. James gave a ring to",
+  "io": " Sarah",
+  "s": " James"
+ },
+ {
+  "input": "Then, John and Lisa went to the store. Lisa gave a bone to",
+  "io": " John",
+  "s": " Lisa"
+ },
+ {
+  "input": "When Peter and Laura got a drink at the station, Peter decided to give it to",
+  "io": " Laura",
+  "s": " Peter"
+ },
+ {
+  "input": "Then, Eric and Dan had a lot of fun at the park. Dan gave a necklace to",
+  "io": " Eric",
+  "s": " Dan"
+ },
+ {
+  "input": "Then, Amy and John went to the hospital. Amy gave a drink to",
+  "io": " John",
+  "s": " Amy"
+ },
+ {
+  "input": "Friends Lisa and Peter found a book at the school. Peter gave it to",
+  "io": " Lisa",
+  "s": " Peter"
+ },
+ {
+  "input": "Then, Karen and Peter had a lot of fun at the store. Karen gave a basketball to",
+  "io": " Peter",
+  "s": " Karen"
+ },
+ {
+  "input": "Then, Karen and Dan went to the office. Dan gave a bone to",
+  "io": " Karen",
+  "s": " Dan"
+ },
+ {
+  "input": "When Emily and Ryan got a book at the restaurant, Emily decided to give it to",
+  "io": " Ryan",
+  "s": " Emily"
+ },
+ {
+  "input": "Then, Amy and Peter went to the store. Peter gave a drink to",
+  "io": " Amy",
+  "s": " Peter"
+ },
+ {
+  "input": "Then, Eric and Mary had a lot of fun at the restaurant. Eric gave a bone to",
+  "io": " Mary",
+  "s": " Eric"
+ },
+ {
+  "input": "Then, Jason and Dan went to the park. Dan gave a ball to",
+  "io": " Jason",
+  "s": " Dan"
+ },
+ {
+  "input": "Then, Paul and Rachel went to the school. Paul gave a ball to",
+  "io": " Rachel",
+  "s": " Paul"
+ },
+ {
+  "input": "Friends Tom and Anna found a book at the office. Anna gave it to",
+  "io": " Tom",
+  "s": " Anna"
+ },
+ {
+  "input": "Then, Susan and Paul went to the station. Susan gave a basketball to",
+  "io": " Paul",
+  "s": " Susan"
+ },
+ {
+  "input": "Friends Tom and Paul found a necklace at the station. Paul gave it to",
+  "io": " Tom",
+  "s": " Paul"
+ },
+ {
+  "input": "Then, Emily and Karen had a lot of fun at the hospital. Emily gave a ring to",
+  "io": " Karen",
+  "s": " Emily"
+ },
+ {
+  "input": "Then, Dan and Eric had a lot of fun at the hospital. Eric gave a ball to",
+  "io": " Dan",
+  "s": " Eric"
+ },
+ {
+  "input": "Friends Dan and Tom found a drink at the school. Dan gave it to",
+  "io": " Tom",
+  "s": " Dan"
+ },
+ {
+  "input": "When Eric and Ryan got a ring at the park, Ryan decided to give it to",
+  "io": " Eric",
+  "s": " Ryan"
+ },
+ {
+  "input": "Friends Kevin and Ryan found a basketball at the garden. Kevin gave it to",
+  "io": " Ryan",
+  "s": " Kevin"
+ },
+ {
+  "input": "Then, Ryan and Paul had a lot of fun at the station. Paul gave a ball to",
+  "io": " Ryan",
+  "s": " Paul"
+ },
+ {
+  "input": "When John and Jason got a ball at the hospital, John decided to give it to",
+  "io": " Jason",
+  "s": " John"
+ },
+ {
+  "input": "Friends Jason and Mary found a ring at the office. Mary gave it to",
+  "io": " Jason",
+  "s": " Mary"
+ },
+ {
+  "input": "Then, Anna and James went to the hospital. Anna gave a snack to",
+  "io": " James",
+  "s": " Anna"
+ },
+ {
+  "input": "Then, Jason and James went to the store. James gave a ball to",
+  "io": " Jason",
+  "s": " James"
+ },
+ {
+  "input": "Friends Martin and Anna found a book at the garden. Martin gave it to",
+  "io": " Anna",
+  "s": " Martin"
+ },
+ {
+  "input": "Friends Emily and Laura found a snack at the store. Laura gave it to",
+  "io": " Emily",
+  "s": " Laura"
+ },
+ {
+  "input": "Friends Anna and Rachel found a drink at the school. Anna gave it to",
+  "io": " Rachel",
+  "s": " Anna"
+ },
+ {
+  "input": "When Jason and Susan got a necklace at the school, Susan decided to give it to",
+  "io": " Jason",
+  "s": " Susan"
+ },
+ {
+  "input": "Then, Ryan and Susan went to the station. Ryan gave a snack to",
+  "io": " Susan",
+  "s": " Ryan"
+ },
+ {
+  "input": "When Adam and Mark got a basketball at the school, Mark decided to give it to",
+  "io": " Adam",
+  "s": " Mark"
+ },
+ {
+  "input": "Friends Paul and Ryan found a bone at the hospital. Paul gave it to",
+  "io": " Ryan",
+  "s": " Paul"
+ },
+ {
+  "input": "When Peter and Scott got a necklace at the garden, Scott decided to give it to",
+  "io": " Peter",
+  "s": " Scott"
+ },
+ {
+  "input": "When Amy and Scott got a snack at the restaurant, Amy decided to give it to",
+  "io": " Scott",
+  "s": " Amy"
+ },
+ {
+  "input": "When Mark and Scott got a bone at the garden, Scott decided to give it to",
+  "io": " Mark",
+  "s": " Scott"
+ },
+ {
+  "input": "Then, Dan and Scott went to the restaurant. Dan gave a bone to",
+  "io": " Scott",
+  "s": " Dan"
+ },
+ {
+  "input": "When Mark and Emily got a bone at the office, Emily decided to give it to",
+  "io": " Mark",
+  "s": " Emily"
+ },
+ {
+  "input": "Then, Scott and Lisa had a lot of fun at the park. Scott gave a basketball to",
+  "io": " Lisa",
+  "s": " Scott"
+ }
+]

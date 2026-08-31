@@ -1,9 +1,0 @@
-name: entity_binding
-max_new_tokens: 4
-n_train: 200
-n_test: 50
-enumerate_all: false
-balanced: false
-resample_variable: all
-intervention_metric: kl
-colormap: viridis

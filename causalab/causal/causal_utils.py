@@ -323,6 +323,14 @@ def compute_interchange_scores(
             # Process and decode model outputs from batch dictionaries
             dumped_outputs = []
             flattened_outputs = []
+            # ``raw_outputs`` is a legacy-artifact-only field: the stored
+            # per-batch ``raw_results`` schema — a LIST of per-batch dicts
+            # (``[{"string": ..., "sequences": ...}, ...]``). No current
+            # producer writes it (post-EU5a producers return the flat
+            # GenerationResult, #486, and nothing emits ``raw_outputs``);
+            # this loop only ever reads artifacts saved before EU5a, which
+            # may carry several batches and bare-str single-example entries
+            # — hence the tolerant reading below (no artifact migration).
             for batch_dict in raw_outputs:
                 # Use the string field that's already in batch_dict
                 batch_strings = batch_dict["string"]
@@ -698,3 +706,22 @@ def get_specific_path_filter(
         return False
 
     return check_path
+
+
+def form_groups(var_map: dict[Any, list[str]]) -> list[list[str]]:
+    """Distinct, order-stable form groups across a variable's values.
+
+    ``var_map`` is ``{value: [form, ...]}``. Values whose form lists are
+    identical collapse to a single group — this is where the dedup that
+    ``output_token_values`` used to encode emerges for free (e.g. many
+    ``(entity, group)`` tuples sharing one entity's forms).
+    """
+    groups: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for forms in var_map.values():
+        key = tuple(forms)
+        if key in seen:
+            continue
+        seen.add(key)
+        groups.append(list(forms))
+    return groups

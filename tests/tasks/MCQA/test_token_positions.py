@@ -8,7 +8,7 @@ It verifies that tokens are correctly identified in MCQA prompts.
 from causalab.tasks.MCQA.causal_models import NUM_CHOICES
 from causalab.tasks.MCQA.counterfactuals import sample_answerable_question
 from causalab.tasks.MCQA.token_positions import create_token_positions, TEMPLATES
-from causalab.neural.pipeline import LMPipeline, resolve_device
+from tests._helpers.pipeline_shim import PipelineShim
 from causalab.neural.token_positions import TokenPosition
 import pytest
 
@@ -20,8 +20,7 @@ def test_basic_tokenization():
     """Test basic tokenization of MCQA prompts."""
     print("=== Test 1: Basic Tokenization ===")
 
-    device = resolve_device()
-    pipeline = LMPipeline("gpt2", max_new_tokens=1, device=device)
+    pipeline = PipelineShim("gpt2")
 
     # sample_answerable_question() returns a fully computed CausalTrace
     trace = sample_answerable_question()
@@ -47,8 +46,7 @@ def test_get_symbol_index():
     """Test symbol token positions via create_token_positions."""
     print("=== Test 2: Get Symbol Index ===")
 
-    device = resolve_device()
-    pipeline = LMPipeline("gpt2", max_new_tokens=1, device=device)
+    pipeline = PipelineShim("gpt2")
 
     # Create token positions
     token_positions = create_token_positions(pipeline)
@@ -89,8 +87,7 @@ def test_get_correct_symbol_index():
     """Test correct symbol token position via create_token_positions."""
     print("=== Test 3: Get Correct Symbol Index ===")
 
-    device = resolve_device()
-    pipeline = LMPipeline("gpt2", max_new_tokens=1, device=device)
+    pipeline = PipelineShim("gpt2")
 
     # Create token positions
     token_positions = create_token_positions(pipeline)
@@ -125,8 +122,7 @@ def test_token_position_objects():
     """Test TokenPosition object creation."""
     print("=== Test 4: TokenPosition Objects ===")
 
-    device = resolve_device()
-    pipeline = LMPipeline("gpt2", max_new_tokens=1, device=device)
+    pipeline = PipelineShim("gpt2")
 
     # Create all token positions
     token_positions = create_token_positions(pipeline)
@@ -153,8 +149,7 @@ def test_correct_symbol_token_position():
     """Test correct symbol TokenPosition."""
     print("=== Test 5: Correct Symbol TokenPosition ===")
 
-    device = resolve_device()
-    pipeline = LMPipeline("gpt2", max_new_tokens=1, device=device)
+    pipeline = PipelineShim("gpt2")
 
     # Create all token positions
     token_positions = create_token_positions(pipeline)
@@ -181,8 +176,7 @@ def test_last_token_position():
     """Test last token TokenPosition."""
     print("=== Test 6: Last Token Position ===")
 
-    device = resolve_device()
-    pipeline = LMPipeline("gpt2", max_new_tokens=1, device=device)
+    pipeline = PipelineShim("gpt2")
 
     # Create all token positions
     token_positions = create_token_positions(pipeline)
@@ -218,8 +212,7 @@ def test_create_token_positions():
     """Test the factory function that creates all token positions."""
     print("=== Test 7: Create All Token Positions ===")
 
-    device = resolve_device()
-    pipeline = LMPipeline("gpt2", max_new_tokens=1, device=device)
+    pipeline = PipelineShim("gpt2")
 
     token_positions = create_token_positions(pipeline)
 
@@ -249,8 +242,7 @@ def test_highlight_selected_token():
     """Test the highlight_selected_token method."""
     print("=== Test 8: Highlight Selected Token ===")
 
-    device = resolve_device()
-    pipeline = LMPipeline("gpt2", max_new_tokens=1, device=device)
+    pipeline = PipelineShim("gpt2")
 
     token_positions = create_token_positions(pipeline)
 
@@ -272,8 +264,7 @@ def test_edge_case_symbol_not_found():
     """Test error handling when symbol is not found."""
     print("=== Test 9: Edge Case - Symbol Not Found ===")
 
-    device = resolve_device()
-    pipeline = LMPipeline("gpt2", max_new_tokens=1, device=device)
+    pipeline = PipelineShim("gpt2")
 
     # Create token positions
     token_positions = create_token_positions(pipeline)
@@ -301,8 +292,7 @@ def test_period_tokens():
     """Test period token identification."""
     print("=== Test 10: Period Token Positions ===")
 
-    device = resolve_device()
-    pipeline = LMPipeline("gpt2", max_new_tokens=1, device=device)
+    pipeline = PipelineShim("gpt2")
 
     token_positions = create_token_positions(pipeline)
 
@@ -342,8 +332,7 @@ def test_period_tokens():
 
 def test_token_positions_return_type_and_ids():
     """Test that create_token_positions returns a dict of TokenPosition objects with correct ids."""
-    device = resolve_device()
-    pipeline = LMPipeline("gpt2", max_new_tokens=1, device=device)
+    pipeline = PipelineShim("gpt2")
 
     token_positions = create_token_positions(pipeline)
 
@@ -377,8 +366,7 @@ def test_token_positions_return_type_and_ids():
 
 def test_template_none_equivalent_to_default_template():
     """Test that template=None (default) uses TEMPLATES[0] and produces same results."""
-    device = resolve_device()
-    pipeline = LMPipeline("gpt2", max_new_tokens=1, device=device)
+    pipeline = PipelineShim("gpt2")
 
     # Create with explicit default template
     explicit_template = TEMPLATES[0]

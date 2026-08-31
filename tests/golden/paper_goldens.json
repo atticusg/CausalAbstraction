@@ -1,0 +1,218 @@
+{
+  "_provenance_rule": "Every value here traces to a published paper figure/table or to the VeriFires task package that encodes it. No value in this file may come from running this repository's own stack (that would be a pinning run, which the parity goldens already cover).",
+  "goldens": {
+    "ioi.clean_logit_diff": {
+      "paper": "Wang et al. 2023, Interpretability in the Wild (IOI), arXiv:2211.00593",
+      "model": {
+        "key": "gpt2",
+        "revision": "main"
+      },
+      "metric": "mean logit(IO) - logit(S) at the END position over the clean IOI distribution",
+      "units": "logits",
+      "sidedness": "two_sided",
+      "value": 3.56,
+      "band": [
+        2.36,
+        4.76
+      ],
+      "confidence": "high",
+      "source": {
+        "where": "paper section 3 (metric F baseline, computed on 100,000 examples)",
+        "quote": "GPT-2 small has a mean logit difference of 3.56"
+      },
+      "verifires": {
+        "task": "tasks/ioi-circuit",
+        "leaf": "quant-clean-logit-diff"
+      },
+      "notes": "The paper's 3.56 is a 100k-example mean; this test pins N=512 seeded prompts, and the VeriFires +/-1.2 band absorbs the smaller sample. Query-side path patching and attention-pattern checks are out of scope in protocol v1 (no pre-RoPE per-head query; attention_probs unsupported by the reference backend)."
+    },
+    "ioi.io_over_s_rate": {
+      "paper": "Wang et al. 2023, Interpretability in the Wild (IOI), arXiv:2211.00593",
+      "model": {
+        "key": "gpt2",
+        "revision": "main"
+      },
+      "metric": "fraction of clean IOI prompts where logit(IO) > logit(S)",
+      "units": "fraction",
+      "sidedness": "at_least",
+      "floor": 0.9,
+      "confidence": "high",
+      "source": {
+        "where": "paper section 3",
+        "quote": "IO predicted over S 99.3% of the time"
+      },
+      "verifires": {
+        "task": "tasks/ioi-circuit",
+        "leaf": null
+      },
+      "notes": "Secondary assert. Floor set generously below the paper's 99.3% for the small-N regime; VeriFires has no leaf for it (free candidate from reference.md)."
+    },
+    "rome.ate": {
+      "paper": "Meng et al. 2022, Locating and Editing Factual Associations in GPT (ROME), arXiv:2202.05262",
+      "model": {
+        "key": "gpt2-xl",
+        "revision": "main"
+      },
+      "metric": "average total effect: mean over facts of P_clean(object) - P_corrupted(object), corruption = Gaussian noise (3*sigma of the embedding matrix) on subject-token embeddings",
+      "units": "probability points (percent)",
+      "sidedness": "two_sided",
+      "value": 18.6,
+      "band": [
+        10.6,
+        26.6
+      ],
+      "confidence": "high",
+      "source": {
+        "where": "paper section 2 / experimental setup",
+        "quote": "The ATE of this experiment is 18.6%"
+      },
+      "verifires": {
+        "task": "tasks/rome-causal-tracing",
+        "leaf": "quant-ate"
+      },
+      "notes": "Facts are the paper's own tracing set (known_1000.json, 1209 facts, sha256-pinned in gen_counterfact.py), split into equal-subject-width documents (w2-w5) and pooled by the test - an earlier CounterFact-tracing sample measured ATE ~36 (regime mismatch: easier facts; clean baseline 0.38 vs the paper's 0.27), while known_1000 reproduces the clean baseline almost exactly (measured 0.2649). The correctness filter stays loose per the VeriFires trap ('easy facts raise the clean baseline and move the ATE with it'). Known residual deviation: our seeded gaussian corrupts harder than the paper's (corrupted 0.031 vs 0.0847 at the same 3*sigma = 0.1447), pushing the ATE toward the band's upper half. Noise std is 3*sigma of the embedding matrix, not sqrt(3*sigma). MPS pre-verification: 23.35."
+    },
+    "rome.hidden_aie_peak": {
+      "paper": "Meng et al. 2022, ROME, arXiv:2202.05262",
+      "model": {
+        "key": "gpt2-xl",
+        "revision": "main"
+      },
+      "metric": "peak average indirect effect of single-layer hidden-state restoration at the last subject token, over the layer sweep",
+      "units": "probability points (percent)",
+      "sidedness": "two_sided",
+      "value": 8.7,
+      "band": [
+        4.7,
+        12.7
+      ],
+      "confidence": "high",
+      "source": {
+        "where": "paper Fig 2a aggregate",
+        "quote": "AIE = 8.7% at layer 15, at the last subject token"
+      },
+      "verifires": {
+        "task": "tasks/rome-causal-tracing",
+        "leaf": null
+      },
+      "notes": "Not a VeriFires leaf (free candidate documented in the task's reference.md:79-86); band width +/-4 mirrors the task's quant-mlp-aie-peak tolerance. Peak layer is asserted loosely (early-to-middle third of the 48 layers)."
+    },
+    "rome.mlp_window_aie_peak": {
+      "paper": "Meng et al. 2022, ROME, arXiv:2202.05262",
+      "model": {
+        "key": "gpt2-xl",
+        "revision": "main"
+      },
+      "metric": "peak average indirect effect of 10-layer-window MLP restoration ([l-4, l+5], clipped at edges) at the last subject token",
+      "units": "probability points (percent)",
+      "sidedness": "two_sided",
+      "value": 6.6,
+      "band": [
+        2.6,
+        10.6
+      ],
+      "confidence": "high",
+      "source": {
+        "where": "paper Fig 2b aggregate",
+        "quote": "MLP contributions peak at AIE = 6.6%"
+      },
+      "verifires": {
+        "task": "tasks/rome-causal-tracing",
+        "leaf": "quant-mlp-aie-peak"
+      },
+      "notes": "The 10-layer window needs 10 simultaneous swap sites per point, which one sweep axis cannot express - the test generates one document per window programmatically (the parity-goldens build-doc-per-case pattern)."
+    },
+    "mixing.positional_share_edges": {
+      "paper": "Mixing Mechanisms: How Language Models Retrieve Bound Entities In-Context, arXiv:2510.06182",
+      "model": {
+        "key": "google/gemma-2-2b-it",
+        "revision": "main"
+      },
+      "metric": "share of queries attributed to the positional mechanism at FIRST and LAST group positions, at the most-mixed layer (~18)",
+      "units": "percent",
+      "sidedness": "at_least",
+      "floor": 60.0,
+      "confidence": "low",
+      "source": {
+        "where": "paper Fig 2 (value read off the figure, not stated in text)",
+        "quote": "A U-shaped curve emerges: first and last indices rely more on the positional mechanism"
+      },
+      "verifires": {
+        "task": "tasks/mixing-mechanisms",
+        "leaf": "quant-positional-edges"
+      },
+      "notes": "The 80% center is figure-eyeballed (the paper text is only qualitative), hence confidence: low; the VeriFires band [60, 100] exceeds the metric's range at the top, so the intent is one-sided and is encoded as a floor at 60. Attribution is candidate-relative (each mechanism's predicted genre vs the original answer, largest positive logit shift wins) at layer 18, the paper's own intervention layer for gemma-2-2b-it - past retrieval (L20+) the patch carries the counterfactual's finished answer and reflexive sweeps to ~100%. H100 corroboration (job 1380237): pooled edges ~78% at L18 (first 90%, last 65%), tracking the figure-read 80%."
+    },
+    "mixing.positional_share_middle": {
+      "paper": "Mixing Mechanisms, arXiv:2510.06182",
+      "model": {
+        "key": "google/gemma-2-2b-it",
+        "revision": "main"
+      },
+      "metric": "share of queries attributed to the positional mechanism at MIDDLE group positions, at the most-mixed layer (~18)",
+      "units": "percent",
+      "sidedness": "two_sided",
+      "value": 20.0,
+      "band": [
+        5.0,
+        35.0
+      ],
+      "confidence": "high",
+      "source": {
+        "where": "paper section on positional mechanism",
+        "quote": "In middle entity groups, however, its effect becomes minimal, accounting only for 20% of the model's behavior"
+      },
+      "verifires": {
+        "task": "tasks/mixing-mechanisms",
+        "leaf": "quant-positional-middle"
+      },
+      "notes": "The VeriFires package pins no dataset size; this test pins its own seeded N (150 rows per position bucket). Candidate-relative attribution at layer 18 (see the edges entry). H100 corroboration (job 1380237): middle 17% at L18, tracking the paper's stated 20%."
+    },
+    "arithmetic.hours_baseline_acc": {
+      "paper": "Arithmetic in the Wild: Llama uses Base-10 Addition to Reason About Cyclic Concepts, arXiv:2605.01148",
+      "model": {
+        "key": "meta-llama/Llama-3.1-8B",
+        "revision": "main"
+      },
+      "metric": "no-intervention accuracy on all 1,152 hours prompts (24 concepts x 48 spelled-out offsets, exact paper template)",
+      "units": "fraction",
+      "sidedness": "two_sided",
+      "value": 0.7,
+      "band": [
+        0.65,
+        0.75
+      ],
+      "confidence": "high",
+      "source": {
+        "where": "paper dataset table",
+        "quote": "hours ... 1152 ... 70.8%"
+      },
+      "verifires": {
+        "task": "tasks/arithmetic-in-the-wild-hours",
+        "leaf": "quant-hours-baseline-acc"
+      },
+      "notes": "match is exact next-token equality on a single-token column. Tokenization rule (Llama-3.1 never merges space+digits, but bare zero-padded hours are single tokens): the prompt carries the trailing space ('... it will be ') and the answer column is the bare zero-padded hour, asserted single-token by the fixture generator. The VeriFires package accepts any consistent, stated rule."
+    },
+    "arithmetic.steering_top1_fraction": {
+      "paper": "Arithmetic in the Wild, arXiv:2605.01148",
+      "model": {
+        "key": "meta-llama/Llama-3.1-8B",
+        "revision": "main"
+      },
+      "metric": "fraction of the 24 steering targets whose target hour token is top-1 in the prompt-averaged post-steering distribution (layer 18 residual, last token, alpha=10, periods {2,5,10,20,50}, prompts filtered to baseline-correct only)",
+      "units": "fraction",
+      "sidedness": "at_least",
+      "floor": 0.8,
+      "confidence": "high",
+      "source": {
+        "where": "paper Fig 7 diagonal, operationalized by the task author (a co-first-author of the paper)",
+        "quote": "require that the fraction of the 24 steering targets whose target token receives the highest prompt-averaged probability is at least 0.8 (i.e., >= 20 of 24 targets)"
+      },
+      "verifires": {
+        "task": "tasks/arithmetic-in-the-wild-hours",
+        "leaf": "quant-steering-top1-fraction"
+      },
+      "notes": "The VeriFires checklist encodes 0.85 +/- 0.1 while its judge_notes.md states a floor at 0.8; both agree the criterion is one-sided ('a higher fraction is better, never worse'), so the floor from the stated intent is used and the discrepancy is recorded here. Anti-gaming constraints from judge_notes.md are enforced in code: all 24 targets steered, fixed period set, prompt filter is baseline correctness only. Top-1 is taken over the 24 hour tokens' prompt-averaged probabilities (the diagonal's own support); the per-prompt Eq. 4 correction runs as a local-only pytorch_fn edit in generated documents, with the pinned harvest document feeding the test-side probe fit."
+    }
+  }
+}
