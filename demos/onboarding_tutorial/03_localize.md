@@ -294,7 +294,8 @@ The grid is far from flat: **max IIA 0.969 at (L14, answer slot)**, grid mean
 0.094, grid min 0.000.
 
 **Verdict.** Yes — the variable is movable by an interchange, and the cells that
-move it are a small minority: 4 of 128 cells exceed 0.5.
+move it are a small minority: **95 of 128 cells are exactly 0.000**, 33 are
+non-zero, 11 exceed 0.5, and 2 exceed 0.9.
 
 ### Q2 — the answer slot, at L14
 
