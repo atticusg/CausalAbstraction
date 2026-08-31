@@ -39,7 +39,7 @@ from causalab.neural.shared.sites import (
     resolve_site,
 )
 from causalab.protocol.bundles import entry_selection, selector_slot
-from causalab.protocol.errors import ProtocolError
+from causalab.protocol.errors import ProtocolError, ValidationError
 from causalab.protocol.plan import generated_budget
 from causalab.protocol.registry import component_width
 from causalab.protocol.shapes import FeatureShape
@@ -232,6 +232,22 @@ def _attention_result(site: ResolvedSite, premix: torch.Tensor) -> torch.Tensor:
     return torch.cat([contribution(head) for head in range(heads)], dim=-1)
 
 
+def _ragged_write_error(
+    ename: str, widths: list[int], *, model: str | None = None
+) -> ValidationError:
+    """One message for rule 19, raised from the pre-flight and from the
+    landing path — the same refusal wherever it is noticed first."""
+    where = f" in intervened_model {model!r}" if model else ""
+    return ValidationError(
+        19,
+        f"write {ename!r}{where} addresses ragged position widths "
+        f"{widths} — an all-positions or variable write needs every row to "
+        "address the same number of positions, because the landed slice has "
+        "one shape for the whole batch (§5.19)",
+        path=f"writes.{ename}.pos",
+    )
+
+
 class ExecutorBase:
     """Execute one concrete document against one loaded model.
 
@@ -266,6 +282,7 @@ class ExecutorBase:
         self.coords = dict(coords or {})
         self._read_values: dict[str, torch.Tensor | RaggedValue] = {}
         self._groups_run: set[tuple[str, str]] = set()
+        self._write_widths_checked = False
         self._batches: dict[str, EncodedBatch] = {}
         self._continuations: dict[tuple[str, str], Continuation] = {}
         #: per generate read, the decode steps each row addresses — the
@@ -285,9 +302,55 @@ class ExecutorBase:
         """The (featurized, dims-selected) value of one read; runs its
         group (and, transitively, operand groups) on first use."""
         if name not in self._read_values:
+            self.check_write_widths()
             read = self.doc.reads[name]
             self._run_group(str(read.model), str(read.input))
         return self._read_values[name]
+
+    def check_write_widths(self) -> None:
+        """Rule 19, checked **before any forward pass**.
+
+        A ragged write used to surface from the landing path — i.e. on the
+        accelerator, after the weights had loaded, with no rule number. On a
+        35 B model that is minutes of wasted compute for a fact the encoded
+        batch already knows, and it shaped a whole corpus: the refusal run had
+        to end every request in a ``.`` token so negative indices aligned
+        across rows.
+
+        Only the tokenizer can say how wide a row is, which is why this cannot
+        live in ``validate --data`` — that verb reads the dataset but holds no
+        tokenizer, and giving it one would break the pure verbs' network- and
+        torch-free contract. Encoding is the earliest point the question has an
+        answer.
+        """
+        if self._write_widths_checked:
+            return
+        self._write_widths_checked = True
+        for model, im in self.doc.intervened_models.items():
+            input_role = str(im.input)
+            names = tuple(im.writes) if isinstance(im.writes, tuple) else ()
+            for ename in names:
+                write = self.doc.writes[ename]
+                spec = self._spec(write.pos)
+                if spec.all is None and spec.variable is None:
+                    continue  # an index or a column position is uniform by shape
+                if spec.generated is not None:
+                    continue  # rule 16 already refuses a generated write
+                site = resolve_site(self.bundle, self.doc.sites[str(write.site)])
+                if not site.shape.has_contract_form:
+                    # This tap's last axis is positions, not features, so the
+                    # landing path edits the whole tensor and never gathers —
+                    # there are no per-row widths to be ragged. Mirroring that
+                    # skip here is what keeps the pre-flight from refusing an
+                    # `attention_scores` write, which is the point of the
+                    # component.
+                    continue
+                batch = self._batch(input_role)
+                widths = {
+                    len(row) for row in self._positions(write.pos, batch, input_role)
+                }
+                if len(widths) != 1:
+                    raise _ragged_write_error(ename, sorted(widths), model=model)
 
     def dense_value(self, name: str) -> torch.Tensor:
         """A read value that must be a dense tensor (metric inputs): a
@@ -410,6 +473,7 @@ class ExecutorBase:
         forwards with updated featurizer parameters)."""
         self._read_values.clear()
         self._groups_run.clear()
+        self._write_widths_checked = False
         self._continuations.clear()
         self._read_steps.clear()
 
@@ -795,9 +859,12 @@ class ExecutorBase:
         if value in self.doc.reads:
             stored = self._read_values[value]
             if isinstance(stored, RaggedValue):
-                raise NotImplementedError(
-                    f"operand read {value!r} is ragged — pairing ragged windows "
-                    "into a write is not batchable in the v1 reference engine"
+                raise ValidationError(
+                    19,
+                    f"operand read {value!r} is ragged (unequal per-row "
+                    "position widths) — pairing ragged windows into a write "
+                    "has no aligned shape, so the write is refused rather "
+                    "than landed on a guess (§5.19)",
                 )
             return stored.to(self.bundle.device)
         if "." in value:
@@ -956,12 +1023,7 @@ class ExecutorBase:
             )
             widths = {len(row) for row in positions}
             if len(widths) != 1:
-                raise NotImplementedError(
-                    f"write {ename!r}: ragged position widths {sorted(widths)} "
-                    "are not batchable in the v1 reference engine — an "
-                    "all-positions or variable write needs every row to be "
-                    "the same length"
-                )
+                raise _ragged_write_error(ename, sorted(widths))
             idx = torch.tensor(positions, dtype=torch.long, device=tensor.device)
             rows = torch.arange(tensor.shape[0], device=tensor.device).unsqueeze(1)
             fslice = site.feature_slice or slice(None)

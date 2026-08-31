@@ -10,6 +10,7 @@ import pytest
 import torch
 
 from causalab.neural.shared.encoding import encode
+from causalab.protocol.errors import ValidationError
 
 from tests.neural.engines.pytorch_hooks import hook_oracle_lib as oracle_lib
 from tests.neural.engines.pytorch_hooks._drive import base_data_section, executor_for
@@ -476,15 +477,31 @@ def test_all_positions_write_matches_oracle(bundle, oracle: OracleShim):
     torch.testing.assert_close(have, want, **TOL)
 
 
-def test_ragged_all_positions_write_refuses(llama_bundle):
-    """The documented v1 limit (spec §2.3): rows of unequal length make an
-    all write ragged, which the reference engine refuses rather than
-    silently writing a rectangle over the padding."""
+def test_ragged_all_positions_write_refuses(llama_bundle, monkeypatch):
+    """The documented v1 limit (spec §5.19): rows of unequal length make an
+    `all` write ragged, which the engine refuses rather than silently writing
+    a rectangle over the padding.
+
+    It refuses **by rule number, before the forward pass**. It used to be a
+    bare `NotImplementedError` raised while landing the write — i.e. on the
+    accelerator after the weights had loaded, with no rule to look up. That is
+    minutes of a 35 B load for a fact the encoded batch already knows, and it
+    shaped a whole corpus: every request had to end in a `.` token so negative
+    indices aligned across rows.
+    """
     texts = ["one two", "a much longer sentence right here indeed and then some more"]
     batch = encode(llama_bundle.tokenizer, texts)
     assert batch.content_start(0) != batch.content_start(1)  # genuinely ragged
 
     executor = executor_for(zero_ablate_all_doc(), llama_bundle, base_texts=texts)
-    with pytest.raises(NotImplementedError) as err:
+
+    def no_forward(*args, **kwargs):
+        raise AssertionError("refused too late: a forward pass already ran")
+
+    monkeypatch.setattr(type(executor), "_run_group", no_forward)
+
+    with pytest.raises(ValidationError) as err:
         executor.read_value("logits")
-    assert "all-positions" in str(err.value)
+    assert err.value.rule == 19
+    assert "ragged position widths" in str(err.value)
+    assert "all-positions or variable write" in str(err.value)
