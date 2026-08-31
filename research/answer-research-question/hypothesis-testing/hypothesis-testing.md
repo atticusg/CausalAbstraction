@@ -9,6 +9,11 @@ hypothesis does not support the target hypothesis.
 You arrive with a target, alternatives, and the datasets that distinguish them.
 Three rules make the experiment a valid test.
 
+Treat each claimed intermediate variable as an individual target. Use the
+counterfactual dataset designed for that variable and the alternatives it must be
+distinguished from. Evidence for one variable does not automatically support the
+rest of its causal model.
+
 **Use a dataset that distinguishes the hypotheses.** For each comparison, use the
 dataset identified in step 3 and report its CPU baseline. A neural score of 0.70 is
 not evidence for the target if an alternative also scored 0.70.

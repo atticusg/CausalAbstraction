@@ -21,6 +21,11 @@ Two reference hypotheses are always in play and bound what any result can mean:
 
 ## Step 3a: draft the candidate causal model(s)
 
+Start from the active entries in the `ROADMAP.md` table of candidate variables.
+Promote an entry only by defining it as an explicit variable with possible values,
+parents, and a mechanism. Preserve competing candidates as separate causal models
+or variable subsets until a counterfactual dataset can distinguish them.
+
 Write one or more runnable causal models. Define inputs as leaf variables,
 intermediates from explicit parents, and a prompt and output variable. Use
 intermediates such as a carry bit or equality to expose the parts you want to test.

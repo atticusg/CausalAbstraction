@@ -1,143 +1,163 @@
 # Step 2 — Exploratory experimentation
 
-Use inexpensive experiments to inform a hypothesis, not to prove one. This phase
-starts only after behavioral analysis is complete. Reuse its selected prompt,
-model configuration, dataset and scoring code, code that loads the model, and
-working job setup. Extend that code instead of building a separate implementation
-of the task.
+Use exploratory experiments to find candidate intermediate causal variables and
+the neural locations that may carry them. These experiments suggest what the
+model may be doing. They do not establish that a candidate variable exists.
 
-The three required experiments are logit lens, PCA, and counterfactual patching.
-They are separate experiments and may launch in parallel. Hypothesis generation
-remains blocked until all three finish and their observations have been assembled.
+Use [`../../causal-handbook.md`](../../causal-handbook.md) for the distinction
+between exploratory correlation, localization of an observable input variable,
+and evidence for an intermediate causal variable.
 
-Everything here is suggestive. A logit lens heatmap will always contain some
-structure, a PCA projection only shows what is linearly available, and a small
-patching study provides locations to investigate rather than a reliable effect
-size.
+This phase starts only after behavioral analysis is complete. Reuse its selected
+prompt, model and revision, dataset and scoring code, code that loads the model,
+and working job setup. Extend the working behavioral experiment instead of
+reimplementing the task.
 
-Before launching each experiment, state what it would show if the initial guess
-were right. Exclude causally impossible locations: with causal attention,
-information moves from left to right, so an earlier token cannot contain
-information introduced by a later token.
+## Execution graph
 
-## Logit lens experiment
+Critical token locations are a blocking prerequisite. Identify them before
+launching any exploratory experiment.
 
-Decode intermediate residual stream activations through the model's output head
-to see what each layer and token position would predict if the network stopped
-there. Run the experiment over all tokens and all layers for about twelve inputs.
-Save the top predictions at each cell rather than only the highest-scoring token.
+```
+identify critical tokens and spans
+        │
+        ├── logit lens
+        ├── PCA
+        ├── full residual stream patching ──▶ residual stream DAS
+        ├── full attention output patching ─▶ attention head DBM
+        └── full MLP output patching ───────▶ MLP neuron DBM
+```
 
-- Report the depth at which the answer first appears and what is predicted at the
-  positions relevant to the task before then.
-- Early layers frequently decode to noise. The lens applies the final layer norm
-  and output head to an activation that was not trained to be read there. Treat
-  this as a projection artifact rather than a finding.
-- Decodability at a layer bounds where to look. It does not show that the layer
-  computes the answer or that a later component uses the decoded information.
+Launch the five experiments on the left immediately and in parallel after the
+critical locations are fixed. Each experiment is independent and has its own
+protocol document, run directory, and report.
 
-## PCA experiment
+The three experiments on the right are individually gated:
 
-Collect the residual stream at token positions relevant to the task across a few
-thousand inputs. Fit centered PCA separately at each layer. Color the projections
-by every label supported by the behavioral evaluation, including each relevant
-token's value, the correct answer, the model's answer, and whether the answer was
-correct.
+- Start residual stream DAS as soon as full residual stream patching identifies
+  locations with signal.
+- Start attention head DBM as soon as full attention output patching identifies
+  promising layer bands and token locations.
+- Start MLP neuron DBM as soon as full MLP output patching identifies promising
+  layer bands and token locations.
 
-- Provide every applicable color scheme. Structure may be visible under one label
-  and invisible under another.
-- Report what the leading components organize and the depth at which that
-  organization appears.
-- Visible structure does not show that the model uses it. PCA shows that
-  information is present and linearly available.
+These follow-up jobs may run concurrently. A follow-up does not wait for an
+unrelated branch. If a full-vector patching experiment finds no signal, record the
+null result and close that branch without launching its follow-up.
 
-## Counterfactual patching experiment
+Hypothesis generation remains blocked until all five initial experiments and
+every applicable follow-up are complete, their reports exist, and their
+observations have been added to the table of candidate variables in `ROADMAP.md`.
 
-Construct pairs in which the counterfactual differs from the original input at
-exactly one token. Verify that this single change also changes the model's output.
-Discard pairs that differ at more than one token or do not change the output.
+## Shared data and locations
 
-Patch in one direction only: take activations from the counterfactual run and
-insert them into the original run. Sweep every model layer at the changed token's
-position and at every token position relevant to the task after it. Do not patch
-earlier positions, because causal attention prevents them from receiving
-information from the changed token.
+Use the single-token counterfactual dataset throughout the patching and fitting
+experiments. Each pair must differ at exactly one input token, and that change
+must change the model's output. The changed token realizes the observable input
+variable that DAS and DBM try to localize.
 
-The patching branch contains three separate experiments. They use the same pairs
-and may also run concurrently:
+Run each method at every critical token location. For a critical span, inspect
+each position separately. Patching experiments must also patch the whole span
+together. DAS runs at every individual location with patching signal and also
+learns one shared subspace across an entire span with signal. The shared
+subspace is applied at each position; the token vectors are not concatenated.
 
-1. **Residual stream.** Patch the complete residual stream vector at one layer and
-   position at a time. This traces where the changed information is carried from
-   its source through later positions.
-2. **Attention outputs.** Patch the complete attention output across contiguous
-   bands of layers at the same positions. Include bands of width one so every
-   layer is tested, then test wider bands. This shows whether a span of attention
-   layers is sufficient to transfer the changed behavior.
-3. **MLP outputs.** Patch the complete MLP output across contiguous bands of layers
-   at the same positions. Include bands of width one so every layer is tested,
-   then test wider bands. This shows whether a span of MLP layers is sufficient to
-   transfer the changed behavior.
+For patching, use activations from the counterfactual run as the source and insert
+them into the original run. Patch only the changed position and locations after
+it. Causal attention prevents an earlier position from receiving information
+introduced by a later token.
 
-For every intervention, report whether the original output moves to the
-counterfactual output and report the change in the relevant output logits. The
-goal is to trace mediation from the changed token through later positions relevant
-to the task, not merely to find a cell with a nonzero effect.
+## Experiments and report contracts
 
-## Units of work
+| Order | Method | Instructions and report contract |
+|---|---|---|
+| prerequisite | Critical token selection | [`identify-critical-tokens.md`](identify-critical-tokens.md) |
+| initial, parallel | Logit lens | [`logit-lens.md`](logit-lens.md) |
+| initial, parallel | PCA | [`pca.md`](pca.md) |
+| initial, parallel | Full residual stream patching | [`residual-stream-patching.md`](residual-stream-patching.md) |
+| initial, parallel | Full attention output patching | [`attention-output-patching.md`](attention-output-patching.md) |
+| initial, parallel | Full MLP output patching | [`mlp-output-patching.md`](mlp-output-patching.md) |
+| after residual patching | Residual stream DAS | [`residual-stream-das.md`](residual-stream-das.md) |
+| after attention patching | Attention head DBM | [`attention-head-dbm.md`](attention-head-dbm.md) |
+| after MLP patching | MLP neuron DBM | [`mlp-neuron-dbm.md`](mlp-neuron-dbm.md) |
 
-- One logit lens experiment over all layers and token positions.
-- One PCA experiment over all layers and positions relevant to the task.
-- One experiment that patches the residual stream.
-- One experiment that patches bands of attention outputs.
-- One experiment that patches bands of MLP outputs.
-- One synthesis that compares the observations from all three experiments.
+Every method document specifies whether its deliverable is a comprehensive
+interactive explorer or a smaller self-contained HTML report. Do not replace an
+interactive contract with a static image. All reports must embed their data and
+assets and work without network access.
 
-## Handoff
+## Shard one experiment correctly
 
-The phase is complete only when all three default experiments have finished and
-their observations have been assembled with the strength and limitations of each
-result. Update `ROADMAP.md`, then go to
-[`../hypothesis-generation/hypothesis-generation.md`](../hypothesis-generation/hypothesis-generation.md).
-
-If you arrived here from hypothesis testing, use the failed test to define a new
-set of exploratory experiments. Do not rerun completed sweeps. Hypothesis
-generation remains blocked until the revised exploratory phase is complete.
-
-## Running these experiments
-
-Extend the behavioral analysis code and protocol documents for the sites, metrics,
-and saved outputs. Keep the same selected prompt and model configuration. Inspect
-each protocol document before running it:
+A method remains one research experiment even when its sweep is too large for one
+GPU job. Put every independent layer, position, head, neuron, dimension, and seed
+axis in a protocol document. Run `explain` to inspect its expanded point count:
 
 ```bash
 uv run causalab explain experiment.json --data-root "$DATA_ROOT"
-uv run causalab run experiment.json \
-  --data-root "$DATA_ROOT" --out "$WORKDIR/exploration/run-name" \
-  --device cuda --dtype bf16
 ```
 
-Use these shipped documents as concrete starting points:
+Divide that point range into non-overlapping half-open intervals. Launch every
+shard with the same protocol document, data root, model precision, and code. Only
+the point interval and shard output directory may differ:
 
-- **Logit lens:** read the residual stream at a swept source layer, insert that
-  read into the final `block_output`, then read `lm_head` at the same position and
-  save a `top_k` metric. This applies the model's final normalization and output
-  head to each source activation. The direct-effect protocols in
-  `causalab/configs/protocols/hydra_effect.json` use the same read, insert, and
-  decode pattern.
-- **PCA:** use `causalab/configs/protocols/harvest.json` to save residual stream
-  activations. Add a workflow script step that runs
-  `{"module": "causalab.analysis.fit_pca"}` with the harvested tensor as `acts`
-  and the requested component count as `k`. It writes `basis.safetensors` and a
-  JSON table containing each component's explained variance. Join labels from the
-  behavioral evaluation when plotting the projections.
-- **Counterfactual patching:** start from
-  `causalab/configs/protocols/weekdays_locate_scan.json`, which inserts a
-  counterfactual activation across a layer and position grid. A sweep is written
-  directly on a named field. For example,
-  `"layer": {"sweep": {"range": [0, 32]}}` covers layers 0 through 31. Build
-  separate protocol documents for the residual stream, contiguous bands of
-  attention layers, and contiguous bands of MLP layers. Each document must use
-  pairs that differ at exactly one token and must insert the counterfactual
-  activation into the original run.
+```bash
+uv run causalab run experiment.json \
+  --data-root "$DATA_ROOT" \
+  --out "$WORKDIR/exploration/method/shard-00" \
+  --points 0:32 --device cuda --dtype bf16
 
-Protocol sweeps replace the retired fan-out runner. Use `--points START:STOP` to
-run part of a large sweep without changing its campaign or point identifiers.
+uv run causalab run experiment.json \
+  --data-root "$DATA_ROOT" \
+  --out "$WORKDIR/exploration/method/shard-01" \
+  --points 32:64 --device cuda --dtype bf16
+```
+
+The document digest identifies the campaign, and each expanded point has its own
+digest. `--points` does not change either identity. Do not generate a different
+document per shard, use `--set` differently across shards, overlap point ranges,
+or omit points. Before interpreting the experiment, verify that the union of
+shard manifests contains every expected point exactly once. Assemble report data
+by point digest and sweep coordinates.
+
+A simultaneous five-layer or ten-layer patch contains several dependent writes:
+the chosen start layer determines every layer in the band. The current protocol
+sweep language cannot express that dependency as one axis. Author one protocol
+document for each explicit band, keep every document under the same method
+experiment directory, and shard each document over its remaining position and
+data axes. These documents are separate campaigns but one reported experiment.
+
+`--points` applies to protocol documents, not workflow documents. If a workflow
+contains a large method, shard that method's protocol experiment directly and
+run dependent analysis only after its shards are complete.
+
+## Candidate intermediate variables
+
+Keep a running ledger in `ROADMAP.md`. Add a candidate when one or more
+exploratory results suggest a stable quantity, state, or transformation inside
+the model. Keep competing explanations separate.
+
+For each candidate, record:
+
+- a plain definition of the proposed variable;
+- its possible values;
+- the layers, token locations, and components that may carry it;
+- the observations supporting it;
+- observations that conflict with it;
+- which experiment should distinguish it from competing candidates;
+- its status: active, rejected, merged with another candidate, or promoted into
+  an explicit causal-model hypothesis.
+
+Exploratory DAS and DBM localize an observable input variable. They do not by
+themselves promote that variable into a causal-model hypothesis. That happens in
+hypothesis generation, where the candidate becomes an explicit intermediate
+variable in a high-level causal model.
+
+## Handoff
+
+The handoff contains all method reports and the updated table of candidate
+variables. State which branches found signal, which returned null results, where the
+signal appeared and disappeared across layers and tokens, and which competing
+internal explanations remain.
+
+Update `ROADMAP.md`, then go to
+[`../hypothesis-generation/hypothesis-generation.md`](../hypothesis-generation/hypothesis-generation.md).

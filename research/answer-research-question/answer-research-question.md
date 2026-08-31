@@ -4,7 +4,18 @@ This six-step protocol turns a question about a language model's internal workin
 into a supported claim. This file defines the order, roadmap, and routing between
 steps.
 
+The goal is to identify meaningful intermediate causal variables inside the
+model. Behavioral analysis establishes a task the model can perform and describes
+its errors. Exploration produces competing guesses about the internal process.
+Hypothesis generation expresses those guesses as explicit high-level causal
+models, and hypothesis testing uses counterfactual datasets to test individual
+intermediate variables.
+
 Read this file before entering any step.
+
+Read [`../causal-handbook.md`](../causal-handbook.md) for the scientific framework
+behind intermediate variables, causal models, counterfactual datasets, and the
+limits of each intervention method.
 
 These steps are dependent phases. They are not six work streams that can begin
 together. Behavioral analysis is the first gate: complete it before launching
@@ -15,42 +26,38 @@ is active. The next phase stays blocked until the active phase is complete.
 ## The flow
 
 ```
-                    ┌──────────────────────────────┐
-                    │     behavioral analysis      │
-                    │  REQUIRED FIRST; BLOCKS ALL  │
-                    │         LATER PHASES         │
-                    └──────────────┬───────────────┘
-                                   │ reuse its code and setup
-                    ┌──────────────┼──────────────┐
-                    ▼              ▼              ▼
-              ┌───────────┐  ┌───────────┐  ┌───────────────┐
-              │logit lens │  │    PCA    │  │counterfactual │
-              │           │  │           │  │   patching    │
-              └─────┬─────┘  └─────┬─────┘  └───────┬───────┘
-                    └──────────────┼──────────────┘
-                                   ▼ all three complete
-                    ┌──────────────────────────────┐
-                    │    hypothesis generation     │
-                    └──────────────┬───────────────┘
-                                   ▼
-                    ┌──────────────────────────────┐
-                    │      hypothesis testing      │
-                    └──────────────┬───────────────┘
-                                   │ strong positive result
-                                   ▼
-                    ┌──────────────────────────────┐
-                    │      generalize results      │
-                    └──────────────┬───────────────┘
-                                   ▼
-                    ┌──────────────────────────────┐
-                    │         save results         │
-                    └──────────────────────────────┘
+behavioral analysis              required first; blocks all later phases
+        │
+        ▼
+identify critical tokens         blocks every exploratory experiment
+        │
+        ▼
+exploratory experimentation      launch five initial experiments in parallel
+        ├── logit lens
+        ├── PCA
+        ├── residual stream patching ──▶ residual stream DAS
+        ├── attention output patching ─▶ attention head DBM
+        └── MLP output patching ───────▶ MLP neuron DBM
+        │
+        │ each follow-up waits only for its parent patching experiment
+        │ all initial and applicable follow-up experiments must finish
+        ▼
+hypothesis generation            explicit causal models and variables
+        │
+        ▼
+hypothesis testing               counterfactual tests of individual variables
+        │ strong evidence
+        ▼
+generalize results
+        │
+        ▼
+save results
 ```
 
-The three branches between behavioral analysis and hypothesis generation are the
-exploratory experimentation phase. Launch them in parallel after behavioral
-analysis finishes. Hypothesis generation cannot begin until all three branches
-finish and their observations have been assembled.
+Exploratory jobs on separate branches may run concurrently. Residual stream DAS,
+attention head DBM, and MLP neuron DBM each start as soon as their own parent
+patching experiment identifies signal. Hypothesis generation cannot begin until
+the exploratory phase and its table of candidate variables are complete.
 
 The return paths after a failed or ambiguous hypothesis test are described under
 "Routing after hypothesis testing" below.
@@ -58,9 +65,9 @@ The return paths after a failed or ambiguous hypothesis test are described under
 | Step | Document | The question it answers |
 |---|---|---|
 | 1 | [`behavioral-analysis/`](behavioral-analysis/behavioral-analysis.md) | Can the model do this at all, and what does it get wrong? |
-| 2 | [`exploratory-experimentation/`](exploratory-experimentation/exploratory-experimentation.md) | What cheap internal evidence is there, before committing to a hypothesis? |
-| 3 | [`hypothesis-generation/`](hypothesis-generation/hypothesis-generation.md) | What algorithm might the model be running, and what would distinguish it from the alternatives? |
-| 4 | [`hypothesis-testing/`](hypothesis-testing/hypothesis-testing.md) | Does the evidence favor this hypothesis over its alternatives? |
+| 2 | [`exploratory-experimentation/`](exploratory-experimentation/exploratory-experimentation.md) | What candidate intermediate variables and neural locations does the initial evidence suggest? |
+| 3 | [`hypothesis-generation/`](hypothesis-generation/hypothesis-generation.md) | Which explicit causal models and intermediate variables could explain the evidence? |
+| 4 | [`hypothesis-testing/`](hypothesis-testing/hypothesis-testing.md) | Does a counterfactual test support an individual intermediate variable over its alternatives? |
 | 5 | [`generalize-results/`](generalize-results/generalize-results.md) | How far does the claim reach beyond the setting it was tested in? |
 | 6 | [`save-results/`](save-results/save-results.md) | What gets written down, and where? |
 
@@ -79,6 +86,11 @@ the project. Behavioral analysis is never optional.
 After every step, update the plan and append what happened, how it differed from
 your expectation, and what changes next. Never edit earlier log entries.
 
+During exploration, maintain the table of candidate intermediate variables in
+`ROADMAP.md`. Record competing guesses, supporting and conflicting observations,
+possible neural locations, the experiment that could distinguish them, and their
+current status. Do not delete rejected candidates.
+
 ## A step is a phase, not an experiment
 
 Each step is a phase that may contain several experiments. Divide it into units in
@@ -94,11 +106,12 @@ experiment. This does not unblock exploratory experimentation: every unit still
 belongs to behavioral analysis, and that phase must finish before the pipeline
 advances.
 
-After that gate passes, exploratory experimentation launches its logit lens, PCA,
-and counterfactual patching experiments in parallel. Each reuses the
-selected prompt, model configuration, code, and evaluation setup from behavioral
-analysis. Hypothesis generation remains blocked until the exploratory phase is
-complete.
+After that gate passes, identify critical token locations. Then launch logit lens,
+PCA, residual stream patching, attention output patching, and MLP output patching
+in parallel. Each reuses the selected prompt, model configuration, code, and
+evaluation setup from behavioral analysis. The three learned localization jobs
+are individually gated by their parent patching results. Hypothesis generation
+remains blocked until the exploratory phase is complete.
 
 ## Routing after hypothesis testing
 

@@ -10,7 +10,7 @@ abstraction, interchange interventions, DAS, DBM, steering, and ablation.
 contains the six-step protocol:
 
 1. [Behavioral analysis](answer-research-question/behavioral-analysis/behavioral-analysis.md) — can the model do it, and how does it fail?
-2. [Exploratory experimentation](answer-research-question/exploratory-experimentation/exploratory-experimentation.md) — parallel logit lens, PCA, and counterfactual patching experiments
+2. [Exploratory experimentation](answer-research-question/exploratory-experimentation/exploratory-experimentation.md) — critical-token selection, five parallel initial experiments, and three gated localization follow-ups
 3. [Hypothesis generation](answer-research-question/hypothesis-generation/hypothesis-generation.md) — the causal model and the counterfactuals that test it
 4. [Hypothesis testing](answer-research-question/hypothesis-testing/hypothesis-testing.md) — the hypothesis against its alternatives
 5. [Generalize results](answer-research-question/generalize-results/generalize-results.md) — how far the claim reaches
@@ -18,6 +18,10 @@ contains the six-step protocol:
 
 Read it first. It contains the flow chart, roadmap, and rules for responding to a
 negative test.
+
+The [`causal handbook`](causal-handbook.md) explains the scientific framework:
+candidate intermediate variables, causal models, counterfactual datasets,
+intervention methods, and limits on interpretation.
 
 ## Silico entry point
 
@@ -62,18 +66,19 @@ Start with
 for a new research question. Use the reference trees above when the question
 starts from an existing subspace or requires changes to the CausaLab codebase.
 
-## Remaining execution stub
+## Remaining execution stubs
 
 The protocol refactor retired the Hydra runner, the `analyses/` tree, Python
 methods, and SLURM dispatch. Missing replacements are marked with
 
 > **Execution: stub.** …
 
-The remaining stub is:
+The remaining stubs are:
 
 | Document | Waiting on |
 |---|---|
 | `behavioral-analysis/behavioral-analysis.md` | A protocol document that can decode a batch of prompts greedily and display the results. |
+| `exploratory-experimentation/attention-head-dbm.md` | A grouped DBM gate with one tied mask value per complete attention head across a selected layer band. The current gate masks individual feature coordinates. |
 
 `hypothesis-testing/` has no stub: it runs on the shipped method presets in the
 library's `causalab/configs/methods/` and the worked workflow in
