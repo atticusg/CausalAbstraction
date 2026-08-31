@@ -261,8 +261,12 @@ the model said the row's value for `x`.
   instead.
 - ⚠️ **There is no chat prefix in v1.** Both the `n ≥ 0` rebase above and the
   "past any chat prefix" clause below are written against a `prefix_lengths`
-  the encoder sets to **0 for every row** — there is no chat-template code
-  path, so the rule is an identity today. A dataset that wants an instruct
+  the encoder sets to **0 for every row** — `apply_chat_template` is called
+  **nowhere** in the package, so the rule is an identity today. (The
+  `use_chat_template` field and chat-prefix hook in
+  `neural/token_positions.py` belong to the pre-protocol pipeline surface the
+  task packages annotate against; no engine implements them. That module says
+  so at the top.) A dataset that wants an instruct
   model's chat frame bakes the *rendered* template into its `input` column,
   which works; what it must not do is leave the template's leading BOS in
   place, because the encoder adds special tokens as the tokenizer defines them
@@ -590,6 +594,16 @@ execution order:
 - **`file_path`** (optional): load a fitted artifact instead of computing.
   Its `ArtifactIdentity` (sec. 8) is checked; mismatch refuses. A loaded
   featurizer may not appear in `train.params`.
+  - ⚠️ **`model_dtype` is part of that identity, and `--dtype` is not a way to
+    satisfy it.** The compared value is the document's `model.dtype`, and a
+    `model` block with no `dtype` **implies `fp32`** — so an apply document that
+    omits it is refused against a fit that declared `bf16`, with
+    `[V15] … implies 'fp32' but the bundle was stamped 'bf16'`. `--dtype` is a
+    `--set model.dtype=…` shorthand on a **document** run, and a *workflow* run
+    does not accept it at all — so a chained fit → apply can only be repaired in
+    the file. Write `"dtype": "bf16"` into the apply document's `model` block,
+    next to the fit's. The refusal message says so, and names the stamped
+    value.
 - **`entry`** (optional, only with `file_path`): which entry of that bundle.
   A swept document writes one file across all its points, keyed by
   coordinate (`weight[k=8,seed=0]`, sec. 2.12), so "the fit at k=8, seed=0"
@@ -600,6 +614,14 @@ execution order:
     swept on `featurizers.rot.k` selects the fit at *its* `k` and the two
     sweeps zip instead of crossing. Coordinates the producer never had are
     ignored; a bundle with a single entry needs nothing.
+  - **Authored, it is used exactly as written and is not completed from those
+    coordinates.** The two spellings are alternatives, not layers: completing
+    one from the other would make a selector's meaning depend on which axes the
+    consuming document happens to sweep. So a *partial* `entry` against a
+    multi-axis bundle resolves only when it is already unique, and otherwise
+    refuses naming the coordinates that would disambiguate — pinning `k`
+    elsewhere in the document does **not** narrow an `entry` that omits `k`.
+    Name every varying coordinate, or drop `entry` entirely.
   - A selection that matches no entry, or more than one, is a **load
     error** — never first-hit-wins. Inside a workflow it is caught before
     any step runs, since a producing document's entry names follow from its
@@ -932,6 +954,19 @@ everything that leaves the run. Three saveable kinds, two entry shapes:
   singletons shared by all points.
 - Multiple axes form the **cross product**; nothing else (no zip, no
   conditionals; dependent axes are a generator's job — emit the JSON).
+  - ⚠️ **`data.base.dataset` and `data.counterfactual.dataset` are two names,
+    hence two axes.** Sweeping both over the same *n* refs is an *n*×*n* cross
+    that pairs every base table with every counterfactual table, and rows are
+    paired **across roles by index** (sec. 2.2) — so *n*²−*n* of those points
+    silently score mispaired rows rather than failing. One campaign hit the
+    4096-point cap this way and read the cap as the symptom. There is no zip to
+    reach for: the intended shape is **one table carrying both sides**, base
+    reading `input` and the counterfactual role reading
+    `counterfactual_inputs[j]` of the *same* ref — which is what every shipped
+    preset does, and what leaves one axis to sweep. When the two sides really
+    are separate files, that is one document per pair (or one `--set` per
+    shard), not one document with two axes. Letting two fields share one axis
+    is a spec change and its own PR.
 - Coordinates suffix derived names (`rot[k=8]`) and key results.
 - Expansion is **deterministic at load**: one document ⇒ a set of point
   protocols. The document digest names the campaign; each point's digest is

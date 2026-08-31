@@ -689,7 +689,12 @@ def test_rule_15_artifact_identity_mismatch(env):
 
 def test_rule_15_artifact_identity_match_passes(env):
     doc = copy.deepcopy(base_doc())
-    doc["model"] = {"key": "meta-llama/Llama-3.1-8B", "revision": "main"}
+    # the fixture bundle is stamped bf16, as corpus 09 declares
+    doc["model"] = {
+        "key": "meta-llama/Llama-3.1-8B",
+        "revision": "main",
+        "dtype": "bf16",
+    }
     doc["sites"]["tgt"] = {"component": "block_output", "layer": 18}
     doc["featurizers"] = {
         "rot": {

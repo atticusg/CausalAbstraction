@@ -501,6 +501,23 @@ uv run causalab run scan.json \
 Each point's digest is the provenance unit, so shards are independent and their
 outputs merge by coordinate.
 
+**If a generator writes your documents, have it skip an empty axis rather than
+emit one.** `{"sweep": []}` is a load error — a campaign of zero points is
+almost always a bug in whatever produced the list, and expanding it to "one
+point, unswept" would silently change the experiment. The refusal names the
+axis:
+
+```
+refused: [V14] at sites.target.layer a sweep axis must have at least one value
+```
+
+That is legible on its own; the reason it is worth planning for is the shape of
+a job loop. Under `set -euo pipefail` one document that refuses at load takes
+the whole loop with it, so a generator that emits `{"sweep": []}` for a filter
+that matched nothing loses every *later* document in the batch too. Either drop
+the field when the list is empty, or let the generator refuse where it can say
+which filter came back empty.
+
 ## 8. Chaining documents: workflows
 
 A workflow document chains protocol steps with `script` steps between them —
