@@ -500,6 +500,8 @@ editing a script busts its reuse, which is why the hash is in the digest.
 
 | you want | read |
 |---|---|
+| a worked experiment, end to end | [`../demos/`](../demos/) — one markdown demo per research question |
+| the demo format | [`demos.md`](demos.md) |
 | the normative document spec | [`intervention_protocol.md`](intervention_protocol.md) |
 | chaining documents | [`workflow_protocol.md`](workflow_protocol.md) |
 | the module map and layering rules | [`CODEBASE.md`](CODEBASE.md) |
