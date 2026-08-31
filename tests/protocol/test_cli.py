@@ -244,6 +244,53 @@ def test_engine_nnsight_selects_the_nnsight_engine(
     assert _CapturingNnsight.last.name == "nnsight"
 
 
+def test_explain_engine_prints_the_engine_that_would_run(
+    capturing_engine, artifacts_root, capsys
+):
+    """`explain` printed `requires` and stopped, so routing could not be
+    pre-flighted — which is exactly what is not obvious on a model where one
+    family of components is hooks-only and another is nnsight-only."""
+    code = main(
+        _argv("explain", "02_interchange_im.json", artifacts_root, "--engine", "auto")
+    )
+    assert code == 0
+    assert "engine    capture" in capsys.readouterr().out
+
+
+def test_explain_engine_prints_the_refusal_rather_than_raising(
+    capturing_engine, artifacts_root, capsys, monkeypatch
+):
+    """A document nothing serves is the *more* useful answer of the two, so it
+    is printed beside the plan instead of aborting the explanation."""
+    monkeypatch.setattr(
+        capturing_engine,
+        "capabilities",
+        frozenset(),  # serves nothing
+    )
+    # `pytorch_hooks`, not `auto`: auto also builds the real nnsight engine,
+    # which would serve this document and route right past the stub
+    code = main(
+        _argv(
+            "explain",
+            "02_interchange_im.json",
+            artifacts_root,
+            "--engine",
+            "pytorch_hooks",
+        )
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "engine    refused" in out
+    assert "paired_forward" in out  # names what is missing
+
+
+def test_explain_without_the_flag_loads_no_engine(artifacts_root, capsys):
+    """Opt-in: engines are heavy, and the pure verbs stay torch-free. No
+    `capturing_engine` fixture here — a load would import the real one."""
+    assert main(_argv("explain", "02_interchange_im.json", artifacts_root)) == 0
+    assert "engine" not in capsys.readouterr().out
+
+
 def test_run_defaults_stay_cpu_fp32(capturing_engine, artifacts_root, tmp_path):
     assert main(_run_argv("02_interchange_im.json", artifacts_root, tmp_path)) == 0
     assert capturing_engine.last.device == "cpu"
