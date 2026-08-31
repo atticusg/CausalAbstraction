@@ -106,6 +106,30 @@ def _carriers(document: Path) -> list[Path]:
     ]
 
 
+def _run_tree_load(document: Path) -> str | None:
+    """The first ``file_path`` this document LOADS whose leading segment looks
+    like a step name rather than a repo path — i.e. one that resolves only in a
+    run tree. Featurizers and ``params`` are the IM spec's two load sites."""
+    raw = json.loads(document.read_text())
+    for section in ("featurizers", "params"):
+        for entry in (raw.get(section) or {}).values():
+            path = entry.get("file_path") if isinstance(entry, dict) else None
+            if isinstance(path, str) and not (REPO / path).exists():
+                return path
+    return None
+
+
+def _workflows_naming(document: Path) -> list[Path]:
+    """Workflows in the same demo that run ``document`` as a step."""
+    want = document.name
+    found = []
+    for workflow in sorted((document.parents[1] / "workflows").glob("*.json")):
+        steps = json.loads(workflow.read_text()).get("steps", {})
+        if any(str(s.get("document", "")).endswith(want) for s in steps.values()):
+            found.append(workflow)
+    return found
+
+
 def _ids(paths: list[Path]) -> list[str]:
     return [str(p.relative_to(REPO)) for p in paths]
 
@@ -118,7 +142,20 @@ class TestDocuments:
         ``--data`` is the half that catches the drift a demo is most likely to
         acquire: a metric naming a column the table stopped emitting reads as
         valid structurally and produces nothing at run time.
+
+        One document shape cannot be loaded on its own, and the exception is
+        narrow on purpose. An **apply** document — the second half of every
+        fit→apply pair — names its fitted artifact by a *run-tree* path
+        (``"fit/rot.safetensors"``), where the first segment is a step name
+        that only means something inside the workflow that declares it. Loaded
+        standalone it raises ``[V15] artifact file not found``, which is the
+        loader being right rather than the demo being wrong. Such a document is
+        covered by its workflow's own entry in this same parametrization, and
+        covered *better*: that load applies the step's ``set`` block and checks
+        the producing step really writes the file. So the exception is allowed
+        only when the workflow exists and names this document.
         """
+        from causalab.protocol.errors import ValidationError
         from causalab.protocol.loader import check_data_columns, load
 
         raw = json.loads(document.read_text())
@@ -131,8 +168,20 @@ class TestDocuments:
                 inner = loaded.inner.get(name)
                 if inner is not None:
                     check_data_columns(inner, env)
-        else:
+            return
+        try:
             check_data_columns(load(document, env), env)
+        except ValidationError as error:
+            if error.rule != 15 or not _run_tree_load(document):
+                raise
+            carriers = _workflows_naming(document)
+            assert carriers, (
+                f"{document.name} loads from a run tree "
+                f"({_run_tree_load(document)}) but no workflow in "
+                f"{document.parents[1].name}/ names it as a step — an apply "
+                "document is only loadable inside the workflow that supplies "
+                "its artifact"
+            )
 
     @pytest.mark.parametrize("document", _documents(), ids=_ids(_documents()))
     def test_has_a_description(self, document: Path) -> None:
