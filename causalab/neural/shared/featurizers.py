@@ -299,6 +299,11 @@ def build_stack(
     would make a rotation depend on construction order. The cache is keyed by
     name, so a cached stage built from a different seed refuses, as with width.
 
+    A ``subspace`` spec may name its **own** ``seed`` (§2.5), which wins. That is
+    what makes an *untrained* subspace a random rank-k basis a document can
+    sweep — the matched-k random-subspace control, which otherwise needs a
+    ``train`` block it has nothing to train.
+
     ``coords`` are the executing point's sweep coordinates: they select the
     matching entry of a swept bundle when the spec authored no ``entry``
     (§2.5)."""
@@ -309,6 +314,9 @@ def build_stack(
     running: int | None = width
     for name in chain:
         spec = specs[name]
+        # a `subspace` may author its own seed (§2.5); absent, the document's
+        # seed stands, so nothing about an existing document changes
+        stage_seed = spec.seed if isinstance(spec.seed, int) else seed
         if name in stage_cache:
             stage = stage_cache[name]
             built_for = _stage_width(stage)
@@ -319,10 +327,11 @@ def build_stack(
                     f"built for width {built_for} — one featurizer, one width",
                 )
             built_seed = getattr(stage, "seed", None)
-            if built_seed is not None and built_seed != seed:
+            if built_seed is not None and built_seed != stage_seed:
                 raise ProtocolError(
                     "P2",
-                    f"featurizer {name!r} is used at init seed {seed} here but the "
+                    f"featurizer {name!r} is used at init seed {stage_seed} here "
+                    f"but the "
                     f"cached stage was initialised from seed {built_seed} — one "
                     "featurizer, one seed; a stage cache belongs to one point, so "
                     "two points differing in train.seed must not share one",
@@ -339,7 +348,7 @@ def build_stack(
                 spec,
                 width=running,
                 load_tensors=load_tensors,
-                seed=seed,
+                seed=stage_seed,
                 coords=coords,
             )
             stage.to(device)  # parameters and registered buffers alike

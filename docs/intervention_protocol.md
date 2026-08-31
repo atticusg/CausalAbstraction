@@ -545,20 +545,33 @@ execution order:
 | kind | featurize | param slots | authored fields |
 |---|---|---|---|
 | `identity` (default) | `(x, 0)` | — | — |
-| `subspace` | `(Qᵀx, 0)` | `weight` | `k`, `parametrization` ∈ `cayley` \| `matrix_exp` \| `stiefel` |
+| `subspace` | `(Qᵀx, 0)` | `weight` | `k`, `parametrization` ∈ `cayley` \| `matrix_exp` \| `stiefel`, `seed` |
 | `pca` | `(Pᵀx, 0)` | `weight` | `k`, `file_path` |
 | `sae` | `(enc(x), x − dec(enc(x)))` | `enc, dec, b_enc, b_dec` | `file_path` |
 | `standardize` | `((x−μ)/σ, 0)` | `mu, sigma` | `file_path` |
 | `gate` | `(σ(θ)⊙x, (1−σ(θ))⊙x)` | `theta` | — |
 
 - **Widths are derived** from (model, site) — never authored. Only choices
-  (`k`, `parametrization`, `dtype`, `init`) are authored.
+  (`k`, `parametrization`, `dtype`, `init`, `seed`) are authored.
 - **Params are auto-declared** per kind, named `<featurizer>.<slot>`.
 - **Composition**: a `featurizer` reference may be a list `["rot", "gate"]`,
   applied left-to-right with a per-stage `err` list.
 - **Error-term contract**: `err` and unselected dims always come from the
   pre-write value at the address — so a zero write ablates only the feature
   contribution, and a `dims` write is a subspace swap.
+- **`seed`** (optional, `subspace` only): the draw its **initial** rotation
+  comes from. Absent, it is the document's seed (`train.seed`, or 0 with no
+  fit), so an existing document is unchanged and its canonical form does not
+  grow a field. Illegal together with `file_path`: a loaded featurizer's
+  weights are its bytes and it draws nothing.
+  - This is what makes an *untrained* `subspace` a first-class **random rank-k
+    basis**: `Q = qr(randn(d, k))` at that seed, orthonormal by construction.
+    With `seed: {"sweep": [0, 1, 2]}` and no `train` block, one document is the
+    matched-k random-subspace control — three draws at one cell, scored exactly
+    as the fit was, in one model load. Without an authorable seed the control
+    needed a `train` section it had nothing to train, which is why every study
+    that wanted it built the draws by hand.
+    See `configs/protocols/random_subspace_control.json`.
 - **`file_path`** (optional): load a fitted artifact instead of computing.
   Its `ArtifactIdentity` (sec. 8) is checked; mismatch refuses. A loaded
   featurizer may not appear in `train.params`.
