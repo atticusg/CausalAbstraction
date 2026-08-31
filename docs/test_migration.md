@@ -7,7 +7,7 @@ exactly once below, in one of four categories:
 - **re-driven oracle** — oracle/behavioral tests whose assertions were kept
   verbatim and re-driven through protocol documents (same tolerances, same
   ground truth: the raw-hook oracle, moved intact to
-  `tests/neural/pytorch_hooks/hook_oracle_lib.py`).
+  `tests/neural/engines/pytorch_hooks/hook_oracle_lib.py`).
 - **replaced interface** — tests bound to a deleted interface (hydra configs,
   runner, methods/analyses wrappers, the Plan API) replaced by
   protocol-equivalent tests of the same behavior.
@@ -20,7 +20,7 @@ exactly once below, in one of four categories:
 **Baseline** (at `a50637c`): 3205 tests, 12 pre-existing failures, all in
 `tests/runner/test_run_exp_dispatch.py`. **Outcome** (post-cut, `c05b308`):
 1333 passed, 0 failed — the kept frozen trees plus the new-layer tests in
-`tests/protocol/` and `tests/neural/pytorch_hooks/`.
+`tests/protocol/` and `tests/neural/engines/pytorch_hooks/`.
 
 Path conventions: the *old file* column is relative to the table's area; *new
 file* paths are relative to `tests/`. Parametrized data dirs (`configs/`,
@@ -82,7 +82,7 @@ file* paths are relative to `tests/`. Parametrized data dirs (`configs/`,
 | `interchange/test_layer_scan.py` | replaced interface | `protocol/test_sweep.py`, `protocol/test_corpus.py` (corpus 07) | the layer scan is a sweep axis; deterministic expansion + the locate-grid shape pinned |
 | `interchange/test_single_pair.py` | replaced interface | `neural/pytorch_hooks/test_positions_frame.py::test_out_of_bounds_refuses` | the #176 contract carried verbatim in spirit: a stale position refuses, never addresses the wrong token |
 | `path_patching/conftest.py` | retired | retired | Plan-era fixtures (single-step pipelines, pyvene hook-cleanup workarounds) |
-| `path_patching/test_head_receivers_hook_oracle.py` | retired | retired | per-head value (v_proj-output, KV-head space) and query receivers have no §2.4 component — `attention_value` is the o_proj input; flagged at the gate (the parity skip table names it); see gaps |
+| `path_patching/test_head_receivers_hook_oracle.py` | retired | retired | per-head value (v_proj-output, KV-head space) and query receivers have no §2.4 component — `attention_premix` is the o_proj input; flagged at the gate (the parity skip table names it); see gaps |
 | `path_patching/test_outputs.py` | replaced interface | `neural/pytorch_hooks/test_metrics.py` | the Plan-logits→`GenerationResult` adapter died; last-position slice/argmax/decode live in metric lowering |
 | `path_patching/test_plans.py` | replaced interface | `protocol/test_corpus.py` (corpus 03), `tests/protocols/03_path_patching_im.json` | the pass structure and receiver wiring are explicit authored document content, pinned by digest + execution shape |
 | `path_patching/test_receiver_set.py` | retired | retired | multi-receiver documents are expressible (several inject edits) but the set-degeneracy invariant has no dedicated new test; per-receiver two-pass semantics are oracle-pinned |
@@ -168,7 +168,7 @@ file* paths are relative to `tests/`. Parametrized data dirs (`configs/`,
 | `_helpers/golden.py` | retired | retired | golden-runner capture/replay harness of the deleted runner tier |
 | `_helpers/runner_completion.py` | retired | retired | artifact-completion assertion bundle for deleted runners |
 | `_helpers/test_runner_completion.py` | retired | retired | unit tests of the retired helper above |
-| `configs/` (53 YAML: 3 top-level, `golden/` 21, `model/` 2, `smoke/` 27) | retired | retired | hydra runner configs; method presets moved to `causalab/configs/methods/*.json` and the corpus documents (`tests/protocols/*.json`) |
+| `configs/` (53 YAML: 3 top-level, `golden/` 21, `model/` 2, `smoke/` 27) | retired | retired | hydra runner configs; the presets moved to `causalab/configs/protocols/*.json` and the corpus documents (`tests/protocols/*.json`) |
 | `goldens/` (21 JSON) | retired | retired | runner-golden pins of the deleted chains; the numeric-anchor role passes to `protocol/corpus_digests.json` + the parity goldens — the chat-coherent GPU tier itself is a gap |
 | `test_compose.py` | retired | retired | tests hydra composition of deleted configs |
 | `test_exploration_pca.py` | retired | retired | GPU golden pin of the deleted exploration analysis on chat-coherent |
@@ -308,7 +308,7 @@ site tooling that hooks in via the CLI's `--points` shard selector.
   dataset-serialization seam (§2.2): a task's counterfactual dataset is
   serialized by `causalab/tasks/serialize.py` and driven as corpus document
   `10_task_table_iia_im.json`; the pin is
-  `tests/neural/pytorch_hooks/test_end_to_end_iia.py`. Values are captured
+  `tests/neural/engines/pytorch_hooks/test_end_to_end_iia.py`. Values are captured
   fresh, not carried over — the retired test scored generated strings through
   `task.checker`, a document scores an argmax against the answer's declared
   forms, and its coherent-model half used a chat template v1 cannot express.

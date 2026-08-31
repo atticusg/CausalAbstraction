@@ -11,8 +11,8 @@ here is what lets ``protocol/`` carry no workflow code and ``workflow/`` depend
 on ``protocol/`` one way only — so the intervention protocol is usable on its
 own, which is the point of having two packages.
 
-``run`` needs an execution backend; the reference backend
-(:mod:`causalab.neural.pytorch_hooks`) is imported lazily by whichever half
+``run`` needs an execution engine; the reference engine
+(:mod:`causalab.neural.engines.pytorch_hooks`) is imported lazily by whichever half
 needs it, so the pure verbs stay torch-free.
 """
 
@@ -26,8 +26,9 @@ from typing import Any, Sequence
 
 from causalab.protocol.errors import ProtocolError
 from causalab.protocol.resolve import FileArtifacts, FileDatasets, ResolutionEnv
+from causalab.protocol.schema import PRECISION_DTYPES
 
-__all__ = ["ensure_model_registered", "main", "register_model_key"]
+__all__ = ["ensure_model_registered", "load_engines", "main", "register_model_key"]
 
 
 def _parse_set(values: Sequence[str]) -> dict[str, Any]:
@@ -40,6 +41,24 @@ def _parse_set(values: Sequence[str]) -> dict[str, Any]:
             overrides[dotted] = json.loads(raw_value)
         except json.JSONDecodeError:
             overrides[dotted] = raw_value  # a bare word is a string
+    return overrides
+
+
+def _overrides(args: argparse.Namespace) -> dict[str, Any]:
+    """``--set`` overrides plus the ``--dtype`` shorthand, which is one of
+    them: dtype belongs to the document, so the only way to change it from
+    the command line is the way every other field changes (§9)."""
+    overrides = _parse_set(args.set)
+    dtype = getattr(args, "dtype", None)
+    if dtype is None:
+        return overrides
+    already = overrides.get("model.dtype")
+    if already is not None and already != dtype:
+        raise SystemExit(
+            f"--dtype {dtype} contradicts --set model.dtype={already} — "
+            "they set the same field"
+        )
+    overrides["model.dtype"] = dtype
     return overrides
 
 
@@ -97,14 +116,25 @@ def _build_parser() -> argparse.ArgumentParser:
             p.add_argument(
                 "--device",
                 default="cpu",
-                help="torch device string for the reference backend "
+                help="torch device string for the reference engine "
                 "(cpu, cuda, cuda:1, mps)",
             )
             p.add_argument(
+                "--engine",
+                choices=("pytorch_hooks", "nnsight", "auto"),
+                default="pytorch_hooks",
+                help="execution engine: the reference (default), the nnsight "
+                "tracing engine (needs the 'nnsight' extra), or 'auto' — "
+                "every installed engine, reference first, routed by "
+                "choose_engine (§8)",
+            )
+            p.add_argument(
                 "--dtype",
-                choices=("fp32", "bf16", "fp16"),
-                default="fp32",
-                help="model dtype for the reference backend",
+                choices=PRECISION_DTYPES,
+                default=None,
+                help="shorthand for --set model.dtype=… — precision is a "
+                "document fact (§2.1), so an override enters the digest and "
+                "the record never lies about what produced the numbers",
             )
             p.add_argument(
                 "--points",
@@ -124,15 +154,58 @@ def _env(args: argparse.Namespace) -> ResolutionEnv:
     )
 
 
+def load_engines(choice: str, device: str) -> list[Any]:
+    """Build the ``run`` verb's engine list — lazily, so the pure verbs stay
+    torch-free (importlib keeps the layering honest: ``protocol/`` never
+    links against an execution engine).
+
+    ``auto`` is every installed engine with the reference first — list order
+    is routing preference (§8), so pytorch_hooks serves what it can and the
+    nnsight engine picks up what it refuses. A missing optional engine is
+    only an error when named explicitly."""
+    import importlib
+
+    engines: list[Any] = []
+    if choice in ("pytorch_hooks", "auto"):
+        try:
+            hooks = importlib.import_module("causalab.neural.engines.pytorch_hooks")
+        except ModuleNotFoundError as err:
+            raise ProtocolError(
+                "P2",
+                f"no execution engine available ({err}) — 'run' needs the "
+                "reference engine causalab.neural.engines.pytorch_hooks",
+            ) from err
+        engines.append(hooks.PytorchHooksEngine(device=device))
+    if choice in ("nnsight", "auto"):
+        try:
+            tracing = importlib.import_module("causalab.neural.engines.nnsight_tracing")
+        except ModuleNotFoundError as err:
+            if choice == "nnsight":
+                raise ProtocolError(
+                    "P2",
+                    f"the nnsight engine is not installed ({err}) — install "
+                    "the 'nnsight' extra (pip install 'causalab[nnsight]')",
+                ) from err
+        else:
+            engines.append(tracing.NnsightEngine(device=device))
+    return engines
+
+
 def ensure_model_registered(args: argparse.Namespace) -> None:
     """The run verb touches the model anyway, so an unregistered key is
     resolved from its HF config and registered before canonicalization —
     the pure verbs stay registry-only so digests never depend on the
     network."""
-    from causalab.protocol.loader import apply_overrides, load_text
+    from causalab.protocol.loader import apply_overrides, flatten, load_text
 
-    raw = apply_overrides(dict(load_text(args.document)), _parse_set(args.set))
-    register_model_key(raw)
+    # flatten first: in a split document the model lives in the `application`
+    # half (§1.1), and `--set model.key=…` addresses the composition
+    raw = dict(load_text(args.document))
+    try:
+        raw, _, _ = flatten(raw, base_dir=args.document.resolve().parent)
+    except ProtocolError:
+        return  # a malformed document refuses properly in the real load
+    register_model_key(apply_overrides(raw, dict(args.parsed_set)))
 
 
 def register_model_key(raw: dict[str, Any]) -> None:
@@ -159,7 +232,7 @@ def register_model_key(raw: dict[str, Any]) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse, build the environment, and dispatch on document type."""
     args = _build_parser().parse_args(argv)
-    args.parsed_set = _parse_set(args.set)
+    args.parsed_set = _overrides(args)
     env = _env(args)
     try:
         from causalab.protocol.loader import load_text

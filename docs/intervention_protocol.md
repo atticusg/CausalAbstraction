@@ -3,36 +3,97 @@
 The **Intervention Protocol** defines causal intervention experiments on neural networks, with some useful properties:
 
 - **Serializable JSON document that's easily shareable and reproducible**: The intervention protocol is one JSON document that fully describes an experiment: it can be hashed, diffed, shared, and re-run. It is self-contained and enables exact reproduction.
-- **Agnostic to neural network interfaces.**: The intervention protocol defines the experiment, not the implementation. The protocol is passed to a separate parser/compiler compiling the protocol into runnable code of intervention backends (like pytorch-native hooks, NNsight/NNterp, SGLang, Megatron, etc.). The protocol says *what*; backend specific parser/planner derives *how* (forward count, fusion, batching, sweep parallelization) and execute an intervention protocol.
+- **Agnostic to neural network interfaces.**: The intervention protocol defines the experiment, not the implementation. The protocol is passed to a separate parser/compiler compiling the protocol into runnable code of intervention engines (like pytorch-native hooks, NNsight/NNterp, SGLang, Megatron, etc.). The protocol says *what*; engine specific parser/planner derives *how* (forward count, fusion, batching, sweep parallelization) and execute an intervention protocol.
 
 ## 1. Document layout
 
-Sections in this order (order enforced; `save` last):
+Sections in this order (order enforced; `save` last). A document may also be
+written in two halves — `application` then `method` — which carry these same
+sections between them (§1.1):
 
 | # | key | required | content |
 |---|---|---|---|
 | 1 | `version` | ✓ | `"1"` |
-| 2 | `description` | – | free text, the file's intent |
-| 3 | `model` | ✓ | the neural network ℒ (alias: `neural_model`) |
-| 4 | `data` | ✓ | input rows: `base` (+ `counterfactual`) |
-| 5 | `positions` | – | named token-position specs |
-| 6 | `sites` | ✓ | named activation addresses — the complete tap inventory |
-| 7 | `featurizers` | – | named feature-space maps |
-| 8 | `params` | – | free/constant tensors owned by no featurizer |
-| 9 | `reads` | ✓ | value producers |
-| 10 | `writes` | – | effect definitions (inert until listed) |
-| 11 | `intervened_models` | –* | which writes are in force on which input (*required if `writes` present) |
-| 12 | `metrics` | – | closed reductions over read values |
-| 13 | `train` | – | the fit, declared |
-| 14 | `save` | ✓ | the complete output manifest — non-empty, last |
+| 2 | `type` | –* | `protocol` \| `method` \| `workflow` — what this file is (*required in a method file, §1.1) |
+| 3 | `description` | – | free text, the file's intent |
+| 4 | `model` | ✓ | the neural network ℒ, and how it is realized numerically (alias: `neural_model`) |
+| 5 | `data` | ✓ | input rows: `base` (+ `counterfactual`) |
+| 6 | `positions` | – | named token-position specs |
+| 7 | `sites` | ✓ | named activation addresses — the complete tap inventory |
+| 8 | `featurizers` | – | named feature-space maps |
+| 9 | `params` | – | free/constant tensors owned by no featurizer |
+| 10 | `reads` | ✓ | value producers |
+| 11 | `writes` | – | effect definitions (inert until listed) |
+| 12 | `intervened_models` | –* | which writes are in force on which input (*required if `writes` present) |
+| 13 | `metrics` | – | closed reductions over read values |
+| 14 | `train` | – | the fit, declared |
+| 15 | `save` | ✓ | the complete output manifest — non-empty, last |
 
-- **One global namespace**: every name in sections 5–12 must be unique across
+- **One global namespace**: every name in sections 6–13 must be unique across
   all of them; reserved names: `base`, `counterfactual`, `counterfactual[j]`, `original`.
 - All cross-references must resolve; references are by name, never inline
   duplication.
 - **Artifact-valued fields**: anywhere a scalar or position is expected,
   `{"artifact": "<path>", "key": "<field>"}` reads one value from a prior
   run's artifact at load. Missing artifact = load error.
+
+### 1.1 The method / application split
+
+A document answers two questions at once: *what is the experiment* — the
+hypothesis, what is read, what is written into whom, how it is scored — and
+*what was it run on* — which network, over which rows, at which addresses, in
+which precision. The first half transfers to another model and another task;
+the second half is exactly the part that does not. A document may therefore
+say both, in two labelled halves:
+
+```json
+{
+  "version": "1",
+  "description": "the run's intent",
+  "application": {
+    "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main", "dtype": "bf16"},
+    "data":  {"base": {...}, "counterfactual": {...}},
+    "sites": {"target": {"layer": 18}}
+  },
+  "method": { "...": "reads, writes, intervened_models, metrics, save" }
+}
+```
+
+**One file is one experiment run.** The split is a shape *inside* the
+document, not a second file to keep in step with the first: a run document is
+self-contained, hashable and shareable exactly as a flat one is. The `method`
+half may instead be a **path** to a reusable method file (relative to the
+document, `"type": "method"` at its top level) — the loader inlines it, and
+the record of what ran carries the whole thing either way. A method file may
+also simply be pasted into the half; the `type` and `version` it brings along
+are checked, and a method digests the same inline as in its file.
+
+| | the **method** half | the **application** half |
+|---|---|---|
+| holds | the experiment: `causal_model`, `positions`, `featurizers`, `reads`, `writes`, `intervened_models`, `metrics`, `train`, `save`, and the site *names* it addresses | the inputs and the addresses: `model` (key, revision, dtype, quantization), `data`, and the site records |
+| must hold | `reads` and `save` — what is measured is the method's, never the application's | `model` and `data` — the network and the rows a method leaves open |
+| may not hold | `model`, `data` | — |
+
+A method's `sites` entries may be partial or empty — `"target": {}` names an
+address the application supplies, `{"component": "block_output"}` fixes the
+component and leaves the layer open, `{"component": "lm_head"}` is already
+closed. Everything still open is the method's **signature**, and `explain`
+prints it.
+
+Composition is a **disjoint-or-equal merge**: every leaf comes from exactly
+one half, or from both with the same value (a restatement, cross-checked like
+a `save` entry's bindings, §2.12). An application may *complete* a method,
+never overrule it — a contradiction is a load error (rule 18), because an
+application that could overrule its method would make the method's digest a
+claim about nothing. The two `description`s join, method first.
+
+The composition is an ordinary protocol document: it validates, expands,
+canonicalizes and digests **exactly as the same experiment written flat**.
+Splitting is an authoring choice, not a second dialect, and the point digest —
+the provenance unit — is unmoved by it (§7). Dotted paths (`--set`, a workflow
+step's `set`) address the *composition*, so they mean the same thing in both
+forms. Which method a run used is reported by `explain`, written into the run
+record, and stamped into artifacts; it is not part of the canonical bytes.
 
 ## 2. Section reference
 
@@ -42,8 +103,41 @@ Sections in this order (order enforced; `save` last):
 |---|---|
 | `model.key` | model name (HF key or registry name) — the network as a *name* |
 | `model.revision` | checkpoint revision |
+| `model.dtype` | the compute dtype the weights are realized in: `fp32` (default) \| `bf16` \| `fp16` |
+| `model.quantization` | optional — load-time weight quantization (below) |
 
 - `neural_model` is accepted as an alias of `model`; canonical form uses `model`.
+- **Precision is part of the experiment, not of the run.** The same protocol at
+  `bf16` and at `nf4` produces different numbers, so `dtype` and `quantization`
+  are document vocabulary and enter the digest. An authored file may stay
+  silent — the canonical form materializes `dtype` (§7), so no *record* is ever
+  silent about the precision its numbers came out of. The CLI's `--dtype` is
+  shorthand for `--set model.dtype=…` (§9): it changes the document, and the
+  digest changes with it.
+
+```json
+"model": {
+  "key": "meta-llama/Llama-3.1-8B", "revision": "main", "dtype": "bf16",
+  "quantization": {"scheme": "nf4", "method": "bitsandbytes", "compute_dtype": "bf16", "double_quant": true}
+}
+```
+
+| quantization field | meaning |
+|---|---|
+| `scheme` | ✓ — `int8` (LLM.int8() mixed-precision decomposition) \| `nf4` \| `fp4` (the two 4-bit datatypes) |
+| `method` | the quantizer: `bitsandbytes` (default, the only v1 entry) |
+| `compute_dtype` | dtype the dequantized matmuls run in; defaults to `model.dtype` |
+| `double_quant` | 4-bit only — quantize the quantization constants |
+| `int8_threshold` | `int8` only — the outlier threshold (default `6.0`) |
+
+- There is no bare `int4`: 4-bit is `nf4` or `fp4`, and a field whose point is
+  to name one realization may not be ambiguous about which.
+- Weights quantized **ahead of time** (GPTQ, AWQ) are a property of the
+  checkpoint, so `model.key`/`revision` already name them; `quantization`
+  describes quantization applied *at load* to an unquantized checkpoint.
+- A document with `quantization` requires the `quantized_weights` capability
+  (§8), so an engine that cannot realize it refuses instead of quietly running
+  something else.
 
 ### 2.2 `data`
 
@@ -92,7 +186,7 @@ Named entries; a read/write `pos` is a name here, or an inline spec.
 | + `"generated": {"max_new_tokens": n}` | resolve the anchor inside the row's greedy continuation instead of its prompt |
 
 - Positions are **never resolved to integers in the document**. Resolution is
-  a backend service against a `PositionFrame` (pad side, packing, sequence
+  an engine service against a `PositionFrame` (pad side, packing, sequence
   shard map) — sec. 8.
 
 **The continuation frame (`generated`).** A decode produces a second frame, so
@@ -168,17 +262,271 @@ the model said the row's value for `x`.
 |---|---|
 | `component` | one of the vocabulary below |
 | `layer` | depth index (where the component has one) |
-| `head` / `expert` / `stream` | optional sub-axes: attention head, MoE expert, residual-stream index |
+| `head` / `expert` / `stream` | optional sub-axes: attention head, MoE expert, **mixer stream** |
 
-Component vocabulary (per-backend `SiteResolver` maps each to a tap):
+`head` and `stream` are checked against the component, not against the model:
+`head` is refused on a component with no head axis, and bounded by *that
+component's* head count — which under GQA is narrower for a KV-space component
+than for a query-space one. `stream` is one of `full_attention` /
+`linear_attention`.
 
-`embeddings` · `block_input` · `block_output` · `attention_output` ·
-`attention_value` · `attention_probs` · `mlp_input` · `mlp_output` ·
-`mlp_activation` · `router_logits` · `expert_output` · `ln_final` · `lm_head`
+Component vocabulary (per-engine `SiteResolver` maps each to a tap), in
+execution order:
+
+`input_ids` · `embeddings` · `block_input` · `attention_input_norm` ·
+`delta_qkv` · `delta_gate` · `delta_conv` · `delta_query` · `delta_key` ·
+`delta_value` · `delta_beta` · `delta_decay` · `delta_kv_mem` ·
+`delta_state_update` · `delta_state` · `delta_kernel_output` · `delta_premix` ·
+`attention_query_pre_rope` · `attention_key_pre_rope` ·
+`attention_value_states` · `attention_gate` · `attention_query` ·
+`attention_key` · `attention_scores` · `attention_z` · `deltanet_qkv` ·
+`deltanet_gate` · `deltanet_qkv_conv` · `deltanet_query` · `deltanet_key` ·
+`deltanet_value` · `deltanet_beta` · `deltanet_decay` · `deltanet_state` ·
+`deltanet_core_out` · `deltanet_gated_out` · `attention_result` ·
+`attention_output` · `attention_premix` · `attention_probs` · `block_mid` ·
+`mlp_input_norm` · `mlp_input` · `router_logits` · `router_scores` ·
+`expert_idx` · `expert_gate_proj` · `expert_up_proj` · `expert_activation` ·
+`expert_permutation` · `expert_output` · `routed_output` · `mlp_activation` ·
+`shared_expert_gate_proj` · `shared_expert_up_proj` ·
+`shared_expert_activation` · `shared_expert_output` · `shared_expert_gate` ·
+`mlp_output` · `block_output` · `ln_final` · `lm_head`
 
 - **`sites` is the complete inventory**: every site a read or write references
   must be declared here, including `lm_head` (`{"component": "lm_head"}`).
   There are no implicit site names.
+- **The three norm taps** name the two RMSNorms every block carries:
+  `attention_input_norm` is `input_layernorm`'s **output** (what the mixer
+  consumes), `block_mid` is `post_attention_layernorm`'s **input** (the residual
+  stream after the mixer is added), and `mlp_input_norm` is that same module's
+  **output**. So a block satisfies
+  `block_mid = block_input + attention_output` and
+  `block_output = block_mid + mlp_output`.
+- **`input_ids` is the model's token input, not an activation.** It is
+  layer-less, **read-only**, and *not a feature space*: it carries integer ids
+  on a position axis, so no featurizer may attach to it and it has no width.
+  Read `embeddings` for the vector the ids look up.
+- **The MoE surface** splits four ways. The **router** exposes
+  `router_logits` (all experts), `router_scores` (the renormalized top-k) and
+  `expert_idx` (which experts, integer ids on the same top-k axis);
+  `router_probs` is *derived* — `softmax(router_logits)` — and is not a
+  component. `routed_output` is the combined expert output, and the **shared
+  expert** exposes its SwiGLU interior plus `shared_expert_gate`, the scalar
+  that mixes it in. The *routed* per-expert interior (round 3) has no module
+  boundaries at all — the experts module stores its weights as 3-D parameters
+  and computes the whole interior inside one dispatched
+  `ALL_EXPERTS_FUNCTIONS["grouped_mm"]` call — so its components are reached by
+  wrapping that dispatch entry, and they carry a **dispatch pin**: a model
+  loaded with any other `experts_implementation` (the `"eager"` per-expert
+  loop, `"batched_mm"`) is refused by name, because a different factorization
+  computes different intermediates even where the block's output agrees (to
+  4.2e-7 on the fixture). `expert_activation` is the activated gate half,
+  `act_fn(gate_e)` — the same tensor `mlp_activation` names on the llama
+  family — represented **token-major**: `(batch·position, top_k · d_expert)`,
+  slot *k* the *k*-th ranked expert, joined to experts through `expert_idx`.
+  Its slot axis is a ranking, like `router_scores`, with the same
+  basis-fitting refusal — and so are the other interior slots:
+  `expert_gate_proj` and `expert_up_proj` are the two halves of the fused
+  `[gate_e | up_e]` projection (one capture, two addresses — the
+  `attention_gate` precedent), and `expert_output` is the down-projection's
+  output **before** the routing weight, pinned by the identity
+  `routed_output == Σ_slot expert_output · router_scores` (exactly, 0.0).
+- **`expert: e` is the ragged face of the routed interior.** On the four
+  interior components it selects the (position, slot) pairs the router sent to
+  expert *e* and returns flat rows plus per-example widths (a ragged value);
+  an expert no token chose returns width-0 rows — a data fact, not an error.
+  A write under `expert: e` lands only on that expert's rows (and therefore
+  lands nowhere when no addressed token chose it). `featurizer`/`dims` are
+  refused on this face: they are sized against the token-major `top_k · d`
+  axis and these rows are `d`-wide. On every other MoE component `expert`
+  is still refused — those tensors have no per-expert axis.
+  `expert_permutation` (integral, read-only) is the serving kernel's row
+  bookkeeping for anyone aligning raw kernel-order tensors; it lives inside
+  the fused forward where no module boundary exists, so only the nnsight
+  engine's `.source` address table serves it. The other interior components
+  are served by both engines — the reference engine through the dispatch
+  wrapper above, the nnsight engine through its `.source` addresses — with
+  the same token-major presentation and the same pre-routing-weight
+  `expert_output`.
+- **`expert_idx` is a routing table, not a feature space** — the same rule as
+  `input_ids`: integer ids, no featurizer, no width. And `router_scores` has a
+  width but its axis is a per-token **ranking**, not a basis: column *k* is the
+  *k*-th ranked expert, a different expert for different tokens, so a basis
+  fitted across positions is fitted across a basis that is itself shuffled per
+  position. A **basis-fitting** featurizer there (`subspace`, `pca`, `sae`) is
+  therefore refused; `identity`, `standardize` and `gate` act per column and are
+  still accepted, because "how large is the top-ranked score, typically" is a
+  meaningful question about a ranking.
+- **`expert` is refused on every MoE component.** None of these tensors is
+  indexed by expert id: the router's axes are all-experts or top-k, the shared
+  expert is not one of the routed experts, and the per-expert interior is
+  indexed by routed *slot* (its top-k axis) — `expert_idx` says which expert
+  fills each slot.
+- **The Gated DeltaNet interior** (`deltanet_*`) is the linear-attention
+  mixer's inside — the fused q|k|v projection pre- and post-conv (the conv tap
+  is channels-first), the q/k/v splits (q and k in *key-head* space, before
+  `repeat_interleave` — the linear-attention analogue of GQA), the per-head
+  write strength `deltanet_beta` and decay `deltanet_decay`, the output gate,
+  the delta kernel's return pre- and post-gate, and **`deltanet_state`**: the
+  recurrent state, once per 64-token prefill chunk. The state's position axis
+  is the **kernel's chunk index**, not a token position — read it whole or at
+  an integer chunk index; text anchors have nothing to resolve against there.
+  Per-token prefill state does not exist: the recurrent kernel runs only in
+  single-token decode, by the modeling code's own dispatch, so it is refused
+  by name rather than served at a granularity the kernel does not have. In
+  the **generated frame** the state *is* per token: each decode step runs the
+  recurrent kernel once, and a continuation read of `deltanet_state` gets one
+  state per generated position — a separate, decode-verified address, because
+  decode dispatches different kernels than prefill (interior components
+  without one refuse by name in that frame). These live inside one fused
+  forward — the nnsight engine serves them through its `.source` address
+  table; the reference engine refuses them by name.
+- **`attention_result` is the per-head contribution to the residual stream**,
+  and the only component the model never computes: the block projects the whole
+  `attention_premix` at once, so what the forward pass forms is the *sum* over
+  heads. `sum_h attention_result == attention_output` (minus the o-projection's
+  bias, which belongs to no head) is the identity that defines it.
+  Naming a `head` is strongly encouraged — the dense form is `heads` times
+  `attention_output`, which on a 64-head model at hidden 4096 is 64× the memory
+  — but the whole tensor is not refused, only documented. The read is derived
+  after the position gather, so the cost is `n_positions · heads · hidden`
+  rather than `seq · heads · hidden`.
+- **Three components are read-only, and a write to any is refused** rather than
+  silently discarded. `input_ids` is the model's input. `router_logits` is
+  discarded by the MoE block itself, which routes on the scores and indices it
+  computed from them — so a write there could not reach anything. Write
+  `router_scores` to reweight the chosen experts, or `expert_idx` to change
+  which experts fire. `attention_result` is *derived* — there is no tensor there
+  to change — so write `attention_premix` with the same `head` instead; the
+  result is a linear function of it.
+- **The mixer's interior is four module boundaries, not four chunk ops.**
+  `attention_query_pre_rope` and `attention_key_pre_rope` are the queries and
+  keys as the mixer computes them, *before* RoPE rotates them — on a family with
+  `q_norm`/`k_norm` those norms run before RoPE, so their outputs are exactly
+  these tensors. `attention_value_states` is `v_proj`'s output: the actual value
+  vectors, in **KV-head space**, and the tap sits before the KV cache is
+  updated, so a write there reaches it. `attention_gate` is the second split of
+  the gated-attention family's fused `[q | gate]` projection.
+- **`attention_value_states` is not `attention_premix`,** and the two are the
+  reason the latter was renamed. `attention_premix` is the o-projection's
+  *input* — the mixer's output after the gate, in **query-head** space, `heads ·
+  head_dim` wide. `attention_value_states` is `v_proj`'s output, in **KV-head**
+  space, `kv_heads · head_dim` wide. Under GQA those differ by the group ratio,
+  so a `head` valid on one can be out of range on the other; the bound is the
+  component's, and naming a head the component does not have is an error.
+- **`attention_gate` exists only where the mixer computes one.** Qwen3.5/3.6's
+  attention multiplies its output by `sigmoid(gate)` before projecting out, and
+  packs the gate into the q-projection. A family without one refuses the
+  component by name rather than returning a slice of `q`. All four components
+  are refused on a fused-qkv family (GPT-2's `c_attn`), and all four require a
+  full-attention layer.
+- **Four more components live *inside* the attention function**, where no
+  forward hook reaches: `attention_query` and `attention_key` are the post-RoPE
+  queries and keys as that function receives them (`attention_key` before the
+  GQA `repeat_kv`, so **KV-head space**), `attention_scores` is the softmax's
+  input, and `attention_z` is the function's result — the mixer's output
+  *before* the gate multiply and the o-projection. Unlike the module-boundary
+  four, these do not depend on separate q/k/v projections, so they read on a
+  fused-qkv family too.
+- **`attention_scores` is the write surface `attention_probs` could not be.**
+  They are the same tensor one step apart and have identical axes; what differs
+  is what happens next. After the pattern comes the value multiply, which
+  assumes rows summing to 1 and gets whatever an edit produced — so the pattern
+  accepts only `swap`. After the scores comes the model's own softmax, which
+  renormalizes by construction — so **every mechanism is legal**. Attention
+  knockout is an `add_scaled` of a large negative mask; head boosting is a
+  scale. Note that a *uniform* shift is a no-op, because softmax is invariant to
+  a shift along the axis it normalizes: a knockout has to be targeted, which
+  means a full-shape operand rather than a scalar. `gaussian` is refused, since
+  its noise is drawn per feature axis and this tap has none.
+- **Continuation reads are refused where the steps do not stack.** A decode step
+  attends over the whole KV cache, so a tensor indexed by the positions being
+  attended *to* grows by one per step while the query axis stays 1.
+  `attention_probs`, `attention_scores` (two position axes) and `attention_key`
+  (one position axis, over the keys) therefore refuse in the `generated` frame;
+  `attention_query` and `attention_z` are query-axis-shaped and read normally.
+  Writes never need the rule — rule 16 already makes them prefill-only.
+- **`attention_probs` is the whole attention pattern**, `(batch, heads, query,
+  key)`, and round 1 exposes it whole: `pos: "all"`. Both of its trailing axes
+  are positions — its *feature* axis IS a position axis — so addressing one
+  query row, attaching a featurizer, or slicing `dims` is **refused** rather
+  than approximated. Those three refusals are not written per component: the
+  tap declares its axes as `(batch, head, position[query], key_position[key])`,
+  which has two position axes and therefore no `(batch, position, feature)`
+  form, and each refusal follows from something that form would have provided.
+  A write replaces the whole pattern, which is what an
+  interchange on attention means, and both inputs must have the same number of
+  positions. The edit is handed back to the model's own value multiply — nothing
+  recomputes it — so a write here works on every family whose eager attention
+  the backend can wrap, and only `swap` is refused arithmetic because nothing
+  downstream restores rows summing to 1.
+- **The Gated DeltaNet interior begins at its module boundaries** (round 4.1):
+  `delta_qkv` is `in_proj_qkv`'s output — the fused `[q | k | v]` projection,
+  whose three widths are *unequal* (`key_dim`/`key_dim`/`value_dim`), so it has
+  no head axis and reads whole (or via `dims`); `delta_gate` is `in_proj_z`'s
+  output, the output gate, value-head space; and `delta_premix` is `out_proj`'s
+  **input** — the post-norm, post-gate mixer value, the exact analogue of
+  `attention_premix`, which is why the name. All three require a
+  `linear_attention` layer: at a full-attention layer they refuse with the
+  mirror of the DeltaNet refusal ("a gated-attention mixer computes no
+  delta-rule state"), and a family with no linear stream anywhere (llama,
+  GPT-2) hits that refusal at every layer. The conv output and the kernel
+  boundary are *function* taps (round 4.2) — the `conv1d` module never fires.
+- **Seven more DeltaNet boxes live at the kernel boundary** (round 4.2), as
+  arguments and returns of two module-global call sites the forward uses:
+  `delta_conv` is `causal_conv1d_fn`'s return (channels-first, the fused
+  unequal widths again, so no head axis); `delta_query`/`delta_key`/
+  `delta_value` are the kernel's first three arguments — post-conv,
+  GVA-**tiled** to the value-head count, and **pre**-l2norm (the kernel
+  normalizes and scales internally, so these are the tensors a write can
+  steer); `delta_beta` (`sigmoid(in_proj_b)`) and `delta_decay` (the
+  log-decay `g`, negative reals) are its per-head gates, whose feature axis
+  IS the head axis; `delta_kernel_output` is its return — the pre-norm,
+  pre-gate `core_attn_out`, pinned by
+  `norm(delta_kernel_output, delta_gate) == delta_premix` (exactly). The
+  wrappers swap the modeling file's own globals for the dynamic extent of the
+  tapped mixer's forward and call through to the originals — so whatever
+  hub/`fla` dispatch the environment resolved keeps computing, and identity
+  is bit-exact by construction. Both delta-rule kernels and both conv
+  entry points are swapped together, so cached decode steps (which natively
+  run the recurrent kernel and `causal_conv1d_update`) are tapped identically
+  to prefill — `delta_key` therefore reads in the generated frame, unlike
+  `attention_key` (the kernel receives one step's k, not the prefix). A
+  `kernelize()`d mixer (a hub-kernel class forward) is refused by name, as is
+  a family whose modeling file does not export the four globals. The untiled
+  q/k and the post-split views are not components (F7: one box, one address —
+  they are `delta_conv` rows re-viewed).
+- **The DeltaNet per-step interior is read by stepping the library's own
+  recurrent kernel** (round 4.3) — intercept, never transcribe, §2.3 of the
+  round plan. `delta_state` is the recurrent state `S_t`: one `d_k × d_v`
+  matrix per head per step, the second shape with no feature space (after the
+  attention pattern) — but unlike the pattern it keeps its one position axis,
+  so positions gather on the *steps* axis, `head:` selects a matrix stack, and
+  `featurizer`/`dims` refuse off the declared axes. `delta_kv_mem`
+  (`(S_{t-1}·exp(g_t) · k̂_t).sum`) and `delta_state_update` (`(v_t −
+  kv_mem_t)·β_t`, the diagram's `delta`) are derived from adjacent states and
+  pinned by the reconstruction identity `S_t == S_{t-1}·exp(g_t) + k̂_t ⊗
+  delta_t` against the kernel's own returned states, exactly. At **prefill** a
+  read runs the stepwise loop in the chunked call's *shadow*: the base forward
+  is bit-identical, and the cost is O(seq) extra kernel calls at the tapped
+  layer only (on a real checkpoint a full-seq all-layers `delta_state` is
+  `layers · seq · heads · d_k · d_v` floats — address positions early). At
+  **decode** the model runs the recurrent kernel natively, so generated-frame
+  reads are plain per-step captures, pinned cross-path against test-side
+  stepping. A **write** to `delta_state` substitutes the stepwise loop for the
+  chunked call so edits feed forward — the one deliberate path-forcing in the
+  vocabulary, costing ~5e-7 on the fixture's logits, pinned per layer as a
+  bound. Its tensor operand must cover exactly the write's addressed steps
+  (step-for-step, no broadcasting). `delta_kv_mem` is **read-only** (a memory
+  readout has no independent existence — write `delta_state` or `delta_value`)
+  and `delta_state_update` writes are deferred (D6: they lower exactly onto a
+  state edit via the reconstruction identity).
+- **`stream` names a mixer stream, and it is a per-layer fact.** It is one of
+  `full_attention` / `linear_attention`. A hybrid tower carries a different mixer
+  at different depths (Qwen3.6's text tower alternates Gated DeltaNet with gated
+  full attention), so a site whose declared `stream` contradicts the layer it
+  names is refused at load. `attention_probs` requires
+  a full-attention layer: a linear-attention block computes no attention matrix,
+  so the refusal there is about the architecture and is permanent.
 - Sites are pure data — no behavior, no model handles.
 
 ### 2.5 `featurizers`
@@ -283,13 +631,13 @@ Closed mechanism set (`do` has exactly one key):
 | `{"gaussian": {"seed": s, "scale": c, "axis": "tp_duplicated" \| "tp_split"}}` | `f ← f + c·randn(s)` | additive |
 | `{"renormalize": true}` | `f ← f·‖f₀‖/‖f‖` | absolute |
 | `{"clamp": {"lo": a, "hi": b}}` | `f ← clip(f, a, b)` | absolute |
-| `{"pytorch_fn": {"qualname": "…"}}` | arbitrary | absolute; **local-only** — refused at load by any non-local backend |
+| `{"pytorch_fn": {"qualname": "…"}}` | arbitrary | absolute; **local-only** — refused at load by any non-local engine |
 
 - Per (site, overlapping pos, model): **at most one absolute write**; any
   number of additive writes. Application order: absolute first, then additive
   deltas summed. This replaces any commutativity analysis and makes write sets
   order-free.
-- `gaussian.axis` tells a tensor-parallel backend whether the draw is
+- `gaussian.axis` tells a tensor-parallel engine whether the draw is
   replicated or sharded across ranks; `seed` is part of the hash.
 
 ### 2.9 `intervened_models`
@@ -323,23 +671,74 @@ Closed vocabulary; `of` names a read; other value fields name dataset columns.
 | `cross_entropy` | `of, target` | CE against target |
 | `kl` | `of, target` (a read) | KL between two reads' distributions |
 | `class_probs` | `of, groups` | summed probability per group |
-| `top_k` | `of, k` | top-k tokens + probs |
+| `top_k` | `of, k, by` | the k top-ranked entries of the read (see below) |
 | `match` | `of, expected` (+ optional `mode`) | match indicator |
 | `decode` | `of` | the addressed tokens as text |
+
+**Reads a kind may bind to.** Every kind but `kl` and `top_k` names *vocabulary
+entries* — an authored string resolved to a token id — so it binds to a *plain*
+`lm_head` read and a metric over anything else is a load error. Plain means no
+`featurizer` and no `dims`: a featurizer re-expresses the projection in its own
+latents and `dims` re-indexes a slice, so under either one the read's entries
+are no longer token ids even though the site says `lm_head`. `kl` compares two
+reads against each other; `top_k` reports indices along whichever axis its read
+has. Those two bind to a read at any component.
 
 **Domains.** Every kind consumes one of two things from its read, and which
 one is a property of the kind:
 
 | domain | kinds | consumes |
 |---|---|---|
-| `distribution` | everything above except `decode` | the vocabulary projection at the addressed positions |
+| `distribution` | everything above except `decode` | the read's dense value at the addressed positions — the vocabulary projection for every kind but `top_k` |
 | `ids` | `decode` | only the tokens the decode produced |
 
 An `ids` kind therefore obliges **no** vocabulary projection anywhere (§8's
 materialization requirement) — a text probe is cheap by construction, not by a
-backend's cleverness. It also only means something where tokens were
+engine's cleverness. It also only means something where tokens were
 *produced*: `decode` binds to a read whose position carries `generated` (§2.3),
 and a `decode` over a prompt-frame read is a load error.
+
+#### `top_k` — one kind over any read
+
+`top_k` is the reduction for "I only want the largest few entries per row". Its
+reason to exist is that the alternative is saving the whole tensor to disk and
+argsorting it later: a 4k-wide residual stream, or a 100k-latent SAE/BSF
+featurizer output, times every example and every position. Like `reduce: mean`
+on a save entry (§2.12), it happens **where the rows are gathered**.
+
+So `top_k` binds to any read — `lm_head`, `block_output`, `mlp_activation`, a
+featurizer's output. There is deliberately no `top_dims` / `top_features`
+sibling kind: one kind, disambiguated by mandatory fields.
+
+- **`k`** (mandatory, integer) — how many entries per row. `1 ≤ k ≤ width`.
+- **`by`** (mandatory, `value` | `abs_value` | `prob`) — the ranking rule. It
+  is mandatory because only the author knows what the axis is, and the answers
+  differ: a vocabulary projection has no meaningful negative entries, while a
+  residual stream and a signed feature code do, so ranking an SAE code by
+  signed value and by magnitude return different sets.
+  - `value` — the k largest signed entries. Any read.
+  - `abs_value` — the k largest by `|x|`; the reported value stays signed. Any
+    read.
+  - `prob` — softmax the last axis, then take the k largest probabilities.
+    **Plain `lm_head` reads only** — a softmax across neurons, SAE latents, a
+    featurizer's re-expression of the projection or a `dims` re-index of it
+    normalizes over an axis that is not an event space, so its "probabilities"
+    would be probabilities of nothing; validation refuses it elsewhere. A
+    pre-`by` document that ranked logits meant `prob`.
+
+**Result columns.** Each has one fixed meaning, in every document. A column is
+*absent* when it does not apply — never reinterpreted:
+
+| column | meaning | emitted when |
+|---|---|---|
+| `indices` | index along the read's last axis (a token id on `lm_head`, a neuron on `mlp_activation`, a latent on a featurizer output) | always |
+| `tokens` | that index decoded as a token string | the read is a plain `lm_head` tap |
+| `values` | the **raw** read value at that index | always |
+| `probs` | the softmax probability over the vocabulary | `by: "prob"` |
+
+`values` is always raw — a logit under `by: "prob"`, not the probability — so a
+downstream reader never has to know the ranking rule to know what it is
+holding. The normalized number lives in its own column.
 
 **Metrics over several positions.** A read may address more than one position —
 every generated token of a row, a window of them, the tokens where the model
@@ -359,13 +758,16 @@ its table says which:
   models = two reads + two metrics.
 - Metrics are gather-then-reduce over read values and dataset columns —
   nothing else. Cross-read arithmetic (differences of saved metrics) is
-  post-hoc analysis. The vocabulary stays closed so backends can lower kinds
+  post-hoc analysis. The vocabulary stays closed so engines can lower kinds
   to fused/vocab-parallel implementations.
 - **`token_form`** (optional, `auto` | `bare` | `space_prefixed`; default
   `auto`) — how this metric's string answers become token ids. Legal on every
   kind that names token strings (`logit_diff`, `token_logit`, `cross_entropy`,
   `class_probs`, `match`); `kl` and `top_k` never resolve a string and refuse
-  the key.
+  the key. That stays true under `top_k`'s any-read semantics: it *reports*
+  indices it found and decodes them only when the read taps `lm_head` — it
+  never turns an authored string into a token id, so the knob would have
+  nothing to apply to.
   - `auto` tries `" " + s` first and falls back to `s`. That is right when the
     answer follows a space in the prompt — weekdays, names, MCQA letters — and
     it is the default so pre-`token_form` documents are unchanged.
@@ -404,7 +806,7 @@ its table says which:
 | `steps` | `{"epochs": n}` or `{"updates": n}` |
 | `batch` | `{"pairs": n}` — counts base+counterfactual **pairs**, not rows |
 | `anneal` | dotted-path schedules, e.g. `{"gate.theta.temperature": [start, end, frac]}` |
-| `precision` | `{feature, loss, model}` dtypes |
+| `precision` | `{feature, loss}` dtypes — the *model's* dtype is `model.dtype` (§2.1), one home per fact |
 | `eval` | `{every, split, metrics}` |
 | `early_stop` | `{metric, patience, mode}` |
 | `checkpoint` | transient training state (resume); the final artifact is the `save` entry |
@@ -467,7 +869,7 @@ everything that leaves the run. Three saveable kinds, two entry shapes:
   the provenance unit. The planner content-dedups sub-values shared across
   points — shared harvests and forwards fall out automatically (identical
   reads intern to one read).
-- **The planner derives the sharing; the backend claims it.** A forward
+- **The planner derives the sharing; the engine claims it.** A forward
   group's `digest` is the identity of everything determining its activations,
   and **taps are deliberately not in it** — reading layer 3 or layer 23 of the
   same un-intervened forward is the same forward. So a 32-layer scan's
@@ -476,22 +878,23 @@ everything that leaves the run. Three saveable kinds, two entry shapes:
   `sum(num_forwards)` a per-point loop pays (128). Spending that is execution's
   job, not the plan's — run each distinct digest **once**, capturing the
   **union** of the taps every point asked of it, and let each point gather and
-  featurize its own value out of that one capture. The reference backend does
+  featurize its own value out of that one capture. The reference engine does
   this and reports what it ran as `RunResult.forwards`. The trade is memory: a
   shared pass holds every tapped address at once where a per-point loop held
-  one. A backend that interns nothing is still correct, only slower.
+  one. An engine that interns nothing is still correct, only slower — it
+  leaves `RunResult.forwards` at 0, which reads as "not measured".
 
 ## 4. Execution semantics
 
 - **Models → forwards.** For each expanded point, the models are: `original`
   on every input it is read on, plus each intervened_model. Each (model)
   is one forward group over its input rows; fusion, batching, and staging
-  across groups are the backend's choice. `num_forwards` is derived, never
+  across groups are the engine's choice. `num_forwards` is derived, never
   authored.
 - **Within a model**: apply each in-force write at its address (absolute
   first, then additive sum); reads see the fully written state.
 - **Across models**: operand values flow along the acyclic model graph;
-  the backend stages them (fused multi-pass, saved constants, or microbatch
+  the engine stages them (fused multi-pass, saved constants, or microbatch
   wiring — its call).
 - **Elision**: a model whose reads are all satisfied may stop its forward
   after the deepest tap; a full-depth pass is never owed. A group that
@@ -534,13 +937,23 @@ A conforming loader rejects the document unless all of these hold:
 11. Sink rule: every read is saved, a metric input, or an operand.
 12. Loaded featurizers (`file_path`) are not trained; trained featurizers are
     declared kinds with trainable slots.
-13. `pytorch_fn` present ⇒ refused unless the selected backend is local.
+13. `pytorch_fn` present ⇒ refused unless the selected engine is local.
 14. Sweep wrappers well-formed; the expanded point count is reported (and may
     be capped without an explicit override flag).
 15. Artifact-valued fields resolve (missing artifact = error, never a
     default).
 16. Generation is read-only and prefill-only: no write's `pos` carries
     `generated`, and `train` does not co-occur with a `generated` position.
+17. The model's realization is coherent: a `quantization` block carries only
+    the knobs its own scheme has (`double_quant` is 4-bit vocabulary,
+    `int8_threshold` is int8 vocabulary).
+18. Composition (§1.1): a split document carries both halves, `application`
+    first; the method declares neither `model` nor `data` and does declare
+    `reads` and `save`; the application declares `model` and `data`; a method
+    *file* agrees with the document on `version`; every leaf is supplied by
+    exactly one half, or by both with the same value; and the composition is
+    closed — every input and every site address bound. An unfilled hole is
+    refused with the list of what is missing.
 
 ## 6. Derived — never authored
 
@@ -560,7 +973,7 @@ A conforming loader rejects the document unless all of these hold:
 - **An experiment is a value, not a program.** One JSON document fully
   describes an experiment: it can be hashed, diffed, shared, and re-run.
   It never contains tensors, closures, resolved token indices, module
-  references, or anything only one backend could interpret.
+  references, or anything only one engine could interpret.
 - **The parser owns execution.** The document says *what*; the parser/planner
   derives *how* (forward count, fusion, batching, sweep parallelization) and
   `explain` reports it.
@@ -575,20 +988,26 @@ A conforming loader rejects the document unless all of these hold:
   sampling, and one neural model per document.
 - **Canonical-stamp principle**: the authored file may be minimal; the
   canonical form materializes *everything* — every default (constant LR,
-  optimizer betas, dtypes), every resolved reference (dataset digests,
-  artifact values), every derived width, sugar expanded (int and `"all"`
-  positions, alias `neural_model` → `model`), unordered lists sorted (IM
-  write lists),
-  sweeps expanded to points.
+  optimizer betas, `model.dtype` and the quantization scheme's own knobs),
+  every resolved reference (dataset digests, artifact values), every derived
+  width, sugar expanded (int and `"all"` positions, alias `neural_model` →
+  `model`), unordered lists sorted (IM write lists), sweeps expanded to
+  points. `type` is authoring metadata and is dropped: the canonical form is
+  the experiment, not the file.
+- **Composition is transparent** (§1.1): a document authored as a method plus
+  an application canonicalizes to the same bytes as the same experiment
+  authored as one file, so how a point was reached never moves its digest.
+  Method provenance (the method's own content hash) rides in the run record
+  and the artifact stamp instead.
 - `digest = sha256(canonical bytes)` — sorted keys, canonical floats; each
   param replaced by its content hash. Document digest = campaign; point
   digest = provenance unit, stamped on every artifact as `produced_by`.
 - Any change to canonical form bumps `version` and ships a loader migration.
   Pin a golden corpus (canonical form + digest per example) in tests.
 
-## 8. Backend contract
+## 8. Engine contract
 
-A backend implements these services:
+An engine implements these services:
 
 | service | contract |
 |---|---|
@@ -600,14 +1019,16 @@ A backend implements these services:
 | featurizers | kinds table with declared dtypes; error-term contract |
 | metrics | lower kinds to native ops; derive minimal logit materialization (`logits_to_keep`, vocab-parallel CE) from `save` + metric needs |
 | generation | greedy-decode a group to its derived depth; materialize a distribution only where `save` or a metric needs one (see below); writes stay in the prefill |
-| training | own the `train` loop (optimizer, accumulation, anneal, early stop, checkpoints) — the document never changes across backends |
+| training | own the `train` loop (optimizer, accumulation, anneal, early stop, checkpoints) — the document never changes across engines |
 | RNG | realize `gaussian` per declared seed + axis semantics, bit-stable across parallelism layouts |
 | stamping | write canonical point protocols + digests; `ArtifactIdentity` into every featurizer bundle's safetensors header |
 
 `ArtifactIdentity` (stamped, checked on any `file_path` load; mismatch
-refuses): `produced_by` digest · model key + revision · tokenizer · site
-record · `k` · parametrization · dtype · trained-on data ref + digest ·
-backend · code commit.
+refuses): `produced_by` digest · model key + revision · **model dtype +
+quantization** · tokenizer · site record · `k` · parametrization · featurizer
+dtype · trained-on data ref + digest · engine · code commit. A rotation
+fitted against bf16 weights is not the same artifact as one fitted against
+fp32 weights, and the stamp is what says so.
 
 **Per entry, not per file.** A swept document writes one file from many
 points, so the file-level stamp carries only what every point agrees on;
@@ -618,18 +1039,32 @@ check runs against the record of the entry a document actually selects. A
 bundle with no table is a single-point or hand-made artifact and is checked
 at file level, as before.
 
-**Capabilities.** `requires` is derived from the document; a backend declares
-what it supports; `choose_backend = first b where requires ⊆ b.capabilities`;
+**Capabilities.** `requires` is derived from the document; an engine declares
+what it supports; `choose_engine = first b where requires ⊆ b.capabilities`;
 refusal messages generate from the missing capability.
+
+Two kinds of entry, one comparison. The **coarse verbs** below are the closed
+`CAPABILITIES` vocabulary. **Component entries** are generated, never listed:
+every site a read or write references contributes `component:<name>` (a write
+also `component:<name>:write`), and each engine declares the component sets it
+serves — so a document touching a component outside one engine's site
+vocabulary routes past it to an engine that serves it, and the generated
+refusal names the entry. The closed vocabulary behind these entries is the
+sec. 2.4 `Component` literal itself. Stream- and layer-level constraints (a
+full-attention box on a DeltaNet layer, a read-only component) stay
+engine-internal policy: they depend on the loaded model or are true of every
+engine, so routing on them would be either impossible or misleading.
 
 | capability | required when |
 |---|---|
 | `grad` | `train` present |
 | `paired_forward` | a write's operand read has a different `input` than the write's model |
-| `full_logits` | a full `lm_head` read is saved, or a metric needs the full vocab (`top_k`, `class_probs`) |
+| `full_logits` | a full `lm_head` read is saved, or a `class_probs` / `top_k` metric reads `lm_head` other than through a `dims` slice — a *featurized* `lm_head` read still obliges the whole projection (the featurizer consumes it) even though its value is latents. A `top_k` over any other component obliges no vocabulary projection (sec. 2.10) and must not be charged for one |
 | `generate` | any position carries `generated` (sec. 2.3) |
+| `quantized_weights` | `model.quantization` present (sec. 2.1) |
 | `writable_attention_probs` | a write targets `attention_probs` |
 | `pytorch_fn_local` | any `pytorch_fn` |
+| `component:<name>`[`:write`] | generated — a read or write references a site with that component (writes add `:write`) |
 
 Reference matrix:
 
@@ -639,6 +1074,7 @@ Reference matrix:
 | `paired_forward` | ✓ fused invokes | ✓ pairs per microbatch | ✗ |
 | arbitrary writes | ✓ | ✓ | additive steering only |
 | `full_logits` | ✓ | ✗ vocab-parallel only | ✓ |
+| `quantized_weights` | ✓ bitsandbytes | ✗ | ✓ its own quantizers |
 | `pytorch_fn_local` | ✓ | ✗ | ✗ |
 
 **Materialization (generation).** A continuation read's cost is not the decode,
@@ -649,13 +1085,13 @@ depth and — per continuation read — whether anything downstream consumes a
 distribution: the read is saved, or a metric in the `distribution` domain
 reduces it (sec. 2.10). An `ids`-domain metric does **not** count, which is the
 point of the domain: a text probe — `decode` over a continuation read, nothing
-saved — obliges no vocabulary projection at all, and a backend **must not**
+saved — obliges no vocabulary projection at all, and an engine **must not**
 build one where the answer is no.
 
 *How* it complies is its own business: keeping only the addressed steps,
 projecting a narrower slice (`logits_to_keep` takes an index tensor), replaying
 the sequence teacher-forced, or a vocab-parallel reduction. The reference
-backend keeps `ln_final` activations across steps and projects through the head
+engine keeps `ln_final` activations across steps and projects through the head
 only at the addressed positions, which needs no second pass — an implementation
 note, not a requirement. `explain` prints the obligation so the bill is legible
 before a run.
@@ -663,12 +1099,14 @@ before a run.
 **Execution scale.** Documents and workflows are scheduler-agnostic — they
 never name devices, hosts, or job systems. The division of labor:
 
-- A **backend** owns all intra-run execution: device placement, dtype,
-  batching, and any parallelism across a campaign's points or across its own
+- A **engine** owns all intra-run execution: device placement, batching, and
+  any parallelism across a campaign's points or across its own
   accelerators — declared, like everything else, through its capability set
-  and constructor. The reference backend takes `device`/`dtype` and runs
-  points serially; sharded and multi-device backends are backend work, not
-  document vocabulary.
+  and constructor. The reference engine takes `device` and runs points
+  serially; sharded and multi-device engines are engine work, not document
+  vocabulary. **Precision is not on this list**: `dtype` and `quantization`
+  change the numbers, so they are the document's (§2.1), and an engine reads
+  them per point rather than being told once.
 - **Job dispatch is site tooling outside this repository.** The one seam it
   needs is the CLI's `--points START:STOP` selector: an external scheduler
   expands nothing itself, launches `run` per index range, and recombines by
@@ -677,17 +1115,72 @@ never name devices, hosts, or job systems. The division of labor:
 
 ## 9. CLI
 
+The four verbs dispatch on the document's type (§1.1): a **workflow** runs its
+step graph, a **method file** answers only what a method can answer
+(`validate`, `digest`, and `explain`, which prints its signature — `run` is
+refused: there are no inputs and no addresses), and a **protocol document**
+runs the full pipeline, a split one composing its halves first.
+
 | verb | effect |
 |---|---|
-| `run <doc>` | validate, expand, plan, execute, stamp |
+| `run <doc>` | validate, expand, plan, execute, stamp; writes `<out>/protocol.json` — the canonical document, its digest, the per-point provenance digests, and the method it was composed from |
 | `validate <doc> [--data]` | sec. 5 checks; `--data` also checks column references |
 | `explain <doc>` | models + forward plan, expanded point count, derived `requires`, resolved bindings, digest, what `save` produces |
 | `digest <doc>` | the campaign digest |
 | `--set path=value` | ad-hoc override — exploration only; promote anything that matters into the file |
-| `--device`, `--dtype` (run) | reference-backend placement: any torch device string (`cpu` default, `cuda`, `cuda:1`, `mps`) and `fp32` (default) \| `bf16` \| `fp16` |
+| `--device` (run) | reference-engine placement: any torch device string (`cpu` default, `cuda`, `cuda:1`, `mps`). Placement is execution; precision is not (§8) |
+| `--dtype` (run) | shorthand for `--set model.dtype=…` — it edits the document, so the run's digest is the overridden document's and the record never lies about what produced the numbers. Refused on a workflow, whose steps each declare their own |
 | `--points START:STOP` (run) | execute one half-open point-index shard of the expanded campaign (sec. 8, execution scale); document runs only — digests and stamps are unaffected |
 
 ## 10. Worked examples
+
+The same interchange experiment as one run document, split into its two halves
+(§1.1). The method fixes the mechanism and the scoring and leaves the inputs
+and the layer open; the application closes them. It composes to the one-file
+flat document further down, digest for digest.
+
+```json
+{
+  "version": "1",
+  "description": "Llama-3.1-8B in bf16, answer-slot residual at layer 18, over the weekdays training pairs.",
+  "application": {
+    "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main", "dtype": "bf16"},
+    "data": {
+      "base":   {"dataset": "weekdays/train", "field": "input"},
+      "counterfactual": {"dataset": "weekdays/train", "field": "counterfactual_inputs[0]"}
+    },
+    "sites": {"target": {"layer": 18}}
+  },
+  "method": {
+    "description": "Interchange intervention: swap the answer-slot residual from the counterfactual into base; IIA scoring.",
+    "causal_model": {"key": "weekdays.causal_model"},
+    "sites": {
+      "target":  {"component": "block_output"},
+      "lm_head": {"component": "lm_head"}
+    },
+    "reads": {
+      "v_cf":   {"site": "target",  "pos": -1, "model": "original", "input": "counterfactual"},
+      "logits": {"site": "lm_head", "pos": -1, "model": "patched",  "input": "base"}
+    },
+    "writes": {"patch": {"site": "target", "pos": -1, "do": {"swap": "v_cf"}}},
+    "intervened_models": {"patched": {"input": "base", "writes": ["patch"]}},
+    "metrics": {
+      "iia":        {"kind": "match",      "of": "logits", "expected": "cf_answer"},
+      "logit_diff": {"kind": "logit_diff", "of": "logits", "a": "cf_answer", "b": "base_answer"}
+    },
+    "save": [
+      {"value": "iia",        "model": "patched", "input": "base", "file_path": "iia.parquet"},
+      {"value": "logit_diff", "model": "patched", "input": "base", "file_path": "logit_diff.parquet"}
+    ]
+  }
+}
+```
+
+`causalab explain` on that document prints the composed plan and the method's
+digest; on a method *file* it prints what is still to bind — `model`, `data`,
+and `sites.target.layer`. A layer scan is a one-line edit of the application
+half: `"sites": {"target": {"layer": {"sweep": {"range": [0, 32]}}}}`, with the
+method untouched and still hashing the same.
 
 Path patching (sender → receiver, off-path frozen; shows cross-model flow):
 
@@ -700,7 +1193,7 @@ Path patching (sender → receiver, off-path frozen; shows cross-model flow):
     "counterfactual": {"dataset": "ioi/test", "field": "counterfactual_inputs[0]"}
   },
   "sites": {
-    "sender":   {"component": "attention_value",  "layer": 9, "head": 9},
+    "sender":   {"component": "attention_premix",  "layer": 9, "head": 9},
     "receiver": {"component": "block_input",      "layer": 12},
     "a10":      {"component": "attention_output", "layer": 10},
     "a11":      {"component": "attention_output", "layer": 11},

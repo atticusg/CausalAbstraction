@@ -4,7 +4,7 @@
 
 A framework for **mechanistic interpretability** — reverse-engineering the algorithms language models use internally using **causal abstraction**.
 
-You write a high-level causal model describing *how you think* an LM solves a task, then run experiments to test whether the LM's internal components actually implement that algorithm. Every experiment is a serializable **intervention protocol** — a JSON document naming sites, reads, edits, intervened models, and metrics — validated, digested, and executed by a backend. The document is the seam: backends (pytorch hooks today; tensor-parallel engines tomorrow) implement against the same format.
+You write a high-level causal model describing *how you think* an LM solves a task, then run experiments to test whether the LM's internal components actually implement that algorithm. Every experiment is a serializable **intervention protocol** — a JSON document naming sites, reads, edits, intervened models, and metrics — validated, digested, and executed by an engine. The document is the seam: engines (pytorch hooks today; tensor-parallel engines tomorrow) implement against the same format.
 
 ## Quick Start
 
@@ -14,12 +14,20 @@ You write a high-level causal model describing *how you think* an LM solves a ta
    cd causalab
    uv sync
    ```
-2. **Read the two specs.** [`docs/intervention_protocol.md`](docs/intervention_protocol.md) — the document format (sections, the `do` algebra, sweeps, validation, digests, the backend contract). [`docs/workflow_protocol.md`](docs/workflow_protocol.md) — chaining protocol runs with script steps: inputs, one Python script, declared outputs.
-3. **Run a method preset:**
+2. **Read the two specs.** [`docs/intervention_protocol.md`](docs/intervention_protocol.md) — the document format (sections, the `do` algebra, sweeps, validation, digests, the engine contract). [`docs/workflow_protocol.md`](docs/workflow_protocol.md) — chaining protocol runs with script steps: inputs, one Python script, declared outputs.
+3. **Run a shipped protocol:**
    ```bash
-   uv run causalab explain  causalab/configs/methods/interchange.json --data-root <data>
-   uv run causalab run      causalab/configs/methods/interchange.json \
+   uv run causalab explain  causalab/configs/protocols/interchange.json --data-root <data>
+   uv run causalab run      causalab/configs/protocols/interchange.json \
        --data-root <data> --out runs/interchange --device cuda --dtype bf16
+   ```
+   Or run the same experiment as one document split into its two halves — the
+   **method** is the transferable half, the **application** names the network,
+   the data, the addresses and the precision (spec §1.1):
+   ```bash
+   uv run causalab explain causalab/configs/methods/interchange.json          # what must be bound
+   uv run causalab run     causalab/configs/runs/weekdays_8b_interchange.json \
+       --data-root <data> --out runs/interchange --device cuda
    ```
 
 ## The CLI
@@ -31,15 +39,17 @@ You write a high-level causal model describing *how you think* an LM solves a ta
 | `explain <doc>` | models, forward plan, point count, derived `requires`, digest, save products |
 | `digest <doc>` | the campaign digest |
 
-Common flags: `--set path=value` (ad-hoc override — exploration only), `--data-root` / `--artifacts-root` (resolution roots), `--device` / `--dtype` (reference-backend placement, `run` only), `--points START:STOP` (execute one shard of a swept campaign — the seam external schedulers dispatch on; digests are unaffected). The same verbs dispatch on workflow documents (they carry a `steps` section).
+Common flags: `--set path=value` (ad-hoc override — exploration only), `--data-root` / `--artifacts-root` (resolution roots), `--device` (reference-engine placement, `run` only), `--dtype` (shorthand for `--set model.dtype=…`: precision is a document fact, so it enters the digest), `--points START:STOP` (execute one shard of a swept campaign — the seam external schedulers dispatch on; digests are unaffected). The same verbs dispatch on workflow documents (they carry a `steps` section).
 
-**Execution scale is not document vocabulary.** Documents and workflows never name devices, hosts, or job systems: backends own intra-run execution, and job dispatch is site tooling outside this repository (spec §8, "Execution scale").
+`run` also writes `<out>/protocol.json`: the canonical document (every default materialized — dtype and quantization included), its digest, the per-point provenance digests, and the method it was composed from. That file is what someone reproducing the run reads first.
 
-## Method presets
+**Execution scale is not document vocabulary.** Documents and workflows never name devices, hosts, or job systems: engines own intra-run execution, and job dispatch is site tooling outside this repository (spec §8, "Execution scale").
 
-The golden-corpus documents ship as user-facing presets in [`causalab/configs/methods/`](causalab/configs/methods/):
+## Shipped documents
 
-| preset | method |
+The golden-corpus documents ship as user-facing presets in [`causalab/configs/protocols/`](causalab/configs/protocols/) — complete protocol documents, network and all:
+
+| preset | experiment |
 |---|---|
 | `harvest` | activation harvesting at named sites/positions |
 | `interchange` | interchange intervention + IIA scoring |
@@ -51,24 +61,28 @@ The golden-corpus documents ship as user-facing presets in [`causalab/configs/me
 | `weekdays_das_sweep` | k × seed DAS fits at a located cell |
 | `weekdays_das_apply` | apply a fitted rotation (ArtifactIdentity-checked) |
 
-[`causalab/configs/workflows/weekdays_8b.json`](causalab/configs/workflows/weekdays_8b.json) chains locate → select → fit → apply → plots as one workflow document (two step types: `protocol` and `script`).
+[`causalab/configs/runs/`](causalab/configs/runs/) holds the same experiment as a **split run document** (`application` + `method` in one file, spec §1.1), and [`causalab/configs/methods/`](causalab/configs/methods/) the reusable method on its own — the network- and data-independent half. [`causalab/configs/workflows/weekdays_8b.json`](causalab/configs/workflows/weekdays_8b.json) chains locate → select → fit → apply → plots as one workflow document (two step types: `intervention_protocol` and `script`).
 
 ## Repository layout
 
 ```
 causalab/
-├── protocol/        # backend-free document layer: load, validate, canonicalize,
-│                    #   digest, sweep expansion, backend routing, workflow model, CLI
+├── protocol/        # engine-free document layer: load, validate, canonicalize,
+│                    #   digest, sweep expansion, engine routing, workflow model, CLI
 ├── neural/
-│   ├── pytorch_hooks/  # the reference backend: sites, positions, mechanisms,
-│   │                   #   featurizers, metrics, train loop, stamping
+│   ├── shared/      # what every engine uses: sites, encoding, layouts,
+│   │                #   mechanisms, featurizers, metrics, outputs, executor base
+│   ├── engines/
+│   │   ├── pytorch_hooks/    # the reference engine: hooks, decode, train loop
+│   │   └── nnsight_tracing/  # the nnsight engine: traces (the 'nnsight' extra)
 │   └── token_positions.py
 ├── analysis/        # numerical analysis a script step runs (fits, statistics, operands)
 ├── workflow/        # the workflow runner: run-tree overlay, script invocation, manifest
 ├── causal/          # causal model primitives
 ├── tasks/           # task definitions (causal models + counterfactual generators)
 ├── io/              # disk I/O + plotting primitives
-└── configs/         # method presets (JSON documents) + workflow documents
+└── configs/         # protocols/ (flat documents) + runs/ (split ones) +
+                    #   methods/ + workflows/ — JSON, no Python config system
 docs/                # the two specs, CODEBASE.md, TESTS.md, test_migration.md
 tests/               # tiered suite — see docs/TESTS.md
 ```
@@ -77,6 +91,7 @@ tests/               # tiered suite — see docs/TESTS.md
 
 - **Causal model**: your hypothesis about how the LM solves a task — variables, values, parent–child dependencies, mechanisms (`causalab/causal/`).
 - **Task**: a prompt distribution plus a causal model and counterfactual generators (`causalab/tasks/`).
+- **Method / application**: the two halves one document may be written in — the method is what transfers (hypothesis, reads, writes, metrics, save), the application is what cannot (which network, which data, which addresses, which precision). One file is still one run: the halves compose into an ordinary protocol document, digest for digest.
 - **Intervention protocol**: one experiment as data — which activations are read, which are edited (`swap`, `add_scaled`, `gaussian`, …), in which intervened models, scored by which metrics. Sweeps expand a document into a campaign of points with content-deduped shared work.
 - **Workflow**: a chain of protocol executions plus script steps, with dependencies derived from references — never authored ordering. Everything a step declares is published where it lands; there is no save manifest.
 
@@ -86,4 +101,4 @@ See [`docs/TESTS.md`](docs/TESTS.md). CPU tiers run with `uv run pytest -m "not 
 
 ## History
 
-The Hydra runner, `analyses/` chains, `methods/` as Python, SLURM dispatch, and the notebook demos were retired in the protocol refactor (PR #20); [`docs/test_migration.md`](docs/test_migration.md) is the ledger. Their intervention cores return as method presets and workflow documents.
+The Hydra runner, `analyses/` chains, `methods/` as Python, SLURM dispatch, and the notebook demos were retired in the protocol refactor (PR #20); [`docs/test_migration.md`](docs/test_migration.md) is the ledger. Their intervention cores return as shipped protocol documents and workflows.

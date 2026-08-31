@@ -1,6 +1,6 @@
 """The workflow-protocol document model (docs/workflow_protocol.md, v2).
 
-Backend-free, like the rest of this package: parsing, the workflow load-error
+Engine-free, like the rest of this package: parsing, the workflow load-error
 checklist, the derived dependency graph and schedule, and the canonical form +
 digest. Executing a loaded workflow is :mod:`causalab.workflow.runner`'s job.
 
@@ -56,7 +56,13 @@ from causalab.protocol.errors import (
     ValidationError,
     suggest,
 )
-from causalab.protocol.loader import LoadedProtocol, apply_overrides, load, load_text
+from causalab.protocol.loader import (
+    LoadedProtocol,
+    apply_overrides,
+    flatten,
+    load,
+    load_text,
+)
 from causalab.protocol.resolve import ArtifactStore, ResolutionEnv
 from causalab.protocol.schema import FEATURIZER_SLOTS
 from causalab.protocol.sweep import (
@@ -863,6 +869,10 @@ def load_workflow(
 
     # ---- rule 4 (references) + derived dependency edges (§3) --------------- #
     overridden_raw: dict[str, dict[str, Any]] = {}
+    inner_dirs: dict[str, Path] = {}
+    #: per step, the method its document was composed from (§1.1) — the
+    #: flatten happens here, so the provenance is attached back below
+    inner_methods: dict[str, tuple[str | None, str | None]] = {}
     deps: dict[str, set[str]] = {name: set() for name in steps}
     step_refs: dict[str, set[tuple[str, str]]] = {}
     run_tree_loads: dict[str, set[str]] = {name: set() for name in steps}
@@ -915,7 +925,14 @@ def load_workflow(
                 4, f"document {step.document!r} not found", path=f"steps.{name}"
             )
         try:
-            inner_raw = apply_overrides(dict(load_text(doc_path)), step.set)
+            # flatten a split inner document first (§1.1), so a step's `set`
+            # paths are the composition's — one vocabulary for both authoring
+            # forms
+            flat, method_hash, method_ref = flatten(
+                dict(load_text(doc_path)), base_dir=doc_path.parent
+            )
+            inner_methods[name] = (method_hash, method_ref)
+            inner_raw = apply_overrides(flat, step.set)
         except ParseError as err:
             raise WorkflowError(
                 8,
@@ -923,6 +940,7 @@ def load_workflow(
                 path=f"steps.{name}",
             ) from err
         overridden_raw[name] = inner_raw
+        inner_dirs[name] = doc_path.parent
         refs = _walk_step_refs(inner_raw, step_names)
         step_refs[name] = refs
         run_tree_loads[name] = _walk_run_tree_paths(inner_raw, step_names)
@@ -997,6 +1015,7 @@ def load_workflow(
             loaded = load(
                 overridden_raw[name],
                 load_env,
+                base_dir=inner_dirs.get(name),
                 point_cap=step.max_points
                 if step.max_points is not None
                 else DEFAULT_POINT_CAP,
@@ -1007,6 +1026,11 @@ def load_workflow(
                 f"document {step.document!r} does not load: {err}",
                 path=f"steps.{name}",
             ) from err
+        method_hash, method_ref = inner_methods.get(name, (None, None))
+        if method_hash is not None:
+            loaded = dataclasses.replace(
+                loaded, method_digest=method_hash, method_ref=method_ref
+            )
         inner[name] = loaded
         if deferred:
             inner_digests[name] = _authored_digest(overridden_raw[name])

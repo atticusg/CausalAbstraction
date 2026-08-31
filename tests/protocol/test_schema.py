@@ -175,18 +175,64 @@ def test_metric_token_form_rejects_an_unknown_form():
 
 
 def test_metric_token_form_is_refused_on_kinds_that_resolve_no_string():
-    """``kl`` compares two reads and ``top_k`` decodes ids it found — neither
-    turns an authored string into a token id, so the knob is meaningless."""
+    """``kl`` compares two reads and ``top_k`` reports indices it found —
+    neither turns an authored string into a token id, so the knob is
+    meaningless. Still true now that ``top_k`` runs over any read: it decodes
+    an index only when the read taps ``lm_head``, and never resolves one."""
     raw = base_doc()
     raw["metrics"]["ld"] = {
         "kind": "top_k",
         "of": "logits",
         "k": 3,
+        "by": "prob",
         "token_form": "bare",
     }
     with pytest.raises(ParseError) as err:
         parse_document(in_order(raw))
     assert err.value.code == "P3"
+
+
+def test_top_k_needs_a_ranking_rule():
+    """``by`` is mandatory: only the author knows whether the read's axis has
+    meaningful negative entries, and guessing changes the answer."""
+    raw = base_doc()
+    raw["metrics"]["tk"] = {"kind": "top_k", "of": "logits", "k": 3}
+    with pytest.raises(ParseError) as err:
+        parse_document(in_order(raw))
+    assert err.value.code == "P2"
+    assert "by" in str(err.value)
+
+
+@pytest.mark.parametrize("by", ["value", "abs_value", "prob"])
+def test_top_k_ranking_vocabulary(by):
+    raw = base_doc()
+    raw["metrics"]["tk"] = {"kind": "top_k", "of": "logits", "k": 3, "by": by}
+    doc = parse_document(in_order(raw))
+    assert doc.metrics["tk"].fields["by"] == by
+
+
+def test_top_k_ranking_is_a_closed_enum():
+    raw = base_doc()
+    raw["metrics"]["tk"] = {"kind": "top_k", "of": "logits", "k": 3, "by": "softmax"}
+    with pytest.raises(ParseError) as err:
+        parse_document(in_order(raw))
+    assert err.value.code == "P4"
+
+
+def test_top_k_ranking_is_not_sweepable():
+    """A sweep over ``by`` would fork a campaign on how a plot is read rather
+    than on a research variable — the reasoning that keeps ``token_form`` off
+    §3's wrappers."""
+    raw = base_doc()
+    raw["metrics"]["tk"] = {
+        "kind": "top_k",
+        "of": "logits",
+        "k": 3,
+        "by": {"sweep": ["value", "abs_value"]},
+    }
+    with pytest.raises(ValidationError) as err:
+        parse_document(in_order(raw))
+    assert err.value.rule == 14
 
 
 def test_metric_token_form_is_not_sweepable():

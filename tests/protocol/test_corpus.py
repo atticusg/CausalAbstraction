@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from causalab.protocol.backend import requires
+from causalab.protocol.engine import component_capability, requires
 from causalab.protocol.loader import load
 from causalab.protocol.plan import (
     COMPONENT_RANK,
@@ -30,20 +30,92 @@ from tests.protocol._env import CORPUS_DIR
 PINS_PATH = Path(__file__).parent / "corpus_digests.json"
 PINS = json.loads(PINS_PATH.read_text())
 
-#: (file, expected points, expected forwards per point, expected requires)
+
+def _touch(*components: str) -> set[str]:
+    """The generated capability entries for touched components — a trailing
+    ``+w`` marks one the document also writes (§8, component routing)."""
+    needed: set[str] = set()
+    for item in components:
+        name, wrote = (item[:-2], True) if item.endswith("+w") else (item, False)
+        needed.add(component_capability(name))
+        if wrote:
+            needed.add(component_capability(name, write=True))
+    return needed
+
+
+#: (file, expected points, expected forwards per point, expected requires —
+#: coarse capabilities plus the generated component entries)
 CORPUS_SHAPE = [
-    ("01_harvest_im.json", 1, 1, set()),
-    ("02_interchange_im.json", 1, 2, {"paired_forward"}),
-    ("03_path_patching_im.json", 1, 4, {"paired_forward"}),
-    ("04_das_im.json", 1, 2, {"grad", "paired_forward"}),
-    ("05_dbm_im.json", 1, 2, {"grad", "paired_forward"}),
-    ("06_hydra_effect_im.json", 1, 7, {"paired_forward"}),
-    ("07_weekdays_locate_scan_im.json", 64, 2, {"paired_forward"}),
-    ("08_weekdays_das_sweep_im.json", 9, 2, {"grad", "paired_forward"}),
-    ("09_das_apply_im.json", 1, 2, {"paired_forward"}),
-    ("10_task_table_iia_im.json", 1, 3, {"full_logits", "paired_forward"}),
-    ("11_probe_generate_im.json", 1, 1, {"generate", "full_logits"}),
-    ("12_probe_variable_im.json", 1, 1, {"generate", "full_logits"}),
+    ("01_harvest_im.json", 1, 1, _touch("block_output")),
+    (
+        "02_interchange_im.json",
+        1,
+        2,
+        {"paired_forward"} | _touch("block_output+w", "lm_head"),
+    ),
+    (
+        "03_path_patching_im.json",
+        1,
+        4,
+        {"paired_forward"}
+        | _touch(
+            "attention_output+w", "attention_premix+w", "block_input+w", "lm_head"
+        ),
+    ),
+    (
+        "04_das_im.json",
+        1,
+        2,
+        {"grad", "paired_forward"} | _touch("block_output+w", "lm_head"),
+    ),
+    (
+        "05_dbm_im.json",
+        1,
+        2,
+        {"grad", "paired_forward"} | _touch("block_output+w", "lm_head"),
+    ),
+    (
+        "06_hydra_effect_im.json",
+        1,
+        7,
+        {"paired_forward"} | _touch("attention_output+w", "block_output+w", "lm_head"),
+    ),
+    (
+        "07_weekdays_locate_scan_im.json",
+        64,
+        2,
+        {"paired_forward"} | _touch("block_output+w", "lm_head"),
+    ),
+    (
+        "08_weekdays_das_sweep_im.json",
+        9,
+        2,
+        {"grad", "paired_forward"} | _touch("block_output+w", "lm_head"),
+    ),
+    (
+        "09_das_apply_im.json",
+        1,
+        2,
+        {"paired_forward"} | _touch("block_output+w", "lm_head"),
+    ),
+    (
+        "10_task_table_iia_im.json",
+        1,
+        3,
+        {"full_logits", "paired_forward"} | _touch("block_output+w", "lm_head"),
+    ),
+    (
+        "11_probe_generate_im.json",
+        1,
+        1,
+        {"generate", "full_logits"} | _touch("block_output+w", "lm_head"),
+    ),
+    (
+        "12_probe_variable_im.json",
+        1,
+        1,
+        {"generate", "full_logits"} | _touch("block_output", "lm_head"),
+    ),
 ]
 
 

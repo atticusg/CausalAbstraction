@@ -89,7 +89,10 @@ def assert_golden(golden_id: str, measured: float) -> None:
         )
 
 
-def run_document(name: str, out: Path, *, dtype: str = "fp32", **extra: str) -> None:
+def run_document(name: str, out: Path, **extra: str) -> None:
+    """Run one golden document through the real CLI. Precision is the
+    document's own (§2.1) — the pinned digest covers it, so a golden cannot
+    be measured at a precision its record does not name."""
     argv = [
         "run",
         str(GOLDEN_PROTOCOLS / name),
@@ -101,8 +104,6 @@ def run_document(name: str, out: Path, *, dtype: str = "fp32", **extra: str) -> 
         str(out),
         "--device",
         _device(),
-        "--dtype",
-        dtype,
     ]
     for key, value in extra.items():
         argv += ["--set", f"{key}={value}"]
@@ -118,7 +119,9 @@ def test_ioi_clean_logit_diff(tmp_path):
 
 
 def test_hours_baseline_accuracy(tmp_path):
-    run_document("hours_baseline_im.json", tmp_path, dtype="bf16")
+    # precision is the document's own now (§2.1) — hours_baseline_im.json
+    # declares bf16, and the pinned digest covers it
+    run_document("hours_baseline_im.json", tmp_path)
     acc = _frame(tmp_path / "acc.json")["value"]
     assert len(acc) == 1152
     assert_golden("arithmetic.hours_baseline_acc", float(acc.mean()))
@@ -130,7 +133,7 @@ def test_rome_average_total_effect(tmp_path):
     read is off the seed axis, so its per-seed rows are identical and the
     per-example mean collapses them.
 
-    One document per subject-token width (the backend refuses ragged
+    One document per subject-token width (the engine refuses ragged
     edits); pooling the per-fact effects across the width shards restores
     the loose-filter width distribution — a single-width sample biases the
     ATE (diagnosed +16pts on the width-4 bucket alone)."""
@@ -211,7 +214,7 @@ def test_rome_mlp_window_aie_peak(tmp_path):
             doc = {
                 "version": "1",
                 "description": f"generated: ROME MLP window restore, center {center}, width-{width} shard",
-                "model": {"key": "gpt2-xl", "revision": "main"},
+                "model": {"key": "gpt2-xl", "revision": "main", "dtype": "fp32"},
                 "data": {
                     "base": {"dataset": f"counterfact/facts_w{width}", "field": "input"}
                 },
@@ -318,8 +321,6 @@ def test_rome_mlp_window_aie_peak(tmp_path):
                 str(out),
                 "--device",
                 _device(),
-                "--dtype",
-                "fp32",
             ]
             assert main(argv) == 0
             ce_corr = _frame(out / "ce_corr.json")
@@ -357,7 +358,7 @@ def test_mixing_positional_shares(tmp_path):
     merged_parts = []
     for bucket in ("first", "middle", "last"):
         out = tmp_path / bucket
-        run_document(f"mixing_scan_{bucket}_im.json", out, dtype="bf16")
+        run_document(f"mixing_scan_{bucket}_im.json", out)
         frames = {}
         for mech in ("pos", "lex", "ref"):
             frame = _frame(out / f"ld_{mech}.json")
@@ -421,7 +422,7 @@ def test_arithmetic_steering_diagonal(tmp_path):
 
     # 1. baseline: keep the prompts the model answers correctly
     base_out = tmp_path / "baseline"
-    run_document("hours_baseline_im.json", base_out, dtype="bf16")
+    run_document("hours_baseline_im.json", base_out)
     acc = _frame(base_out / "acc.json")
     rows = json_lib.loads((FIXTURES / "data" / "hours" / "all.json").read_text())
     correct = [rows[int(e)] for e, v in zip(acc["example"], acc["value"]) if v == 1.0]
@@ -429,7 +430,7 @@ def test_arithmetic_steering_diagonal(tmp_path):
 
     # 2. harvest addition residuals (pinned document)
     harvest_out = tmp_path / "harvest"
-    run_document("addition_harvest_im.json", harvest_out, dtype="bf16")
+    run_document("addition_harvest_im.json", harvest_out)
     acts = (
         load_file(str(harvest_out / "acts_l18.safetensors"))["acts"].squeeze(1).float()
     )
@@ -474,7 +475,11 @@ def test_arithmetic_steering_diagonal(tmp_path):
         doc = {
             "version": "1",
             "description": f"generated: hours steering toward target {target:02d}",
-            "model": {"key": "meta-llama/Llama-3.1-8B", "revision": "main"},
+            "model": {
+                "key": "meta-llama/Llama-3.1-8B",
+                "revision": "main",
+                "dtype": "bf16",
+            },
             "data": {"base": {"dataset": "hours/correct", "field": "input"}},
             "sites": {
                 "l18": {"component": "block_output", "layer": 18},
@@ -526,8 +531,6 @@ def test_arithmetic_steering_diagonal(tmp_path):
             str(out),
             "--device",
             _device(),
-            "--dtype",
-            "bf16",
         ]
         assert main(argv) == 0
         table = _frame(out / "hour_probs.json")

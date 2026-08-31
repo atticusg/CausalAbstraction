@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from causalab.protocol.backend import requires_campaign
+from causalab.protocol.engine import requires_campaign
 from causalab.protocol.canonical import canonicalize, digest
 from causalab.protocol.errors import ParseError, ProtocolError, ValidationError
 from causalab.protocol.loader import load, load_text
@@ -214,13 +214,16 @@ def test_rule_10_saving_a_write_is_not_saveable_not_undeclared():
 
 
 def test_rule_10_duplicate_file_path():
+    # the colliding entry saves v_cf (a block_output read) so nothing else
+    # fires first — a dims slice on the lm_head read feeding `ld` would now
+    # be a rule-4 error of its own, and the duplicate-path check is the first
+    # thing _check_save runs, which is what this pins
     doc = base_doc()
-    doc["reads"]["logits"]["dims"] = [0]
     doc["save"].append(
         {
-            "value": "logits",
-            "model": "patched",
-            "input": "base",
+            "value": "v_cf",
+            "model": "original",
+            "input": "counterfactual",
             "file_path": "ld.json",
         }
     )

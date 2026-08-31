@@ -77,6 +77,14 @@ causalab = "causalab.cli:main"
 module-name = ["causalab"]
 module-root = ""
 
+[project.optional-dependencies]
+# The nnsight tracing engine (causalab/neural/engines/nnsight_tracing/).
+# Pinned to the 0.8-branch rev the engine was verified against on the real
+# Qwen3.6-35B-A3B (cockpit notes/causalab-nnsight-engine-plan.md §0 decision 1;
+# experiments/2026-08-28 nnsight 0.8 verification): bump deliberately, re-running
+# the address canary, never implicitly.
+nnsight = ["nnsight"]
+
 [build-system]
 requires = ["uv_build>=0.9.5,<0.10.0"]
 build-backend = "uv_build"
@@ -86,7 +94,9 @@ dev = [
     "pytest>=8.4.2",
     "pytest-cov>=7.0.0",
     "pytest-xdist>=3.6.0",
-    "ruff",
+    # pinned exactly: formatting is a CI gate, and an unpinned formatter turns
+    # a green tree red on a bystander ruff release (it bit the N-stack)
+    "ruff==0.14.5",
     "pre-commit>=4.4.0",
     "basedpyright",
     "scikit-learn-stubs",
@@ -94,7 +104,17 @@ dev = [
     "scipy-stubs",
     "ipdb>=0.13.13",
     "hypothesis>=6.0",
+    # the nnsight engine's parity suite runs in the default dev env (CI uses
+    # `uv sync --frozen`, which installs this group); the runtime dependency
+    # itself is the optional extra above
+    "nnsight",
 ]
+
+[tool.uv.sources]
+# One source for the extra and the dev group alike — the 0.8-branch rev the
+# engine was verified against (see the optional-dependencies note above).
+nnsight = { git = "https://github.com/ndif-team/nnsight.git", rev = "8c480727" }
+
 
 [tool.ruff]
 # target-version inferred from project.requires-python

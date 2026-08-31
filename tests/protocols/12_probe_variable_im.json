@@ -18,12 +18,12 @@
     "where": {"site": "target", "pos": "said_answer", "model": "original", "input": "base"}
   },
   "metrics": {
-    "per_step": {"kind": "top_k", "of": "steps", "k": 1},
+    "per_step": {"kind": "top_k", "of": "steps", "k": 1, "by": "prob"},
     "said": {"kind": "decode", "of": "steps"}
   },
   "save": [
-    {"value": "per_step", "model": "original", "input": "base", "file_path": "per_step.parquet"},
-    {"value": "said", "model": "original", "input": "base", "file_path": "said.parquet"},
+    {"value": "per_step", "model": "original", "input": "base", "file_path": "per_step.json"},
+    {"value": "said", "model": "original", "input": "base", "file_path": "said.json"},
     {"value": "where", "model": "original", "input": "base", "file_path": "where.safetensors"}
   ]
 }

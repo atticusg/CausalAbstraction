@@ -19,11 +19,20 @@ __all__ = ["main"]
 
 def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
     from causalab.protocol.loader import apply_overrides as _apply
+    from causalab.protocol.loader import flatten as _flatten
     from causalab.protocol.loader import load_text as _load_text
     from causalab.cli import register_model_key
     from causalab.workflow.document import ProtocolStep, load_workflow
 
     if args.verb == "run":
+        if getattr(args, "dtype", None) is not None:
+            print(
+                "refused: --dtype sets model.dtype on one protocol document; a "
+                "workflow's steps each declare their own realization — set it "
+                "in the step's document, or with that step's own `set` block",
+                file=sys.stderr,
+            )
+            return 1
         if args.points is not None:
             print(
                 "refused: --points shards a single document's expanded "
@@ -49,9 +58,10 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
             if not doc_path.is_file():
                 continue
             try:
-                inner_raw = _apply(
-                    dict(_load_text(doc_path)), dict(step_raw.get("set", {}) or {})
+                flat, _, _ = _flatten(
+                    dict(_load_text(doc_path)), base_dir=doc_path.parent
                 )
+                inner_raw = _apply(flat, dict(step_raw.get("set", {}) or {}))
             except ProtocolError:
                 continue
             register_model_key(inner_raw)
@@ -115,25 +125,16 @@ def main(args: argparse.Namespace, env: ResolutionEnv) -> int:
             for item in loaded.unchecked_paths:
                 print(f"  {item}")
         return 0
-    # run
-    import importlib
-
-    try:
-        hooks = importlib.import_module("causalab.neural.pytorch_hooks")
-    except ModuleNotFoundError as err:
-        print(
-            f"refused: no execution backend available ({err}) — 'run' needs "
-            "the reference backend causalab.neural.pytorch_hooks",
-            file=sys.stderr,
-        )
-        return 1
+    # run — engines are optional, lazily-imported extras; --engine picks
+    # the list, choose_engine routes per protocol step
+    from causalab.cli import load_engines
     from causalab.workflow import run_workflow
 
     result = run_workflow(
         loaded,
         env,
         args.out,
-        [hooks.PytorchHooksBackend(device=args.device, dtype=args.dtype)],
+        load_engines(getattr(args, "engine", "pytorch_hooks"), args.device),
         resume=getattr(args, "resume", False),
         reuse_nondeterministic=getattr(args, "reuse_nondeterministic", False),
     )

@@ -13,7 +13,7 @@ where it moved.
 It has to run in a **subprocess**: ``tests/conftest.py`` imports torch at
 session scope, so an in-process ``"torch" not in sys.modules`` check would be
 false regardless of whether the loader behaved. The subprocess precedent is
-``tests/neural/pytorch_hooks/test_end_to_end_iia.py``.
+``tests/neural/engines/pytorch_hooks/test_end_to_end_iia.py``.
 """
 
 from __future__ import annotations
@@ -30,7 +30,9 @@ from tests.protocol._env import FIXTURES
 pytestmark = pytest.mark.unit
 
 REPO = Path(__file__).resolve().parents[2]
-METHODS = REPO / "causalab/configs/methods"
+#: the full protocol documents. `configs/methods/` now holds method
+#: HALVES (§1.1), so the shipped documents moved to `configs/protocols/`.
+METHODS = REPO / "causalab/configs/protocols"
 
 _PROBE = """
 import json, sys
