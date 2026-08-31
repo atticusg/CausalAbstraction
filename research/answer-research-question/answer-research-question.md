@@ -4,12 +4,15 @@ This six-step protocol turns a question about a language model's internal workin
 into a supported claim. This file defines the order, roadmap, and routing between
 steps.
 
-The goal is to identify meaningful intermediate causal variables inside the
-model. Behavioral analysis establishes a task the model can perform and describes
-its errors. Exploration produces competing guesses about the internal process.
-Hypothesis generation expresses those guesses as explicit high-level causal
-models, and hypothesis testing uses counterfactual datasets to test individual
-intermediate variables.
+The goal is to build a causal account of the computation at every layer of the
+model. The account should explain how relevant input tokens enter the
+computation, how attention and MLP layers move or transform that information,
+which meaningful intermediate variables appear, and how the output forms.
+Behavioral analysis establishes a task the model can perform. Exploration traces
+the input and output variables and produces competing guesses about the internal
+process. Hypothesis generation expresses those guesses as explicit causal models.
+Hypothesis testing uses counterfactual datasets to test one intermediate variable
+through the same six intervention methods used during exploration.
 
 Read this file before entering any step.
 
@@ -32,23 +35,25 @@ behavioral analysis              required first; blocks all later phases
 identify critical tokens         blocks every exploratory experiment
         │
         ▼
-exploratory experimentation      launch five initial experiments in parallel
+exploratory experimentation      trace every input variable and the output
         ├── logit lens
         ├── PCA
-        ├── residual stream patching ──▶ residual stream DAS
-        ├── attention output patching ─▶ attention head DBM
-        └── MLP output patching ───────▶ MLP neuron DBM
+        └── six intervention experiments:
+            ├── residual stream patching ──▶ residual stream DAS
+            ├── attention output patching ─▶ attention head DBM
+            └── MLP output patching ───────▶ MLP neuron DBM
         │
         │ each follow-up waits only for its parent patching experiment
         │ all initial and applicable follow-up experiments must finish
         ▼
-hypothesis generation            explicit causal models and variables
+hypothesis generation            one dataset-design experiment per variable
         │
         ▼
-hypothesis testing               counterfactual tests of individual variables
+hypothesis testing               six experiments per intermediate variable
+        │                        run concurrently when dependencies allow
         │ strong evidence
         ▼
-generalize results
+generalize results               prompt templates, related tasks, wild text
         │
         ▼
 save results
@@ -91,6 +96,12 @@ During exploration, maintain the table of candidate intermediate variables in
 possible neural locations, the experiment that could distinguish them, and their
 current status. Do not delete rejected candidates.
 
+Maintain the layer-by-layer causal account in the same roadmap. Include every
+attention and MLP layer, relevant token positions, supported variables, direct
+intervention evidence, and unresolved gaps. Update it after exploration,
+hypothesis testing, and every generalization experiment. The final report should
+explain this table, not reconstruct the model's story from scattered reports.
+
 ## A step is a phase, not an experiment
 
 Each step is a phase that may contain several experiments. Divide it into units in
@@ -106,12 +117,22 @@ experiment. This does not unblock exploratory experimentation: every unit still
 belongs to behavioral analysis, and that phase must finish before the pipeline
 advances.
 
-After that gate passes, identify critical token locations. Then launch logit lens,
-PCA, residual stream patching, attention output patching, and MLP output patching
-in parallel. Each reuses the selected prompt, model configuration, code, and
-evaluation setup from behavioral analysis. The three learned localization jobs
-are individually gated by their parent patching results. Hypothesis generation
-remains blocked until the exploratory phase is complete.
+After that gate passes, identify critical token locations and enumerate the input
+variables and output variable. Then launch logit lens, PCA, residual stream
+patching, attention output patching, and MLP output patching in parallel. Reuse
+each patching result to evaluate every applicable input variable and the output
+variable. The three learned localization jobs are individually gated by their
+parent patching results and use separate supervised training jobs for each
+variable. Hypothesis generation remains blocked until the exploratory phase is
+complete.
+
+Hypothesis generation runs one dataset-design experiment for each proposed
+intermediate variable. Hypothesis testing then runs residual stream patching,
+attention output patching, MLP output patching, residual stream DAS, attention
+head DBM, and MLP neuron DBM for that variable. Treat these as six distinct
+experiments and run them concurrently whenever their data and location inputs are
+ready. Together, their reports should extend the layer-by-layer causal account
+rather than return six disconnected scores.
 
 ## Routing after hypothesis testing
 

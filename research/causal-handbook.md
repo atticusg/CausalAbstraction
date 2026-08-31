@@ -148,7 +148,7 @@ Hold the model against the standard task-quality objectives (granularity, gradin
 
 ### Curate the hypothesis space, don't enumerate
 
-The space encompasses every variable subset of every causal model that solves the task — far too large to iterate over. The scientific work is **curation**: pick the few compelling, competing hypotheses worth distinguishing, organised around the variables you actually care about. As you later move across the transformer — different residual-stream depths, different attention heads — you typically expect *groups* of co-occurring variables to share a location, so think in terms of a **group of target hypotheses**, not a single one.
+The space encompasses every variable subset of every causal model that solves the task — far too large to iterate over. The scientific work is **curation**: pick the few compelling, competing hypotheses worth distinguishing, organised around the variables you actually care about. Test one intermediate variable in each experiment. Compare it only with input, output, and intermediate variables that could plausibly be confused with it. Variables may still co-occur at one neural location, but preserve them as separate targets so the evidence for one does not silently count as evidence for the others.
 
 Prune with architecture reasoning: with causal attention, information flows left-to-right, so, e.g., a subset is only realizable at a location at or after the tokens that carry its information.
 

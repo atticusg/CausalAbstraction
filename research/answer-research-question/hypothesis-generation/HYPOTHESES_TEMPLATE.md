@@ -1,4 +1,4 @@
-# Hypotheses: {task / behavior}
+# Dataset experiment: {intermediate variable}
 
 _Use this template during hypothesis generation. A later experiment will test
 where these variables are represented in the network._
@@ -27,10 +27,11 @@ For each model in `code/hypotheses/models.py`:
   produce the same outputs for every pair in the large random sample; see section
   5; for example, two variables may carry the same information}
 
-## 3. Hypotheses: targets and alternatives
+## 3. Target and plausible alternatives
 
-List each **target** and its **alternatives**. A target may group variables. The
-code adds the null and full mediation references.
+Name the one intermediate variable targeted by this experiment. List only input,
+output, and competing intermediate variables that could plausibly be confused
+with it. The code adds the null and full mediation references.
 
 | Name | Role (target/alt) | Model | Target variables | Why it's interesting |
 |------|-------------------|-------|------------------|----------------------|
@@ -41,15 +42,18 @@ code adds the null and full mediation references.
 
 - **Architecture pruning:** {which subsets were ruled out by left-to-right flow /
   token layout, and why}
+- **Variables excluded from comparison:** {each variable considered, and why it
+  cannot plausibly be confused with the target}
 
 ## 4. Counterfactual datasets
 
-List the wide, narrow, and single token datasets from
-`code/hypotheses/counterfactuals.py`. Keep all three types.
+List the broad, narrow, and any single-token datasets from
+`counterfactuals.py`. Broad and narrow coverage are required. Add a single-token
+dataset when it helps distinguish or trace the target.
 
 | Dataset | Type | Data split and what it holds out | What it changes | Purpose |
 |---------|--------------------------|-------------------------------|---------------------|------|
-| {wide_…} | wide | train | {random / systematic} | broad coverage |
+| {wide_…} | broad | train | {random / systematic} | broad coverage |
 | {narrow_…} | narrow | eval (holds out {entities/templates}) | {fix A, flip B} | separate {hA vs hB} |
 | {single_…} | single-token | train/eval | {flip one token = one input var} | trace {var}'s path through the network (low separating power) |
 
@@ -87,3 +91,6 @@ narrow_flip_ones_fix_carry  carry                0.00     1.00     ones 1.00   (
 - **Next step:** {implement the chosen model + generators via the setup-task guide
   (`../../implementation/setup-task/setup-task.md`), design the later experiment
   that will test where the variables are represented in the network, or do both}
+- **Valid hypothesis-testing comparisons:** {target-versus-alternative
+  comparisons supported by the datasets}
+- **Required outputs:** `distinguishability.json` and `report.html`

@@ -1,9 +1,9 @@
 # Hypothesis report format
 
-Use this template for the report produced during hypothesis generation. The report
-compares causal models, describes the counterfactual datasets, and shows which
-hypotheses a CPU computation can distinguish. This template comes from the reports
-for the name sorting experiments.
+Use this template for the HTML report produced by one intermediate-variable
+experiment during hypothesis generation. The report describes the target
+variable, its counterfactual datasets, and the input, output, and intermediate
+variables that a CPU computation can distinguish from it.
 
 Follow the required section order, the rules for reporting distinguishability for
 each dataset, and the convention for figure captions. Use your judgment for
@@ -54,19 +54,28 @@ The report runs top to bottom in exactly this order:
      and mechanisms. In the name sorting example with two models, show M-select
      first and M-pairwise below it.
 
-4. **Groups that the sampled pairs never distinguish.** List the hypotheses that
+4. **Target and alternatives.** Define the one intermediate variable targeted by
+   this experiment. List every input, output, and intermediate variable that
+   could plausibly be confused with it. Then list the variables considered but
+   excluded and explain briefly why each one is not a plausible alternative.
+
+5. **Groups that the sampled pairs never distinguish.** List the hypotheses that
    produce identical output vectors for every pair in the large random sample. For
    each group, state which hypotheses cannot be distinguished and **why**. For
    example, "keys determine the slot, so
    `{argmin_slot, keys}` are one hypothesis"; "winner identity = output in a
    selection task, so `{winner_name, all}`"). Include the supporting figure.
 
-5. **Counterfactual datasets and distinguishability.** Give **each** dataset its own
+6. **Counterfactual datasets and distinguishability.** Give **each** dataset its own
    subsection as described in section 3. Put the visualization for a dataset in
    that dataset's subsection. Do not collect all visualizations in a separate
    section at the end.
 
-6. **Observations and limitations.** Explain patterns across the datasets, then
+7. **Valid hypothesis tests.** State exactly which target-versus-alternative
+   comparisons the datasets support in hypothesis testing and which remain
+   confounded.
+
+8. **Observations and limitations.** Explain patterns across the datasets, then
    state the limits of the result. Do not put distinguishability graphs in this
    section. This is the last section.
 
@@ -93,15 +102,12 @@ this order:
 Show one heatmap for every counterfactual dataset in the subsection for that
 dataset.
 
-- **Axes:** Use the **same complete set of hypotheses on both axes**. Give every
-  hypothesis its own row and column. Do not combine hypotheses:
-  - the input variables individually (e.g. `name_0`, `name_1`, `name_2`),
-  - the key/intermediate variables (e.g. `keys` or `key_0..n`),
-  - **each comparison variable individually** when the model has them
-    (`cmp_01`, `cmp_02`, `cmp_12`, …) plus any role-based discriminator
-    (`cmp_losers`), do not fold the comparison variables into a single entry,
-  - the selection/output variables (`argmin_slot`, `winner_name`),
-  - the two reference hypotheses `null` and `all`.
+- **Axes:** Use the same focused set on both axes: the target intermediate
+  variable, every plausibly confusable input, output, and intermediate variable,
+  plus the `null` and `all` references. Give every included variable its own row
+  and column. Do not combine distinct input tokens, spans, or intermediate
+  variables into one label. Do not add unrelated variables merely to make the
+  matrix exhaustive.
 - **Cell value:** the `can_distinguish_with_dataset` score for that dataset between
   the row hypothesis and the column hypothesis. Show the numeric value in each cell.
 - **Colors:** Use a sequential scale from cream to ember (`#F6F5F0 → #C4650D`)
@@ -141,9 +147,13 @@ without cards.
 Confirm that the report follows the section order above and that:
 
 - it shows the task before the causal models and states which outputs it covers;
-- it explains every model, variable, and group that the sample cannot distinguish;
+- it defines one target intermediate variable, its plausible alternatives, and
+  why other variables were excluded;
+- it explains every model, included variable, and group that the sample cannot
+  distinguish;
 - each dataset has an example, heatmap, and interpretation in one subsection;
 - every heatmap follows the axis, label, value, and color rules in section 4;
 - every figure has a numbered title, Description, and Findings line; and
+- it states which later hypothesis tests are valid; and
 - the conclusion states its limits and makes no claim about where variables are
   represented in the network.

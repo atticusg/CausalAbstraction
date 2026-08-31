@@ -1,63 +1,71 @@
 # Step 5 — Generalize results
 
-A tested hypothesis initially applies only to the model, task, prompt, data split,
-and seeds used in step 4. Test each boundary before making a broader claim.
+A tested intermediate variable initially applies only to the model, task, prompt,
+token positions, datasets, and evaluation split used in hypothesis testing.
+Generalization repeats the six core intervention experiments in new settings and
+asks which parts of the layer-by-layer causal account survive.
 
-## Expand one axis at a time
+Run three canonical generalization experiments:
 
-Each is a separate experiment that can fail independently. Roughly increasing cost:
+1. [New prompt templates](prompt-template-generalization.md), including another
+   language when it expresses the same task.
+2. [Related tasks](related-task-generalization.md) that may use the same
+   intermediate variable for a different behavior.
+3. [Naturally occurring text](in-the-wild-generalization.md) from web text,
+   WikiText, fine-tuning data, or another corpus used for next-token prediction.
 
-- **Inputs within the task** — edge values, longer operands, distribution tails,
-  cases where the answer collides with an operand. Step 1's error catalogue tells
-  you which regions are most likely to break the story.
-- **Prompt format** — different template, phrasing, separator, zero- vs few-shot.
-  Format sensitivity is common and is not a minor caveat: a mechanism that exists
-  only under one template is a mechanism for that template.
-- **Position** — if the mechanism was localized at a fixed token index, does it
-  move when the content moves? Interchange at a fixed index cannot distinguish a
-  mechanism pinned to a position from one pinned to a semantic role.
-- **Datasets** — ideally one you did not construct. The strongest test here, since
-  your own dataset shares its assumptions with your causal model.
-- **Related tasks** should have the same abstract structure but present it in a
-  different form. To test whether conditions share a mechanism, train the method
-  that locates the mechanism on one condition and evaluate it on a condition held
-  out from training. The distinguishability matrix in step 3 cannot test whether a
-  mechanism is shared across conditions.
-- **Models** — another checkpoint, size, or family. Most informative about whether
-  you found something about this network or about how transformers do this task.
-  Layer indices, head counts, and tokenization all change, so redefine "the same
-  location" before comparing.
+These experiments may run in parallel after hypothesis testing establishes the
+target intermediate variable and its baseline causal account. Give each its own
+directory, protocol documents, run artifacts, and self-contained HTML report.
 
-Report the **fraction of behavior** explained. A result of 60% supports a different
-claim from 100%.
+## Repeat the core test
 
-Repeat step 4's controls in every new setting. If full mediation fails, the test is
-broken; the mechanism has not necessarily failed to generalize.
+Each generalization experiment repeats:
 
-## Reading it
+- residual stream patching;
+- attention output patching;
+- MLP output patching;
+- residual stream DAS;
+- attention head DBM; and
+- MLP neuron DBM.
 
-- **A failed generalization is a result.** The boundary is often more informative
-  than the interior: holding at two digits and breaking at three says something
-  specific about what the model built.
-- **Say where you stopped and why.** "Not tested on other model families" is an
-  honest, useful sentence; silence reads as generality.
-- **Don't widen the claim to match the strongest result.** If it held on four of
-  six formats, the claim is about those four and the two failures go in the writeup.
-- **Keep the limits of the claim visible in the prose.** A statement can become an
-  overclaim when it is repeated without the conditions that made it true.
+Use the same definitions, controls, three-seed rule for DAS and DBM, report
+metrics, and positive-control checks as hypothesis testing. Adapt the
+counterfactual datasets to the new setting and certify that they still
+distinguish the target from plausible input, output, and intermediate
+alternatives before interpreting neural results.
 
-## Typical units of work
+Do not assume that a token location transfers. Identify critical tokens and spans
+again in each setting. New prompt formats, languages, tasks, and natural text may
+move the same semantic role to a new position or divide it across a different
+span.
 
-- One per axis attempted.
-- One per new dataset or model brought in, including establishing that the setting
-  is comparable at all.
-- One for the final statement of scope: the widest claim the evidence supports,
-  with its boundaries.
+## Update the causal account
 
-## Handoff
+The purpose is not only to report whether one score transfers. Each experiment
+must revise the layer-by-layer causal account:
 
-You leave with a claim and an explicit boundary around it. Update `ROADMAP.md`,
-then go to [`../save-results/save-results.md`](../save-results/save-results.md).
+- where the relevant inputs enter;
+- how attention moves or combines their information;
+- how MLP layers preserve or transform it;
+- where the intermediate variable becomes causally effective;
+- how it reaches the output; and
+- which layers remain unresolved.
 
-If an expansion turns up a mechanism you did not expect, that is a new question and
-gets its own roadmap rather than being appended to this one.
+Keep the original account and the new account side by side. A mechanism may
+generalize while changing token location, or remain at the same location while
+changing which components implement it. Report both kinds of change.
+
+## Completion and handoff
+
+Generalization is complete when all three reports exist or when a report states a
+concrete reason that its setting cannot support a valid test. For every setting,
+state the fraction of behavior explained and the exact boundary of the claim.
+
+A failed generalization is a result. Do not widen the claim to match the strongest
+condition and do not hide settings where the positive control failed. If a new
+setting suggests a different intermediate variable, create a new roadmap for that
+question.
+
+Update `ROADMAP.md`, then go to
+[`../save-results/save-results.md`](../save-results/save-results.md).

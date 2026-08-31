@@ -25,6 +25,11 @@ moves the original answer to the counterfactual answer, the counterfactual versu
 original answer logit difference, and the full model output needed to inspect
 failures.
 
+Save each intervention once. From that saved result, calculate a separate score
+for the changed input variable, every other applicable input variable, and the
+output variable. Do not rerun the forward pass merely to change which causal
+variable is being evaluated.
+
 Use `causalab/configs/protocols/weekdays_locate_scan.json` as the starting pattern
 for the layer and position sweep. Keep all layer and position points in one
 campaign and shard it with `--points` when needed.
@@ -45,11 +50,13 @@ Write `result/exploration/residual-stream-patching.html` as a comprehensive,
 self-contained explorer. It must provide:
 
 - a layer-by-token heatmap for the intervention effect;
-- selectors for pair, metric, individual position, and joint span;
+- selectors for causal variable, pair, metric, individual position, and joint
+  span;
 - the exact original input, counterfactual input, changed token, and both normal
   outputs;
 - the patched output and relevant logits for a selected cell;
-- aggregate effect, sample count, and variability for every cell;
+- aggregate effect, sample count, and variability for every cell and causal
+  variable;
 - visible markers for every location that passed the DAS signal gate;
 - a list of locations where the signal first appears, moves to another token, or
   disappears.

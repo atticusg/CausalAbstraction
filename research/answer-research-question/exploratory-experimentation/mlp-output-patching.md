@@ -26,6 +26,10 @@ For every band, patch:
 Save whether the intervention moves the original answer to the counterfactual
 answer, the answer logit difference, and the underlying outputs.
 
+Save each intervention once. Use that result to calculate separate scores for
+every applicable input variable and the output variable. Do not repeat the model
+intervention to change only the variable used for evaluation.
+
 The current protocol sweep language cannot express all dependent writes in a
 layer band through one start-layer sweep. Author one explicit protocol document
 for each band, keep all documents inside this experiment, and shard each document
@@ -44,10 +48,12 @@ Write `result/exploration/mlp-output-patching.html` as a comprehensive,
 self-contained explorer. It must provide:
 
 - a band-start-by-token heatmap with a width selector for five or ten layers;
-- selectors for pair, metric, individual position, and joint span;
+- selectors for causal variable, pair, metric, individual position, and joint
+  span;
 - the exact original and counterfactual inputs and outputs;
 - the patched output and relevant logits for a selected band;
-- aggregate effect, sample count, and variability for every band and location;
+- aggregate effect, sample count, and variability for every band, location, and
+  causal variable;
 - visible markers for every band sent to MLP neuron DBM;
 - a view showing where MLP-mediated signal appears and disappears across depth
   and token position.

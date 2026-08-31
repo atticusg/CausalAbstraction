@@ -1,8 +1,10 @@
 # Step 2 — Exploratory experimentation
 
-Use exploratory experiments to find candidate intermediate causal variables and
-the neural locations that may carry them. These experiments suggest what the
-model may be doing. They do not establish that a candidate variable exists.
+Use exploratory experiments to trace every relevant input variable and the output
+variable through the model, then use those traces to propose intermediate causal
+variables. These experiments begin the layer-by-layer causal account. They
+suggest what the model may be doing, but they do not establish that a proposed
+intermediate variable exists.
 
 Use [`../../causal-handbook.md`](../../causal-handbook.md) for the distinction
 between exploratory correlation, localization of an observable input variable,
@@ -45,16 +47,35 @@ These follow-up jobs may run concurrently. A follow-up does not wait for an
 unrelated branch. If a full-vector patching experiment finds no signal, record the
 null result and close that branch without launching its follow-up.
 
+Together, the three complete-output patching experiments and their three learned
+follow-ups are the six intervention experiments used by this roadmap. Logit lens
+and PCA remain required exploratory experiments, but they are not part of those
+six interventions.
+
 Hypothesis generation remains blocked until all five initial experiments and
 every applicable follow-up are complete, their reports exist, and their
 observations have been added to the table of candidate variables in `ROADMAP.md`.
 
-## Shared data and locations
+## Variables, shared data, and locations
+
+Before launching, list every observable variable that the experiments must
+trace:
+
+- each individual input token or token span used to solve the task; and
+- the output variable used to grade the model's answer.
+
+Give each variable a name, possible values, a rule for finding its token or span,
+and a counterfactual rule that changes it. Treat separate input variables
+separately even when they occur in the same prompt. The output variable may be a
+single answer token or the behavioral scoring rule defined in step 1.
 
 Use the single-token counterfactual dataset throughout the patching and fitting
 experiments. Each pair must differ at exactly one input token, and that change
 must change the model's output. The changed token realizes the observable input
-variable that DAS and DBM try to localize.
+variable that DAS and DBM try to localize. Construct enough single-token datasets
+to cover every input variable that can be changed this way. Retain the resulting
+output value so the same intervention can also be evaluated against the output
+variable.
 
 Run each method at every critical token location. For a critical span, inspect
 each position separately. Patching experiments must also patch the whole span
@@ -66,6 +87,18 @@ For patching, use activations from the counterfactual run as the source and inse
 them into the original run. Patch only the changed position and locations after
 it. Causal attention prevents an earlier position from receiving information
 introduced by a later token.
+
+Run each patching intervention once and save the intervened outputs and logits.
+Evaluate that saved result against every applicable input variable and against
+the output variable. Do not repeat an identical model intervention merely to use
+a different causal variable as the metric.
+
+For residual stream DAS, attention head DBM, and MLP neuron DBM, each supervised
+variable requires its own fit. Within each method experiment, expand the input
+variable, output variable, location, dimension or regularization, and seed axes
+into separate jobs. Launch those jobs in parallel. They remain one research
+experiment because they use the same method and answer the same localization
+question.
 
 ## Experiments and report contracts
 
@@ -86,11 +119,17 @@ interactive explorer or a smaller self-contained HTML report. Do not replace an
 interactive contract with a static image. All reports must embed their data and
 assets and work without network access.
 
+Every intervention report must let the reader select the causal variable used to
+evaluate or supervise the result. It must keep input variables and the output
+variable visibly distinct. A report that combines their scores without naming
+the variable is incomplete.
+
 ## Shard one experiment correctly
 
 A method remains one research experiment even when its sweep is too large for one
-GPU job. Put every independent layer, position, head, neuron, dimension, and seed
-axis in a protocol document. Run `explain` to inspect its expanded point count:
+GPU job. Put every independent causal variable, layer, position, head, neuron,
+dimension, regularization value, and seed axis in a protocol document. Run
+`explain` to inspect its expanded point count:
 
 ```bash
 uv run causalab explain experiment.json --data-root "$DATA_ROOT"
@@ -155,9 +194,11 @@ variable in a high-level causal model.
 ## Handoff
 
 The handoff contains all method reports and the updated table of candidate
-variables. State which branches found signal, which returned null results, where the
-signal appeared and disappeared across layers and tokens, and which competing
-internal explanations remain.
+variables. State which branches found signal, which returned null results, where
+each input variable and the output appeared and disappeared across layers and
+tokens, and which competing internal explanations remain. Record what attention
+and MLP layers contribute wherever the evidence supports a claim, and leave
+unexplained layers visible as gaps in the developing causal account.
 
 Update `ROADMAP.md`, then go to
 [`../hypothesis-generation/hypothesis-generation.md`](../hypothesis-generation/hypothesis-generation.md).

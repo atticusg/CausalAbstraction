@@ -24,12 +24,14 @@ parent patching experiment. Train the mask to preserve the counterfactual output
 effect while penalizing the number of selected neurons. Evaluate on held-out
 pairs.
 
-Run a separate jointly trained mask for every promising combination of layer band
-and token location. For spans, test every position separately and the whole span
-jointly. Sweep regularization strength and several seeds.
+Run a separate jointly trained mask for every supervised input or output variable
+and every promising combination of layer band and token location. For spans,
+test every position separately and the whole span jointly. Sweep regularization
+strength and run exactly three recorded random seeds.
 
-Shard independent band, position, regularization, and seed points within the MLP
-DBM experiment as described in
+Expand the variable, band, position, regularization, and seed axes into separate
+jobs. Launch them in parallel within the MLP DBM experiment and shard them as
+described in
 [`exploratory-experimentation.md`](exploratory-experimentation.md#shard-one-experiment-correctly).
 
 ## Controls
@@ -39,7 +41,7 @@ Include:
 - the parent full-output patch as a positive control;
 - random neuron sets matched to each learned mask's size and layer distribution;
 - held-out intervention performance;
-- several seeds;
+- three seeds;
 - a mask-size versus effect curve.
 
 The mask is not meaningful if the full-output positive control fails or if a
@@ -50,8 +52,8 @@ matched random mask performs equally well.
 Write `result/exploration/mlp-neuron-dbm.html` as a comprehensive,
 self-contained explorer. It must provide:
 
-- selectors for parent band, layer, token position or span, regularization, seed,
-  and data split;
+- selectors for supervised input or output variable, parent band, layer, token
+  position or span, regularization, seed, and data split;
 - the selected neurons and soft mask values within each layer;
 - held-out effect and mask size for every fit;
 - the full-output positive control and matched random-neuron controls;

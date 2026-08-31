@@ -10,6 +10,8 @@ end of every step. See [`answer-research-question.md`](answer-research-question.
 - **Task / behavior:** {what the model is being asked to do}
 - **Goal for intermediate variables:** {what meaningful internal variables this work
   may identify and what evidence would make one worth testing}
+- **Layer-by-layer causal account:** {what must be explained about the input
+  tokens, every attention and MLP layer, the intermediate variables, and output}
 - **What changes once we know:** {what decision, follow-up, or claim this enables.
   If nothing, say so and reconsider the question.}
 - **What would make us stop:** {the result that kills this line of work}
@@ -32,24 +34,26 @@ behavioral analysis             required first; blocks every later phase
 identify critical tokens        required before every exploratory experiment
         │
         ▼
-exploratory experimentation     launch five initial experiments in parallel:
+exploratory experimentation     trace every input variable and the output:
         ├── logit lens
         ├── PCA
-        ├── residual stream patching ──▶ residual stream DAS
-        ├── attention output patching ─▶ attention head DBM
-        └── MLP output patching ───────▶ MLP neuron DBM
+        └── six intervention experiments:
+            ├── residual stream patching ──▶ residual stream DAS
+            ├── attention output patching ─▶ attention head DBM
+            └── MLP output patching ───────▶ MLP neuron DBM
         │
         │ each follow-up waits only for its parent patching experiment
         │ all initial and applicable follow-up experiments must finish
         ▼
-hypothesis generation           independent units may run in parallel
+hypothesis generation           one dataset-design experiment per variable
         │
         ▼
-hypothesis testing              independent tests may run in parallel
+hypothesis testing              six experiments per intermediate variable
+        │                       run concurrently when dependencies allow
         │                       │
         │ strong result         └── revise and return to an earlier phase
         ▼
-generalize results              independent checks may run in parallel
+generalize results              prompt templates, related tasks, wild text
         │
         ▼
 save results
@@ -63,6 +67,7 @@ save results
 ### 2. Exploratory experimentation
 
 - **Critical locations:** {tokens and spans that must be fixed before launch}
+- **Variables traced:** {every relevant input token or span, plus the output}
 - **Initial experiments:** {logit lens, PCA, residual stream patching, attention
   output patching, and MLP output patching}
 - **Gated follow-ups:** {which patching results would launch DAS or DBM}
@@ -72,18 +77,23 @@ save results
 
 - **Expect:** {the explicit intermediate variables and competing causal models
   suggested by exploration}
-- **Units:** {…}
+- **Units:** {one dataset-design experiment per proposed intermediate variable}
+- **Output:** {one HTML report and machine-readable result per variable}
 
 ### 4. Hypothesis testing
 
-- **Expect:** {the counterfactual dataset for each tested intermediate variable,
-  and what result would count as strong evidence}
-- **Units:** {one per contested alternative, roughly}
+- **Expect:** {how each tested intermediate variable appears across residual
+  streams, attention, and MLPs, and what alternatives remain}
+- **Units:** {six experiments per intermediate variable: three complete-output
+  patching experiments, residual stream DAS, attention head DBM, and MLP neuron
+  DBM}
+- **Seeds:** {three recorded seeds for every DAS and DBM fit}
 
 ### 5. Generalize results
 
-- **Expect:** {the widest claim you think will survive}
-- **Units:** {…}
+- **Expect:** {the widest layer-by-layer causal account that survives}
+- **Units:** {new prompt templates, related tasks, and in-the-wild next-token
+  prediction}
 
 ### 6. Save results
 
@@ -101,6 +111,23 @@ separate and update it through hypothesis generation and testing.
 Use these statuses: `active`, `rejected`, `merged`, or `promoted to causal model`.
 Do not delete rejected candidates; preserving them prevents the pipeline from
 repeating the same unsupported guess.
+
+## Layer-by-layer causal account
+
+Start this table during exploration and update it after hypothesis testing and
+every generalization experiment. Include every model layer. Leave unsupported
+cells as `unresolved`; do not fill gaps with guesses.
+
+| Layer | Relevant token positions | Residual stream | Attention contribution | MLP contribution | Variables supported here | Evidence | Unresolved questions |
+|---|---|---|---|---|---|---|---|
+| embedding | {…} | {…} | not applicable | not applicable | {input variables} | {artifact links} | {…} |
+| 0 | {…} | {…} | {…} | {…} | {…} | {artifact links} | {…} |
+| … | {…} | {…} | {…} | {…} | {…} | {artifact links} | {…} |
+| output | {final position} | {…} | not applicable | not applicable | {output variable} | {artifact links} | {…} |
+
+For every entry, distinguish direct intervention evidence from decodability or
+correlation. Record where information moves between token positions as well as
+where it exists.
 
 ## Revision log
 

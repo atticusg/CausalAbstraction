@@ -10,10 +10,10 @@ abstraction, interchange interventions, DAS, DBM, steering, and ablation.
 contains the six-step protocol:
 
 1. [Behavioral analysis](answer-research-question/behavioral-analysis/behavioral-analysis.md) — can the model do it, and how does it fail?
-2. [Exploratory experimentation](answer-research-question/exploratory-experimentation/exploratory-experimentation.md) — critical-token selection, five parallel initial experiments, and three gated localization follow-ups
-3. [Hypothesis generation](answer-research-question/hypothesis-generation/hypothesis-generation.md) — the causal model and the counterfactuals that test it
-4. [Hypothesis testing](answer-research-question/hypothesis-testing/hypothesis-testing.md) — the hypothesis against its alternatives
-5. [Generalize results](answer-research-question/generalize-results/generalize-results.md) — how far the claim reaches
+2. [Exploratory experimentation](answer-research-question/exploratory-experimentation/exploratory-experimentation.md) — trace input and output variables through five initial experiments and three gated follow-ups
+3. [Hypothesis generation](answer-research-question/hypothesis-generation/hypothesis-generation.md) — one counterfactual dataset experiment per proposed intermediate variable
+4. [Hypothesis testing](answer-research-question/hypothesis-testing/hypothesis-testing.md) — six intervention experiments for each intermediate variable
+5. [Generalize results](answer-research-question/generalize-results/generalize-results.md) — new prompt templates, related tasks, and naturally occurring text
 6. [Save results](answer-research-question/save-results/save-results.md)
 
 Read it first. It contains the flow chart, roadmap, and rules for responding to a
@@ -55,7 +55,7 @@ harness is the exception.
 
 The `causalab/` package remains the source of truth for executable behavior. Its
 protocol and workflow specifications are in [`../docs/`](../docs/), reusable
-methods are in `causalab/configs/methods/`, and the worked workflow is
+protocol presets are in `causalab/configs/protocols/`, and the worked workflow is
 `causalab/configs/workflows/weekdays_8b.json`. Keep this research guidance aligned
 with those interfaces.
 
@@ -80,6 +80,7 @@ The remaining stubs are:
 | `behavioral-analysis/behavioral-analysis.md` | A protocol document that can decode a batch of prompts greedily and display the results. |
 | `exploratory-experimentation/attention-head-dbm.md` | A grouped DBM gate with one tied mask value per complete attention head across a selected layer band. The current gate masks individual feature coordinates. |
 
-`hypothesis-testing/` has no stub: it runs on the shipped method presets in the
-library's `causalab/configs/methods/` and the worked workflow in
-`causalab/configs/workflows/weekdays_8b.json`.
+Most of `hypothesis-testing/` runs on the shipped protocol presets in the
+library's `causalab/configs/protocols/` and the worked workflow in
+`causalab/configs/workflows/weekdays_8b.json`. Its attention head DBM experiment
+inherits the grouped-head gate stub listed above.

@@ -1,16 +1,24 @@
 # Step 3 — Hypothesis generation
 
-Build two things on a CPU: a runnable **causal model** of the algorithm you think
-the network uses, and **counterfactual datasets** that distinguish it from
-alternatives. A hypothesis without such a dataset is not testable. This step does
-not use the target network.
+Run one CPU experiment for each proposed intermediate variable. Each experiment
+builds two things: a runnable **causal model** of the algorithm you think the
+network uses, and **counterfactual datasets** that distinguish the intermediate
+variable from alternatives that could plausibly be confused with it. A
+hypothesis without such a dataset is not testable. This step does not use the
+target network.
+
+Experiments for different intermediate variables may run in parallel after their
+variable definitions and shared causal model are ready. Keep their datasets,
+distinguishability results, and reports separate even when they import the same
+model code.
 
 ## What a hypothesis is here
 
-A hypothesis pairs a causal model with **a subset of its variables** and claims
-that a specific neural location represents them. "The model computes a carry bit"
-is too broad; name the location and distinguish the carry bit from the operands and
-answer.
+A hypothesis pairs a causal model with **one intermediate variable** and claims
+that a specific neural location represents it. "The model computes a carry bit"
+is too broad; name the location and distinguish the carry bit from any input,
+output, or competing intermediate variable that could plausibly produce the same
+experimental result.
 
 Two reference hypotheses are always in play and bound what any result can mean:
 
@@ -57,26 +65,49 @@ determinism, single-token decoding, value coverage — at
 
 Scaffolds to edit: [`templates/models.py`](templates/models.py).
 
-## Step 3b: curate the competing hypotheses
+## Step 3b: define one experiment per intermediate variable
 
-Choose distinct variable subsets as hypotheses. Mark the focal subsets as
-**targets** and compare them with the rest. A target may group related variables
-that could share a location.
+Create one experiment directory for every intermediate variable that may proceed
+to hypothesis testing:
+
+```text
+$WORKDIR/hypothesis-generation/
+└── {intermediate-variable}/
+    ├── models.py
+    ├── counterfactuals.py
+    ├── distinguishability.json
+    └── report.html
+```
+
+The intermediate variable is the experiment's target. Compare it with variables
+that could plausibly be confused with it at the proposed location or under the
+planned intervention. Consider:
+
+- each input token or span whose value could explain the same result;
+- the output variable, when the target may simply encode the answer;
+- competing intermediate variables with overlapping values or causal roles;
+- the null and full mediation references.
+
+Do not compare the target with every variable in the causal model. Record why any
+nearby or otherwise credible candidate was considered but excluded. This keeps
+the experiment focused without hiding an important alternative.
 
 Prune with architecture reasoning. Causal attention means information flows left to
 right, so a subset is only realizable at a location at or after the tokens carrying
 that information. This typically removes more of the hypothesis space than any
 other single consideration.
 
-The null and full-mediation references are added automatically; you do not list
+The null and full mediation references are added automatically; you do not list
 them by hand.
 
 ## Step 3c: design the counterfactual datasets
 
 A counterfactual dataset contains (base, counterfactual) input pairs. Its design
-determines which hypotheses it can distinguish. Build all three types:
+determines which hypotheses it can distinguish. Every intermediate-variable
+experiment must contain both broad and narrow coverage:
 
-- **Wide** datasets use random resampling with balancing appropriate to the task,
+- **Broad** datasets (`wide` in the harness) use random resampling with balancing
+  appropriate to the task,
   or a systematic manipulation such as swapping order, shuffling, or holding the
   template fixed while resampling its contents. They provide broad coverage and
   remain useful when the causal model turns out to be wrong.
@@ -89,6 +120,10 @@ determines which hypotheses it can distinguish. Build all three types:
   everything else fixed, however, they trace
   one piece of information through the network. Build one for any variable you
   intend to follow in a downstream localization.
+
+Build a single-token dataset when it helps distinguish the target or connect this
+phase to an input trace from exploration. It supplements the required wide and
+narrow datasets; it does not replace either one.
 
 Each example must contain exactly one counterfactual input. For every dataset,
 record its type, **train/eval split**, and what evaluation holds out. Supervised
@@ -113,7 +148,7 @@ Two outputs to produce:
 
 Use these numbers as baselines for interpretation, not as pass or fail thresholds.
 
-- **~0.50 on a wide dataset is partial separation.** A dataset may confound two
+- **~0.50 on a broad dataset is partial separation.** A dataset may confound two
   alternatives with each other and still cleanly separate both from the target,
   which is frequently the intent.
 - **A score near zero against the null means that the dataset cannot test that
@@ -150,19 +185,21 @@ dataset.
 
 ### Run the check
 
-Put the completed `models.py` and `counterfactuals.py` files in one directory,
-then run the harness from the CausaLab repository root:
+Put the completed `models.py` and `counterfactuals.py` files in the intermediate
+variable's experiment directory, then run the harness from the CausaLab
+repository root:
 
 ```bash
-uv run python scripts/run_hypothesis_generation.py "$WORKDIR/HYPOTHESES"
+uv run python scripts/run_hypothesis_generation.py \
+  "$WORKDIR/hypothesis-generation/{intermediate-variable}"
 ```
 
 The harness calls CausaLab's `distinguishability_report`, adds the null and
 full-mediation references when they are absent, runs every designed dataset, and
 runs the broad random check with 100,000 pairs. It writes
-`$WORKDIR/HYPOTHESES/distinguishability.json` and prints a compact summary. Use
-`--n`, `--random-n`, `--seed`, or `--output` when the defaults do not fit the
-investigation.
+`distinguishability.json` inside that experiment directory and prints a compact
+summary. Use `--n`, `--random-n`, `--seed`, or `--output` when the defaults do not
+fit the investigation.
 
 The harness imports and executes the two Python files, so only run it on modules
 you trust.
@@ -191,26 +228,39 @@ The dataset tables are generated files. Store information that varies by row or
 describes the task, such as answer forms and position anchors, in columns when
 building the table. Do not compute that information inside a protocol document.
 
-## Typical units of work
+## Run the variable experiments
 
-- One unit per candidate causal model drafted.
-- One unit per counterfactual dataset designed and implemented.
-- One unit for the distinguishability matrix, plus one per iteration when a
-  confound sends you back to design a sharper dataset.
-- One unit for the hypotheses document.
+Treat each intermediate variable as one experiment. Within it, use separate work
+units for the broad dataset, each narrow dataset, the random distinguishability
+check, and the HTML report. Run independent CPU work in parallel, but do not
+finalize the report until all required datasets have been checked.
 
-## Write it down
+## Result contract
 
-Fill [`HYPOTHESES_TEMPLATE.md`](HYPOTHESES_TEMPLATE.md) and save it as
-`$WORKDIR/HYPOTHESES.md`. Include the models, hypotheses, datasets and splits,
-distinguishability matrix, and interpretation.
+For each intermediate variable, fill
+[`HYPOTHESES_TEMPLATE.md`](HYPOTHESES_TEMPLATE.md) and write a self-contained
+`report.html` using
+[`hypothesis-report-format.md`](hypothesis-report-format.md). The HTML report is
+required, not optional. It must contain:
 
-If this step produces a standalone report, [`hypothesis-report-format.md`](hypothesis-report-format.md)
-is the fixed format downstream readers expect.
+- the intermediate variable's exact definition and possible values;
+- its proposed neural locations;
+- every plausibly confusable input, output, and intermediate variable;
+- the reason any credible nearby candidate was considered but excluded;
+- exact examples from every broad and narrow dataset;
+- training and evaluation split definitions;
+- the distinguishability result for every included alternative;
+- groups that the large random sample did not distinguish;
+- the machine-readable result path and causal model revision;
+- a direct statement of which hypothesis-testing comparisons are now valid.
+
+The experiment is incomplete if either `distinguishability.json` or `report.html`
+is missing.
 
 ## Handoff
 
 Update `ROADMAP.md`, then go to
 [`../hypothesis-testing/hypothesis-testing.md`](../hypothesis-testing/hypothesis-testing.md)
-with a hypothesis that is certified distinguishable from at least one alternative
-you care about.
+with one report per intermediate variable and datasets that distinguish it from
+the input, output, or competing intermediate variables that could plausibly be
+confused with it.
