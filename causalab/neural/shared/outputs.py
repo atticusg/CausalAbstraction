@@ -239,6 +239,12 @@ def code_commit(repo_root: Path) -> str:
 #: and does not belong in the same table (spec §2.12).
 TRAIN_EVAL_FILE = "train_eval.json"
 
+#: Where a run records what each fit can say about *itself*. A separate file
+#: from the trained bundle because the bundle's metadata is a closed identity
+#: schema, and separate from the metric table because these are properties of
+#: a parameter, not of an example.
+FIT_DIAGNOSTICS_FILE = "fit_diagnostics.json"
+
 
 def write_outputs(
     output_dir: Path,
@@ -247,6 +253,7 @@ def write_outputs(
     *,
     identity_base: Mapping[str, Any],
     train_evals: Sequence[Mapping[str, Any]] = (),
+    fit_diagnostics: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Path]:
     """Write every accumulated save file under ``output_dir``; returns
     manifest path → absolute path.
@@ -272,9 +279,14 @@ def write_outputs(
         target.parent.mkdir(parents=True, exist_ok=True)
         write_table(target, table.rows)
         written[rel] = target
-    if train_evals:
-        target = output_dir / TRAIN_EVAL_FILE
+    for rel, records in (
+        (TRAIN_EVAL_FILE, train_evals),
+        (FIT_DIAGNOSTICS_FILE, fit_diagnostics),
+    ):
+        if not records:
+            continue
+        target = output_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(list(train_evals), indent=2) + "\n")
-        written[TRAIN_EVAL_FILE] = target
+        target.write_text(json.dumps(list(records), indent=2) + "\n")
+        written[rel] = target
     return written

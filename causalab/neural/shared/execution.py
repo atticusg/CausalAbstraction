@@ -37,6 +37,7 @@ from causalab.protocol.schema import (
 
 __all__ = [
     "ExecutorSurface",
+    "MASK_DECISIVE_MARGIN",
     "TrainEvalScore",
     "TrainOutcome",
     "execute_request",
@@ -93,6 +94,13 @@ class TrainEvalScore:
         }
 
 
+#: A soft mask is "decisive" at a dimension when σ(θ) is outside
+#: ``[0.5 - MASK_DECISIVE_MARGIN, 0.5 + MASK_DECISIVE_MARGIN]`` — i.e. outside
+#: [0.1, 0.9] at the default. Chosen to match the measure the A3B DBM run
+#: reported: 0 of 2048 dimensions cleared it, in either configuration.
+MASK_DECISIVE_MARGIN = 0.4
+
+
 @dataclasses.dataclass(frozen=True)
 class TrainOutcome:
     """What an engine's train loop produced.
@@ -108,6 +116,14 @@ class TrainOutcome:
 
     stages: Mapping[str, Any]
     eval_score: TrainEvalScore | None = None
+    #: Per trained featurizer, whatever the fit can say about *itself* — see
+    #: :func:`~causalab.neural.engines.pytorch_hooks.train.fit_diagnostics`.
+    #: Written beside the bundle, because a fit that produced a meaningless
+    #: parameter and a perfect score is otherwise indistinguishable from a
+    #: good one.
+    diagnostics: Mapping[str, Mapping[str, float]] = dataclasses.field(
+        default_factory=dict
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -140,6 +156,7 @@ def execute_request(
     tensor_files: dict[str, TensorFile] = {}
     metric_files: dict[str, MetricTable] = {}
     train_evals: list[Mapping[str, Any]] = []
+    fit_diagnostics: list[Mapping[str, Any]] = []
     summaries: list[Mapping[str, Any]] = []
     for point_raw, coords, digest in zip(
         request.points, request.coords, request.digests
@@ -153,6 +170,7 @@ def execute_request(
             tensor_files=tensor_files,
             metric_files=metric_files,
             train_evals=train_evals,
+            fit_diagnostics=fit_diagnostics,
             executor_factory=executor_factory,
             train_runner=train_runner,
             engine_name=engine_name,
@@ -186,6 +204,7 @@ def execute_request(
         metric_files,
         identity_base=identity_base,
         train_evals=train_evals,
+        fit_diagnostics=fit_diagnostics,
     )
     return RunResult(files=files, summaries=tuple(summaries))
 
@@ -199,6 +218,7 @@ def _execute_point(
     tensor_files: dict[str, TensorFile],
     metric_files: dict[str, MetricTable],
     train_evals: list[Mapping[str, Any]],
+    fit_diagnostics: list[Mapping[str, Any]],
     executor_factory: Callable[
         [Document, ExecutionRequest, Mapping[str, Any]], ExecutorSurface
     ],
@@ -221,6 +241,17 @@ def _execute_point(
         if outcome.eval_score is not None:
             train_evals.append(
                 outcome.eval_score.as_record(point=point_digest, coords=coords)
+            )
+        if outcome.diagnostics:
+            fit_diagnostics.append(
+                {
+                    "point": point_digest,
+                    "coords": dict(coords),
+                    "featurizers": {
+                        name: dict(values)
+                        for name, values in outcome.diagnostics.items()
+                    },
+                }
             )
     executor.run_all()
     metric_values: dict[str, list[Any]] = {}

@@ -35,7 +35,11 @@ from typing import Any, Mapping
 import torch
 
 from causalab.neural.engines.pytorch_hooks.executor import PointExecutor, document_seed
-from causalab.neural.shared.execution import TrainEvalScore, TrainOutcome
+from causalab.neural.shared.execution import (
+    MASK_DECISIVE_MARGIN,
+    TrainEvalScore,
+    TrainOutcome,
+)
 from causalab.neural.shared.featurizers import Gate, Stage
 from causalab.neural.shared.metrics import column_token_ids
 from causalab.protocol.engine import ExecutionRequest
@@ -48,7 +52,7 @@ from causalab.protocol.schema import (
     metric_reads_vocabulary,
 )
 
-__all__ = ["metric_tensor", "run_training"]
+__all__ = ["fit_diagnostics", "metric_tensor", "run_training"]
 
 
 def metric_tensor(
@@ -322,10 +326,57 @@ def run_training(
             featurizers=tuple(trained_names),
             selected=selected,
         )
+    trained = {name: stages[name] for name in trained_names}
     return TrainOutcome(
-        stages={name: stages[name] for name in trained_names},
+        stages=trained,
         eval_score=eval_score,
+        diagnostics=fit_diagnostics(trained),
     )
+
+
+def fit_diagnostics(stages: Mapping[str, Stage]) -> dict[str, dict[str, float]]:
+    """What each fit can say about *itself*, saved beside the bundle.
+
+    The case this exists for: the shipped DBM preset produced **0 of 2048**
+    dimensions outside [0.1, 0.9] in either configuration and still scored
+    **1.000** at layer 38. The mechanism is that :meth:`Gate._mask` returns a
+    *hard* ``θ > 0`` mask in eval mode, and ``run_training`` puts the stages in
+    eval mode before returning — so the 1.000 was the hard mask, and with θ
+    never separated ``θ > 0`` is a coin flip on gradient noise. Roughly half the
+    dimensions swap, which at the readout layer scores 1.000.
+
+    So the preset produced a **meaningless mask and a perfect number**, and
+    nothing in the run's saved outputs said so. These two numbers say so:
+
+    ``decisive_fraction``
+        The fraction of dimensions where σ(θ) is outside
+        [0.5 − :data:`MASK_DECISIVE_MARGIN`, 0.5 + …]. Near 0 means the gate
+        never committed and the score below it describes noise, whatever it
+        says.
+    ``hard_mask_size``
+        How many dimensions ``θ > 0`` keeps — the mask the eval-mode score was
+        actually computed through, which is the number a localization claim is
+        about.
+
+    This is the half of the DBM finding that needs no GPU. Retuning `l1` and
+    the anneal so θ *does* separate needs a run to validate and is deliberately
+    not asserted here.
+    """
+    out: dict[str, dict[str, float]] = {}
+    for name, stage in stages.items():
+        theta = getattr(stage, "theta", None)
+        if not isinstance(stage, Gate) or theta is None:
+            continue
+        with torch.no_grad():
+            soft = torch.sigmoid(theta.detach().float() / max(stage.temperature, 1e-12))
+            decisive = (soft - 0.5).abs() > MASK_DECISIVE_MARGIN
+            out[name] = {
+                "width": float(theta.numel()),
+                "decisive_fraction": float(decisive.float().mean()),
+                "hard_mask_size": float((theta.detach() > 0).sum()),
+                "temperature": float(stage.temperature),
+            }
+    return out
 
 
 def _snapshot(stages: Mapping[str, Stage]) -> dict[str, dict[str, torch.Tensor]]:

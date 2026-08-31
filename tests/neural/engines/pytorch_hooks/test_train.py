@@ -401,3 +401,77 @@ def test_validation_accepts_the_train_docs():
         from tests.protocol._docs import in_order
 
         validate_document(parse_document(in_order(raw)), engine_is_local=True)
+
+
+def test_a_gate_fit_reports_whether_its_mask_is_a_mask():
+    """The DBM finding's non-GPU half.
+
+    As shipped, `configs/protocols/dbm.json` produced **0 of 2048** dimensions
+    outside [0.1, 0.9] and still scored **1.000** at layer 38 — because
+    `Gate._mask` returns a *hard* `θ > 0` mask in eval mode, so an unseparated
+    θ makes the mask a coin flip on gradient noise. Roughly half the dimensions
+    swap, which at the readout layer scores 1.000. A meaningless mask and a
+    perfect number, with nothing in the saved outputs to tell them apart.
+
+    Asserted on the fit's own report rather than on a value: what is under test
+    is that the fact is *recorded*, not that a random model separates θ. The
+    retune that makes θ separate needs a GPU run and is not asserted here.
+    """
+    from causalab.neural.engines.pytorch_hooks.loading import load_model
+    from causalab.neural.engines.pytorch_hooks.train import run_training
+    from causalab.protocol.resolve import ResolutionEnv
+
+    bundle = load_model(TINY_LLAMA)
+    executor = executor_for(
+        dbm_doc(),
+        bundle,
+        base_texts=BASES,
+        counterfactual_texts=COUNTERFACTUALS,
+        extra_columns={"label": ANSWERS},
+    )
+    request = ExecutionRequest(
+        points=(),
+        canonical=(),
+        digests=(),
+        coords=(),
+        document_digest="0" * 64,
+        env=ResolutionEnv(datasets=_NoDatasets(), artifacts=None),  # type: ignore[arg-type]
+        output_dir=None,  # type: ignore[arg-type]
+    )
+    outcome = run_training(executor.doc, executor, request)
+
+    report = outcome.diagnostics["gate"]
+    width = int(report["width"])
+    assert width == outcome.stages["gate"].theta.numel()
+    assert 0.0 <= report["decisive_fraction"] <= 1.0
+    assert 0 <= report["hard_mask_size"] <= width
+    # the hard mask is what the eval-mode score was computed through, so it has
+    # to be reported as a count of *this* gate, not a fraction of some other
+    assert report["hard_mask_size"] == float((outcome.stages["gate"].theta > 0).sum())
+
+
+def test_a_subspace_fit_reports_no_mask_diagnostic():
+    """Only a gate has a mask to be indecisive about — the report is per kind,
+    not a fixed schema every fit has to fill with zeros."""
+    from causalab.neural.engines.pytorch_hooks.loading import load_model
+    from causalab.neural.engines.pytorch_hooks.train import run_training
+    from causalab.protocol.resolve import ResolutionEnv
+
+    bundle = load_model(TINY_LLAMA)
+    executor = executor_for(
+        das_doc(seed=0, epochs=1),
+        bundle,
+        base_texts=BASES,
+        counterfactual_texts=COUNTERFACTUALS,
+        extra_columns={"label": ANSWERS},
+    )
+    request = ExecutionRequest(
+        points=(),
+        canonical=(),
+        digests=(),
+        coords=(),
+        document_digest="0" * 64,
+        env=ResolutionEnv(datasets=_NoDatasets(), artifacts=None),  # type: ignore[arg-type]
+        output_dir=None,  # type: ignore[arg-type]
+    )
+    assert run_training(executor.doc, executor, request).diagnostics == {}
