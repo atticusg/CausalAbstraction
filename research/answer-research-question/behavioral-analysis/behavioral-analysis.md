@@ -53,26 +53,30 @@ from one that fails whenever two operands have the same value.
   expected output. Group the errors and report the short list of recurring
   patterns. A reader cannot check aggregate rates alone.
 
-## For multi-token generations, what kind of output is it producing?
+## Decompose multi-token outputs
 
-Most causal methods score one token at one position. For longer outputs, first
-define a consistent score.
+Most causal methods explain one next-token prediction at one location. If the
+behavior generates several meaningful tokens, complete
+[`output-decomposition.md`](output-decomposition.md) before exploration.
 
-- **Look for a single decisive token first** — the first token of the answer, a
-  yes/no, a chosen letter. If the rest of the generation follows from it, score it
-  and the rest of the protocol gets easy.
-- **Otherwise, name the output modes** and the function that assigns a generation
-  to one. Any later metric is built on that function.
-- **Check the decisive content sits at a stable position.** If it moves, positional
-  interventions smear across it — find an anchor or narrow the task until one
-  exists, and say in the roadmap that you did.
+For a standardized sequence, such as several numbers or fixed semantic fields,
+reuse one parent behavioral setup and create a child investigation for each
+meaningful output token or semantic slot. For free-form text, do not branch on
+every literal token. Define a smaller set of scientific subquestions that each
+ends at one next-token prediction and has a semantic target that can be aligned
+across examples.
+
+The primary analysis conditions on the correct preceding output tokens. Treat
+those tokens as explicit input variables for the current target. Follow-up
+investigations may replace the correct prefix with the model's own generated
+prefix to test how earlier errors change the computation.
 
 ## Typical units of work
 
 - One per prompt-format candidate evaluated.
 - One per error-structure hypothesis checked (by input variable, position, answer
   identity).
-- One for the output characterization, if the behavior is multi-token.
+- One for output decomposition, if the behavior is multi-token.
 
 ## Final report
 
@@ -99,7 +103,8 @@ log, causal interpretation, unrelated plots, or additional sections.
 ## Handoff
 
 You leave with a selected prompt, measured performance, the interactive behavioral
-report, a summary of the errors, and a scoring rule. If you
+report, a summary of the errors, a scoring rule, and `OUTPUT_TARGETS.md` when the
+generation contains several meaningful tokens. If you
 will build a causalab task from this behavior, check it against the five task
 quality objectives now rather than after the task is written —
 [`../../implementation/setup-task/instructions/task_quality_objectives.md`](../../implementation/setup-task/instructions/task_quality_objectives.md).

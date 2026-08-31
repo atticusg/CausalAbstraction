@@ -7,6 +7,11 @@ Use the selected prompt, model, inputs, and answer scoring from behavioral
 analysis. Include about twelve representative inputs by default, with correct and
 incorrect behavioral examples when both exist.
 
+Read `INTERMEDIATE_VARIABLE_IDEAS.md` and include the proposed symbols or output
+tokens associated with the current child output target. Label each one with the
+idea's current status. Selecting a symbol for inspection does not make it an
+established intermediate variable.
+
 ## Method
 
 Read `block_output` at the selected source layer and position, insert that vector

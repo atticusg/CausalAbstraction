@@ -43,6 +43,11 @@ experiments may start immediately because exploration already supplied candidate
 locations and hypothesis generation supplied the supervised intermediate
 variable and its datasets.
 
+Several intermediate variables may be under test at once. Their six-experiment
+groups are independent unless they share a required artifact explicitly. Do not
+serialize testing across variables merely to preserve the visual order of the
+roadmap.
+
 Within each method experiment, expand independent locations, layer bands,
 dimensions, regularization values, datasets, and seeds into separate CausaLab
 jobs. Run those jobs in parallel and shard them with nonoverlapping `--points`
@@ -139,10 +144,16 @@ The experiment is incomplete until the six method artifacts and the combined HTM
 report exist. If the attention head DBM execution stub prevents that experiment,
 mark the report incomplete and name the missing evidence explicitly.
 
+After each result, update `INTERMEDIATE_VARIABLE_IDEAS.md`, the layer-by-layer
+causal account in `ROADMAP.md`, and `REPORT_PLAN.md`. Run as many generation and
+testing iterations as the evidence requires. Select main claims only when their
+tests are sharp enough to distinguish them from plausible alternatives.
+
 ## Routing out
 
-**Strong positive result** →
-[`../generalize-results/generalize-results.md`](../generalize-results/generalize-results.md).
+**Strong positive result** → mark it as a candidate main claim. After the useful
+generation and testing iterations are complete, select the subset that warrants
+[`generalization`](../generalize-results/generalize-results.md).
 
 **Anything else** → return to
 [hypothesis generation](../hypothesis-generation/hypothesis-generation.md) when

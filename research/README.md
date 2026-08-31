@@ -9,15 +9,19 @@ abstraction, interchange interventions, DAS, DBM, steering, and ablation.
 **[`answer-research-question/`](answer-research-question/answer-research-question.md)**
 contains the six-step protocol:
 
-1. [Behavioral analysis](answer-research-question/behavioral-analysis/behavioral-analysis.md) — can the model do it, and how does it fail?
+1. [Behavioral analysis](answer-research-question/behavioral-analysis/behavioral-analysis.md) — establish the behavior and decompose meaningful multi-token outputs
 2. [Exploratory experimentation](answer-research-question/exploratory-experimentation/exploratory-experimentation.md) — trace input and output variables through five initial experiments and three gated follow-ups
 3. [Hypothesis generation](answer-research-question/hypothesis-generation/hypothesis-generation.md) — one counterfactual dataset experiment per proposed intermediate variable
 4. [Hypothesis testing](answer-research-question/hypothesis-testing/hypothesis-testing.md) — six intervention experiments for each intermediate variable
 5. [Generalize results](answer-research-question/generalize-results/generalize-results.md) — new prompt templates, related tasks, and naturally occurring text
-6. [Save results](answer-research-question/save-results/save-results.md)
+6. [Save results](answer-research-question/save-results/save-results.md) — synthesize the evidence into LaTeX, a compiled PDF, and a complete appendix
 
 Read it first. It contains the flow chart, roadmap, and rules for responding to a
 negative test.
+
+The pipeline starts from nearby counterfactual inputs and one next-token output
+target at a time. Natural prompts are in scope when they can be turned into a
+controlled task with named variables and auditable token or span locations.
 
 The [`causal handbook`](causal-handbook.md) explains the scientific framework:
 candidate intermediate variables, causal models, counterfactual datasets,

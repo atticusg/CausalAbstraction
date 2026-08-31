@@ -1,9 +1,16 @@
 # Step 5 — Generalize results
 
 A tested intermediate variable initially applies only to the model, task, prompt,
-token positions, datasets, and evaluation split used in hypothesis testing.
-Generalization repeats the six core intervention experiments in new settings and
-asks which parts of the layer-by-layer causal account survive.
+output target, prefix condition, token positions, datasets, and evaluation split
+used in hypothesis testing. Generalization repeats the six core intervention
+experiments in new settings and asks which parts of the layer-by-layer causal
+account survive.
+
+Do not generalize every positive result. Read `REPORT_PLAN.md`, select the main
+claims that need broader evidence, and state which kind of generalization is
+meaningful for each one. Several claims may share one generalization experiment.
+Claims that remain outside this phase keep the narrower scope established during
+hypothesis testing.
 
 Run three canonical generalization experiments:
 
@@ -14,9 +21,11 @@ Run three canonical generalization experiments:
 3. [Naturally occurring text](in-the-wild-generalization.md) from web text,
    WikiText, fine-tuning data, or another corpus used for next-token prediction.
 
-These experiments may run in parallel after hypothesis testing establishes the
-target intermediate variable and its baseline causal account. Give each its own
-directory, protocol documents, run artifacts, and self-contained HTML report.
+Applicable experiments may run in parallel after the selected claims and their
+baseline causal accounts are stable. Give each its own directory, protocol
+documents, run artifacts, and self-contained HTML report. Record why an experiment
+type is not meaningful for a selected claim rather than manufacturing a weak
+analogue.
 
 ## Repeat the core test
 
@@ -38,7 +47,8 @@ alternatives before interpreting neural results.
 Do not assume that a token location transfers. Identify critical tokens and spans
 again in each setting. New prompt formats, languages, tasks, and natural text may
 move the same semantic role to a new position or divide it across a different
-span.
+span. For multi-token generations, preserve the semantic next-token target from
+the child investigation and resolve its position again in every example.
 
 ## Update the causal account
 
@@ -58,14 +68,15 @@ changing which components implement it. Report both kinds of change.
 
 ## Completion and handoff
 
-Generalization is complete when all three reports exist or when a report states a
-concrete reason that its setting cannot support a valid test. For every setting,
-state the fraction of behavior explained and the exact boundary of the claim.
+Generalization is complete when every applicable report for the selected main
+claims exists and `REPORT_PLAN.md` records why the other experiment types were
+not applicable. For every setting, state the fraction of behavior explained and
+the exact boundary of the claim.
 
 A failed generalization is a result. Do not widen the claim to match the strongest
 condition and do not hide settings where the positive control failed. If a new
 setting suggests a different intermediate variable, create a new roadmap for that
 question.
 
-Update `ROADMAP.md`, then go to
+Update `ROADMAP.md` and `REPORT_PLAN.md`, then go to
 [`../save-results/save-results.md`](../save-results/save-results.md).

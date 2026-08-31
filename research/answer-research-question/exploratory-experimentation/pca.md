@@ -37,7 +37,8 @@ data.
 Color every projection by all labels inherited from behavioral analysis,
 including relevant input values, expected answer, model answer, correctness,
 prompt format when more than one remains, and token location. Add other candidate
-variables from the roadmap ledger as color options, but label them as exploratory.
+variables from `INTERMEDIATE_VARIABLE_IDEAS.md` and the roadmap table as color
+options, but show their current status and label them as exploratory.
 
 Apply SVD or eigendecomposition to centered observations. PCA finds orthogonal directions that maximize variance; on centered data this also minimizes linear reconstruction error (the two views coincide only because the data were centered first).
 

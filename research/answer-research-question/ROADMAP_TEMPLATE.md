@@ -3,11 +3,20 @@
 _Copy this into `$WORKDIR/ROADMAP.md` before running anything. Update it at the
 end of every step. See [`answer-research-question.md`](answer-research-question.md)._
 
+_Also create `INTERMEDIATE_VARIABLE_IDEAS.md` and `REPORT_PLAN.md` from the
+templates beside this file._
+
 ## The question
 
 - **Question:** {the question in a form that has an answer — not a topic}
 - **Model:** {model key and revision}
 - **Task / behavior:** {what the model is being asked to do}
+- **Controlled task:** {how a natural or templatic prompt becomes examples with
+  named variables and auditable token or span locations}
+- **Nearby counterfactual principle:** {which minimal, legible input changes will
+  reveal causal structure and where broader changes are necessary}
+- **Output targets:** {one token or semantic next-token subquestion per child
+  investigation; include the prefix used for each target}
 - **Goal for intermediate variables:** {what meaningful internal variables this work
   may identify and what evidence would make one worth testing}
 - **Layer-by-layer causal account:** {what must be explained about the input
@@ -21,15 +30,19 @@ end of every step. See [`answer-research-question.md`](answer-research-question.
 Use one block for each step. Before the step begins, describe what you expect and
 divide the work into the units that you will track.
 
-The steps are blocking phases, not independent work streams. Complete behavioral
-analysis before launching any work from a later phase. After that, launch work
-only from the current phase. Independent units within that phase may run in
-parallel, but the next phase remains blocked until the current phase is complete.
+Behavioral analysis and exploration are strict gates. After exploration, track
+dependencies per intermediate variable: hypothesis generation for many variables
+may run in parallel, and testing for one variable may begin while generation
+continues for another. Generalization waits for selection of the main claims, and
+final synthesis waits for their generalization results.
 
 ```
-behavioral analysis             required first; blocks every later phase
+behavioral analysis             required first; establish controlled task
         │
         │ reuse its selected prompt, model, code, and evaluation setup
+        ▼
+decompose output                create meaningful next-token child investigations
+        │
         ▼
 identify critical tokens        required before every exploratory experiment
         │
@@ -45,24 +58,27 @@ exploratory experimentation     trace every input variable and the output:
         │ each follow-up waits only for its parent patching experiment
         │ all initial and applicable follow-up experiments must finish
         ▼
-hypothesis generation           one dataset-design experiment per variable
+hypothesis loop                 many variables proceed concurrently
+        ├── generation A ──▶ six tests A ──┐
+        ├── generation B ──▶ six tests B ──┤ revise and repeat
+        └── generation C ──▶ six tests C ──┘
+        │
+        │ select main claims
+        ▼
+generalize main claims          prompt templates, related tasks, natural text
         │
         ▼
-hypothesis testing              six experiments per intermediate variable
-        │                       run concurrently when dependencies allow
-        │                       │
-        │ strong result         └── revise and return to an earlier phase
-        ▼
-generalize results              prompt templates, related tasks, wild text
-        │
-        ▼
-save results
+final LaTeX synthesis
 ```
 
 ### 1. Behavioral analysis
 
 - **Expect:** {…}
 - **Units:** {…}
+- **Output decomposition:** {shared parent setup and meaningful child targets, or
+  why the task has one output target}
+- **Prefix policy:** {correct prefix for primary analysis; selected free-generation
+  follow-ups}
 
 ### 2. Exploratory experimentation
 
@@ -94,10 +110,12 @@ save results
 - **Expect:** {the widest layer-by-layer causal account that survives}
 - **Units:** {new prompt templates, related tasks, and in-the-wild next-token
   prediction}
+- **Claims selected:** {subset of main claims for which these tests are meaningful}
 
 ### 6. Save results
 
-- **Expect:** {what the deliverable is and who reads it}
+- **Expect:** {`report.tex`, compiled `report.pdf`, figures, and a machine-readable
+  index of every experiment}
 
 ## Candidate intermediate variables
 

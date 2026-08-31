@@ -27,12 +27,21 @@ This experiment should deliberately move important variables to new token
 positions. It must distinguish a mechanism that follows a semantic role from one
 that is tied to a fixed index.
 
+For a multi-token output, first repeat the target under the correct-prefix
+condition used by the child investigation. Then run a separate free-generation
+follow-up in which the model supplies its own preceding output tokens. Treat the
+generated prefix as observed input to the target prediction and report whether
+the mechanism changes when earlier outputs are wrong. Never combine correct and
+generated prefixes in one aggregate score.
+
 ## HTML report contract
 
 Write `result/generalization/prompt-templates.html` as a self-contained
 interactive report. It must provide:
 
 - one tab per exact prompt template, with representative inputs and outputs;
+- separate correct-prefix and generated-prefix views when the target follows
+  earlier output tokens;
 - behavioral performance for every template;
 - aligned token views showing how each semantic role moves;
 - the six intervention results for every template;

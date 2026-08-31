@@ -15,6 +15,12 @@ prompt, model and revision, dataset and scoring code, code that loads the model,
 and working job setup. Extend the working behavioral experiment instead of
 reimplementing the task.
 
+When the parent behavior has several output targets, run this phase inside one
+child investigation from `OUTPUT_TARGETS.md`. Trace only that child's next-token
+output target while reusing the parent setup. Resolve semantic output roles to
+their actual token indices for every example. Treat preceding output tokens in
+the correct prefix as explicit input variables.
+
 ## Execution graph
 
 Critical token locations are a blocking prerequisite. Identify them before
@@ -61,21 +67,29 @@ observations have been added to the table of candidate variables in `ROADMAP.md`
 Before launching, list every observable variable that the experiments must
 trace:
 
-- each individual input token or token span used to solve the task; and
-- the output variable used to grade the model's answer.
+- each individual input token or token span used to solve the task;
+- every preceding output token that may affect the current target; and
+- the current child's next-token output variable.
 
 Give each variable a name, possible values, a rule for finding its token or span,
 and a counterfactual rule that changes it. Treat separate input variables
-separately even when they occur in the same prompt. The output variable may be a
-single answer token or the behavioral scoring rule defined in step 1.
+separately even when they occur in the same prompt. Define the output variable as
+the current child's next-token target and use the scoring rule from behavioral
+analysis for that prediction.
 
-Use the single-token counterfactual dataset throughout the patching and fitting
-experiments. Each pair must differ at exactly one input token, and that change
-must change the model's output. The changed token realizes the observable input
-variable that DAS and DBM try to localize. Construct enough single-token datasets
-to cover every input variable that can be changed this way. Retain the resulting
-output value so the same intervention can also be evaluated against the output
-variable.
+Use the single-token counterfactual dataset throughout the initial patching and
+fitting experiments whenever one valid token edit can change the input variable.
+Each such pair must differ at exactly one input token, and that change must change
+the model's output. The changed token realizes the observable input variable that
+DAS and DBM try to localize. Construct enough single-token datasets to cover every
+input variable that can be changed this way.
+
+Some semantic variables require a short span edit to preserve grammar or meaning.
+In that case, use the smallest legible edit, name every changed token, and explain
+why a one-token pair is invalid. Treat it as a separate dataset. Patch each
+changed position separately and the span jointly. Do not call it a single-token
+counterfactual. Retain the resulting output value so the same intervention can be
+evaluated against the current next-token output variable.
 
 Run each method at every critical token location. For a critical span, inspect
 each position separately. Patching experiments must also patch the whole span
@@ -99,6 +113,11 @@ variable, output variable, location, dimension or regularization, and seed axes
 into separate jobs. Launch those jobs in parallel. They remain one research
 experiment because they use the same method and answer the same localization
 question.
+
+Read `$WORKDIR/INTERMEDIATE_VARIABLE_IDEAS.md` before logit lens and PCA. Use its
+declared symbols as logit lens candidates and its declared labels as PCA color and
+association options. Keep their status visible: an untested idea remains
+speculation even when it determines what the report lets a reader inspect.
 
 ## Experiments and report contracts
 

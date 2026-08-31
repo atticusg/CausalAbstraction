@@ -185,6 +185,13 @@ A hypothesis that **no pair deconfounds from the null** is inert under the task'
 
 Design at these altitudes and keep them distinct:
 
+Start from nearby counterfactuals because they are easiest to interpret: preserve
+the original input and make the smallest changes that exercise the variable or
+separate the hypotheses. Proximity is a design principle, not an absolute rule.
+A grammatical semantic change may require a short token span, and a wide dataset
+must cover combinations that are not immediate neighbors. Record every changed
+variable so the reader can tell what the pair tests.
+
 - **Wide counterfactual datasets** — random resampling under task-appropriate balancing, or systematic manipulations (swap order, shuffle, hold the template and resample infills). Broadly interesting and robust to the causal model being wrong. **Your articulated causal model is usually at least a little wrong**; the process is iterative, and wide datasets keep you from gerrymandering yourself into only confirming a model you will later discard.
 - **Narrow counterfactual datasets** — sharply targeted pairs that hold one variable fixed and flip another to separate two specific hypotheses.
 - **Single-token (minimal-edit) counterfactual datasets** — base and counterfactual differ by *exactly one token*, and that token realizes a single input variable (swap one name, one digit, one operator). They have little sharp distinguishing power — moving only one thing leaves most hypotheses confounded with each other, so expect low deconfounding rates across the matrix — but distinguishing is not their job. **Their job is to track one piece of information.** With everything else held fixed, the single changed variable is the only thing that can move the output, so you can localize where that variable is represented and trace its path layer-by-layer and position-by-position through the network (logit lens, single-pair interchange / path patching). They are the cheapest, most legible way to make contact with the actual flow — what carries this variable, and where — and the natural bridge to the downstream neural localization experiments. Build one for any variable you want to follow through the model; reach for narrow datasets instead when the goal is to adjudicate between competing hypotheses.

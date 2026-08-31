@@ -12,6 +12,12 @@ variable definitions and shared causal model are ready. Keep their datasets,
 distinguishability results, and reports separate even when they import the same
 model code.
 
+There is no global barrier between hypothesis generation and hypothesis testing.
+As soon as one intermediate variable has valid datasets and its required outputs,
+launch its six testing experiments. Continue generating datasets for other
+variables at the same time. A failed test may create a revised variable or a new
+narrow dataset experiment without stopping unrelated work.
+
 ## What a hypothesis is here
 
 A hypothesis pairs a causal model with **one intermediate variable** and claims
@@ -37,6 +43,9 @@ or variable subsets until a counterfactual dataset can distinguish them.
 Write one or more runnable causal models. Define inputs as leaf variables,
 intermediates from explicit parents, and a prompt and output variable. Use
 intermediates such as a carry bit or equality to expose the parts you want to test.
+For a child investigation later in a multi-token output, represent preceding
+output tokens from the correct prefix as explicit input variables whenever they
+can affect the current next-token target.
 
 Start from the closest analogue among the shipped tasks rather than from nothing:
 positional decomposition (`causalab/tasks/entity_binding/`), boolean logic
@@ -105,6 +114,13 @@ them by hand.
 A counterfactual dataset contains (base, counterfactual) input pairs. Its design
 determines which hypotheses it can distinguish. Every intermediate-variable
 experiment must contain both broad and narrow coverage:
+
+Keep pairs as close to the original input as the scientific comparison allows.
+For a narrow dataset, hold everything fixed except the smallest set of variables
+needed to distinguish the target from one plausible alternative. This may change
+one token or a short, declared set of tokens. Broad datasets may move farther to
+cover the input space. Exact proximity is less important there than valid and
+representative coverage.
 
 - **Broad** datasets (`wide` in the harness) use random resampling with balancing
   appropriate to the task,
@@ -235,6 +251,11 @@ units for the broad dataset, each narrow dataset, the random distinguishability
 check, and the HTML report. Run independent CPU work in parallel, but do not
 finalize the report until all required datasets have been checked.
 
+Update `INTERMEDIATE_VARIABLE_IDEAS.md` when an experiment begins, when its
+datasets become testable, and when testing later supports, rejects, or revises the
+idea. Update `REPORT_PLAN.md` when a dataset or distinguishability figure may
+belong in the main report or appendix.
+
 ## Result contract
 
 For each intermediate variable, fill
@@ -259,8 +280,8 @@ is missing.
 
 ## Handoff
 
-Update `ROADMAP.md`, then go to
+For each ready intermediate variable, update `ROADMAP.md` and immediately launch
 [`../hypothesis-testing/hypothesis-testing.md`](../hypothesis-testing/hypothesis-testing.md)
-with one report per intermediate variable and datasets that distinguish it from
-the input, output, or competing intermediate variables that could plausibly be
-confused with it.
+with its report and the datasets that distinguish it from plausible input,
+output, or intermediate alternatives. Do not wait for generation experiments for
+unrelated variables.

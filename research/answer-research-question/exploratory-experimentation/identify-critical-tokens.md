@@ -13,14 +13,19 @@ Include both kinds of locations below.
 
 ### Tokens that affect the outcome
 
-Start with tokens whose content can change the final answer. Use the behavioral
-task and its single-token counterfactual pairs to identify them. A pair qualifies
-when the original and counterfactual inputs differ at exactly one token and the
-model's output changes.
+Start with tokens whose content can change the current next-token target. Use the
+behavioral task and its single-token counterfactual pairs first. Such a pair
+qualifies when the original and counterfactual inputs differ at exactly one token
+and the model's output changes.
 
-Record the input variable realized by the token and the observed output change.
-If the variable spans several tokens, record the full span and every position in
-it.
+When a semantic variable requires a short span edit, record the smallest legible
+edit as a separate counterfactual class. Name every changed token and explain why
+a one-token edit would be invalid. Include preceding output tokens from the
+correct prefix when they can affect the target.
+
+Record the input variable realized by the token or span and the observed output
+change. If the variable spans several tokens, record the full span and every
+position in it.
 
 ### Tokens where information may accumulate
 
