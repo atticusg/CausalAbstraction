@@ -773,9 +773,12 @@ its table says which:
     it is the default so pre-`token_form` documents are unchanged.
   - It is **wrong** when the answer does not follow a space and both forms
     happen to be single tokens. Under gpt2, `"?"` is token 30 and `" ?"` is
-    token 5633: a `match` on a punctuation answer scores 5633, the model emits
-    30, and the metric reads a flat 0.000 with no error raised anywhere. Pin
-    `token_form: "bare"` for those. `auto` warns when the two forms disagree.
+    token 5633: a `match` on a punctuation answer scored 5633, the model emits
+    30, and the metric read a flat 0.000. Pin `token_form: "bare"` for those.
+    **`auto` now refuses** rather than guessing whenever the two forms
+    disagree — as a single token each (the case above), or, under
+    `mode: "first_token"`, on which piece they credit. It warned before, and a
+    warning that produces a wrong number anyway is not a check.
   - The form applies to every token string in the metric, so a `class_probs`
     whose groups mix spaced and bare answers must stay on `auto`.
 - A column value resolves to **one token**, space-prefixed form first; a
@@ -794,7 +797,11 @@ its table says which:
   - `first_token` is what "prefix" means with logits at one position. It
     over-credits an answer space that is not first-token-distinct; whether a
     table's answer space *is* first-token-distinct is a property of the
-    dataset, so the mode is opt-in per document and never a default.
+    dataset, so the mode is opt-in per document and never a default — **and
+    the metric refuses** a row set in which two different answers share a
+    first token, which is the last place the claim can be checked before a
+    number exists. `" 85"` is `[220, "8", "5"]` on Qwen, so an emitted `87`
+    would otherwise score 1.000 against an expected `85`.
 
 ### 2.11 `train`
 

@@ -72,18 +72,21 @@
     "acc": {
       "kind": "match",
       "of": "logits_clean",
-      "expected": "answer"
+      "expected": "answer",
+      "token_form": "space_prefixed"
     },
     "iia": {
       "kind": "match",
       "of": "logits_patched",
-      "expected": "cf_answer"
+      "expected": "cf_answer",
+      "token_form": "space_prefixed"
     },
     "ld": {
       "kind": "logit_diff",
       "of": "logits_patched",
       "a": "cf_answer",
-      "b": "answer"
+      "b": "answer",
+      "token_form": "space_prefixed"
     }
   },
   "save": [
