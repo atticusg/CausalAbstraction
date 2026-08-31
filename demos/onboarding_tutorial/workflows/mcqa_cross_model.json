@@ -1,11 +1,14 @@
 {
   "version": "1",
-  "description": "The 07_cross_model demo end to end: harvest one checkpoint's answer-slot activation, graft it into another checkpoint's forward, and score what comes out. Two protocol steps and one file between them -- the shape a cross-model experiment has to take when a document names exactly one model.",
-  "output_dir": "mcqa_cross_model",
+  "description": "The 07_cross_model demo's control arm: harvest the answer-slot activation of the instruction-tuned model and graft it back into the same model. This is the notebook's own validation scenario -- source and target the same checkpoint -- and it has to reproduce an ordinary interchange, because that is what it is. It runs, which is what makes the cross-checkpoint arm's refusal a statement about the two models rather than about the graft.",
+  "output_dir": "mcqa_cross_same",
   "steps": {
     "source": {
       "type": "intervention_protocol",
-      "document": "../protocols/mcqa_source_harvest.json"
+      "document": "../protocols/mcqa_source_harvest.json",
+      "set": {
+        "model.key": "meta-llama/Llama-3.2-1B-Instruct"
+      }
     },
     "graft": {
       "type": "intervention_protocol",

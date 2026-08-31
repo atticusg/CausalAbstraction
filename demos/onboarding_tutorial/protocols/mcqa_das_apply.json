@@ -14,7 +14,7 @@
     "lm_head": {"component": "lm_head"}
   },
   "featurizers": {
-    "rot": {"kind": "subspace", "k": {"sweep": [1, 2, 4, 8, 16]}, "parametrization": "cayley",
+    "rot": {"kind": "subspace", "k": {"sweep": [1, 2, 4, 8, 16, 32, 64, 128]}, "parametrization": "cayley",
             "file_path": "fit/rot.safetensors"}
   },
   "reads": {

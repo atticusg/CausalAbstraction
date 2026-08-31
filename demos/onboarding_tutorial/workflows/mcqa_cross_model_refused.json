@@ -1,0 +1,15 @@
+{
+  "version": "1",
+  "description": "The 07_cross_model demo's experimental arm: harvest on the pretrained checkpoint, graft into the instruction-tuned one. Identical to the control workflow beside it but for the source step's model.key. It loads -- validate and explain both pass -- and it refuses at run time, which is the demo's result and the reason both documents ship.",
+  "output_dir": "mcqa_cross_model",
+  "steps": {
+    "source": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_source_harvest.json"
+    },
+    "graft": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_cross_patch.json"
+    }
+  }
+}

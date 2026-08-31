@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "description": "The 06_components demo end to end: scan three components across 16 layers, draw the grid, reduce it to the argmax cell, then fit a gate at that cell and score the mask on a split it never saw. The scan chooses the site the fit trains at, so 'which component' and 'how much of it' are one chain rather than two experiments with a hand-copied layer number between them.",
+  "description": "The 06_components demo end to end: scan three components across 16 layers, draw the grid, reduce it to the argmax cell, then fit a gate at that cell under three L1 weights and score each mask on a split it never saw. The scan chooses the site the fit trains at, so 'which component' and 'how much of it' are one chain rather than two experiments with a hand-copied layer number between them. The L1 sweep is three steps rather than an axis because train.objective is a list, and a list-typed field is never a sweep axis.",
   "output_dir": "mcqa_components",
   "steps": {
     "scan": {
@@ -9,42 +9,172 @@
     },
     "grid": {
       "type": "script",
-      "script": {"module": "causalab.io.plots.workflow_figures"},
+      "script": {
+        "module": "causalab.io.plots.workflow_figures"
+      },
       "inputs": {
-        "table": {"step": "scan", "file": "iia.json"},
+        "table": {
+          "step": "scan",
+          "file": "iia.json"
+        },
         "plot": "lines",
         "x": "sites.target.layer",
         "series": "sites.target.component"
       },
-      "outputs": {"figure": "component_iia.png", "plotted": {"file": "component_iia.json"}}
+      "outputs": {
+        "figure": "component_iia.png",
+        "plotted": {
+          "file": "component_iia.json"
+        }
+      }
     },
     "best": {
       "type": "script",
-      "script": {"module": "causalab.workflow.scripts.select"},
+      "script": {
+        "module": "causalab.workflow.scripts.select"
+      },
       "inputs": {
-        "table": {"step": "scan", "file": "iia.json"},
+        "table": {
+          "step": "scan",
+          "file": "iia.json"
+        },
         "choose": "max",
-        "emit": {"best_layer": "sites.target.layer", "best_component": "sites.target.component"}
+        "emit": {
+          "best_layer": "sites.target.layer",
+          "best_component": "sites.target.component"
+        }
       },
       "outputs": {
-        "values": {"file": "values.json",
-                   "keys": {"best_layer": 14, "best_component": "block_output"}}
+        "values": {
+          "file": "values.json",
+          "keys": {
+            "best_layer": 14,
+            "best_component": "block_output"
+          }
+        }
       }
     },
-    "gate_fit": {
+    "gate_fit_lo": {
       "type": "intervention_protocol",
       "document": "../protocols/mcqa_gate_fit.json",
       "set": {
-        "sites.target.layer": {"artifact": "best", "key": "best_layer"},
-        "sites.target.component": {"artifact": "best", "key": "best_component"}
+        "sites.target.layer": {
+          "artifact": "best",
+          "key": "best_layer"
+        },
+        "sites.target.component": {
+          "artifact": "best",
+          "key": "best_component"
+        },
+        "train.objective": [
+          [
+            1.0,
+            "ce"
+          ],
+          [
+            0.01,
+            {
+              "l1": "gate"
+            }
+          ]
+        ]
       }
     },
-    "gate_apply": {
+    "gate_apply_lo": {
       "type": "intervention_protocol",
       "document": "../protocols/mcqa_gate_apply.json",
       "set": {
-        "sites.target.layer": {"artifact": "best", "key": "best_layer"},
-        "sites.target.component": {"artifact": "best", "key": "best_component"}
+        "sites.target.layer": {
+          "artifact": "best",
+          "key": "best_layer"
+        },
+        "sites.target.component": {
+          "artifact": "best",
+          "key": "best_component"
+        },
+        "featurizers.gate.file_path": "gate_fit_lo/gate.safetensors"
+      }
+    },
+    "gate_fit_mid": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_gate_fit.json",
+      "set": {
+        "sites.target.layer": {
+          "artifact": "best",
+          "key": "best_layer"
+        },
+        "sites.target.component": {
+          "artifact": "best",
+          "key": "best_component"
+        },
+        "train.objective": [
+          [
+            1.0,
+            "ce"
+          ],
+          [
+            0.3,
+            {
+              "l1": "gate"
+            }
+          ]
+        ]
+      }
+    },
+    "gate_apply_mid": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_gate_apply.json",
+      "set": {
+        "sites.target.layer": {
+          "artifact": "best",
+          "key": "best_layer"
+        },
+        "sites.target.component": {
+          "artifact": "best",
+          "key": "best_component"
+        },
+        "featurizers.gate.file_path": "gate_fit_mid/gate.safetensors"
+      }
+    },
+    "gate_fit_hi": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_gate_fit.json",
+      "set": {
+        "sites.target.layer": {
+          "artifact": "best",
+          "key": "best_layer"
+        },
+        "sites.target.component": {
+          "artifact": "best",
+          "key": "best_component"
+        },
+        "train.objective": [
+          [
+            1.0,
+            "ce"
+          ],
+          [
+            3.0,
+            {
+              "l1": "gate"
+            }
+          ]
+        ]
+      }
+    },
+    "gate_apply_hi": {
+      "type": "intervention_protocol",
+      "document": "../protocols/mcqa_gate_apply.json",
+      "set": {
+        "sites.target.layer": {
+          "artifact": "best",
+          "key": "best_layer"
+        },
+        "sites.target.component": {
+          "artifact": "best",
+          "key": "best_component"
+        },
+        "featurizers.gate.file_path": "gate_fit_hi/gate.safetensors"
       }
     }
   }

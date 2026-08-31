@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "description": "Which attention head moves the answer symbol into the answer slot? 06 asks which component; this asks which head of it. The site is attention_probs -- the post-softmax pattern itself -- so a point interchanges one head's whole (query x key) pattern from the counterfactual into the base and asks whether the model then answers the counterfactual's symbol. The pattern must be read at pos 'all': a row of it is a distribution over key positions, and a single query position is not the object an interchange on attention moves. 16 layers x 32 heads over 64 pairs.",
+  "description": "Which attention head moves the answer symbol into the answer slot? 06 asks which component; this asks which head of it. The site is attention_probs -- the post-softmax pattern itself -- so a point interchanges one head's whole (query x key) pattern from the counterfactual into the base and asks whether the model then answers the counterfactual's symbol. The pattern must be read at pos 'all': a row of it is a distribution over key positions, and a single query position is not the object an interchange on attention moves. The band is layers 12-15, which is 06's result rather than a budget: its component scan reads attention_output at 0.000 for every layer 0-13 and 15 and 0.719 at 14, so a head outside the band writes into a site whose whole output moves nothing. 4 layers x 32 heads over 64 pairs.",
   "model": {"key": "meta-llama/Llama-3.2-1B-Instruct", "revision": "main", "dtype": "bf16"},
   "data": {
     "base":           {"dataset": "mcqa/pairs_n64_s0", "field": "input"},
@@ -8,7 +8,7 @@
   },
   "sites": {
     "pattern": {"component": "attention_probs",
-                "layer": {"sweep": {"range": [0, 16]}},
+                "layer": {"sweep": {"range": [12, 16]}},
                 "head":  {"sweep": {"range": [0, 32]}}},
     "lm_head": {"component": "lm_head"}
   },
