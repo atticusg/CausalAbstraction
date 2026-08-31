@@ -8,7 +8,7 @@
 | **Data** | `weekdays/train` (64 pairs), `weekdays/test` (32) — `natural_domains_arithmetic`, `domain_type=weekdays` |
 | **Documents** | [`workflows/weekdays_geometry.json`](workflows/weekdays_geometry.json) → five [`protocols/`](protocols/) |
 | **Cost** | 10 steps, 118 points; the DAS step trains 9 rotations |
-| **Reproduced** | ⚠ all ten steps re-run 2026-08-31 on one H100 80GB (digest `8143a3361bb0326e…`) and every number below is this run's; RQ3's 2D/3D views and RQ4's two walks are still the pre-refactor reference — they need script steps that do not ship |
+| **Reproduced** | ⚠ all ten steps re-run 2026-08-31 on one H100 80GB (digest `b4c84874445539d3…`) and every number below is this run's; RQ3's 2D/3D views and RQ4's two walks are still the pre-refactor reference — they need script steps that do not ship |
 
 ## TL;DR
 
@@ -70,7 +70,7 @@ verbatim — the file is what `causalab run` reads, and
         "emit": {"best_layer": "sites.target.layer", "best_pos": "positions.tap"}
       },
       "outputs": {
-        "values": {"file": "values.json", "keys": {"best_layer": 18, "best_pos": {"index": -1}}}
+        "values": {"file": "values.json", "keys": {"best_layer": 26, "best_pos": {"index": -1}}}
       }
     },
     "harvest": {
@@ -565,13 +565,13 @@ file byte for byte — the file is what `causalab run` reads, and
 ```bash
 uv run causalab validate demos/weekdays_geometry/workflows/weekdays_geometry.json \
     --data-root demos/weekdays_geometry/data
-# OK: demos/weekdays_geometry/workflows/weekdays_geometry.json — 10 steps, digest 8143a3361bb0326e…
+# OK: demos/weekdays_geometry/workflows/weekdays_geometry.json — 10 steps, digest b4c84874445539d3…
 ```
 
 ```bash
 uv run causalab explain demos/weekdays_geometry/workflows/weekdays_geometry.json \
     --data-root demos/weekdays_geometry/data
-# digest    8143a3361bb0326e7a1c58561f4ca715e45404ec48b2e76324d11afc2689ba1a
+# digest    b4c84874445539d33811d62995234a8aa14b07533795942b8f641d94d5595d60
 # schedule  5 levels
 #   level 0: baseline, locate
 #   level 1: locate_heatmap, best
@@ -697,15 +697,14 @@ they differ qualitatively:
 ## Results
 
 Run on 2026-08-31, one H100 80GB, reference engine (`pytorch_hooks`), bf16,
-workflow digest `8143a3361bb0326e…`. All ten steps completed in 132 s.
+workflow digest `b4c84874445539d3…`. All ten steps completed in 132 s.
 
-**Read this first: the run selected layer 26, not the 18 the workflow
-declares.** `best` is a `select` step, so the layer the downstream steps use is
-whatever `locate`'s argmax turns out to be — and it is **L26**. The workflow's
-`best.outputs.values.keys` declares `{"best_layer": 18, …}`, which is what the
-plan-time *authored* digests for `harvest`, `fit` and `walk` are computed
-against; the run itself harvested, fitted and walked at **L26**. Every RQ3 and
-RQ4 number below is therefore a layer-26 measurement.
+**The layer is selected, not pinned, and it is 26.** `best` is a `select` step,
+so the layer the downstream steps use is whatever `locate`'s argmax turns out to
+be — and it is **L26**, on a plateau running L26–L31. Every RQ3 and RQ4 number
+below is therefore a layer-26 measurement. The workflow's
+`best.outputs.values.keys` now declares `{"best_layer": 26, …}` to match; before
+this run it declared 18, inherited from the source notebook's prose.
 
 ### RQ1 — yes, 0.828
 
@@ -899,16 +898,20 @@ ring-versus-line comparison remains unanswered — see Limits.
 
 ## Limits
 
-- **The layer is selected, not pinned, and it is 26.** The source notebook's
-  prose said layer 18 and its config said 28; the run resolves the question by
-  not answering it — `best` is a `select` step, so the layer is `locate`'s
-  argmax, and that is **L26** (0.953, on a plateau that runs L26–L31). The
-  workflow's `best.outputs.values.keys` still *declares* `{"best_layer": 18}`,
-  which is only used to compute the plan-time authored digests for `harvest`,
-  `fit` and `walk` — so `explain`'s authored digests for those three steps
-  describe a plan at L18 while the run happened at L26. Updating that declared
-  value to 26 would make the two agree; it moves the workflow digest, so it is a
-  deliberate follow-up rather than a typo fix.
+- **The declared `best_layer` is a validation placeholder, not a pin, and it is
+  now 26.** The source notebook's prose said layer 18 and its config said 28;
+  neither is what runs, because `best` is a `select` step and the layer is
+  `locate`'s argmax — **L26** (0.953, plateau L26–L31). What the declared value
+  in `best.outputs.values.keys` actually does is get substituted into the
+  downstream documents at *load* time, so it is bounds-checked: declaring 999
+  is refused with `[V4] at sites.target.layer … layer 999 out of range for the
+  32-layer model`. It does **not** enter those steps' authored digests —
+  `harvest`, `fit` and `walk` keep `4548aa31…`, `386b7941…` and `95cadecd…`
+  across the 18 → 26 change, which is the point of calling them *authored*
+  rather than campaign digests: they are the step's document with its `set`
+  block applied symbolically, and the artifact's value is a runtime fact. The
+  change does move the **workflow** digest, `8143a336…` → `b4c84874…`, because
+  the workflow document's own bytes changed.
 - **`fit_pca`'s spectrum is normalized over the components it keeps**, so
   RQ3a cannot state what fraction of the *full* 4096-dimensional variance the
   32-component subspace retains — the reference figure's 98% was that quantity
@@ -944,8 +947,11 @@ ring-versus-line comparison remains unanswered — see Limits.
   artifacts the run already produces — `pca/basis.safetensors`,
   `harvest/acts.safetensors`, `walk/day_probs.json` — so none of them needs a
   new document or a new GPU hour.
-- Reconcile the declared `best_layer` with the selected one (18 → 26) so the
-  authored digests `explain` prints describe the plan that actually runs.
+- The declared `best_layer` is reconciled with the selected one (18 → 26), so
+  the value the downstream documents are validated against is the value the run
+  actually uses. A model with fewer than 27 layers would now be refused at load
+  rather than at the GPU, which is the whole reason the placeholder is
+  bounds-checked.
 - The missing spline-fit script is the one piece between the linear arm and the
   comparison — it is a `script` step over `harvest`'s activations, which is what
   the step type exists for ([`docs/workflow_protocol.md`](../../docs/workflow_protocol.md) §2.3).
