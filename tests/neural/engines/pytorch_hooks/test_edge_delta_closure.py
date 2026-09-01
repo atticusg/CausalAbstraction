@@ -14,10 +14,16 @@ trunk being linear all the way to the logits:
 
 so routing *every* head of layer L into the mixer output itself must land it
 on ``Σ_h result_cf + bias`` — which is ``attention_output`` on the
-counterfactual, exactly what swapping the whole mixer output produces. The
-bias belongs to no head and enters once, from the base value, so it cancels;
-the ``bundle`` fixture covers gpt2, whose o-projection *has* a bias, as well
-as llama, whose does not.
+counterfactual, exactly what swapping the whole mixer output produces.
+
+The o-projection bias belongs to no head, and it drops out for a reason worth
+stating precisely: it is the *same constant* in the base and counterfactual
+values, so it cancels in the difference **however the derivation attributes
+it** — the closure is insensitive to bias attribution rather than a test of it.
+What pins the attribution itself is
+``test_sites_round2_result.py::test_the_bias_belongs_to_no_head``. What the
+nonzero-bias test below adds is that a real bias, rather than the fixtures'
+absent (llama) or all-zero (gpt2) one, leaks no term into the closure.
 
 The receiver is ``attention_output`` and not ``block_mid``: a ``block_mid``
 write is currently only half-applied (it reaches the MLP but not the residual
@@ -30,15 +36,20 @@ which is the whole point: the nonlinearity is computed, not assumed.
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+import contextlib
+from typing import Any, Iterator, Sequence
 
 import pytest
 import torch
 
-from causalab.neural.engines.pytorch_hooks.loading import ModelBundle
+from causalab.neural.engines.pytorch_hooks.loading import ModelBundle, load_model
 
 from tests.neural.engines.pytorch_hooks._drive import base_data_section, executor_for
-from tests.neural.engines.pytorch_hooks.conftest import BASE_TEXT, COUNTERFACTUAL_TEXT
+from tests.neural.engines.pytorch_hooks.conftest import (
+    BASE_TEXT,
+    COUNTERFACTUAL_TEXT,
+    TINY_GPT2,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -177,10 +188,7 @@ def _clean_doc() -> dict[str, Any]:
 
 
 def test_routing_every_head_equals_swapping_the_mixer_output(bundle: ModelBundle):
-    """Patch-everything closure. ``Σ_h attention_result == attention_output``
-    minus the o-projection bias, and the bias enters once from the base value,
-    so the all-heads edge set must be indistinguishable from the swap — on
-    gpt2 (biased o-projection) as well as llama (unbiased)."""
+    """Patch-everything closure, on both families in the fixture."""
     every_head = range(bundle.info.num_heads)
     torch.testing.assert_close(
         _logits(_edge_delta_doc(every_head), bundle),
@@ -288,3 +296,44 @@ def test_a_block_mid_write_does_not_reach_the_residual_skip(
     # the write did land where it was addressed — this is not a lost write
     torch.testing.assert_close(mid, executor.read_value("v_cf"), **TOL)
     torch.testing.assert_close(out - mlp, mid, **TOL)
+
+
+@contextlib.contextmanager
+def _nonzero_o_projection_bias(bundle: ModelBundle, layer: int) -> Iterator[None]:
+    """Give gpt2's attention output projection a bias that is actually there.
+
+    The fixture ships zeros, which cannot tell "the bias cancels" apart from
+    "the bias is dropped". Restored on the way out — the bundle is
+    session-cached, so leaving it perturbed would leak into every later test.
+    """
+    proj = bundle.model.transformer.h[layer].attn.c_proj
+    assert proj.bias is not None, "gpt2's c_proj is expected to carry a bias"
+    saved = proj.bias.detach().clone()
+    with torch.no_grad():
+        proj.bias.copy_(torch.linspace(-0.7, 0.7, proj.bias.numel()))
+    try:
+        yield
+    finally:
+        with torch.no_grad():
+            proj.bias.copy_(saved)
+
+
+def test_the_closure_holds_with_a_nonzero_o_projection_bias():
+    """The one term the per-head derivation cannot attribute, made real.
+
+    Both fixtures dodge it — llama's o-projection has no bias, tiny-random
+    gpt2's is all zeros — so the closure above never meets one. It should not
+    care: the bias is the same constant on both inputs and cancels in the
+    difference. This asserts that it does not care, which is a weaker and more
+    honest claim than "this pins the bias".
+    """
+    bundle = load_model(TINY_GPT2)
+    with _nonzero_o_projection_bias(bundle, LAYER):
+        assert bundle.model.transformer.h[LAYER].attn.c_proj.bias.abs().max() > 0
+        torch.testing.assert_close(
+            _logits(_edge_delta_doc(range(bundle.info.num_heads)), bundle),
+            _logits(_mixer_swap_doc(), bundle),
+            **TOL,
+        )
+    # and the perturbation really was undone
+    assert bundle.model.transformer.h[LAYER].attn.c_proj.bias.abs().max() == 0
