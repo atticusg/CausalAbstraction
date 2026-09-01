@@ -82,7 +82,7 @@ file* paths are relative to `tests/`. Parametrized data dirs (`configs/`,
 | `interchange/test_layer_scan.py` | replaced interface | `protocol/test_sweep.py`, `protocol/test_corpus.py` (corpus 07) | the layer scan is a sweep axis; deterministic expansion + the locate-grid shape pinned |
 | `interchange/test_single_pair.py` | replaced interface | `neural/pytorch_hooks/test_positions_frame.py::test_out_of_bounds_refuses` | the #176 contract carried verbatim in spirit: a stale position refuses, never addresses the wrong token |
 | `path_patching/conftest.py` | retired | retired | Plan-era fixtures (single-step pipelines, pyvene hook-cleanup workarounds) |
-| `path_patching/test_head_receivers_hook_oracle.py` | retired | retired | per-head value (v_proj-output, KV-head space) and query receivers have no §2.4 component — `attention_premix` is the o_proj input; flagged at the gate (the parity skip table names it); see gaps |
+| `path_patching/test_head_receivers_hook_oracle.py` | retired | **re-expressible** | both receivers have a §2.4 component as of round 2: the per-head value receiver is `attention_value_states` (v_proj's output, KV-head space) and the query receiver is `attention_query_pre_rope`. Neither is `attention_premix`, which is the o_proj *input* in query space. Verified running as a per-head receiver in corpus 03's two-pass shape on the reference engine (with `attention_key_pre_rope`); no test re-drives the retired oracle's assertions yet |
 | `path_patching/test_outputs.py` | replaced interface | `neural/pytorch_hooks/test_metrics.py` | the Plan-logits→`GenerationResult` adapter died; last-position slice/argmax/decode live in metric lowering |
 | `path_patching/test_plans.py` | replaced interface | `protocol/test_corpus.py` (corpus 03), `tests/protocols/03_path_patching_im.json` | the pass structure and receiver wiring are explicit authored document content, pinned by digest + execution shape |
 | `path_patching/test_receiver_set.py` | retired | retired | multi-receiver documents are expressible (several inject edits) but the set-degeneracy invariant has no dedicated new test; per-receiver two-pass semantics are oracle-pinned |
@@ -288,8 +288,13 @@ site tooling that hooks in via the CLI's `--points` shard selector.
 
 - **Parity captured-goldens re-drive** — landed on this branch:
   `neural/pytorch_hooks/test_parity_goldens.py` replays every portable pinned
-  case, but 2 gqa `head_value` pins are explicitly skipped (the §2.4 vocabulary
-  has no v_proj-output component) and the skip table is itself under audit.
+  case, but 2 gqa `head_value` pins are explicitly skipped. **The stated reason
+  is out of date** — `attention_value_states` *is* v_proj's output in KV-head
+  space (§2.4, round 2), so the vocabulary no longer lacks the component. What
+  the pins need is a re-audit against it: whether the retired oracle's head
+  indexing matches the KV-head space that component presents under GQA is
+  unmeasured, so this stays a gap, with a different reason than the one
+  recorded.
 - **Chat-coherent GPU golden tier** — discharged on this branch by
   `tests/golden/`: paper-provenance goldens (`test_paper_goldens.py`, values
   from published papers / the VeriFires task packages, never a stack run) and
@@ -298,9 +303,15 @@ site tooling that hooks in via the CLI's `--points` shard selector.
   pins await their first cuda capture (the replay skips until then), and the
   old tier's chat template + answer directive are inexpressible in v1 (no
   chat-template code path), so the drift documents use raw completions.
-- **Per-head query receivers** — no spec component for the pre-attention
-  q_h = W_Q^h·x receiver (`test_head_receivers_hook_oracle.py`'s query half);
-  path patching onto query receivers is inexpressible in v1.
+- ~~**Per-head query receivers**~~ — **closed** by round 2's attention
+  interior: `attention_query_pre_rope` is the pre-attention q_h = W_Q^h·x
+  receiver (`test_head_receivers_hook_oracle.py`'s query half), q_norm's output
+  on a family that has one and q_proj's otherwise, in query-head space. Path
+  patching onto a per-head query receiver is expressible, and runs: driven as
+  corpus 03's two-pass shape on the reference engine alongside
+  `attention_value_states` and `attention_key_pre_rope`. RoPE needs no handling
+  at these addresses by construction — they are pre-rotation, and the model
+  re-rotates downstream of the injection.
 - **Cross-model / two-pipeline patching** — one model per document in v1;
   `test_cross_model_hook_oracle.py`'s source-pipeline injection contract has no
   new carrier.
