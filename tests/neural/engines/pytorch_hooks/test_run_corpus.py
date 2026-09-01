@@ -107,6 +107,38 @@ def test_03_path_patching_runs(roots, tmp_path):
     assert len(ld) == 3
 
 
+def test_15_circuit_edges_runs(roots, tmp_path):
+    """The per-edge polarity map, executed: eight additive writes at one
+    address, two intervened models, and the two edge sets must not land on the
+    same number as the clean run or as each other — the whole point is that
+    which edges are routed changes the metric."""
+    code = _run(
+        "15_circuit_edges_im.json",
+        roots,
+        tmp_path,
+        # the fixture has two layers, so every sender is layer 0 and the
+        # receiver is the residual entering layer 1 — still strictly upstream
+        "sites.nm_9_6.layer=0",
+        "sites.nm_9_6.head=1",
+        "sites.nm_9_9.layer=0",
+        "sites.nm_9_9.head=2",
+        "sites.nm_10_0.layer=0",
+        "sites.nm_10_0.head=0",
+        "sites.ctl_10_7.layer=0",
+        "sites.ctl_10_7.head=3",
+        "sites.recv.layer=1",
+    )
+    assert code == 0
+    clean = table_frame(tmp_path / "ld_clean.json")["value"]
+    circuit = table_frame(tmp_path / "ld_circuit.json")["value"]
+    complement = table_frame(tmp_path / "ld_complement.json")["value"]
+    assert len(clean) == len(circuit) == len(complement) == 3
+    # routing edges moved the metric, and the two edge sets are distinguishable
+    assert not clean.equals(circuit)
+    assert not clean.equals(complement)
+    assert not circuit.equals(complement)
+
+
 def test_06_hydra_effect_runs(roots, tmp_path):
     code = _run(
         "06_hydra_effect_im.json",
