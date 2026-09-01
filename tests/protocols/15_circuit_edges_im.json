@@ -1,0 +1,260 @@
+{
+  "version": "1",
+  "description": "Circuit evaluation over an explicit per-edge polarity map (IOI name movers): each edge is one attention head's contribution to the residual stream entering a later layer, routed to its counterfactual value by a pair of additive writes (+1 on the counterfactual read of `attention_result`, -1 on the base read) and routed to base by being absent. The whole edge set is in force in one forward, so the paths interact through the real model rather than through an assumption that the trunk is additive downstream of the receiver; the complement set is the off-circuit control. Stacking one-edge runs cannot produce this, which is why an edge set is one document and not a composition of documents.",
+  "model": {
+    "key": "meta-llama/Llama-3.1-8B",
+    "revision": "main"
+  },
+  "data": {
+    "base": {
+      "dataset": "ioi/test",
+      "field": "input"
+    },
+    "counterfactual": {
+      "dataset": "ioi/test",
+      "field": "counterfactual_inputs[0]"
+    }
+  },
+  "sites": {
+    "nm_9_6": {
+      "component": "attention_result",
+      "layer": 9,
+      "head": 6
+    },
+    "nm_9_9": {
+      "component": "attention_result",
+      "layer": 9,
+      "head": 9
+    },
+    "nm_10_0": {
+      "component": "attention_result",
+      "layer": 10,
+      "head": 0
+    },
+    "ctl_10_7": {
+      "component": "attention_result",
+      "layer": 10,
+      "head": 7
+    },
+    "recv": {
+      "component": "block_input",
+      "layer": 11
+    },
+    "lm_head": {
+      "component": "lm_head"
+    }
+  },
+  "reads": {
+    "b_9_6": {
+      "site": "nm_9_6",
+      "pos": -1,
+      "model": "original",
+      "input": "base"
+    },
+    "c_9_6": {
+      "site": "nm_9_6",
+      "pos": -1,
+      "model": "original",
+      "input": "counterfactual"
+    },
+    "b_9_9": {
+      "site": "nm_9_9",
+      "pos": -1,
+      "model": "original",
+      "input": "base"
+    },
+    "c_9_9": {
+      "site": "nm_9_9",
+      "pos": -1,
+      "model": "original",
+      "input": "counterfactual"
+    },
+    "b_10_0": {
+      "site": "nm_10_0",
+      "pos": -1,
+      "model": "original",
+      "input": "base"
+    },
+    "c_10_0": {
+      "site": "nm_10_0",
+      "pos": -1,
+      "model": "original",
+      "input": "counterfactual"
+    },
+    "b_10_7": {
+      "site": "ctl_10_7",
+      "pos": -1,
+      "model": "original",
+      "input": "base"
+    },
+    "c_10_7": {
+      "site": "ctl_10_7",
+      "pos": -1,
+      "model": "original",
+      "input": "counterfactual"
+    },
+    "logits_clean": {
+      "site": "lm_head",
+      "pos": -1,
+      "model": "original",
+      "input": "base"
+    },
+    "logits_circuit": {
+      "site": "lm_head",
+      "pos": -1,
+      "model": "circuit",
+      "input": "base"
+    },
+    "logits_complement": {
+      "site": "lm_head",
+      "pos": -1,
+      "model": "complement",
+      "input": "base"
+    }
+  },
+  "writes": {
+    "on_9_6": {
+      "site": "recv",
+      "pos": -1,
+      "do": {
+        "add_scaled": {
+          "op": "c_9_6",
+          "alpha": 1.0
+        }
+      }
+    },
+    "off_9_6": {
+      "site": "recv",
+      "pos": -1,
+      "do": {
+        "add_scaled": {
+          "op": "b_9_6",
+          "alpha": -1.0
+        }
+      }
+    },
+    "on_9_9": {
+      "site": "recv",
+      "pos": -1,
+      "do": {
+        "add_scaled": {
+          "op": "c_9_9",
+          "alpha": 1.0
+        }
+      }
+    },
+    "off_9_9": {
+      "site": "recv",
+      "pos": -1,
+      "do": {
+        "add_scaled": {
+          "op": "b_9_9",
+          "alpha": -1.0
+        }
+      }
+    },
+    "on_10_0": {
+      "site": "recv",
+      "pos": -1,
+      "do": {
+        "add_scaled": {
+          "op": "c_10_0",
+          "alpha": 1.0
+        }
+      }
+    },
+    "off_10_0": {
+      "site": "recv",
+      "pos": -1,
+      "do": {
+        "add_scaled": {
+          "op": "b_10_0",
+          "alpha": -1.0
+        }
+      }
+    },
+    "on_10_7": {
+      "site": "recv",
+      "pos": -1,
+      "do": {
+        "add_scaled": {
+          "op": "c_10_7",
+          "alpha": 1.0
+        }
+      }
+    },
+    "off_10_7": {
+      "site": "recv",
+      "pos": -1,
+      "do": {
+        "add_scaled": {
+          "op": "b_10_7",
+          "alpha": -1.0
+        }
+      }
+    }
+  },
+  "intervened_models": {
+    "circuit": {
+      "input": "base",
+      "writes": [
+        "on_9_6",
+        "off_9_6",
+        "on_9_9",
+        "off_9_9",
+        "on_10_0",
+        "off_10_0"
+      ]
+    },
+    "complement": {
+      "input": "base",
+      "writes": [
+        "on_10_7",
+        "off_10_7"
+      ]
+    }
+  },
+  "metrics": {
+    "ld_clean": {
+      "kind": "logit_diff",
+      "of": "logits_clean",
+      "a": "answer",
+      "b": "cf_answer",
+      "token_form": "space_prefixed"
+    },
+    "ld_circuit": {
+      "kind": "logit_diff",
+      "of": "logits_circuit",
+      "a": "answer",
+      "b": "cf_answer",
+      "token_form": "space_prefixed"
+    },
+    "ld_complement": {
+      "kind": "logit_diff",
+      "of": "logits_complement",
+      "a": "answer",
+      "b": "cf_answer",
+      "token_form": "space_prefixed"
+    }
+  },
+  "save": [
+    {
+      "value": "ld_clean",
+      "model": "original",
+      "input": "base",
+      "file_path": "ld_clean.json"
+    },
+    {
+      "value": "ld_circuit",
+      "model": "circuit",
+      "input": "base",
+      "file_path": "ld_circuit.json"
+    },
+    {
+      "value": "ld_complement",
+      "model": "complement",
+      "input": "base",
+      "file_path": "ld_complement.json"
+    }
+  ]
+}

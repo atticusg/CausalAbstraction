@@ -128,6 +128,14 @@ CORPUS_SHAPE = [
         2,
         {"paired_forward"} | _touch("block_output+w", "lm_head"),
     ),
+    (
+        # Eight writes, two intervened models, four forwards: the per-edge
+        # polarity map costs one joint forward per edge set, not one per edge.
+        "15_circuit_edges_im.json",
+        1,
+        4,
+        {"paired_forward"} | _touch("attention_result", "block_input+w", "lm_head"),
+    ),
 ]
 
 
