@@ -38,6 +38,7 @@ __all__ = [
     "interned_groups",
     "plan_point",
     "closure_digest",
+    "site_depth",
 ]
 
 #: Intra-block execution order of the component vocabulary — engine-free
@@ -45,8 +46,9 @@ __all__ = [
 #: and ``lm_head`` sort after every block.
 #:
 #: **Numbered in hundreds, with the attention band deliberately spread.** The
-#: values are ordinal and nothing outside this table reads them, but changing
-#: one changes group elision and therefore every closure digest — so the point
+#: values are ordinal — only their order is ever read, never the numbers — but
+#: changing one changes group elision, therefore every closure digest, and the
+#: operand-reachability comparison (§5.20, via :func:`site_depth`); so the point
 #: of the spacing is that inserting a component never renumbers an existing one.
 #: The attention interior is where the vocabulary is still growing (round 2 adds
 #: the pre-RoPE projections, the gate, the post-RoPE q/k, the scores, the mixer
@@ -320,7 +322,7 @@ def _build_group(
     data_identity: Mapping[str, Any] | None,
 ) -> ForwardGroup:
     taps = tuple(
-        Tap(read=rname, site=str(read.site), depth=_depth(doc, str(read.site)))
+        Tap(read=rname, site=str(read.site), depth=site_depth(doc, str(read.site)))
         for rname, read in doc.reads.items()
         if read.model == model and str(read.input) == input_role
     )
@@ -414,7 +416,22 @@ def closure_digest(
     ).hexdigest()
 
 
-def _depth(doc: Document, site_name: str) -> tuple[int, int]:
+def site_depth(doc: Document, site_name: str) -> tuple[int, int]:
+    """One site's position in the forward pass, as a sortable ``(layer, rank)``.
+
+    The total order the whole vocabulary shares: block depth first, then
+    :data:`COMPONENT_RANK` inside the block, with the two layer-less trunk
+    components sorting after every block. Two readers depend on it, and on
+    nothing finer:
+
+    * group elision (§4) — a forward may stop after its deepest tap;
+    * operand reachability (§5.20) — a write's operand may not be read from
+      strictly deeper than the address it lands on.
+
+    A non-integer ``layer`` (an unexpanded sweep or artifact wrapper) reads as
+    0. Both callers run on a *point* document, where every layer is concrete,
+    so that fallback is a type-narrowing convenience and not a semantic.
+    """
     site = doc.sites[site_name]
     layer = site.layer if isinstance(site.layer, int) else 0
     component = site.component if isinstance(site.component, str) else "lm_head"

@@ -698,6 +698,19 @@ Closed mechanism set (`do` has exactly one key):
   order-free.
 - `gaussian.axis` tells a tensor-parallel engine whether the draw is
   replicated or sharded across ranks; `seed` is part of the hash.
+- **An operand is read from at or above the address it lands on** (rule 20).
+  Deeper is *executable* — the operand's model runs first, which is exactly
+  what sec. 2.9's acyclicity licenses — but the network has no edge from the
+  deeper address to the shallower one, so a write fed that way is attributable
+  to no path, and a number attributable to no path is what this rule exists to
+  refuse. Equal depth is the two-pass idiom: harvest a receiver's value in one
+  intervened model, inject it at that same address in another. If the value is
+  genuinely meant as an externally supplied constant rather than a routed
+  activation, say so — harvest it into a bundle in its own run and load it as a
+  `params` entry (sec. 2.6), where being a constant is the declared thing.
+  Because the order is `(layer, intra-block rank)` and not layer alone, the
+  rule is block-order aware: a head's contribution feeding the same layer's MLP
+  is upstream, and the reverse is refused.
 
 ### 2.9 `intervened_models`
 
@@ -1064,6 +1077,11 @@ A conforming loader rejects the document unless all of these hold:
     checklist, rule 19 is checked when the run encodes its inputs, **before any
     forward pass**, not at load. `validate` cannot decide it: the pure verbs
     hold no tokenizer, by design.
+20. Operand reachability: every write operand that names a **read** is read at
+    an address no deeper than the one the write lands on, in the `(layer,
+    intra-block rank)` order of sec. 2.4's vocabulary. Equal is legal — that is
+    the harvest/inject idiom. Params and literal-scalar operands have no
+    address and are unconstrained.
 
 ## 6. Derived — never authored
 

@@ -28,6 +28,16 @@ Interpretations this module commits to (each surfaced in the PR notes):
 * **Dead declarations** (§0) are reported under rule 11 — the sink rule
   names reads explicitly; unused sites, positions, featurizers and params
   are the same principle and share the rule number.
+* **Rule 20 refuses the uninterpretable, not the unexecutable.** A write
+  whose operand is read from strictly deeper than the write's own address is
+  perfectly runnable — the operand's model runs first, and §2.9's acyclicity
+  is what makes that staging legal. It is refused because no edge of the
+  network carries information from the source to the target, so the number
+  it produces is attributable to no path. Equal depth stays legal: that is
+  the two-pass harvest/inject idiom (corpus 03), where the value is injected
+  at the very address it was read from. The comparison is the same
+  ``(layer, rank)`` order group elision uses, so it is block-order aware —
+  a same-layer head → MLP operand is upstream, and the reverse is not.
 """
 
 from __future__ import annotations
@@ -36,6 +46,7 @@ import re
 from typing import Any, Iterable
 
 from causalab.protocol.errors import ValidationError
+from causalab.protocol.plan import site_depth
 from causalab.protocol.schema import (
     ADDITIVE_MECHANISMS,
     FEATURIZER_SLOTS,
@@ -70,7 +81,7 @@ _TRAINABLE_KINDS = frozenset({"subspace", "gate", "sae"})
 
 
 def validate_document(doc: Document, *, engine_is_local: bool | None = None) -> None:
-    """Run checklist rules 3–13, 16 and 17 (13 only when ``engine_is_local``
+    """Run checklist rules 3–13, 16, 17 and 20 (13 only when ``engine_is_local``
     is given). Raises :class:`ValidationError` on the first violation."""
     names = _check_namespace(doc)  # rule 3
     _check_references(doc, names)  # rule 4 (+ the rule-5 read bindings)
@@ -82,6 +93,7 @@ def validate_document(doc: Document, *, engine_is_local: bool | None = None) -> 
     _check_trainability(doc)  # rule 12
     _check_generation(doc)  # rule 16
     _check_model_realization(doc)  # rule 17
+    _check_operand_reachability(doc)  # rule 20
     if engine_is_local is not None:
         _check_pytorch_fn(doc, engine_is_local)  # rule 13
 
@@ -1067,4 +1079,52 @@ def _check_model_realization(doc: Document) -> None:
                 )
                 + " (§2.1)",
                 path=f"model.quantization.{field}",
+            )
+
+
+# --------------------------------------------------------------------------- #
+# rule 20 — a write's operand is reachable from its address
+# --------------------------------------------------------------------------- #
+
+
+def _site_label(doc: Document, site_name: str) -> str:
+    """``block_mid`` at layer 11, the way a refusal should name an address."""
+    site = doc.sites[site_name]
+    layer = site.layer
+    where = f" layer {layer}" if isinstance(layer, int) else ""
+    return f"site {site_name!r} ({site.component}{where})"
+
+
+def _check_operand_reachability(doc: Document) -> None:
+    """Refuse a write whose operand is read strictly deeper than it lands.
+
+    The value is *computable* — §2.9 stages the operand's model first — but
+    the network has no edge from the deeper address to the shallower one, so
+    what the write measures is attributable to no path. Equal depth is the
+    two-pass harvest/inject idiom and stays legal.
+    """
+    for ename, write in doc.writes.items():
+        target_site = str(write.site)
+        target = site_depth(doc, target_site)
+        for operand in _operand_names(write.do):
+            read = doc.reads.get(operand)
+            if read is None:
+                continue  # a param or a literal: no address, so no geometry
+            source_site = str(read.site)
+            if site_depth(doc, source_site) <= target:
+                continue
+            raise ValidationError(
+                20,
+                f"write {ename!r} takes its operand from read {operand!r} at "
+                f"{_site_label(doc, source_site)}, which is strictly deeper in "
+                f"the forward pass than the address it lands on, "
+                f"{_site_label(doc, target_site)}. The operand's model runs "
+                "first, so this is executable — but no edge of the network "
+                "carries information from the deeper address to the shallower "
+                "one, so the write is attributable to no path (§2.8). Read the "
+                "operand at or above the write's address; if it is meant as an "
+                "externally supplied constant rather than a routed activation, "
+                "harvest it in its own run and load it as a `params` entry "
+                "(§2.6).",
+                path=f"writes.{ename}.do",
             )

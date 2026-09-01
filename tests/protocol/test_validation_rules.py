@@ -867,3 +867,205 @@ def test_decode_over_a_continuation_read_is_legal():
         }
     ]
     parse_and_validate(doc)
+
+
+# rule 20 — operand reachability -------------------------------------------- #
+
+
+def _two_site_doc(
+    read_site: dict[str, Any], write_site: dict[str, Any]
+) -> dict[str, Any]:
+    """A document whose write at ``write_site`` is fed from ``read_site``.
+
+    Deliberately additive: rule 20 is about where the operand came from, not
+    about the mechanism, and an `add_scaled` delta is the idiom that makes the
+    geometry load-bearing (a routed per-edge contribution, §2.8).
+    """
+    doc = base_doc()
+    doc["sites"]["src"] = read_site
+    doc["sites"]["dst"] = write_site
+    doc["reads"]["v_src"] = {
+        "site": "src",
+        "pos": -1,
+        "model": "original",
+        "input": "counterfactual",
+    }
+    # base_doc's own target read and site are replaced wholesale here, and an
+    # unreferenced read or site is rule 11 — which would mask rule 20.
+    doc["reads"].pop("v_cf")
+    doc["sites"].pop("tgt")
+    doc["writes"] = {
+        "patch": {
+            "site": "dst",
+            "pos": -1,
+            "do": {"add_scaled": {"op": "v_src", "alpha": 1.0}},
+        }
+    }
+    return doc
+
+
+def test_rule_20_operand_read_deeper_than_the_write_is_refused():
+    doc = _two_site_doc(
+        {"component": "block_output", "layer": 9},
+        {"component": "block_output", "layer": 3},
+    )
+    err = expect_rule(20, doc)
+    assert "'v_src'" in str(err) and "layer 9" in str(err) and "layer 3" in str(err)
+
+
+def test_rule_20_operand_read_upstream_of_the_write_is_legal():
+    parse_and_validate(
+        _two_site_doc(
+            {"component": "block_output", "layer": 1},
+            {"component": "block_output", "layer": 3},
+        )
+    )
+
+
+def test_rule_20_equal_depth_is_legal_because_that_is_harvest_inject():
+    """Corpus 03's shape: a receiver's value read in one model and injected at
+    the very same address in another. Equal depth must never be refused."""
+    parse_and_validate(
+        _two_site_doc(
+            {"component": "block_output", "layer": 3},
+            {"component": "block_output", "layer": 3},
+        )
+    )
+
+
+def test_rule_20_is_block_order_aware_within_one_layer():
+    """A head's residual contribution feeding the same layer's MLP is a real
+    sequential edge; the reverse direction is not."""
+    parse_and_validate(
+        _two_site_doc(
+            {"component": "attention_result", "layer": 3, "head": 1},
+            {"component": "mlp_input", "layer": 3},
+        )
+    )
+    err = expect_rule(
+        20,
+        _two_site_doc(
+            {"component": "mlp_output", "layer": 3},
+            {"component": "attention_output", "layer": 3},
+        ),
+    )
+    assert "mlp_output" in str(err) and "attention_output" in str(err)
+
+
+def test_rule_20_lm_head_sorts_after_every_block():
+    """The two layer-less trunk components are deeper than any block, so an
+    `lm_head`-derived operand can land nowhere but the trunk's own tail."""
+    doc = base_doc()
+    doc["reads"].pop("v_cf")
+    doc["reads"]["v_logits"] = {
+        "site": "lm_head",
+        "pos": -1,
+        "model": "original",
+        "input": "counterfactual",
+        "dims": list(range(768)),  # gpt2 hidden, so the widths agree
+    }
+    doc["writes"] = {
+        "patch": {
+            "site": "tgt",
+            "pos": -1,
+            "do": {"add_scaled": {"op": "v_logits", "alpha": 1.0}},
+        }
+    }
+    err = expect_rule(20, doc)
+    assert "lm_head" in str(err)
+
+
+def test_rule_20_ignores_params_and_literal_operands():
+    """A param has no address, so it has no geometry to be wrong about."""
+    doc = base_doc()
+    doc["params"] = {"bias": {"file_path": "p.safetensors"}}
+    doc["writes"] = {
+        "patch": {
+            "site": "tgt",
+            "pos": -1,
+            "do": {"add_scaled": {"op": "bias", "alpha": 1.0}},
+        }
+    }
+    doc["reads"].pop("v_cf")
+    parse_and_validate(doc)
+
+
+def test_rule_20_constrains_the_alpha_slot_too():
+    """`alpha` may name a read (§2.8 operands), and a coefficient taken from
+    downstream is as unattributable as a downstream value."""
+    doc = base_doc()
+    doc["sites"]["deep"] = {"component": "block_output", "layer": 9}
+    doc["reads"]["k"] = {
+        "site": "deep",
+        "pos": -1,
+        "model": "original",
+        "input": "counterfactual",
+        "dims": [0],
+    }
+    doc["writes"] = {
+        "patch": {
+            "site": "tgt",
+            "pos": -1,
+            "do": {"add_scaled": {"op": "v_cf", "alpha": "k"}},
+        }
+    }
+    err = expect_rule(20, doc)
+    assert "'k'" in str(err)
+
+
+def test_the_whole_corpus_is_upstream_or_equal():
+    """The rule is a *new refusal*, so its blast radius is the claim worth
+    pinning: no shipped document routes an operand backwards.
+
+    Read straight off the JSON rather than through the loader — that keeps the
+    claim about the authored corpus and not about one point of an expansion,
+    and it stays true for the two documents whose layer is a sweep or an
+    artifact reference (skipped here, concrete at every point, and covered by
+    ``test_corpus.py`` loading all of them under the live rule).
+    """
+    import json
+
+    from causalab.protocol.plan import COMPONENT_RANK, UNRANKED
+
+    from tests.protocol._env import CORPUS_DIR
+
+    def depth(site: dict[str, Any]) -> tuple[int, int] | None:
+        component = site["component"]
+        if component not in COMPONENT_RANK:
+            return None
+        rank = COMPONENT_RANK.get(component, UNRANKED)
+        if component in ("ln_final", "lm_head"):
+            return (1_000_000, rank)
+        layer = site.get("layer", 0)
+        return None if not isinstance(layer, int) else (layer, rank)
+
+    files = sorted(CORPUS_DIR.glob("*_im.json"))
+    assert files, "corpus did not resolve"
+    compared = 0
+    for path in files:
+        doc = json.loads(path.read_text())
+        sites, reads = doc.get("sites", {}), doc.get("reads", {})
+        for wname, write in doc.get("writes", {}).items():
+            payload = next(iter(write["do"].values()))
+            slots = (
+                [payload]
+                if isinstance(payload, str)
+                else [payload.get(k) for k in ("op", "alpha")]
+                if isinstance(payload, dict)
+                else []
+            )
+            target = depth(sites[write["site"]])
+            for slot in slots:
+                if not isinstance(slot, str) or slot not in reads:
+                    continue
+                source = depth(sites[reads[slot]["site"]])
+                if target is None or source is None:
+                    continue
+                compared += 1
+                assert source <= target, (
+                    f"{path.name}: write {wname!r} reads {slot!r} from deeper "
+                    f"({source} > {target}) — rule 20 would refuse it"
+                )
+    # 18, not 20: corpus 07's layer is a sweep and 08's is an artifact
+    # reference, so neither is comparable off the authored JSON.
+    assert compared >= 18, f"only {compared} operand edges compared"

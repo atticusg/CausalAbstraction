@@ -35,7 +35,7 @@ __all__ = [
 #: How many rules the §5 load-error checklist has. Named so the range guard
 #: below and the spec move together: adding a rule means editing §5 and this
 #: number, and nothing else.
-CHECKLIST_RULES: int = 19
+CHECKLIST_RULES: int = 20
 
 
 class ProtocolError(ValueError):
